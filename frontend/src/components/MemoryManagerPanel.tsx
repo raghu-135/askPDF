@@ -16,14 +16,16 @@ import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import {
-  applyMemoryCuratorChanges,
+  applyMemoryManagerPlan,
   getMemoryWorkspaceStatus,
+  planMemoryManager,
   prepareMemoryWorkspace,
-  respondToMemoryCurator,
   type MemoryCuratorMessage,
   type MemoryCuratorOperation,
   type MemoryCuratorResponse,
   type MemoryCuratorWebSource,
+  type MemoryManagerOperation,
+  type MemoryManagerPlan,
   type MemoryConsistencyReviewCursor,
   type MemoryWorkspaceReadiness,
 } from '../lib/api';
@@ -31,8 +33,8 @@ import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
   toMemoryConsistencyReviewCursor,
-  type MemoryCuratorIntent,
-} from '../lib/memory-curator';
+  type MemoryManagerIntent,
+} from '../lib/memory-manager';
 import {
   ConversationComposer,
   ConversationHeader,
@@ -57,7 +59,7 @@ import {
 
 const defaultContextWindow = 8192;
 
-const initialPrompt = (intent: MemoryCuratorIntent) => {
+const initialPrompt = (intent: MemoryManagerIntent) => {
   if (intent.mode === 'memory_review') {
     return 'Review related memories for duplicates, conflicts, superseded statements, and stale override relationships.';
   }
@@ -71,6 +73,46 @@ const initialPrompt = (intent: MemoryCuratorIntent) => {
 };
 
 const conversationReviewComposerText = 'Click Send to review this conversation and extract durable memories for this thread.';
+
+const managerMode = (mode: MemoryManagerIntent['mode']): 'direct_edit' | 'conversation_extract' | 'consistency_review' => (
+  mode === 'conversation_review'
+    ? 'conversation_extract'
+    : mode === 'memory_review'
+      ? 'consistency_review'
+      : 'direct_edit'
+);
+
+const managerOperationToCuratorOperation = (operation: MemoryManagerOperation): MemoryCuratorOperation => ({
+  action: operation.type === 'memory_create' ? 'create' : operation.type === 'memory_delete' ? 'delete' : 'update',
+  scope_type: operation.scope_type,
+  scope_id: operation.scope_id,
+  memory_id: operation.memory_id,
+  expected_updated_at: operation.expected_updated_at,
+  content: operation.content,
+  attributes: operation.attributes,
+  override_targets: operation.override_target_ids.map((memoryId) => ({
+    memory_id: memoryId,
+    expected_updated_at: operation.override_target_versions?.[memoryId] || '',
+  })),
+  semantic_action: operation.type === 'relationship_replace' ? 'set_overrides' : undefined,
+  operation_group_id: operation.operation_group_id,
+  move_source_memory_id: operation.source_memory_id,
+  move_destination_memory_id: operation.destination_memory_id,
+});
+
+const managerPlanToCuratorResponse = (plan: MemoryManagerPlan): MemoryCuratorResponse => ({
+  message: plan.message,
+  state: plan.state === 'blocked' ? 'clarification' : plan.state,
+  choices: plan.choices,
+  operations: plan.operations.map(managerOperationToCuratorOperation),
+  operation_summaries: plan.analysis,
+  review: plan.review,
+  memory_review: plan.memory_review,
+  embedding_readiness: plan.embedding_readiness,
+  pending_web_search: plan.pending_web_search,
+  web_sources: plan.web_sources,
+  consent: plan.consent,
+});
 
 type CuratorUiMessage = MemoryCuratorMessage & { id: string; web_sources?: MemoryCuratorWebSource[] };
 
@@ -86,7 +128,7 @@ const curatorMessage = (
   ...(choiceId ? { choice_id: choiceId } : {}),
 });
 
-const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage | null => {
+const initialAssistantMessage = (intent: MemoryManagerIntent): CuratorUiMessage | null => {
   if (intent.mode === 'conversation_review' || intent.mode === 'memory_review') return null;
   if (intent.mode === 'edit') {
     return curatorMessage(
@@ -100,7 +142,7 @@ const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage 
   );
 };
 
-export default function MemoryCuratorPanel({
+export default function MemoryManagerPanel({
   intent,
   onBack,
   backLabel = 'Back',
@@ -108,7 +150,7 @@ export default function MemoryCuratorPanel({
   onDirtyChange,
   onApplied,
 }: {
-  intent: MemoryCuratorIntent;
+  intent: MemoryManagerIntent;
   onBack: () => void;
   backLabel?: string;
   contextSubtitle?: React.ReactNode;
@@ -134,6 +176,8 @@ export default function MemoryCuratorPanel({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [reviewCursor, setReviewCursor] = useState<MemoryConsistencyReviewCursor | null>(null);
   const [reviewCanContinue, setReviewCanContinue] = useState(false);
+  const [managerPlan, setManagerPlan] = useState<MemoryManagerPlan | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const context = useMemo(() => buildCuratorContext(intent), [intent]);
   const curatorEmbeddingModel = intent.embeddingModel
@@ -222,8 +266,8 @@ export default function MemoryCuratorPanel({
     setError(null);
     setApplied(false);
     try {
-      const response = await respondToMemoryCurator({
-        mode: intent.mode,
+      const plan = await planMemoryManager({
+        mode: managerMode(intent.mode),
         context,
         memory_id: intent.memory?.id,
         messages: nextMessages.map(({ role, content, choice_id }) => ({
@@ -233,10 +277,15 @@ export default function MemoryCuratorPanel({
         })),
         llm_model: llmModel,
         context_window: contextWindow,
+        review_round: reviewCursor ? 2 : 1,
+        review_id: reviewId,
         web_search_mode: webSearchMode,
         ...(webSearchDecision ? { web_search_decision: webSearchDecision } : {}),
         ...(intent.mode === 'memory_review' && reviewCursor ? { memory_review_cursor: reviewCursor } : {}),
       });
+      setManagerPlan(plan);
+      if (plan.review_id) setReviewId(plan.review_id);
+      const response = managerPlanToCuratorResponse(plan);
       setMessages([...nextMessages, {
         ...curatorMessage('assistant', response.message),
         web_sources: response.web_sources || [],
@@ -247,7 +296,7 @@ export default function MemoryCuratorPanel({
     } finally {
       setBusy(false);
     }
-  }, [context, contextWindow, intent.memory?.id, intent.mode, llmModel, modelReady, reviewCursor, webSearchMode]);
+  }, [context, contextWindow, intent.memory?.id, intent.mode, llmModel, modelReady, reviewCursor, reviewId, webSearchMode]);
 
   useEffect(() => {
     if (intent.mode !== 'memory_review' || !llmModel || modelReady !== true || messages.length) return;
@@ -264,21 +313,18 @@ export default function MemoryCuratorPanel({
   };
 
   const apply = async () => {
-    if (!decision) return;
+    if (!decision || !managerPlan) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await applyMemoryCuratorChanges({
-        context,
-        operations: decision.operations,
-        review_cursor: decision.review?.cursor || undefined,
-        memory_review_cursor: decision.memory_review
-          ? toMemoryConsistencyReviewCursor(decision.memory_review)
-          : undefined,
+      const result = await applyMemoryManagerPlan({
+        plan: managerPlan,
+        idempotency_key: `memory-manager:${managerPlan.plan_id}`,
         actor_id: 'ui',
       });
       setApplied(true);
       setDecision(null);
+      setManagerPlan(null);
       setReviewCanContinue(Boolean(
         decision.memory_review
         && decision.memory_review.remaining_anchor_count > 0
@@ -371,14 +417,14 @@ export default function MemoryCuratorPanel({
             void respond(next, { query: pending.query, approved: choice.id === 'approve-web-search' });
           }}
           onCustomSubmit={(text) => submitMessage(text)}
-          customPlaceholder="Tell the curator how to proceed"
+        customPlaceholder="Describe how you want to proceed"
         />
       </ResizableDecisionPanel>
     );
   } else if (decision && ['clarification', 'conflict'].includes(decision.state)) {
     decisionPanel = (
       <ResizableDecisionPanel
-        title={decision.state === 'conflict' ? 'Choose how to resolve this conflict' : 'Choose an option'}
+        title={decision.state === 'conflict' ? 'Choose how to resolve this conflict' : 'Provide clarification'}
         variant={decision.state === 'conflict' ? 'conflict' : 'clarification'}
         rootRef={panelRef}
         horizontalInset={1}
@@ -394,7 +440,7 @@ export default function MemoryCuratorPanel({
           disabled={busy}
           onSelect={(choice, text) => submitMessage(text, choice.id)}
           onCustomSubmit={(text) => submitMessage(text)}
-          customPlaceholder="Tell the curator what outcome you prefer"
+          customPlaceholder="Describe the intended outcome"
         />
       </ResizableDecisionPanel>
     );

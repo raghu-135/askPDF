@@ -3,19 +3,19 @@ import test from 'node:test';
 
 import {
   buildCuratorContext,
-  createCuratorIntent,
-  curatorTitle,
-  defaultMemoryCuratorIntent,
-  memoryReviewCuratorIntent,
-  reviewCuratorIntent,
+  createManagerIntent,
+  managerTitle,
+  defaultMemoryManagerIntent,
+  memoryReviewManagerIntent,
+  reviewManagerIntent,
   toMemoryConsistencyReviewCursor,
-} from '../src/lib/memory-curator.ts';
+} from '../src/lib/memory-manager.ts';
 
 const project = { id: 'project-1' };
 const thread = { id: 'thread-1', project_id: 'project-1' };
 
 test('default curator intent follows the active workspace context', () => {
-  assert.deepEqual(defaultMemoryCuratorIntent({}), {
+  assert.deepEqual(defaultMemoryManagerIntent({}), {
     mode: 'create',
     scopeType: 'user',
     scopeId: 'default',
@@ -23,12 +23,12 @@ test('default curator intent follows the active workspace context', () => {
     projectId: undefined,
     memory: null,
   });
-  assert.equal(defaultMemoryCuratorIntent({ project }).scopeType, 'project');
-  assert.equal(defaultMemoryCuratorIntent({ thread, project }).scopeType, 'thread');
+  assert.equal(defaultMemoryManagerIntent({ project }).scopeType, 'project');
+  assert.equal(defaultMemoryManagerIntent({ thread, project }).scopeType, 'thread');
 
   const readyProject = { ...project, embeddingModel: 'project-model' };
   assert.equal(
-    defaultMemoryCuratorIntent({ project: readyProject }).embeddingModel,
+    defaultMemoryManagerIntent({ project: readyProject }).embeddingModel,
     'project-model',
   );
 });
@@ -56,7 +56,7 @@ test('review cursor serialization excludes transient candidate metadata', () => 
 });
 
 test('curator intents preserve workspace scope and canonical global ID', () => {
-  const intent = createCuratorIntent({
+  const intent = createManagerIntent({
     scopeType: 'user',
     scopeId: 'legacy-user',
     thread,
@@ -73,9 +73,9 @@ test('curator intents preserve workspace scope and canonical global ID', () => {
 });
 
 test('consistency review binds to the active project or thread context', () => {
-  const globalReview = memoryReviewCuratorIntent({});
-  const projectReview = memoryReviewCuratorIntent({ project });
-  const threadReview = memoryReviewCuratorIntent({ thread, project });
+  const globalReview = memoryReviewManagerIntent({});
+  const projectReview = memoryReviewManagerIntent({ project });
+  const threadReview = memoryReviewManagerIntent({ thread, project });
 
   assert.deepEqual(globalReview, {
     mode: 'memory_review',
@@ -94,23 +94,23 @@ test('consistency review binds to the active project or thread context', () => {
   assert.equal(threadReview.mode, 'memory_review');
   assert.equal(threadReview.scopeType, 'thread');
   assert.equal(threadReview.scopeId, 'thread-1');
-  assert.equal(curatorTitle(threadReview), 'Memory Consistency Review');
+  assert.equal(managerTitle(threadReview), 'Memory Consistency Review');
 });
 
 test('selected memory opens edit mode and conversation review stays thread-scoped', () => {
   const memory = { id: 'memory-1', content: 'Use concise answers.' };
-  const edit = createCuratorIntent({
+  const edit = createManagerIntent({
     scopeType: 'project',
     scopeId: project.id,
     thread,
     project,
     memory,
   });
-  const review = reviewCuratorIntent(thread);
+  const review = reviewManagerIntent(thread);
 
   assert.equal(edit.mode, 'edit');
   assert.equal(edit.memory, memory);
-  assert.equal(curatorTitle(edit), 'Edit Memory');
+  assert.equal(managerTitle(edit), 'Edit Memory');
   assert.deepEqual(review, {
     mode: 'conversation_review',
     scopeType: 'thread',

@@ -545,6 +545,62 @@ export interface MemoryCuratorApplyResponse {
   memory_review_cursor?: MemoryConsistencyReviewCursor | null;
 }
 
+export type MemoryManagerMode = 'direct_edit' | 'conversation_extract' | 'consistency_review';
+export type MemoryManagerOperationType =
+  | 'memory_create'
+  | 'memory_update'
+  | 'memory_delete'
+  | 'memory_move'
+  | 'memory_merge'
+  | 'relationship_replace';
+
+export interface MemoryManagerOperation {
+  type: MemoryManagerOperationType;
+  memory_id?: string;
+  source_memory_id?: string;
+  destination_memory_id?: string;
+  scope_type?: MemoryScopeType;
+  scope_id?: string;
+  target_scope_type?: MemoryScopeType;
+  target_scope_id?: string;
+  content?: string;
+  attributes?: MemoryAttributes;
+  override_target_ids: string[];
+  override_target_versions?: Record<string, string>;
+  expected_updated_at?: string;
+  operation_group_id?: string;
+}
+
+export interface MemoryManagerPlan {
+  plan_id: string;
+  plan_hash: string;
+  mode: MemoryManagerMode;
+  context: MemoryCuratorContext;
+  state: 'proposal' | 'clarification' | 'no_changes' | 'blocked';
+  message: string;
+  choices: MemoryCuratorResponse['choices'];
+  operations: MemoryManagerOperation[];
+  analysis: MemoryOperationSummary[];
+  review?: MemoryCuratorResponse['review'] | null;
+  memory_review?: MemoryCuratorResponse['memory_review'] | null;
+  budget: Record<string, number>;
+  review_id?: string | null;
+  next_cursor?: MemoryReviewCursor | MemoryConsistencyReviewCursor | null;
+  scope_versions: Record<string, number>;
+  embedding_readiness: MemoryCuratorResponse['embedding_readiness'];
+  pending_web_search?: { query: string; reason: string } | null;
+  web_sources: MemoryCuratorWebSource[];
+  consent?: MemoryCuratorResponse['consent'];
+}
+
+export interface MemoryManagerApplyResponse extends MemoryCuratorApplyResponse {
+  plan_id: string;
+  plan_hash: string;
+  idempotency_key: string;
+  status: 'committed' | 'indexing_pending';
+  review_id?: string | null;
+}
+
 // ============ Agent Workflow Builder API ============
 
 export interface AgentWorkflowGraphSpec {
@@ -1274,18 +1330,20 @@ export async function retryMemoryIndex(memoryId: string, embeddingModel?: string
   return res.json();
 }
 
-export async function respondToMemoryCurator(input: {
-  mode: MemoryCuratorMode;
+export async function planMemoryManager(input: {
+  mode: MemoryManagerMode;
   context: MemoryCuratorContext;
   memory_id?: string;
   messages: MemoryCuratorMessage[];
   llm_model: string;
   context_window: number;
+  review_round?: number;
+  review_id?: string | null;
+  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
   web_search_mode: 'off' | 'ask' | 'on';
   web_search_decision?: { query: string; approved: boolean };
-  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
-}): Promise<MemoryCuratorResponse> {
-  const res = await fetch(`${API_BASE}/api/memory-curator/respond`, {
+}): Promise<MemoryManagerPlan> {
+  const res = await fetch(`${API_BASE}/api/memory-manager/plan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1294,17 +1352,21 @@ export async function respondToMemoryCurator(input: {
   return res.json();
 }
 
-export async function applyMemoryCuratorChanges(input: {
-  context: MemoryCuratorContext;
-  operations: MemoryCuratorOperation[];
-  review_cursor?: MemoryReviewCursor | null;
-  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
+export async function applyMemoryManagerPlan(input: {
+  plan: MemoryManagerPlan;
+  idempotency_key: string;
   actor_id?: string;
-}): Promise<MemoryCuratorApplyResponse> {
-  const res = await fetch(`${API_BASE}/api/memory-curator/apply`, {
+}): Promise<MemoryManagerApplyResponse> {
+  const res = await fetch(`${API_BASE}/api/memory-manager/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...input, confirmed: true }),
+    body: JSON.stringify({
+      plan: input.plan,
+      plan_hash: input.plan.plan_hash,
+      idempotency_key: input.idempotency_key,
+      confirmed: true,
+      actor_id: input.actor_id || 'ui',
+    }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();

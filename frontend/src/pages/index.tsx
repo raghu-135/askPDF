@@ -17,7 +17,7 @@ import PdfUploader from "../components/PdfUploader";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
-import MemoryCuratorPanel from "../components/MemoryCuratorPanel";
+import MemoryManagerPanel from "../components/MemoryManagerPanel";
 import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
@@ -34,7 +34,7 @@ import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
-import { defaultMemoryCuratorIntent, reviewCuratorIntent, type MemoryCuratorIntent } from '../lib/memory-curator';
+import { defaultMemoryManagerIntent, reviewManagerIntent, type MemoryManagerIntent } from '../lib/memory-manager';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -67,10 +67,10 @@ export default function Home() {
   const [sidebarVersion, setSidebarVersion] = useState(0);
   const [isDeletingActiveThread, setIsDeletingActiveThread] = useState(false);
   const [rightPanelLineageThreads, setRightPanelLineageThreads] = useState<Thread[]>([]);
-  const [memoryCuratorIntent, setMemoryCuratorIntent] = useState<MemoryCuratorIntent | null>(null);
-  const [memoryCuratorDirty, setMemoryCuratorDirty] = useState(false);
-  const memoryCuratorDirtyRef = useRef(false);
-  memoryCuratorDirtyRef.current = memoryCuratorDirty;
+  const [memoryManagerIntent, setMemoryManagerIntent] = useState<MemoryManagerIntent | null>(null);
+  const [memoryManagerDirty, setMemoryCuratorDirty] = useState(false);
+  const memoryManagerDirtyRef = useRef(false);
+  memoryManagerDirtyRef.current = memoryManagerDirty;
   const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
   const [lastNonMemoryTabByContext, setLastNonMemoryTabByContext] = useState<Record<string, string>>({});
 
@@ -92,7 +92,7 @@ export default function Home() {
   } = useTraceTabs();
 
   const confirmDiscardMemoryCurator = useCallback(() => (
-    !memoryCuratorDirtyRef.current
+    !memoryManagerDirtyRef.current
     || window.confirm('Discard the unconfirmed memory proposal?')
   ), []);
 
@@ -116,8 +116,8 @@ export default function Home() {
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
-    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
-    setMemoryCuratorIntent(null);
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     // Clear current state
     setPdfTabs([]);
@@ -174,11 +174,11 @@ export default function Home() {
       setActiveThread(null);
       setActiveTabId('home-tab');
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
-    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
-    setMemoryCuratorIntent(null);
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     setActiveThread(null);
     setThreadProject(null);
@@ -200,7 +200,7 @@ export default function Home() {
     } finally {
       setIsPdfLoading(false);
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
@@ -239,8 +239,8 @@ export default function Home() {
   };
 
   const handleOpenHome = useCallback(() => {
-    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
-    setMemoryCuratorIntent(null);
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     setActiveThread(null);
     setActiveProject(null);
@@ -255,7 +255,7 @@ export default function Home() {
     setActiveSource('pdf');
     setChatSentences([]);
     clearTraces();
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleBackToProject = useCallback(async () => {
     try {
@@ -624,9 +624,9 @@ export default function Home() {
   );
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
-    if (memoryCuratorIntent && tabId !== 'memory-tab') {
+    if (memoryManagerIntent && tabId !== 'memory-tab') {
       if (!confirmDiscardMemoryCurator()) return;
-      setMemoryCuratorIntent(null);
+      setMemoryManagerIntent(null);
       setMemoryCuratorDirty(false);
     }
     if (tabId !== 'memory-tab') {
@@ -636,29 +636,29 @@ export default function Home() {
     setIsBrowserActive(tabId === 'browser-tab');
     if (tabId === 'memory-tab') {
       const memoryProject = activeProject || threadProject;
-      if (!memoryCuratorIntent) {
+      if (!memoryManagerIntent) {
         setMemoryCuratorDirty(false);
-        setMemoryCuratorIntent(defaultMemoryCuratorIntent({
+        setMemoryManagerIntent(defaultMemoryManagerIntent({
           thread: activeThread,
           project: memoryProject,
         }));
       }
     }
-  }, [activeProject, activeThread, confirmDiscardMemoryCurator, memoryCuratorIntent, rememberNonMemoryTab, threadProject]);
+  }, [activeProject, activeThread, confirmDiscardMemoryCurator, memoryManagerIntent, rememberNonMemoryTab, threadProject]);
 
-  const handleOpenMemoryCurator = useCallback((intent: MemoryCuratorIntent) => {
-    if (memoryCuratorIntent && memoryCuratorDirtyRef.current && !confirmDiscardMemoryCurator()) return;
+  const handleOpenMemoryCurator = useCallback((intent: MemoryManagerIntent) => {
+    if (memoryManagerIntent && memoryManagerDirtyRef.current && !confirmDiscardMemoryCurator()) return;
     rememberNonMemoryTab(activeTabId);
     setActiveTabId('memory-tab');
     setIsBrowserActive(false);
     setMemoryCuratorDirty(false);
-    setMemoryCuratorIntent(intent);
-  }, [activeTabId, confirmDiscardMemoryCurator, memoryCuratorIntent, rememberNonMemoryTab]);
+    setMemoryManagerIntent(intent);
+  }, [activeTabId, confirmDiscardMemoryCurator, memoryManagerIntent, rememberNonMemoryTab]);
 
   const handleMemoryBack = useCallback(() => {
     if (!confirmDiscardMemoryCurator()) return;
     setMemoryCuratorDirty(false);
-    setMemoryCuratorIntent(null);
+    setMemoryManagerIntent(null);
     const target = lastNonMemoryTabByContext[workspaceContextKey] || fallbackNonMemoryTab();
     if (target === 'home-tab') {
       handleOpenHome();
@@ -670,7 +670,7 @@ export default function Home() {
 
   const handleOpenConversationReview = useCallback(() => {
     if (!activeThread) return;
-    handleOpenMemoryCurator(reviewCuratorIntent(activeThread));
+    handleOpenMemoryCurator(reviewManagerIntent(activeThread));
   }, [activeThread, handleOpenMemoryCurator]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
@@ -682,7 +682,7 @@ export default function Home() {
 
   const isMemoryWorkspaceActive = activeTabId === 'memory-tab';
   const activeMemoryIntent = isMemoryWorkspaceActive
-    ? memoryCuratorIntent || defaultMemoryCuratorIntent({
+    ? memoryManagerIntent || defaultMemoryManagerIntent({
       thread: activeThread,
       project: activeProject || threadProject,
     })
@@ -819,7 +819,7 @@ export default function Home() {
           }
           secondaryContent={
             activeMemoryIntent ? (
-              <MemoryCuratorPanel
+              <MemoryManagerPanel
                 key={`${activeMemoryIntent.mode}:${activeMemoryIntent.memory?.id || activeMemoryIntent.scopeType}:${activeMemoryIntent.scopeId}`}
                 intent={activeMemoryIntent}
                 onBack={handleMemoryBack}

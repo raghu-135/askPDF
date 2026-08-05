@@ -17,10 +17,10 @@ from app.db.enums import ChatTurnStatus, MemoryScopeType
 from app.db.models_sqlmodel import ChatTurn, GlobalMemoryRepresentation, Memory, MemoryOverride, MemoryReviewState, MemoryScopeActivity, Project, Thread
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import get_embedding_model
-from app.models.memory_curator_budget import (
+from app.models.memory_manager_input_budget import (
     MAX_MEMORY_SEARCH_QUERY_CHARS,
     MAX_REVIEW_FETCH_ROWS,
-    compute_curator_budget,
+    compute_memory_manager_input_budget,
 )
 from app.models.retry import invoke_with_retry
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
@@ -76,7 +76,7 @@ async def build_conversation_review_batch(
         ChatTurn.payload["answer"].astext.isnot(None),
         ChatTurn.payload["answer"].astext != "",
     ]
-    review_budget = compute_curator_budget(context_window)["review_context_chars"]
+    review_budget = compute_memory_manager_input_budget(context_window)["review_context_chars"]
     async with session_factory() as session:
         if cursor_at is None:
             result = await session.execute(
@@ -356,7 +356,7 @@ async def build_memory_review_batch(
         global_ids = {memory.id for memory in all_memories if memory.scope_type == MemoryScopeType.USER.value}
     by_id = {memory.id: memory for memory in all_memories}
     start = max(0, anchor_position)
-    review_budget = compute_curator_budget(context_window)["review_context_chars"]
+    review_budget = compute_memory_manager_input_budget(context_window)["review_context_chars"]
     max_anchors = min(
         MAX_REVIEW_ANCHORS,
         max(1, review_budget // REVIEW_ANCHOR_ESTIMATED_CHARS),

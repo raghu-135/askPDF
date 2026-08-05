@@ -4,24 +4,8 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.requests import (
-    MemoryCuratorApplyRequest,
-    MemoryCuratorRespondRequest,
-    MemorySearchRequest,
-)
+from app.models.requests import MemorySearchRequest
 from app.models.memory_limits import MAX_MEMORY_ROWS
-from app.services.memory_curator_service import (
-    MemoryChangedError,
-    MemoryCuratorError,
-    MemoryCuratorModelUnavailableError,
-    MemoryCuratorNotFoundError,
-    respond_to_memory_curator,
-)
-from app.services.memory_tool_service import (
-    MemoryToolError,
-    MemoryToolNotFoundError,
-    apply_confirmed_memory_change,
-)
 from app.services.effective_memory_service import (
     memory_payload,
     resolve_effective_memory_context,
@@ -77,34 +61,6 @@ async def memory_workspace_status_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-def _raise_curator_http(exc: Exception):
-    if isinstance(exc, MemoryChangedError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": exc.code,
-                "message": str(exc),
-                "memories": [memory_payload(memory) for memory in exc.memories],
-            },
-        )
-    if isinstance(exc, MemoryCuratorModelUnavailableError):
-        raise HTTPException(
-            status_code=409,
-            detail={"code": exc.code, "message": str(exc)},
-        )
-    if isinstance(exc, MemoryCuratorNotFoundError):
-        raise HTTPException(
-            status_code=404,
-            detail={"code": exc.code, "message": str(exc)},
-        )
-    if isinstance(exc, MemoryCuratorError):
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": str(exc)},
-        )
-    raise exc
 
 
 @router.get("/memories")
@@ -205,33 +161,6 @@ async def search_thread_memories_endpoint(thread_id: str, req: MemorySearchReque
         raise HTTPException(status_code=409, detail={"code": "embedding_model_unavailable", "message": str(exc)}) from exc
     except EmbeddingModelResolutionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/memory-curator/respond")
-async def memory_curator_respond_endpoint(req: MemoryCuratorRespondRequest):
-    try:
-        return await respond_to_memory_curator(req)
-    except Exception as exc:
-        _raise_curator_http(exc)
-
-
-@router.post("/memory-curator/apply")
-async def memory_curator_apply_endpoint(req: MemoryCuratorApplyRequest):
-    try:
-        return await apply_confirmed_memory_change(req)
-    except EmbeddingModelUnavailableError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "embedding_model_unavailable", "message": str(exc)},
-        ) from exc
-    except MemoryVectorCleanupError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except MemoryToolNotFoundError as exc:
-        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
-    except MemoryToolError as exc:
-        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    except Exception as exc:
-        _raise_curator_http(exc)
 
 
 @router.post("/memories/{memory_id}/index")

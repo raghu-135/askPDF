@@ -109,6 +109,18 @@ Examples:
 
 ## Relationship Policy
 
+Relationship changes are first-class memory administration. Interpret these user requests as
+relationship operations, not content edits:
+
+- "make these memories additive", "keep both", or "stop overriding" means remove the relevant
+  suppression edge while preserving both memory contents;
+- "make A override B" means replace A's complete outgoing override target set with B included;
+- "remove only the override to B" means preserve every other outgoing target and omit B.
+
+For every relationship change, identify the exact overriding memory and return the complete
+`override_target_ids` set. A relationship-only change must preserve the source memory content and
+attributes. Do not ask the user to repeat a decision that is already explicit in their request.
+
 Global memory is broader than Project memory. Project memory is broader than Thread memory.
 
 A narrower memory can be:
@@ -154,6 +166,10 @@ without that target.
 - Do not repeat a question already answered.
 - Do not infer sensitive facts or broaden scope without clear user direction.
 - A proposal is not approval.
+
+When several candidate memories are supplied, analyze the complete supplied set before returning
+one bounded proposal. Resolve all deterministic relationship changes in the same proposal and use
+choices only for genuinely different semantic outcomes.
 
 ## Memory Consistency Review
 

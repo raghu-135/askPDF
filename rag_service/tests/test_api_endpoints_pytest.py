@@ -305,8 +305,8 @@ class TestThreadEndpoints:
         )
         assert retired_direct_create.status_code == 405
 
-        unconfirmed_curator_apply = client.post(
-            "/api/memory-curator/apply",
+        unconfirmed_manager_apply = client.post(
+            "/api/memory-manager/apply",
             json={
                 "context": {
                     "selected_scope_type": "user",
@@ -315,7 +315,7 @@ class TestThreadEndpoints:
                 "operations": [],
             },
         )
-        assert unconfirmed_curator_apply.status_code == 422
+        assert unconfirmed_manager_apply.status_code == 422
 
         retired_candidate_endpoint = client.post("/api/memory-candidates", json={})
         assert retired_candidate_endpoint.status_code == 404

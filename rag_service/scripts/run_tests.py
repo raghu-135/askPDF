@@ -50,7 +50,7 @@ DB_TEST_FILES = [
     "test_database_connection_pytest.py",
     "test_models_sqlmodel_pytest.py",
     "test_project_memory_repository_pytest.py",
-    "test_memory_curator_service_pytest.py",
+    "test_memory_manager_engine_pytest.py",
     "test_project_lifecycle_service_pytest.py",
     "test_thread_repository_pytest.py",
     "test_file_repository_pytest.py",

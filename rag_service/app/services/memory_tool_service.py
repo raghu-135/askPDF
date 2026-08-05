@@ -27,7 +27,7 @@ from app.models.memory_tools import (
     MemoryToolContext,
     MemoryToolScope,
 )
-from app.models.requests import MemoryCuratorApplyRequest, MemoryCuratorOperation
+from app.models.requests import MemoryChangeApplyRequest, MemoryChangeOperation
 from app.models.retry import invoke_with_retry
 from app.services.effective_memory_service import (
     resolve_effective_memory_context,
@@ -388,6 +388,16 @@ async def _incoming_override_count(memory_id: str) -> int:
         )).scalar() or 0)
 
 
+async def _outgoing_override_ids(memory_id: str) -> List[str]:
+    async with async_session_maker() as session:
+        rows = await session.execute(
+            select(MemoryOverride.overridden_memory_id)
+            .where(MemoryOverride.overriding_memory_id == memory_id)
+            .order_by(MemoryOverride.overridden_memory_id)
+        )
+        return [str(memory_id) for memory_id in rows.scalars().all()]
+
+
 async def _memory_lookup(context: MemoryToolContext, ids: Iterable[str]) -> Dict[str, Memory]:
     unique_ids = sorted({str(memory_id) for memory_id in ids if memory_id})
     if not unique_ids:
@@ -438,7 +448,7 @@ async def _find_exact_duplicate(
         return (await session.execute(query.limit(1))).scalar_one_or_none()
 
 
-async def _validate_prepared_cycles(operations: Sequence[MemoryCuratorOperation]) -> None:
+async def _validate_prepared_cycles(operations: Sequence[MemoryChangeOperation]) -> None:
     replacements = {
         str(operation.memory_id or f"new:{operation.operation_group_id}")
         for operation in operations if operation.action in {"create", "update"}
@@ -488,7 +498,7 @@ async def prepare_memory_change(
         if memory_id
     }
     lookup = await _memory_lookup(context, referenced_ids)
-    operations: List[MemoryCuratorOperation] = []
+    operations: List[MemoryChangeOperation] = []
     summaries: List[MemoryOperationSummary] = []
 
     for intent in req.intents:
@@ -499,8 +509,19 @@ async def prepare_memory_change(
         if intent.action in {"update", "delete", "move", "set_overrides"} and source is None:
             raise MemoryToolNotFoundError("The requested memory does not exist in this workspace")
         target_ids = intent.override_target_ids
-        if intent.action in {"create", "update", "move", "set_overrides"} and target_ids is None:
-            raise MemoryToolError("A complete override target set is required")
+        if target_ids is None:
+            if intent.action == "set_overrides":
+                # A relationship-only replacement with no targets means remove
+                # all outgoing suppression edges. This is the canonical
+                # representation of an additive relationship change.
+                target_ids = []
+            elif source is not None and intent.action in {"update", "move"}:
+                # Content-only updates and moves preserve relationships when
+                # the model did not explicitly request a replacement.
+                target_ids = await _outgoing_override_ids(source.id)
+                lookup.update(await _memory_lookup(context, target_ids))
+            else:
+                target_ids = []
         targets = [lookup[memory_id] for memory_id in (target_ids or [])]
         specs = _target_specs(targets)
 
@@ -512,7 +533,7 @@ async def prepare_memory_change(
             if await _find_exact_duplicate(scope, content) is not None:
                 raise MemoryToolError("An identical memory already exists in the destination scope")
             _validate_target_scopes(scope, targets)
-            operations.append(MemoryCuratorOperation(
+            operations.append(MemoryChangeOperation(
                 action="create",
                 scope_type=scope.scope_type,
                 scope_id=scope.scope_id,
@@ -537,7 +558,7 @@ async def prepare_memory_change(
         source_scope = MemoryToolScope(scope_type=source.scope_type, scope_id=source.scope_id)
         expected = iso_utc_z(source.updated_at or source.created_at)
         if intent.action == "delete":
-            operations.append(MemoryCuratorOperation(
+            operations.append(MemoryChangeOperation(
                 action="delete",
                 scope_type=source.scope_type,
                 scope_id=source.scope_id,
@@ -564,7 +585,7 @@ async def prepare_memory_change(
             if await _find_exact_duplicate(source_scope, content, exclude_memory_id=source.id) is not None:
                 raise MemoryToolError("An identical memory already exists in this scope")
             _validate_target_scopes(source_scope, targets)
-            operations.append(MemoryCuratorOperation(
+            operations.append(MemoryChangeOperation(
                 action="update",
                 scope_type=source.scope_type,
                 scope_id=source.scope_id,
@@ -600,7 +621,7 @@ async def prepare_memory_change(
         moved_attributes = intent.attributes or normalize_memory_attributes(source.attributes_json)
         if duplicate is not None:
             duplicate_expected = iso_utc_z(duplicate.updated_at or duplicate.created_at)
-            operations.append(MemoryCuratorOperation(
+            operations.append(MemoryChangeOperation(
                 action="update",
                 scope_type=duplicate.scope_type,
                 scope_id=duplicate.scope_id,
@@ -616,7 +637,7 @@ async def prepare_memory_change(
             ))
             destination_id = duplicate.id
         else:
-            operations.append(MemoryCuratorOperation(
+            operations.append(MemoryChangeOperation(
                 action="create",
                 scope_type=destination_scope.scope_type,
                 scope_id=destination_scope.scope_id,
@@ -628,7 +649,7 @@ async def prepare_memory_change(
                 move_source_memory_id=source.id,
             ))
             destination_id = None
-        operations.append(MemoryCuratorOperation(
+        operations.append(MemoryChangeOperation(
             action="delete",
             scope_type=source.scope_type,
             scope_id=source.scope_id,
@@ -659,7 +680,7 @@ async def prepare_memory_change(
     }
 
 
-async def apply_confirmed_memory_change(req: MemoryCuratorApplyRequest) -> Dict[str, Any]:
+async def apply_confirmed_memory_change(req: MemoryChangeApplyRequest) -> Dict[str, Any]:
     """Apply only a UI-confirmed canonical change set through the existing transaction."""
 
     context, _thread, _project = await build_memory_tool_context(
@@ -675,14 +696,14 @@ async def apply_confirmed_memory_change(req: MemoryCuratorApplyRequest) -> Dict[
         for operation in req.operations
         if operation.action == "delete" and operation.memory_id
     }
-    from app.services.memory_curator_service import apply_memory_curator_change_set
+    from app.services.memory_manager_engine import apply_memory_change_set
 
-    result = await apply_memory_curator_change_set(req)
+    result = await apply_memory_change_set(req)
     changed = {item["id"]: item for item in result.get("changed_memories", [])}
     warnings_by_id: Dict[str, List[Dict[str, Any]]] = {}
     for warning in result.get("warnings", []):
         warnings_by_id.setdefault(str(warning.get("memory_id") or ""), []).append(warning)
-    grouped: Dict[str, List[MemoryCuratorOperation]] = {}
+    grouped: Dict[str, List[MemoryChangeOperation]] = {}
     for operation in req.operations:
         grouped.setdefault(operation.operation_group_id or str(uuid.uuid4()), []).append(operation)
     receipts = []

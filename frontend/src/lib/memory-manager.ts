@@ -8,7 +8,7 @@ import type {
   Thread,
 } from './api';
 
-export interface MemoryCuratorIntent {
+export interface MemoryManagerIntent {
   mode: MemoryCuratorMode;
   scopeType: MemoryScopeType;
   scopeId: string;
@@ -18,7 +18,7 @@ export interface MemoryCuratorIntent {
   embeddingModel?: string | null;
 }
 
-export const buildCuratorContext = (intent: MemoryCuratorIntent): MemoryCuratorContext => ({
+export const buildCuratorContext = (intent: MemoryManagerIntent): MemoryCuratorContext => ({
   selected_scope_type: intent.scopeType,
   selected_scope_id: intent.scopeType === 'user' ? 'default' : intent.scopeId,
   thread_id: intent.threadId || undefined,
@@ -37,7 +37,7 @@ export const toMemoryConsistencyReviewCursor = (
   remaining_anchor_count: review.remaining_anchor_count,
 });
 
-export const createCuratorIntent = ({
+export const createManagerIntent = ({
   scopeType,
   scopeId,
   thread,
@@ -49,7 +49,7 @@ export const createCuratorIntent = ({
   thread?: Thread | null;
   project?: Project | null;
   memory?: MemoryRecord | null;
-}): MemoryCuratorIntent => ({
+}): MemoryManagerIntent => ({
   mode: memory ? 'edit' : 'create',
   scopeType,
   scopeId: scopeType === 'user' ? 'default' : scopeId,
@@ -61,15 +61,15 @@ export const createCuratorIntent = ({
     : {}),
 });
 
-export const defaultMemoryCuratorIntent = ({
+export const defaultMemoryManagerIntent = ({
   thread,
   project,
 }: {
   thread?: Thread | null;
   project?: Project | null;
-}): MemoryCuratorIntent => {
+}): MemoryManagerIntent => {
   if (thread) {
-    return createCuratorIntent({
+    return createManagerIntent({
       scopeType: 'thread',
       scopeId: thread.id,
       thread,
@@ -77,19 +77,19 @@ export const defaultMemoryCuratorIntent = ({
     });
   }
   if (project) {
-    return createCuratorIntent({
+    return createManagerIntent({
       scopeType: 'project',
       scopeId: project.id,
       project,
     });
   }
-  return createCuratorIntent({
+  return createManagerIntent({
     scopeType: 'user',
     scopeId: 'default',
   });
 };
 
-export const reviewCuratorIntent = (thread: Thread): MemoryCuratorIntent => ({
+export const reviewManagerIntent = (thread: Thread): MemoryManagerIntent => ({
   mode: 'conversation_review',
   scopeType: 'thread',
   scopeId: thread.id,
@@ -98,13 +98,13 @@ export const reviewCuratorIntent = (thread: Thread): MemoryCuratorIntent => ({
   ...(thread.embeddingModel ? { embeddingModel: thread.embeddingModel } : {}),
 });
 
-export const memoryReviewCuratorIntent = ({
+export const memoryReviewManagerIntent = ({
   thread,
   project,
 }: {
   thread?: Thread | null;
   project?: Project | null;
-}): MemoryCuratorIntent => ({
+}): MemoryManagerIntent => ({
   mode: 'memory_review',
   scopeType: thread ? 'thread' : project ? 'project' : 'user',
   scopeId: thread?.id || project?.id || 'default',
@@ -115,7 +115,7 @@ export const memoryReviewCuratorIntent = ({
     : {}),
 });
 
-export const curatorTitle = (intent: MemoryCuratorIntent) => {
+export const managerTitle = (intent: MemoryManagerIntent) => {
   if (intent.mode === 'conversation_review') return 'Conversation Memory Review';
   if (intent.mode === 'memory_review') return 'Memory Consistency Review';
   if (intent.mode === 'edit') return 'Edit Memory';

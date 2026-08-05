@@ -51,7 +51,7 @@ import {
   memoryRecallReasonLabel,
   memoryScopeLabel,
 } from '../../lib/memory-ui';
-import { createCuratorIntent, memoryReviewCuratorIntent, type MemoryCuratorIntent } from '../../lib/memory-curator';
+import { createManagerIntent, memoryReviewManagerIntent, type MemoryManagerIntent } from '../../lib/memory-manager';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 
 const MEMORY_LIMIT = 500;
@@ -183,7 +183,7 @@ export default function MemoryWorkspace({
   activeProject?: Project | null;
   projectInventoryVersion?: number;
   curatorRefreshVersion?: number;
-  onOpenCurator?: (intent: MemoryCuratorIntent) => void;
+  onOpenCurator?: (intent: MemoryManagerIntent) => void;
 }) {
   const [sections, setSections] = useState<MemoryWorkspaceSection[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -247,7 +247,7 @@ export default function MemoryWorkspace({
   );
 
   const openCurator = (scopeType: MemoryScopeType, scopeId: string, memory?: MemoryWorkspaceRecord) => {
-    onOpenCurator?.(createCuratorIntent({
+    onOpenCurator?.(createManagerIntent({
       scopeType,
       scopeId,
       thread: activeThread,
@@ -302,7 +302,7 @@ export default function MemoryWorkspace({
             <Button
               size="small"
               startIcon={<FactCheckIcon />}
-              onClick={() => onOpenCurator?.(memoryReviewCuratorIntent({ thread: activeThread, project: projectContext }))}
+              onClick={() => onOpenCurator?.(memoryReviewManagerIntent({ thread: activeThread, project: projectContext }))}
               disabled={!onOpenCurator}
             >
               Review memories

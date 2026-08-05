@@ -12,7 +12,8 @@ from app.models.llm_server_client import (
     REPLANS_LIMIT,
     MAX_SYSTEM_ROLE_CHARS,
 )
-from app.models.memory_curator_budget import MAX_CURATOR_REQUEST_MESSAGES
+from app.models.memory_manager_input_budget import MAX_MEMORY_MANAGER_REQUEST_MESSAGES
+from app.models.memory_manager_budget import HARD_MAX_CANONICAL_OPERATIONS, HARD_MAX_RELATIONSHIP_TARGETS
 from app.models.memory_tools import MemoryAttributes
 from app.models.memory_limits import MAX_MEMORY_QUERY_CHARS
 
@@ -114,7 +115,7 @@ class MemorySearchRequest(BaseModel):
     max_results: int = Field(default=10, ge=1, le=MAX_MEMORY_SEARCH_RESULTS)
 
 
-class MemoryCuratorMessage(BaseModel):
+class MemoryManagerMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["user", "assistant"]
@@ -122,7 +123,7 @@ class MemoryCuratorMessage(BaseModel):
     choice_id: Optional[str] = Field(default=None, max_length=100)
 
 
-class MemoryCuratorContext(BaseModel):
+class MemoryManagerContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     selected_scope_type: Literal["user", "project", "thread"]
@@ -131,14 +132,14 @@ class MemoryCuratorContext(BaseModel):
     project_id: Optional[str] = None
 
 
-class MemoryCuratorWebSearchDecision(BaseModel):
+class MemoryManagerWebSearchDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(min_length=1, max_length=1000)
     approved: bool
 
 
-class MemoryCuratorWebSource(BaseModel):
+class MemoryManagerWebSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=100)
@@ -148,20 +149,20 @@ class MemoryCuratorWebSource(BaseModel):
     searched_at: str = Field(min_length=1, max_length=100)
 
 
-class MemoryCuratorRespondRequest(BaseModel):
+class MemoryManagerConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["create", "edit", "conversation_review", "memory_review"]
-    context: MemoryCuratorContext
+    context: MemoryManagerContext
     memory_id: Optional[str] = None
-    messages: List[MemoryCuratorMessage] = Field(
+    messages: List[MemoryManagerMessage] = Field(
         default_factory=list,
-        max_length=MAX_CURATOR_REQUEST_MESSAGES,
+        max_length=MAX_MEMORY_MANAGER_REQUEST_MESSAGES,
     )
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
     web_search_mode: Literal["off", "ask", "on"] = "off"
-    web_search_decision: Optional[MemoryCuratorWebSearchDecision] = None
+    web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
     memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
 
 
@@ -172,7 +173,7 @@ class MemoryOverrideTarget(BaseModel):
     expected_updated_at: str = Field(min_length=1)
 
 
-class MemoryCuratorOperation(BaseModel):
+class MemoryChangeOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["create", "update", "delete", "noop"]
@@ -187,7 +188,7 @@ class MemoryCuratorOperation(BaseModel):
     operation_group_id: Optional[str] = Field(default=None, max_length=100)
     move_source_memory_id: Optional[str] = None
     move_destination_memory_id: Optional[str] = None
-    web_sources: List[MemoryCuratorWebSource] = Field(default_factory=list, max_length=12)
+    web_sources: List[MemoryManagerWebSource] = Field(default_factory=list, max_length=12)
 
 
 class MemoryReviewCursor(BaseModel):
@@ -210,14 +211,93 @@ class MemoryConsistencyReviewCursor(BaseModel):
     remaining_anchor_count: int = Field(default=0, ge=0)
 
 
-class MemoryCuratorApplyRequest(BaseModel):
+class MemoryChangeApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    context: MemoryCuratorContext
+    context: MemoryManagerContext
     confirmed: Literal[True]
-    operations: List[MemoryCuratorOperation] = Field(default_factory=list, max_length=20)
+    operations: List[MemoryChangeOperation] = Field(default_factory=list, max_length=20)
     review_cursor: Optional[MemoryReviewCursor] = None
     memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
+    actor_id: str = Field(default="ui", min_length=1, max_length=200)
+
+
+class MemoryManagerOperation(BaseModel):
+    """Explicit, browser-held operation in a unified memory plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal[
+        "memory_create",
+        "memory_update",
+        "memory_delete",
+        "memory_move",
+        "memory_merge",
+        "relationship_replace",
+    ]
+    memory_id: Optional[str] = None
+    source_memory_id: Optional[str] = None
+    destination_memory_id: Optional[str] = None
+    scope_type: Optional[Literal["user", "project", "thread"]] = None
+    scope_id: Optional[str] = None
+    target_scope_type: Optional[Literal["user", "project", "thread"]] = None
+    target_scope_id: Optional[str] = None
+    content: Optional[str] = Field(default=None, max_length=MAX_MEMORY_QUERY_CHARS)
+    attributes: Optional[MemoryAttributes] = None
+    override_target_ids: List[str] = Field(default_factory=list, max_length=HARD_MAX_RELATIONSHIP_TARGETS)
+    override_target_versions: Dict[str, str] = Field(default_factory=dict)
+    expected_updated_at: Optional[str] = None
+    operation_group_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class MemoryManagerPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["direct_edit", "conversation_extract", "consistency_review"]
+    context: MemoryManagerContext
+    messages: List[MemoryManagerMessage] = Field(default_factory=list, max_length=MAX_MEMORY_MANAGER_REQUEST_MESSAGES)
+    memory_id: Optional[str] = None
+    llm_model: str = Field(min_length=1)
+    context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    review_round: int = Field(default=1, ge=1)
+    review_cursor: Optional[MemoryReviewCursor] = None
+    memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
+    review_id: Optional[str] = None
+    web_search_mode: Literal["off", "ask", "on"] = "off"
+    web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
+
+
+class MemoryManagerPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str
+    plan_hash: str
+    mode: Literal["direct_edit", "conversation_extract", "consistency_review"]
+    context: MemoryManagerContext
+    state: Literal["proposal", "clarification", "no_changes", "blocked"] = "no_changes"
+    message: str = ""
+    choices: List[Dict[str, str]] = Field(default_factory=list)
+    embedding_readiness: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_web_search: Optional[Dict[str, str]] = None
+    web_sources: List[Dict[str, Any]] = Field(default_factory=list)
+    consent: Optional[Dict[str, Any]] = None
+    operations: List[MemoryManagerOperation] = Field(default_factory=list, max_length=HARD_MAX_CANONICAL_OPERATIONS)
+    analysis: List[Dict[str, Any]] = Field(default_factory=list)
+    review: Optional[Dict[str, Any]] = None
+    memory_review: Optional[Dict[str, Any]] = None
+    budget: Dict[str, int] = Field(default_factory=dict)
+    review_id: Optional[str] = None
+    next_cursor: Optional[Dict[str, Any]] = None
+    scope_versions: Dict[str, int] = Field(default_factory=dict)
+
+
+class MemoryManagerApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan: MemoryManagerPlan
+    plan_hash: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    confirmed: Literal[True]
     actor_id: str = Field(default="ui", min_length=1, max_length=200)
 
 

@@ -26,7 +26,8 @@ from app.models.llm_server_client import (
     check_model_supports_tools,
     get_llm,
 )
-from app.models.memory_curator_budget import bound_curator_transcript, compute_curator_budget
+from app.models.memory_manager_input_budget import bound_memory_manager_transcript, compute_memory_manager_input_budget
+from app.models.memory_manager_budget import compute_memory_manager_budget, pack_candidate_groups
 from app.models.memory_tools import (
     MEMORY_PROPOSE,
     MEMORY_READ_STORED,
@@ -37,10 +38,10 @@ from app.models.memory_tools import (
     normalize_memory_attributes,
 )
 from app.models.requests import (
-    MemoryCuratorApplyRequest,
-    MemoryCuratorContext,
-    MemoryCuratorOperation,
-    MemoryCuratorRespondRequest,
+    MemoryChangeApplyRequest,
+    MemoryManagerContext,
+    MemoryChangeOperation,
+    MemoryManagerConversationRequest,
 )
 from app.models.retry import invoke_with_retry
 from app.prompts.loaders import load_prompt
@@ -83,18 +84,18 @@ from app.time_utils import iso_utc_z, utc_now
 
 logger = logging.getLogger(__name__)
 
-MAX_CURATOR_TOOL_CALLS = 4
-MAX_CURATOR_WEB_CALLS = 2
+MAX_MEMORY_MANAGER_TOOL_CALLS = 4
+MAX_MEMORY_MANAGER_WEB_CALLS = 2
 
-class MemoryCuratorError(ValueError):
+class MemoryManagerError(ValueError):
     code = "memory_curator_error"
 
 
-class MemoryCuratorNotFoundError(MemoryCuratorError):
+class MemoryManagerNotFoundError(MemoryManagerError):
     code = "memory_not_found"
 
 
-class MemoryCuratorModelUnavailableError(MemoryCuratorError):
+class MemoryManagerModelUnavailableError(MemoryManagerError):
     code = "llm_model_unavailable"
 
 
@@ -105,7 +106,7 @@ class CuratorWebSearchInput(BaseModel):
     reason: str = Field(default="Verify current external information", max_length=500)
 
 
-class MemoryChangedError(MemoryCuratorError):
+class MemoryChangedError(MemoryManagerError):
     code = "memory_changed"
 
     def __init__(self, memories: Sequence[Memory]):
@@ -114,7 +115,7 @@ class MemoryChangedError(MemoryCuratorError):
 
 
 async def _resolve_visible_scopes(
-    context: MemoryCuratorContext,
+    context: MemoryManagerContext,
 ) -> tuple[List[Dict[str, str]], Thread | None, Project | None]:
     selected_type = context.selected_scope_type
     selected_id = (
@@ -125,13 +126,13 @@ async def _resolve_visible_scopes(
     async with async_session_maker() as session:
         thread = await session.get(Thread, context.thread_id) if context.thread_id else None
         if context.thread_id and thread is None:
-            raise MemoryCuratorNotFoundError("Thread not found")
+            raise MemoryManagerNotFoundError("Thread not found")
         project_id = context.project_id or (thread.project_id if thread else None)
         project = await session.get(Project, project_id) if project_id else None
         if project_id and project is None:
-            raise MemoryCuratorNotFoundError("Project not found")
+            raise MemoryManagerNotFoundError("Project not found")
         if thread and project and thread.project_id != project.id:
-            raise MemoryCuratorError("Thread does not belong to the selected project")
+            raise MemoryManagerError("Thread does not belong to the selected project")
 
     scopes: List[Dict[str, str]] = []
     if thread is not None:
@@ -147,7 +148,7 @@ async def _resolve_visible_scopes(
         for scope in scopes
     }
     if (selected_type, selected_id) not in deduped:
-        raise MemoryCuratorError("Selected memory scope is not available in this workspace")
+        raise MemoryManagerError("Selected memory scope is not available in this workspace")
     return list(deduped.values()), thread, project
 
 
@@ -300,7 +301,7 @@ def _restrict_conversation_review_intents(
 
 
 def _memory_review_context_from_request(
-    context: MemoryCuratorContext,
+    context: MemoryManagerContext,
 ) -> tuple[str, str]:
     if context.thread_id:
         return "thread", context.thread_id
@@ -308,10 +309,10 @@ def _memory_review_context_from_request(
         return "project", context.project_id
     if context.selected_scope_type == MemoryScopeType.USER.value:
         return "user", LOCAL_USER_MEMORY_SCOPE_ID
-    raise MemoryCuratorError("Memory review requires a user, project, or thread context")
+    raise MemoryManagerError("Memory review requires a user, project, or thread context")
 
 
-async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
+async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Dict[str, Any]:
     try:
         tool_context, thread, project = await build_memory_tool_context(
             selected_scope_type=req.context.selected_scope_type,
@@ -321,13 +322,13 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             capabilities=[MEMORY_READ_STORED, MEMORY_PROPOSE, WEB_SEARCH_CAPABILITY],
         )
     except MemoryToolNotFoundError as exc:
-        raise MemoryCuratorNotFoundError(str(exc)) from exc
+        raise MemoryManagerNotFoundError(str(exc)) from exc
     except MemoryToolError as exc:
-        raise MemoryCuratorError(str(exc)) from exc
+        raise MemoryManagerError(str(exc)) from exc
     scopes = [scope.model_dump() for scope in tool_context.visible_scopes]
     consent = _consent_snapshot(thread, project)
     if not await check_chat_model_ready(req.llm_model):
-        raise MemoryCuratorModelUnavailableError(f"Chat model {req.llm_model} is unavailable")
+        raise MemoryManagerModelUnavailableError(f"Chat model {req.llm_model} is unavailable")
     review = (
         await build_conversation_review_batch(
             thread,
@@ -361,6 +362,11 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 req.memory_review_cursor.snapshot_scope_versions
                 if req.memory_review_cursor else None
             ),
+        )
+        review_budget = compute_memory_manager_budget(req.context_window, "consistency_review")
+        memory_review["candidate_groups"] = pack_candidate_groups(
+            memory_review.get("candidate_groups") or [],
+            review_budget,
         )
         if memory_review.get("blocked"):
             return {
@@ -404,12 +410,12 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 "consent": consent,
             }
 
-    transcript = bound_curator_transcript(
+    transcript = bound_memory_manager_transcript(
         [item.model_dump(mode="json", exclude_none=True) for item in req.messages],
         context_window=req.context_window,
     )
     query = build_review_memory_search_query(transcript, review)
-    curator_budget = compute_curator_budget(req.context_window)
+    curator_budget = compute_memory_manager_input_budget(req.context_window)
     search_result = await search_memory_tool(tool_context, MemorySearchInput(
         query=query,
         view="stored",
@@ -429,9 +435,9 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         used_chars += len(encoded)
     context_memories = bounded_memories
 
-    system_prompt = load_prompt("memory_curator/system.md")
-    tool_limit_prompt = load_prompt("memory_curator/tool_limit.md")
-    permission_retry_prompt = load_prompt("memory_curator/permission_retry.md")
+    system_prompt = load_prompt("memory_manager/system.md")
+    tool_limit_prompt = load_prompt("memory_manager/tool_limit.md")
+    permission_retry_prompt = load_prompt("memory_manager/permission_retry.md")
     prompt_payload = {
         "mode": req.mode,
         "selected_scope_type": req.context.selected_scope_type,
@@ -507,7 +513,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 return json.dumps({"status": "denied", "message": "The user declined this search."})
             pending_web_search = {"query": search_req.query, "reason": search_req.reason}
             return json.dumps({"status": "approval_required", **pending_web_search})
-        if web_call_count >= MAX_CURATOR_WEB_CALLS:
+        if web_call_count >= MAX_MEMORY_MANAGER_WEB_CALLS:
             return json.dumps({"status": "limit_reached"})
         web_call_count += 1
         result = await search_internet(
@@ -560,7 +566,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         if supports_tools:
             bound = llm.bind_tools(tools)
             loop_count = 0
-            while loop_count < MAX_CURATOR_TOOL_CALLS + MAX_CURATOR_WEB_CALLS:
+            while loop_count < MAX_MEMORY_MANAGER_TOOL_CALLS + MAX_MEMORY_MANAGER_WEB_CALLS:
                 loop_count += 1
                 response = await invoke_with_retry(bound.ainvoke, messages)
                 calls = list(getattr(response, "tool_calls", None) or [])
@@ -569,7 +575,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 messages.append(response)
                 for call in calls:
                     is_web_call = str(call.get("name") or "") == "internet_search"
-                    if not is_web_call and tool_call_count >= MAX_CURATOR_TOOL_CALLS:
+                    if not is_web_call and tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
                         break
                     if not is_web_call:
                         tool_call_count += 1
@@ -586,7 +592,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         content=str(output),
                         tool_call_id=str(call.get("id") or f"curator-tool-{loop_count}"),
                     ))
-                if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
+                if tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
                     messages.append(SystemMessage(content=tool_limit_prompt))
                     response = await invoke_with_retry(llm.ainvoke, messages)
                     break
@@ -712,13 +718,6 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             choices = []
     if state == "proposal" and not substantive_operations:
         state = "clarification"
-    if state in {"clarification", "conflict"} and not choices:
-        choices = [{
-            "id": "clarify",
-            "label": "Describe the intended memory",
-            "description": "Tell the curator what should be remembered and at which scope.",
-            "user_message": "Please help me clarify the exact memory and scope.",
-        }]
     return {
         "message": str(parsed.get("message") or "Please review the proposed memory changes.")[:6000],
         "state": state,
@@ -737,7 +736,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     }
 
 
-def _operation_scope(operation: MemoryCuratorOperation) -> tuple[str, str]:
+def _operation_scope(operation: MemoryChangeOperation) -> tuple[str, str]:
     scope_type = str(operation.scope_type or "")
     scope_id = str(operation.scope_id or "").strip()
     if scope_type == MemoryScopeType.USER.value:
@@ -758,9 +757,9 @@ def _validate_override_scope(source: Memory, target: Memory) -> None:
     source_rank = _SCOPE_RANK[source.scope_type]
     target_rank = _SCOPE_RANK[target.scope_type]
     if source_rank < target_rank:
-        raise MemoryCuratorError("A broader memory cannot override a narrower memory")
+        raise MemoryManagerError("A broader memory cannot override a narrower memory")
     if source_rank == target_rank and source.scope_id != target.scope_id:
-        raise MemoryCuratorError("Memory overrides cannot cross peers at the same scope")
+        raise MemoryManagerError("Memory overrides cannot cross peers at the same scope")
 
 
 def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
@@ -772,7 +771,7 @@ def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
 
     def visit(memory_id: str) -> None:
         if memory_id in visiting:
-            raise MemoryCuratorError("Memory override relationships cannot contain a cycle")
+            raise MemoryManagerError("Memory override relationships cannot contain a cycle")
         if memory_id in visited:
             return
         visiting.add(memory_id)
@@ -785,33 +784,37 @@ def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
         visit(source_id)
 
 
-async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dict[str, Any]:
+async def apply_memory_change_set(req: MemoryChangeApplyRequest) -> Dict[str, Any]:
     if req.memory_review_cursor:
         expected_type, expected_id = _memory_review_context_from_request(req.context)
         if (
             req.memory_review_cursor.context_type != expected_type
             or req.memory_review_cursor.context_id != expected_id
         ):
-            raise MemoryCuratorError("Memory review cursor does not match this workspace")
+            raise MemoryManagerError("Memory review cursor does not match this workspace")
     scopes, context_thread, _project = await _resolve_visible_scopes(req.context)
     visible_scopes = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
     operations = [operation for operation in req.operations if operation.action != "noop"]
     if req.review_cursor:
         if context_thread is None or req.review_cursor.thread_id != context_thread.id:
-            raise MemoryCuratorError("Conversation review cursor does not match this thread")
+            raise MemoryManagerError("Conversation review cursor does not match this thread")
         for operation in operations:
             if operation.action != "create":
-                raise MemoryCuratorError("Conversation review can only create new Thread memories")
+                raise MemoryManagerError("Conversation review can only create new Thread memories")
             if _operation_scope(operation) != (MemoryScopeType.THREAD.value, context_thread.id):
-                raise MemoryCuratorError("Conversation review can only create memory in this thread")
+                raise MemoryManagerError("Conversation review can only create memory in this thread")
             if operation.semantic_action not in {None, "create"}:
-                raise MemoryCuratorError("Conversation review cannot modify existing memory")
-    source_ids = [operation.memory_id for operation in operations if operation.memory_id]
+                raise MemoryManagerError("Conversation review cannot modify existing memory")
+    source_ids = [
+        operation.memory_id
+        for operation in operations
+        if operation.memory_id and operation.action != "create"
+    ]
     if len(source_ids) != len(set(source_ids)):
-        raise MemoryCuratorError("A memory may only appear once in a change set")
+        raise MemoryManagerError("A memory may only appear once in a change set")
 
     create_ids = {
-        index: str(uuid.uuid4())
+        index: str(operation.memory_id or uuid.uuid4())
         for index, operation in enumerate(operations)
         if operation.action == "create"
     }
@@ -831,9 +834,9 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         scope = _operation_scope(operation)
         if operation.action == "create":
             if scope not in visible_scopes:
-                raise MemoryCuratorError("Create operation targets an unavailable scope")
+                raise MemoryManagerError("Create operation targets an unavailable scope")
             if not operation.content:
-                raise MemoryCuratorError("Create operation requires content")
+                raise MemoryManagerError("Create operation requires content")
             model = await resolve_scope_embedding_model(*scope)
             await require_embedding_model_ready(model)
             create_models[index] = model
@@ -858,7 +861,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                     locked = {memory.id: memory for memory in result.scalars().all()}
                 missing = [memory_id for memory_id in affected_ids if memory_id not in locked]
                 if missing:
-                    raise MemoryCuratorNotFoundError(f"Memory not found: {missing[0]}")
+                    raise MemoryManagerNotFoundError(f"Memory not found: {missing[0]}")
                 expected_timestamps = {
                     operation.memory_id: operation.expected_updated_at
                     for operation in operations if operation.memory_id
@@ -890,22 +893,22 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                     else:
                         source = locked[operation.memory_id or ""]
                         if (source.scope_type, source.scope_id) not in visible_scopes:
-                            raise MemoryCuratorError("Operation targets memory outside this workspace")
+                            raise MemoryManagerError("Operation targets memory outside this workspace")
                         if _operation_scope(operation) != (source.scope_type, source.scope_id):
-                            raise MemoryCuratorError("Memory scope cannot be changed by update or delete")
+                            raise MemoryManagerError("Memory scope cannot be changed by update or delete")
                     if operation.action not in {"create", "update"}:
                         continue
                     if not operation.content:
-                        raise MemoryCuratorError("Create/update operation requires content")
+                        raise MemoryManagerError("Create/update operation requires content")
                     target_ids = [target.memory_id for target in operation.override_targets]
                     if len(target_ids) != len(set(target_ids)):
-                        raise MemoryCuratorError("Override targets cannot contain duplicates")
+                        raise MemoryManagerError("Override targets cannot contain duplicates")
                     for target_spec in operation.override_targets:
                         target = locked[target_spec.memory_id]
                         if (target.scope_type, target.scope_id) not in visible_scopes:
-                            raise MemoryCuratorError("Override target is outside this workspace")
+                            raise MemoryManagerError("Override target is outside this workspace")
                         if source.id == target.id:
-                            raise MemoryCuratorError("A memory cannot override itself")
+                            raise MemoryManagerError("A memory cannot override itself")
                         _validate_override_scope(source, target)
 
                 existing_edges = list((await session.execute(select(MemoryOverride))).scalars().all())
@@ -951,7 +954,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         duplicate_query = duplicate_query.where(Memory.id != operation.memory_id)
                     duplicate = (await session.execute(duplicate_query.limit(1))).scalar_one_or_none()
                     if duplicate is not None:
-                        raise MemoryCuratorError(
+                        raise MemoryManagerError(
                             f"An identical active memory already exists in this scope: {duplicate.id}"
                         )
 
@@ -960,7 +963,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                 if req.review_cursor is not None:
                     cursor = req.review_cursor
                     if context_thread is None or cursor.thread_id != context_thread.id:
-                        raise MemoryCuratorError("Review cursor does not match the active thread")
+                        raise MemoryManagerError("Review cursor does not match the active thread")
                     reviewed_turn = await session.get(ChatTurn, cursor.reviewed_through_turn_id)
                     if (
                         reviewed_turn is None
@@ -968,14 +971,14 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         or reviewed_turn.status != ChatTurnStatus.COMPLETED.value
                         or reviewed_turn.created_at != cursor.reviewed_through_created_at
                     ):
-                        raise MemoryCuratorError("Review cursor does not reference an eligible turn")
+                        raise MemoryManagerError("Review cursor does not reference an eligible turn")
                     review_thread = await session.get(Thread, cursor.thread_id, with_for_update=True)
                     if review_thread is None:
-                        raise MemoryCuratorNotFoundError("Review thread not found")
+                        raise MemoryManagerNotFoundError("Review thread not found")
 
                 for memory_id, embedding_model in cleanup_targets:
                     if not await get_vector_db().delete_memory_vectors(memory_id, embedding_model):
-                        raise MemoryCuratorError(f"Failed to clean vectors for memory {memory_id}")
+                        raise MemoryManagerError(f"Failed to clean vectors for memory {memory_id}")
                     cleaned_vector_targets.append((memory_id, embedding_model))
 
                 now = utc_now()
@@ -1053,7 +1056,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                 updated_at=now,
                             )
                             if updated is None:
-                                raise MemoryCuratorNotFoundError("Memory disappeared during update")
+                                raise MemoryManagerNotFoundError("Memory disappeared during update")
                             memory = updated
                             to_index.append(memory)
                         elif operation.web_sources or operation.attributes is not None:

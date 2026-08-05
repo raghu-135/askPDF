@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app.prompts.loaders import load_prompt
-from app.models.memory_curator_budget import compute_curator_budget
+from app.models.memory_manager_input_budget import compute_memory_manager_input_budget
 from app.services.memory_review_service import (
     _review_override_edges,
     _visible_review_neighbors,
@@ -26,8 +26,8 @@ def test_review_search_query_is_bounded_and_represents_every_turn():
 
 
 def test_curator_budget_scales_with_selected_context_window():
-    small = compute_curator_budget(2048)
-    large = compute_curator_budget(40000)
+    small = compute_memory_manager_input_budget(2048)
+    large = compute_memory_manager_input_budget(40000)
 
     assert large["transcript_chars"] > small["transcript_chars"]
     assert large["review_context_chars"] > small["review_context_chars"]
@@ -77,7 +77,7 @@ def test_review_override_edges_include_only_relationships_inside_candidate_group
 
 
 def test_memory_review_prompt_teaches_scope_precedence_and_existing_overrides():
-    prompt = load_prompt("memory_curator/system.md")
+    prompt = load_prompt("memory_manager/system.md")
     prompt_flat = " ".join(prompt.split())
 
     assert "clean up existing stored memories and relationships" in prompt_flat

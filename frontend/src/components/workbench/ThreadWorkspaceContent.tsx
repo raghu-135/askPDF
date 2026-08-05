@@ -6,7 +6,7 @@ import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
 import type { Project, Thread } from '../../lib/api';
-import type { MemoryCuratorIntent } from '../../lib/memory-curator';
+import type { MemoryManagerIntent } from '../../lib/memory-manager';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -57,7 +57,7 @@ export default function ThreadWorkspaceContent({
   activeProject?: Project | null;
   projectInventoryVersion?: number;
   curatorRefreshVersion?: number;
-  onOpenMemoryCurator?: (intent: MemoryCuratorIntent) => void;
+  onOpenMemoryCurator?: (intent: MemoryManagerIntent) => void;
   emptyTitle: string;
   emptyDescription: string;
 }) {

@@ -38,6 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.threads import router as threads_router
 from app.api.projects import router as projects_router
 from app.api.memories import router as memories_router
+from app.api.memory_manager import router as memory_manager_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
@@ -138,6 +139,7 @@ app.add_middleware(
 app.include_router(threads_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(memories_router, prefix="/api")
+app.include_router(memory_manager_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(models_router, prefix="/api")
