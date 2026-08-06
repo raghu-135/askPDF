@@ -731,6 +731,18 @@ export interface AgentWorkflowCatalogResponse {
   defaults: {
     context_policy?: AgentWorkflowContextPolicy;
     loop_policy?: Record<string, any>;
+    parallel_policy?: {
+      defaults: Record<string, boolean | number>;
+      fields: Record<string, {
+        type: 'boolean' | 'integer';
+        default: boolean | number;
+        minimum?: number;
+        maximum?: number;
+        step?: number;
+        unit?: string;
+        label: string;
+      }>;
+    };
     [key: string]: any;
   };
   [key: string]: any;

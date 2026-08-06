@@ -4,15 +4,18 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PersonAddAltIcon from '@mui/icons-material/PersonAddAlt';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import {
   Box,
   Chip,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputLabel,
   MenuItem,
   Select,
   Stack,
+  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -560,6 +563,55 @@ function EdgeInspector({
   );
 }
 
+function ParallelPolicyEditor({
+  catalog,
+  policy,
+  disabled,
+  onChange,
+}: {
+  catalog: AgentWorkflowCatalogResponse;
+  policy: Record<string, boolean | number>;
+  disabled?: boolean;
+  onChange: (patch: Record<string, boolean | number>) => void;
+}) {
+  const contract = catalog.defaults.parallel_policy;
+  if (!contract) return null;
+  const numericFields = Object.entries(contract.fields).filter(([, field]) => field.type === 'integer');
+  const partialField = contract.fields.continue_on_partial_failure;
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 1, mt: 1, borderTop: 1, borderColor: 'divider' }}>
+      <Typography variant="caption" sx={sectionLabelSx}>Parallel policy</Typography>
+      {numericFields.map(([key, field]) => (
+        <Box key={key} sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 0.5 }}>
+          <TextField
+            size="small"
+            type="number"
+            label={field.label}
+            value={policy[key] ?? field.default}
+            disabled={disabled}
+            slotProps={{ htmlInput: { min: field.minimum, max: field.maximum, step: field.step || 1 } }}
+            helperText={field.unit ? `${field.minimum}–${field.maximum} ${field.unit}` : `${field.minimum}–${field.maximum}`}
+            onChange={(event) => {
+              const parsed = Number(event.target.value);
+              const value = Math.max(Number(field.minimum), Math.min(Number(field.maximum), Number.isFinite(parsed) ? parsed : Number(field.default)));
+              onChange({ [key]: value });
+            }}
+          />
+          <Tooltip title={`Reset ${field.label.toLocaleLowerCase()}`}>
+            <span><IconButton size="small" disabled={disabled} onClick={() => onChange({ [key]: Number(field.default) })}><RestartAltIcon fontSize="small" /></IconButton></span>
+          </Tooltip>
+        </Box>
+      ))}
+      {partialField ? (
+        <FormControlLabel
+          control={<Switch size="small" checked={Boolean(policy.continue_on_partial_failure)} disabled={disabled} onChange={(_, checked) => onChange({ continue_on_partial_failure: checked })} />}
+          label={<Typography variant="caption">{partialField.label}</Typography>}
+        />
+      ) : null}
+    </Box>
+  );
+}
+
 export default function BuilderInspector({
   catalog,
   state,
@@ -572,6 +624,7 @@ export default function BuilderInspector({
   onRemoveEdge,
   onAddHitlGate,
   onUpdateSettings,
+  onUpdateParallelPolicy,
 }: {
   catalog: AgentWorkflowCatalogResponse;
   state: AgentWorkflowBuilderState;
@@ -584,14 +637,16 @@ export default function BuilderInspector({
   onRemoveEdge: (edgeIndex: number) => void;
   onAddHitlGate: (targetNodeId: string) => void;
   onUpdateSettings: (patch: Record<string, any>) => void;
+  onUpdateParallelPolicy: (patch: Record<string, boolean | number>) => void;
 }) {
   const selectedNode = selection?.kind === 'node'
     ? state.nodes.find((node) => node.id === selection.nodeId)
     : undefined;
   const selectedEdge = selection?.kind === 'edge' ? state.edges[selection.edgeIndex] : undefined;
 
+  let inspector: React.ReactNode;
   if (selectedNode) {
-    return (
+    inspector = (
       <NodeInspector
         catalog={catalog}
         state={state}
@@ -603,10 +658,8 @@ export default function BuilderInspector({
         onAddHitlGate={onAddHitlGate}
       />
     );
-  }
-
-  if (selectedEdge && selection?.kind === 'edge') {
-    return (
+  } else if (selectedEdge && selection?.kind === 'edge') {
+    inspector = (
       <EdgeInspector
         catalog={catalog}
         state={state}
@@ -617,10 +670,8 @@ export default function BuilderInspector({
         onRemoveEdge={onRemoveEdge}
       />
     );
-  }
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.85, minWidth: 0 }}>
+  } else {
+    inspector = <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.85, minWidth: 0 }}>
       <Box>
         <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 700 }}>
           <FactCheckIcon fontSize="small" /> No selection
@@ -647,6 +698,15 @@ export default function BuilderInspector({
         }}
         onChange={(event) => onUpdateSettings({ replans: Math.max(1, Math.min(5, Number(event.target.value) || 1)) })}
       />
+    </Box>;
+  }
+  const hasParallelRegion = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator);
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {inspector}
+      {hasParallelRegion && state.parallel_policy ? (
+        <ParallelPolicyEditor catalog={catalog} policy={state.parallel_policy} disabled={disabled} onChange={onUpdateParallelPolicy} />
+      ) : null}
     </Box>
   );
 }

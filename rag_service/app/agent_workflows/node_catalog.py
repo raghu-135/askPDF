@@ -16,6 +16,7 @@ from app.agent_workflows.enums import (
     WorkflowNodeType,
 )
 from app.models.llm_server_client import REPLANS_LIMIT
+from app.agent_workflows.parallel_contracts import PARALLEL_REDUCER_CHANNELS
 
 
 NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
@@ -397,7 +398,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_RETRIEVAL_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "use_reranker", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "tool_events"],
-        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
+        "parallel_state_writes": list(PARALLEL_REDUCER_CHANNELS),
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -411,7 +412,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_chat_ids", "tool_events"],
-        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
+        "parallel_state_writes": list(PARALLEL_REDUCER_CHANNELS),
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -425,7 +426,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_DURABLE_MEMORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_memory_ids", "tool_events"],
-        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
+        "parallel_state_writes": list(PARALLEL_REDUCER_CHANNELS),
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -439,7 +440,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_THREAD_EVENTS_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "tool_events"],
-        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
+        "parallel_state_writes": list(PARALLEL_REDUCER_CHANNELS),
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -453,7 +454,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_WEB_WORKER: {
         "state_reads": ["question", "use_web_search", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "web_sources", "tool_events"],
-        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
+        "parallel_state_writes": list(PARALLEL_REDUCER_CHANNELS),
         "prompt_slots": ["web_search_mandate"],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {

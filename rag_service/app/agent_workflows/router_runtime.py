@@ -14,6 +14,7 @@ from app.agent_workflows.chat_cancellation import (
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.planning import worker_nodes_from_spec
 from app.agent_workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
+from app.agent_workflows.parallel_contracts import ParallelEventName
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from app.db import (
     AgentRunStatus,
@@ -677,7 +678,7 @@ async def _handle_compiled_rag_chat(
             partial_result.update(cancellation_update)
             if execution_event_sink is not None:
                 for packet in cancellation_update.get("worker_result_packets", []):
-                    await execution_event_sink.emit("worker.cancelled", {
+                    await execution_event_sink.emit(ParallelEventName.WORKER_CANCELLED, {
                         "agent_run_id": agent_run_id,
                         "dispatch_id": packet.get("dispatch_id"),
                         "work_id": packet.get("work_id"),
@@ -687,7 +688,7 @@ async def _handle_compiled_rag_chat(
                         "attempt": packet.get("attempt"),
                         "status": "cancelled",
                     })
-                await execution_event_sink.emit("dispatch.cancelled", cancellation_update.get("parallel_summary") or {})
+                await execution_event_sink.emit(ParallelEventName.DISPATCH_CANCELLED, cancellation_update.get("parallel_summary") or {})
         partial_result["node_events"] = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
         partial_result["tool_events"] = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
         logger.info(

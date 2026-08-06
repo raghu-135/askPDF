@@ -6,7 +6,6 @@ import json
 import os
 import re
 import time
-from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -14,40 +13,24 @@ from urllib.parse import urlsplit, urlunsplit
 from langgraph.types import Send, TimeoutPolicy
 from langgraph.errors import NodeTimeoutError
 
-from app.agent_workflows.enums import EvidenceKind, WorkflowNodeType
+from app.agent_workflows.enums import WorkflowNodeType
 from app.agent_workflows.evidence import combine_evidence
+from app.agent_workflows.parallel_contracts import (
+    DEFAULT_PARALLEL_POLICY,
+    PARALLEL_EVENT_NAMES,
+    PARALLEL_FEATURE_ENV,
+    PARALLEL_REFERENCE_WORKFLOW_ID,
+    PARALLEL_TERMINAL_WORKER_STATUSES,
+    PARALLEL_WORKER_EVIDENCE_KINDS,
+    ParallelEventName,
+    normalized_parallel_policy,
+    parallel_timeout_watchdog_seconds,
+)
 from app.models.retry import is_retryable_model_error
 
 
-PARALLEL_FEATURE_ENV = "ASKPDF_AGENT_WORKFLOW_PARALLEL_V1"
-DEFAULT_PARALLEL_POLICY: Dict[str, Any] = {
-    "enabled": True,
-    "max_concurrency": 4,
-    "max_work_items": 8,
-    "dispatch_timeout_ms": 60_000,
-    "default_worker_timeout_ms": 30_000,
-    "web_worker_timeout_ms": 45_000,
-    "max_attempts": 2,
-    "minimum_successes": 1,
-    "continue_on_partial_failure": True,
-}
-PARALLEL_POLICY_MAXIMUMS = {
-    "max_concurrency": 16,
-    "max_work_items": 32,
-    "dispatch_timeout_ms": 300_000,
-    "default_worker_timeout_ms": 120_000,
-    "web_worker_timeout_ms": 180_000,
-    "max_attempts": 5,
-    "minimum_successes": 32,
-}
-WORKER_EVIDENCE_KIND = {
-    WorkflowNodeType.RETRIEVAL_WORKER.value: EvidenceKind.DOCUMENT.value,
-    WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value: EvidenceKind.THREAD_CONVERSATION_HISTORY.value,
-    WorkflowNodeType.DURABLE_MEMORY_WORKER.value: EvidenceKind.DURABLE_MEMORY.value,
-    WorkflowNodeType.THREAD_EVENTS_WORKER.value: EvidenceKind.THREAD_EVENTS.value,
-    WorkflowNodeType.WEB_WORKER.value: EvidenceKind.WEB.value,
-}
-TERMINAL_WORKER_STATUSES = {"completed", "skipped", "failed", "timed_out", "cancelled"}
+WORKER_EVIDENCE_KIND = PARALLEL_WORKER_EVIDENCE_KINDS
+TERMINAL_WORKER_STATUSES = PARALLEL_TERMINAL_WORKER_STATUSES
 
 
 def parallel_feature_enabled() -> bool:
@@ -86,24 +69,8 @@ def parallel_runtime_authorized(state: Mapping[str, Any]) -> bool:
         return True
     return bool(
         parallel_feature_enabled()
-        and state.get("workflow_id") == "orchestrator_worker_rag_agent"
+        and state.get("workflow_id") == PARALLEL_REFERENCE_WORKFLOW_ID
     )
-
-
-def normalized_parallel_policy(value: Any) -> Dict[str, Any]:
-    raw = value if isinstance(value, dict) else {}
-    policy = deepcopy(DEFAULT_PARALLEL_POLICY)
-    for key in ("enabled", "continue_on_partial_failure"):
-        if isinstance(raw.get(key), bool):
-            policy[key] = raw[key]
-    for key, maximum in PARALLEL_POLICY_MAXIMUMS.items():
-        try:
-            parsed = int(raw.get(key, policy[key]))
-        except (TypeError, ValueError):
-            parsed = int(policy[key])
-        policy[key] = max(1, min(parsed, maximum))
-    policy["minimum_successes"] = min(policy["minimum_successes"], policy["max_work_items"])
-    return policy
 
 
 def _stable_hash(value: Any) -> str:
@@ -208,6 +175,7 @@ def work_item_proposals(parsed: Mapping[str, Any], execution_plan: Sequence[str]
 
 
 def dispatch_sends(state: Mapping[str, Any]) -> List[Send]:
+    policy = normalized_parallel_policy(state.get("parallel_policy"))
     terminal_ids = {
         str(packet.get("work_id"))
         for packet in state.get("worker_result_packets", [])
@@ -229,7 +197,12 @@ def dispatch_sends(state: Mapping[str, Any]) -> List[Send]:
                 "question": str(item.get("query") or state.get("question") or ""),
                 "work_item": dict(item),
             },
-            timeout=TimeoutPolicy(run_timeout=max(0.001, int(item.get("timeout_ms") or 30_000) / 1000)),
+            timeout=TimeoutPolicy(
+                run_timeout=parallel_timeout_watchdog_seconds(
+                    int(item.get("timeout_ms") or policy["default_worker_timeout_ms"]),
+                    policy["max_attempts"],
+                )
+            ),
         )
         for item in pending
     ]
@@ -493,7 +466,7 @@ def cancelled_parallel_dispatch(
     if not work_items:
         queued: Dict[str, Dict[str, Any]] = {}
         for envelope in event_envelopes:
-            if envelope.get("event") != "worker.queued":
+            if envelope.get("event") != ParallelEventName.WORKER_QUEUED:
                 continue
             data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
             if data.get("work_id"):
@@ -513,9 +486,14 @@ def cancelled_parallel_dispatch(
         if not work_id:
             continue
         attempts[work_id] = max(attempts.get(work_id, 1), int(data.get("attempt") or 1))
-        if event == "worker.started":
+        if event == ParallelEventName.WORKER_STARTED:
             active.add(work_id)
-        elif event in {"worker.completed", "worker.failed", "worker.timed_out", "worker.skipped"}:
+        elif event in {
+            ParallelEventName.WORKER_COMPLETED,
+            ParallelEventName.WORKER_FAILED,
+            ParallelEventName.WORKER_TIMED_OUT,
+            ParallelEventName.WORKER_SKIPPED,
+        }:
             active.discard(work_id)
     combined: Dict[str, Any] = {}
     cancelled_count = 0
@@ -529,7 +507,7 @@ def cancelled_parallel_dispatch(
             status="cancelled",
             attempt=attempts.get(work_id, 1),
             lifecycle_events=[{
-                "name": "worker.cancelled",
+                "name": ParallelEventName.WORKER_CANCELLED,
                 "status": "cancelled",
                 "reason": "active_cancelled" if work_id in active else "queued_cancelled",
             }],
@@ -540,6 +518,7 @@ def cancelled_parallel_dispatch(
     existing_statuses = [packet.get("status") for packet in terminal.values()]
     planned = len(work_items)
     summary = {
+        "agent_run_id": state.get("agent_run_id"),
         "dispatch_id": state.get("dispatch_id") or (work_items[0].get("dispatch_id") if work_items else None),
         "planned": planned,
         "completed": existing_statuses.count("completed"),
@@ -550,6 +529,8 @@ def cancelled_parallel_dispatch(
         "retried": sum(max(0, value - 1) for value in attempts.values()),
         "partial_evidence": False,
         "status": "cancelled",
+        "barrier_state": "cancelled",
+        "aggregation_state": "cancelled",
     }
     return {**combined, "parallel_summary": summary}
 

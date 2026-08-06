@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping
 
+from app.agent_workflows.parallel_contracts import (
+    PARALLEL_EVENT_JOURNAL_LIMIT,
+    PARALLEL_SUMMARY_COUNT_FIELDS,
+    PARALLEL_SUMMARY_METRIC_FIELDS,
+    ParallelEventName,
+)
+from app.agent_workflows.parallel_observability import project_parallel_events
+
 
 def _dict_events(events: Any) -> List[Dict[str, Any]]:
     if not isinstance(events, list):
@@ -71,8 +79,26 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
                 if isinstance(item, dict)
             ]
         if isinstance(attempts, list):
-            metrics["parallel_attempts"] = [dict(item) for item in attempts[-256:] if isinstance(item, dict)]
-        for key in ("planned", "completed", "skipped", "failed", "timed_out", "cancelled", "retried"):
+            projected = project_parallel_events([item for item in attempts if isinstance(item, dict)])
+            metrics["parallel_attempts"] = projected["journal"][-PARALLEL_EVENT_JOURNAL_LIMIT:]
+        for key in PARALLEL_SUMMARY_COUNT_FIELDS:
             metrics[f"parallel_worker_{key}"] = int(parallel.get(key) or 0)
+        for key in PARALLEL_SUMMARY_METRIC_FIELDS:
+            metrics[f"parallel_{key}"] = int(parallel.get(key) or 0)
+        worker_latencies = [
+            _elapsed_ms((item.get("data") or {}))
+            for item in metrics.get("parallel_attempts", [])
+            if item.get("event") in {
+                ParallelEventName.WORKER_COMPLETED,
+                ParallelEventName.WORKER_SKIPPED,
+                ParallelEventName.WORKER_FAILED,
+                ParallelEventName.WORKER_TIMED_OUT,
+                ParallelEventName.WORKER_CANCELLED,
+            }
+        ]
+        metrics["parallel_dispatch_latency_ms"] = float(parallel.get("elapsed_ms") or 0)
+        metrics["parallel_worker_latency_ms_total"] = round(sum(worker_latencies), 2)
+        metrics["parallel_worker_latency_ms_average"] = round(sum(worker_latencies) / len(worker_latencies), 2) if worker_latencies else 0.0
+        metrics["parallel_worker_latency_ms_max"] = round(max(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_partial_evidence"] = bool(parallel.get("partial_evidence"))
     return metrics

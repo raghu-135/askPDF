@@ -17,6 +17,7 @@ from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
+from app.agent_workflows.parallel_contracts import parallel_policy_catalog
 from app.agent_workflows.validator import (
     WorkflowResolver,
     WorkflowValidationError,
@@ -605,6 +606,7 @@ async def get_internal_agent_workflow_catalog():
             "loop_policy": {
                 "default_max_node_visits": 1,
             },
+            "parallel_policy": parallel_policy_catalog(),
         },
     }
 

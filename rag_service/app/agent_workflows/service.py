@@ -10,6 +10,7 @@ from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.enums import InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
+from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
@@ -18,6 +19,18 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
+
+
+def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
+    if execution_event_sink is None or not hasattr(execution_event_sink, "parallel_events"):
+        return
+    projection = project_parallel_events(execution_event_sink.parallel_events())
+    result["parallel_attempts"] = projection["journal"]
+    if result.get("parallel_summary") or projection["summary"].get("dispatch_id"):
+        result["parallel_summary"] = {
+            **projection["summary"],
+            **(result.get("parallel_summary") or {}),
+        }
 
 
 def _workflow_version_info(workflow: Any) -> SimpleNamespace:
@@ -203,8 +216,7 @@ class AgentRunService:
                     **stream_kwargs,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            if execution_event_sink is not None and hasattr(execution_event_sink, "parallel_events"):
-                result["parallel_attempts"] = execution_event_sink.parallel_events()
+            _attach_parallel_projection(result, execution_event_sink)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else None
             if status is None:
@@ -442,8 +454,7 @@ class AgentRunService:
                     trace_recorder=resume_trace_recorder,
                     **stream_kwargs,
                 )
-            if execution_event_sink is not None and hasattr(execution_event_sink, "parallel_events"):
-                result["parallel_attempts"] = execution_event_sink.parallel_events()
+            _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {
                 **prior_metrics,

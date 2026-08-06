@@ -63,6 +63,7 @@ export interface AgentWorkflowBuilderState {
   context_policy?: Record<string, any>;
   loop_policy?: Record<string, any>;
   hitl_policy?: Record<string, any>;
+  parallel_policy?: Record<string, boolean | number>;
   runtime?: Record<string, any>;
   extraConfig?: Record<string, any>;
   builder_ui?: {
@@ -115,18 +116,6 @@ const defaultRuntime = (supportsReplans = false, promptPreview = 'router') => ({
   prompt_preview: promptPreview,
 });
 
-const defaultParallelPolicy = {
-  enabled: true,
-  max_concurrency: 4,
-  max_work_items: 8,
-  dispatch_timeout_ms: 60000,
-  default_worker_timeout_ms: 30000,
-  web_worker_timeout_ms: 45000,
-  max_attempts: 2,
-  minimum_successes: 1,
-  continue_on_partial_failure: true,
-};
-
 const nodeTypeById = (nodes: BuilderNodeState[]) => (
   new Map(nodes.map((node) => [node.id, node.type]))
 );
@@ -141,6 +130,34 @@ const catalogEntry = (
 ): AgentWorkflowNodeCatalogEntry | undefined => (
   nodeType ? catalog.node_catalog[nodeType] : undefined
 );
+
+const isParallelWorkerType = (catalog: AgentWorkflowCatalogResponse, nodeType?: string) => (
+  Boolean(nodeType && catalogEntry(catalog, nodeType)?.parallel_state_writes?.includes('worker_result_packets'))
+);
+
+export const normalizeParallelPolicy = (
+  catalog: AgentWorkflowCatalogResponse,
+  value?: Record<string, any>,
+): Record<string, boolean | number> => {
+  const contract = catalog.defaults?.parallel_policy;
+  const normalized: Record<string, boolean | number> = { ...(contract?.defaults || {}) };
+  Object.entries(contract?.fields || {}).forEach(([key, field]) => {
+    const candidate = value?.[key];
+    if (field.type === 'boolean') {
+      normalized[key] = typeof candidate === 'boolean' ? candidate : Boolean(field.default);
+      return;
+    }
+    const parsed = Number(candidate ?? field.default);
+    const minimum = Number(field.minimum ?? 1);
+    const maximum = Number(field.maximum ?? Number.MAX_SAFE_INTEGER);
+    normalized[key] = Math.max(minimum, Math.min(maximum, Number.isFinite(parsed) ? Math.round(parsed) : Number(field.default)));
+  });
+  if (typeof normalized.minimum_successes === 'number' && typeof normalized.max_work_items === 'number') {
+    normalized.minimum_successes = Math.min(normalized.minimum_successes, normalized.max_work_items);
+  }
+  normalized.enabled = true;
+  return normalized;
+};
 
 const routeMetadata = (
   catalog: AgentWorkflowCatalogResponse,
@@ -243,17 +260,10 @@ export function canConnectNodes(
   const sourceType = types.get(sourceId);
   const targetType = types.get(targetId);
   const hasParallelRegion = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
-  const workerTypes = new Set([
-    'retrieval_worker',
-    'thread_conversation_history_worker',
-    BuiltinAgentNodeType.DurableMemoryWorker,
-    'thread_events_worker',
-    'web_worker',
-  ]);
-  if (hasParallelRegion && targetType && workerTypes.has(targetType) && sourceType !== BuiltinAgentNodeType.ParallelDispatch) {
+  if (hasParallelRegion && isParallelWorkerType(catalog, targetType) && sourceType !== BuiltinAgentNodeType.ParallelDispatch) {
     return { ok: false, reason: 'Parallel workers can only accept their dispatcher as a parent.' };
   }
-  if (hasParallelRegion && sourceType && workerTypes.has(sourceType) && targetType !== BuiltinAgentNodeType.Aggregator) {
+  if (hasParallelRegion && isParallelWorkerType(catalog, sourceType) && targetType !== BuiltinAgentNodeType.Aggregator) {
     return { ok: false, reason: 'Parallel workers must join the graph aggregator directly.' };
   }
   return canConnectNodeTypes(catalog, types.get(sourceId), types.get(targetId));
@@ -575,13 +585,7 @@ export function assembleAgentWorkflowSpec(
     ...(state.context_policy ? { context_policy: clone(state.context_policy) } : {}),
     ...(state.loop_policy ? { loop_policy: clone(state.loop_policy) } : {}),
     ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
-    ...(hasParallel ? {
-      parallel_policy: {
-        ...defaultParallelPolicy,
-        ...((state.extraConfig || {}).parallel_policy || {}),
-        enabled: true,
-      },
-    } : {}),
+    ...(hasParallel && state.parallel_policy ? { parallel_policy: clone(state.parallel_policy) } : {}),
     allowed_tool_ids: [...(state.allowed_tool_ids?.length ? state.allowed_tool_ids : collectAllowedToolIds(state.nodes))],
     builder_ui: {
       ...(state.builder_ui || {}),
@@ -610,7 +614,7 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
   const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentWorkflowGraphSpec : {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes.map((node) => clone(node) as BuilderNodeState) : [];
   const edges = Array.isArray(graph.edges) ? graph.edges.map((edge) => clone(edge) as BuilderEdgeState) : [];
-  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'builder_ui']);
+  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'parallel_policy', 'builder_ui']);
   const extraConfig = Object.fromEntries(
     Object.entries(config).filter(([key]) => !knownConfigKeys.has(key)),
   );
@@ -627,6 +631,7 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
     context_policy: config.context_policy ? clone(config.context_policy) : undefined,
     loop_policy: config.loop_policy ? clone(config.loop_policy) : undefined,
     hitl_policy: config.hitl_policy ? clone(config.hitl_policy) : undefined,
+    parallel_policy: config.parallel_policy ? clone(config.parallel_policy) : undefined,
     runtime: spec.runtime && typeof spec.runtime === 'object' ? clone(spec.runtime) : defaultRuntime(false),
     extraConfig,
     builder_ui: {
@@ -669,6 +674,19 @@ export function normalizeBuilderState(
       return Boolean(edge.from && edge.to);
     }),
   };
+  const hasParallelRegion = nodes.some((node) => (
+    node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator
+  ));
+  if (hasParallelRegion) {
+    normalized.parallel_policy = normalizeParallelPolicy(catalog, state.parallel_policy);
+  } else {
+    delete normalized.parallel_policy;
+    const runtime = clone(normalized.runtime || {});
+    if (runtime.features && typeof runtime.features === 'object') {
+      delete runtime.features.supports_parallel_dispatch;
+    }
+    normalized.runtime = runtime;
+  }
   const selectedToolIds = collectAllowedToolIds(normalized.nodes);
   const selectedToolSet = new Set(selectedToolIds);
   normalized.allowed_tool_ids = [

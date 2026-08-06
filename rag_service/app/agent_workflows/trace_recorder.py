@@ -8,6 +8,8 @@ from opentelemetry.trace import SpanKind, StatusCode, set_span_in_context
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent_workflows.enums import NodeEventStatus, TraceStatus
+from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
+from app.agent_workflows.parallel_observability import parallel_span_refs
 from app.agent_workflows.trace_otel import (
     _BufferedSpanExporter,
     _artifacts_from_refs,
@@ -86,6 +88,7 @@ class AgentTraceRecorder:
         self._detail_bytes = 0
         self._detail_limit_reached = False
         self._finalized = False
+        self._closed_parallel_span_ids: set[str] = set()
         self._root_span = self._start_span(
             span_id=self.run_span_id,
             parent_span_id=None,
@@ -284,6 +287,11 @@ class AgentTraceRecorder:
         route_reason: Any,
     ) -> Dict[str, Any]:
         config = _as_dict(self.resolved_spec.get("config"))
+        parallel_metrics = {
+            f"askpdf.{key.replace('_', '.')}": value
+            for key, value in metrics.items()
+            if key.startswith("parallel_") and isinstance(value, (bool, int, float, str))
+        }
         return _clean_dict(
             {
                 SpanAttributes.SESSION_ID: getattr(self.run, "thread_id", None),
@@ -301,6 +309,7 @@ class AgentTraceRecorder:
                 "askpdf.context_window": config.get("context_window"),
                 "askpdf.warning_count": metrics.get("tool_warning_count"),
                 "askpdf.error_count": metrics.get("error_count"),
+                **parallel_metrics,
             }
         )
 
@@ -635,9 +644,11 @@ class AgentTraceRecorder:
         input_data: Any = None,
         output_data: Any = None,
     ) -> None:
+        attrs = _as_dict(attributes)
+        self._record_parallel_runtime_span(event_name, attrs)
         event = build_runtime_trace_event(
             event_name,
-            attributes=attributes,
+            attributes=attrs,
             input_data=input_data,
             output_data=output_data,
         )
@@ -654,6 +665,77 @@ class AgentTraceRecorder:
                     attributes={k: v for k, v in ((_key, _otel_attr_value(_value)) for _key, _value in attrs.items()) if v is not None},
                 )
 
+    def _record_parallel_runtime_span(self, event_name: str, attributes: Mapping[str, Any]) -> None:
+        if event_name not in PARALLEL_EVENT_NAMES:
+            return
+        attrs = dict(attributes)
+        dispatch_id = str(attrs.get("dispatch_id") or "")
+        if not dispatch_id:
+            return
+        dispatch_span_id = f"dispatch:{dispatch_id}"
+        if dispatch_span_id not in self._spans_by_id:
+            self._start_span(
+                span_id=dispatch_span_id,
+                parent_span_id=self.run_span_id,
+                name="Parallel Dispatch",
+                kind=OpenInferenceSpanKindValues.CHAIN.value,
+                status="running",
+                start_time=attrs.get("occurred_at"),
+                attributes=_clean_dict({
+                    "askpdf.parallel.dispatch_id": dispatch_id,
+                    "askpdf.parallel.planned": attrs.get("planned"),
+                }),
+                input_data={}, output_data={}, events=[], links=[], raw={}, order=80,
+                end_immediately=False,
+            )
+        dispatch_span = self._spans_by_id[dispatch_span_id]
+        event_attrs = {key: _otel_attr_value(value) for key, value in attrs.items() if _otel_attr_value(value) is not None}
+        if dispatch_span_id not in self._closed_parallel_span_ids:
+            dispatch_span.add_event(event_name, attributes=event_attrs)
+        if event_name.startswith("worker.") and attrs.get("work_id"):
+            worker_span_id, _ = parallel_span_refs(event_name, attrs)
+            if worker_span_id and worker_span_id not in self._spans_by_id and event_name != ParallelEventName.WORKER_QUEUED:
+                self._start_span(
+                    span_id=worker_span_id,
+                    parent_span_id=dispatch_span_id,
+                    name=f"Parallel Worker: {attrs.get('worker_node_id') or attrs.get('worker_type') or 'worker'}",
+                    kind=OpenInferenceSpanKindValues.RETRIEVER.value,
+                    status="running",
+                    start_time=attrs.get("occurred_at"),
+                    attributes=_clean_dict({
+                        "askpdf.parallel.dispatch_id": dispatch_id,
+                        "askpdf.parallel.work_id": attrs.get("work_id"),
+                        "askpdf.parallel.ordinal": attrs.get("ordinal"),
+                        "askpdf.parallel.worker_node_id": attrs.get("worker_node_id"),
+                        "askpdf.parallel.worker_type": attrs.get("worker_type"),
+                        "askpdf.parallel.attempt": attrs.get("attempt") or 1,
+                    }),
+                    input_data={}, output_data={}, events=[], links=[], raw={}, order=81 + float(attrs.get("ordinal") or 0) / 100,
+                    end_immediately=False,
+                )
+            worker_span = self._spans_by_id.get(worker_span_id or "")
+            if worker_span is not None and worker_span_id not in self._closed_parallel_span_ids:
+                worker_span.add_event(event_name, attributes=event_attrs)
+                worker_status = event_name.removeprefix("worker.")
+                if worker_status in PARALLEL_TERMINAL_WORKER_STATUSES:
+                    status = TraceStatus.ERROR.value if worker_status in {"failed", "timed_out"} else worker_status
+                    worker_span.set_status(_otel_status(status))
+                    sidecar = self._sidecars[worker_span_id]
+                    sidecar["status"] = status
+                    sidecar["attributes"] = _clean_dict({**sidecar["attributes"], **attrs})
+                    sidecar["output"] = {"value": _bounded_value(attrs), "mime_type": "application/json"}
+                    worker_span.end(end_time=_parse_time_ns(attrs.get("occurred_at")))
+                    self._closed_parallel_span_ids.add(worker_span_id)
+        if event_name in {ParallelEventName.AGGREGATION_COMPLETED, ParallelEventName.AGGREGATION_PARTIAL, ParallelEventName.DISPATCH_CANCELLED} and dispatch_span_id not in self._closed_parallel_span_ids:
+            dispatch_status = "cancelled" if event_name == ParallelEventName.DISPATCH_CANCELLED else NodeEventStatus.COMPLETED.value
+            dispatch_span.set_status(_otel_status(dispatch_status))
+            sidecar = self._sidecars[dispatch_span_id]
+            sidecar["status"] = dispatch_status
+            sidecar["attributes"] = _clean_dict({**sidecar["attributes"], **attrs})
+            sidecar["output"] = {"value": _bounded_value(attrs), "mime_type": "application/json"}
+            dispatch_span.end(end_time=_parse_time_ns(attrs.get("occurred_at")))
+            self._closed_parallel_span_ids.add(dispatch_span_id)
+
     def finalize(
         self,
         *,
@@ -667,6 +749,16 @@ class AgentTraceRecorder:
     ) -> Dict[str, Any]:
         if not self._finalized:
             self.run = run
+            for span_id, span in list(self._spans_by_id.items()):
+                if span_id == self.run_span_id or span_id in self._closed_parallel_span_ids:
+                    continue
+                if not span_id.startswith(("dispatch:", "worker:")):
+                    continue
+                status = TraceStatus.ERROR.value if error else NodeEventStatus.COMPLETED.value
+                span.set_status(_otel_status(status))
+                self._sidecars[span_id]["status"] = status
+                span.end(end_time=_parse_time_ns(getattr(run, "completed_at", None)))
+                self._closed_parallel_span_ids.add(span_id)
             run_attributes = self._run_base_attributes(
                 chat_turn_id=chat_turn_id,
                 metrics=metrics,

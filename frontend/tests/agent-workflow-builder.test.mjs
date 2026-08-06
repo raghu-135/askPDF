@@ -23,6 +23,7 @@ import {
   isIsolatedBuilderNode,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
+  normalizeParallelPolicy,
   setHitlContinueWithoutTarget,
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
@@ -57,6 +58,17 @@ test('parallel workflow assembly enables bounded parallel runtime metadata', () 
       { from: 'worker', to: 'aggregate' },
     ],
     allowed_tool_ids: ['document_evidence'],
+    parallel_policy: {
+      enabled: true,
+      max_concurrency: 4,
+      max_work_items: 8,
+      dispatch_timeout_ms: 60000,
+      default_worker_timeout_ms: 30000,
+      web_worker_timeout_ms: 45000,
+      max_attempts: 2,
+      minimum_successes: 1,
+      continue_on_partial_failure: true,
+    },
     runtime: { kind: 'compiled_rag', features: { supports_replans: false } },
   });
 
@@ -321,6 +333,24 @@ const catalog = {
       final_prompt_assembly: 'legacy_evidence',
     },
     loop_policy: { default_max_node_visits: 1 },
+    parallel_policy: {
+      defaults: {
+        enabled: true, max_concurrency: 4, max_work_items: 8, dispatch_timeout_ms: 60000,
+        default_worker_timeout_ms: 30000, web_worker_timeout_ms: 45000, max_attempts: 2,
+        minimum_successes: 1, continue_on_partial_failure: true,
+      },
+      fields: {
+        enabled: { type: 'boolean', default: true, label: 'Parallel execution' },
+        max_concurrency: { type: 'integer', default: 4, minimum: 1, maximum: 16, step: 1, label: 'Maximum concurrency' },
+        max_work_items: { type: 'integer', default: 8, minimum: 1, maximum: 32, step: 1, label: 'Maximum work items' },
+        dispatch_timeout_ms: { type: 'integer', default: 60000, minimum: 1000, maximum: 300000, step: 1000, unit: 'ms', label: 'Dispatch timeout' },
+        default_worker_timeout_ms: { type: 'integer', default: 30000, minimum: 1000, maximum: 120000, step: 1000, unit: 'ms', label: 'Worker timeout' },
+        web_worker_timeout_ms: { type: 'integer', default: 45000, minimum: 1000, maximum: 180000, step: 1000, unit: 'ms', label: 'Web worker timeout' },
+        max_attempts: { type: 'integer', default: 2, minimum: 1, maximum: 5, step: 1, label: 'Maximum attempts' },
+        minimum_successes: { type: 'integer', default: 1, minimum: 1, maximum: 32, step: 1, label: 'Minimum successes' },
+        continue_on_partial_failure: { type: 'boolean', default: true, label: 'Continue with partial evidence' },
+      },
+    },
   },
 };
 
@@ -687,6 +717,7 @@ test('blocks manual connections that bypass a parallel region', () => {
   parallelCatalog.node_catalog.planner.allowed_child_types.push('parallel_dispatch');
   parallelCatalog.node_catalog.retrieval_worker.allowed_parent_types.push('parallel_dispatch');
   parallelCatalog.node_catalog.retrieval_worker.allowed_child_types.push('aggregator');
+  parallelCatalog.node_catalog.retrieval_worker.parallel_state_writes = ['worker_result_packets'];
   parallelCatalog.node_catalog.synthesizer.allowed_parent_types.push('aggregator');
 
   const state = {
@@ -705,4 +736,26 @@ test('blocks manual connections that bypass a parallel region', () => {
   assert.equal(canConnectNodes(parallelCatalog, state, 'worker', 'aggregate').ok, true);
   assert.equal(canConnectNodes(parallelCatalog, state, 'planner', 'worker').ok, false);
   assert.equal(canConnectNodes(parallelCatalog, state, 'worker', 'synthesizer').ok, false);
+});
+
+test('normalizes catalog-driven parallel policy and removes it with the region', () => {
+  const policy = normalizeParallelPolicy(catalog, {
+    max_concurrency: 999,
+    dispatch_timeout_ms: 1,
+    max_work_items: 2,
+    minimum_successes: 9,
+    continue_on_partial_failure: false,
+  });
+  assert.equal(policy.max_concurrency, 16);
+  assert.equal(policy.dispatch_timeout_ms, 1000);
+  assert.equal(policy.minimum_successes, 2);
+  assert.equal(policy.continue_on_partial_failure, false);
+
+  const withoutRegion = normalizeBuilderState(catalog, {
+    ...createInitialBuilderState(catalog, 'router'),
+    parallel_policy: policy,
+    runtime: { features: { supports_parallel_dispatch: true, supports_replans: false } },
+  });
+  assert.equal(withoutRegion.parallel_policy, undefined);
+  assert.equal(withoutRegion.runtime.features.supports_parallel_dispatch, undefined);
 });

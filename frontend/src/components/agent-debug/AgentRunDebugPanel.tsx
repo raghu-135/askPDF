@@ -4,12 +4,13 @@ import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import { buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
+import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
 
 function AgentRunDebugPanel({
   runId,
@@ -239,6 +240,25 @@ function AgentRunDebugPanel({
             {Number(parallelSummary.retried || 0) ? ` · ${parallelSummary.retried} retries` : ''}
             {parallelSummary.elapsed_ms != null ? ` · ${Math.round(Number(parallelSummary.elapsed_ms))} ms worker time` : ''}
           </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, my: 0.5 }}>
+            {Object.entries(PARALLEL_WORKER_STATUS_LABELS).map(([status, label]) => (
+              Number(parallelSummary[status] || 0) > 0 ? <Chip key={status} size="small" variant="outlined" label={`${parallelSummary[status]} ${label}`} /> : null
+            ))}
+            <Chip size="small" variant="outlined" label={`barrier ${parallelSummary.barrier_state || 'pending'}`} />
+            <Chip size="small" variant="outlined" label={`aggregation ${parallelSummary.aggregation_state || (parallelSummary.partial_evidence ? 'partial' : 'completed')}`} />
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Fan-out {Number(parallelSummary.fan_out_width ?? parallelSummary.planned ?? 0)}
+            {' · '}peak {Number(parallelSummary.peak_concurrency || 0)}
+            {parallelSummary.elapsed_ms != null ? ` · dispatch ${Math.round(Number(parallelSummary.elapsed_ms))} ms` : ''}
+          </Typography>
+          {(parallelSummary.evidence_packets_before_dedupe != null || parallelSummary.document_sources_before_dedupe != null || parallelSummary.web_sources_before_dedupe != null) && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              Deduplication: evidence {Number(parallelSummary.evidence_packets_before_dedupe || 0)}→{Number(parallelSummary.evidence_packets_after_dedupe || 0)}
+              {' · '}documents {Number(parallelSummary.document_sources_before_dedupe || 0)}→{Number(parallelSummary.document_sources_after_dedupe || 0)}
+              {' · '}web {Number(parallelSummary.web_sources_before_dedupe || 0)}→{Number(parallelSummary.web_sources_after_dedupe || 0)}
+            </Typography>
+          )}
           {parallelSummary.dispatch_id && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
               Dispatch {parallelSummary.dispatch_id}
@@ -257,7 +277,9 @@ function AgentRunDebugPanel({
                     <Typography key={`${task.work_id}:${attempt.attempt}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 2 }}>
                       Attempt {Number(attempt.attempt || 1)} · {attempt.status || 'unknown'}
                       {attempt.reason ? ` · ${attempt.reason}` : ''}
+                      {attempt.retryable === true ? ' · retryable' : attempt.retryable === false ? ' · non-retryable' : ''}
                       {attempt.elapsed_ms != null ? ` · ${Math.round(Number(attempt.elapsed_ms))} ms` : ''}
+                      {attempt.occurred_at ? ` · ${attempt.occurred_at}` : ''}
                     </Typography>
                   ))}
                 </Box>

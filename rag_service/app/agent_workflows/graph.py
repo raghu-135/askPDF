@@ -75,6 +75,7 @@ from app.agent_workflows.parallel_runtime import (
     worker_terminal_delta,
     work_item_proposals,
 )
+from app.agent_workflows.parallel_contracts import ParallelEventName
 from app.agent_workflows.node_catalog import (
     get_node_type_metadata,
     node_type_capabilities,
@@ -653,11 +654,19 @@ class NodeRegistry:
         async def emit(name: str, data: Dict[str, Any]) -> None:
             lifecycle_status = (
                 NodeEventStatus.FAILED.value
-                if name in {"worker.failed", "worker.timed_out", "worker.cancelled"}
+                if name in {
+                    ParallelEventName.WORKER_FAILED,
+                    ParallelEventName.WORKER_TIMED_OUT,
+                    ParallelEventName.WORKER_CANCELLED,
+                }
                 else "active"
-                if name in {"worker.started", "worker.retrying", "worker.queued"}
+                if name in {
+                    ParallelEventName.WORKER_STARTED,
+                    ParallelEventName.WORKER_RETRYING,
+                    ParallelEventName.WORKER_QUEUED,
+                }
                 else NodeEventStatus.SKIPPED.value
-                if name == "worker.skipped"
+                if name == ParallelEventName.WORKER_SKIPPED
                 else NodeEventStatus.COMPLETED.value
             )
             payload = {
@@ -680,9 +689,27 @@ class NodeRegistry:
             elif studio_queue is not None:
                 await studio_queue.put({"event": name, "data": payload})
 
+        def exhausted_retry_delta(error: BaseException, status: str) -> Dict[str, Any]:
+            error_payload = {
+                "code": f"parallel_worker_{status}",
+                "type": type(error).__name__,
+                "message": compact_preview(str(error) or status, limit=700),
+                "retryable": True,
+            }
+            return worker_terminal_delta(
+                item,
+                status=status,
+                attempt=attempt,
+                lifecycle_events=lifecycle_events,
+                errors=[error_payload],
+                started_at=iso_utc_z(started_at),
+                completed_at=iso_utc_z(utc_now()),
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+
         if attempt > 1:
-            await emit("worker.retrying", {"attempt": attempt - 1, "next_attempt": attempt, "status": "runtime_retry"})
-        await emit("worker.started", {"attempt": attempt})
+            await emit(ParallelEventName.WORKER_RETRYING, {"attempt": attempt - 1, "next_attempt": attempt, "status": "runtime_retry"})
+        await emit(ParallelEventName.WORKER_STARTED, {"attempt": attempt})
         branch_state = {
             **state,
             "question": str(item.get("query") or state.get("question") or ""),
@@ -701,40 +728,52 @@ class NodeRegistry:
         try:
             deadline_ms = int(state.get("dispatch_deadline_epoch_ms") or 0)
             remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000 if deadline_ms else None
+            deadline_owns_timeout = False
             if remaining_seconds is not None and remaining_seconds <= 0:
                 raise ParallelDispatchDeadlineExceeded("parallel dispatch deadline exceeded")
+            worker_timeout_seconds = max(0.001, int(item.get("timeout_ms") or 30_000) / 1000)
+            deadline_owns_timeout = remaining_seconds is not None and remaining_seconds <= worker_timeout_seconds
+            attempt_timeout_seconds = (
+                min(worker_timeout_seconds, remaining_seconds)
+                if remaining_seconds is not None
+                else worker_timeout_seconds
+            )
             worker_call = self._run_sequential_tool_worker(node_name, branch_state, config)
-            output = await asyncio.wait_for(worker_call, timeout=remaining_seconds) if remaining_seconds else await worker_call
+            output = await asyncio.wait_for(worker_call, timeout=attempt_timeout_seconds)
         except ChatRunCancellationRequested:
-            await emit("worker.cancelled", {"attempt": attempt, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)})
+            await emit(ParallelEventName.WORKER_CANCELLED, {"attempt": attempt, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)})
             raise
         except asyncio.TimeoutError as exc:
-            deadline_reached = bool(deadline_ms and int(time.time() * 1000) >= deadline_ms)
+            deadline_reached = deadline_owns_timeout
             timeout_error: BaseException = (
                 ParallelDispatchDeadlineExceeded("parallel dispatch deadline exceeded")
                 if deadline_reached
                 else exc
             )
             retryable = parallel_retryable_error(timeout_error)
-            await emit("worker.timed_out", {
+            await emit(ParallelEventName.WORKER_TIMED_OUT, {
                 "attempt": attempt,
                 "retryable": retryable,
                 "reason": "dispatch_deadline" if deadline_reached else "worker_timeout",
             })
             if retryable and attempt < normalized_parallel_policy(state.get("parallel_policy"))["max_attempts"]:
-                await emit("worker.retrying", {"attempt": attempt, "next_attempt": attempt + 1, "status": "timed_out"})
+                await emit(ParallelEventName.WORKER_RETRYING, {"attempt": attempt, "next_attempt": attempt + 1, "status": "timed_out"})
+            elif retryable:
+                return exhausted_retry_delta(timeout_error, "timed_out")
             raise ParallelWorkerError(timeout_error, attempt=attempt, status="timed_out") from exc
         except Exception as exc:
             retryable = parallel_retryable_error(exc)
             status = "timed_out" if isinstance(exc, TimeoutError) else "failed"
             await emit(f"worker.{status}", {"attempt": attempt, "retryable": retryable})
             if retryable and attempt < normalized_parallel_policy(state.get("parallel_policy"))["max_attempts"]:
-                await emit("worker.retrying", {"attempt": attempt, "next_attempt": attempt + 1, "status": status})
+                await emit(ParallelEventName.WORKER_RETRYING, {"attempt": attempt, "next_attempt": attempt + 1, "status": status})
+            elif retryable:
+                return exhausted_retry_delta(exc, status)
             raise ParallelWorkerError(exc, attempt=attempt, status=status) from exc
 
         latest = (output.get("node_events") or [{}])[-1]
         status = "skipped" if latest.get("status") == NodeEventStatus.SKIPPED.value else "completed"
-        await emit("worker.progress", {
+        await emit(ParallelEventName.WORKER_PROGRESS, {
             "attempt": attempt,
             "evidence_packet_count": len(output.get("evidence_packets") or []),
             "document_source_count": len(output.get("document_sources") or []),
@@ -806,7 +845,15 @@ class NodeRegistry:
             dispatch_id = hashlib.sha256(f"{state.get('agent_run_id')}:{node_id}:{visit}".encode()).hexdigest()[:24]
         sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
         studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
-        summary = {"dispatch_id": dispatch_id, "planned": len(work_items), "status": "planned"}
+        summary = {
+            "agent_run_id": state.get("agent_run_id"),
+            "dispatch_id": dispatch_id,
+            "parent_node_id": node_id,
+            "planned": len(work_items),
+            "status": "planned",
+            "barrier_state": "pending",
+            "aggregation_state": "pending",
+        }
         dispatch_started_epoch_ms = int(time.time() * 1000)
         deadline_epoch_ms = dispatch_started_epoch_ms + normalized_parallel_policy(state.get("parallel_policy"))["dispatch_timeout_ms"]
         work_items = [
@@ -819,15 +866,15 @@ class NodeRegistry:
             for item in work_items
         ]
         if sink is not None:
-            await sink.emit("dispatch.planned", summary)
-            await sink.emit("dispatch.started", summary)
+            await sink.emit(ParallelEventName.DISPATCH_PLANNED, summary)
+            await sink.emit(ParallelEventName.DISPATCH_STARTED, summary)
             for item in work_items:
-                await sink.emit("worker.queued", dict(item))
+                await sink.emit(ParallelEventName.WORKER_QUEUED, dict(item))
         elif studio_queue is not None:
-            await studio_queue.put({"event": "dispatch.planned", "data": summary})
-            await studio_queue.put({"event": "dispatch.started", "data": summary})
+            await studio_queue.put({"event": ParallelEventName.DISPATCH_PLANNED, "data": summary})
+            await studio_queue.put({"event": ParallelEventName.DISPATCH_STARTED, "data": summary})
             for item in work_items:
-                await studio_queue.put({"event": "worker.queued", "data": dict(item)})
+                await studio_queue.put({"event": ParallelEventName.WORKER_QUEUED, "data": dict(item)})
         update = {
             "dispatch_id": dispatch_id,
             "dispatch_node_id": node_id,
@@ -856,17 +903,23 @@ class NodeRegistry:
         sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
         studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
         if sink is not None:
-            await sink.emit("dispatch.barrier_reached", {
+            await sink.emit(ParallelEventName.BARRIER_REACHED, {
+                "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
                 "result_count": len(state.get("worker_result_packets") or []),
             })
         elif studio_queue is not None:
-            await studio_queue.put({"event": "dispatch.barrier_reached", "data": {
+            await studio_queue.put({"event": ParallelEventName.BARRIER_REACHED, "data": {
+                "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
                 "result_count": len(state.get("worker_result_packets") or []),
             }})
         update = aggregate_parallel_results(state)
         summary = dict(update.get("parallel_summary") or {})
+        summary.setdefault("agent_run_id", state.get("agent_run_id"))
+        summary["barrier_state"] = "reached"
+        summary["aggregation_state"] = "partial" if summary.get("partial_evidence") else "completed"
+        update["parallel_summary"] = summary
         aggregation_event = {
             "status": NodeEventStatus.COMPLETED.value,
             **summary,
@@ -882,12 +935,12 @@ class NodeRegistry:
         )
         if sink is not None:
             await sink.emit(
-                "aggregation.partial" if summary.get("partial_evidence") else "aggregation.completed",
+                ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 summary,
             )
         elif studio_queue is not None:
             await studio_queue.put({
-                "event": "aggregation.partial" if summary.get("partial_evidence") else "aggregation.completed",
+                "event": ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 "data": summary,
             })
         return update

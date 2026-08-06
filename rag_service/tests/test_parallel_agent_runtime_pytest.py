@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +13,17 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import NodeError
 
 from app.agent_workflows.compiler import WorkflowCompiler
+from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.graph import NodeRegistry
+from app.agent_workflows.node_catalog import get_node_catalog
+from app.agent_workflows.parallel_contracts import (
+    DEFAULT_PARALLEL_POLICY,
+    PARALLEL_EVENT_NAMES,
+    PARALLEL_REDUCER_CHANNELS,
+    PARALLEL_RETRIEVAL_WORKER_TYPES,
+    PARALLEL_REFERENCE_WORKFLOW_ID,
+)
+from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.parallel_runtime import (
     ParallelWorkerError,
     ParallelDispatchDeadlineExceeded,
@@ -23,7 +35,9 @@ from app.agent_workflows.parallel_runtime import (
     parallel_runtime_authorized,
 )
 from app.agent_workflows.state import merge_parallel_deltas
+from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from app.agent_workflows.validator import WorkflowValidator
+from app.api.agent_workflows import get_internal_agent_workflow_catalog
 
 
 BUILTIN = Path(__file__).parents[1] / "app" / "agent_workflows" / "builtins" / "orchestrator_worker_rag_agent.json"
@@ -52,6 +66,27 @@ def _state():
         "node_visit_counts": {"planner": 1},
         "node_visit_sequence": [{"node": "planner", "node_type": "planner", "visit_index": 1}],
     }
+
+
+def _compiled_initial(spec, worker_types):
+    state = _state()
+    state.update({
+        "agent_run_id": "run-compiled",
+        "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
+        "thread_id": "thread-1",
+        "llm_model": "unused",
+        "embedding_model": "unused",
+        "parallel_enabled": True,
+        "parallel_runtime_override": True,
+        "parallel_aggregator_id": "aggregator",
+        "worker_result_packets": [],
+        "node_visit_counts": {},
+        "node_visit_sequence": [],
+        "available_worker_nodes": [{"id": worker_type, "type": worker_type} for worker_type in worker_types],
+        "loop_policy": spec["config"]["loop_policy"],
+        "parallel_policy": spec["config"]["parallel_policy"],
+    })
+    return state
 
 
 def test_work_item_normalization_is_stable_bounded_and_read_only():
@@ -90,7 +125,7 @@ def test_dispatch_sends_only_incomplete_work_with_dynamic_timeout():
     assert len(sends) == 1
     assert sends[0].node == "memory"
     assert sends[0].arg["work_item"]["work_id"] == items[1]["work_id"]
-    assert sends[0].timeout.run_timeout == 30
+    assert sends[0].timeout.run_timeout == 61.25
 
 
 def _packet(*, ordinal: int, worker: str, status: str = "completed"):
@@ -152,6 +187,67 @@ def test_orchestrator_builtin_validates_and_compiles_without_changing_other_buil
 
     assert spec["runtime"]["features"]["supports_parallel_dispatch"] is True
     assert set(graph.nodes) >= {"parallel_dispatch", "aggregator", "retrieval_worker"}
+
+
+def test_parallel_contracts_are_canonical_and_builtin_policy_does_not_drift():
+    spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
+    assert spec["workflow_id"] == PARALLEL_REFERENCE_WORKFLOW_ID
+    assert spec["config"]["parallel_policy"] == DEFAULT_PARALLEL_POLICY
+    catalog = get_node_catalog()
+    for worker_type in PARALLEL_RETRIEVAL_WORKER_TYPES:
+        assert catalog[worker_type]["parallel_state_writes"] == list(PARALLEL_REDUCER_CHANNELS)
+    assert {"dispatch.started", "worker.started", "dispatch.barrier_reached", "aggregation.completed"} <= PARALLEL_EVENT_NAMES
+
+
+@pytest.mark.asyncio
+async def test_catalog_api_exposes_canonical_parallel_policy_descriptors():
+    catalog = await get_internal_agent_workflow_catalog()
+    policy = catalog["defaults"]["parallel_policy"]
+    assert policy["defaults"] == DEFAULT_PARALLEL_POLICY
+    assert policy["fields"]["max_concurrency"]["maximum"] == 16
+    assert policy["fields"]["dispatch_timeout_ms"]["unit"] == "ms"
+
+
+@pytest.mark.asyncio
+async def test_parallel_event_journal_persists_deterministic_parent_child_spans():
+    run = SimpleNamespace(
+        id="run-trace",
+        thread_id="thread-trace",
+        user_id=None,
+        workflow_id=PARALLEL_REFERENCE_WORKFLOW_ID,
+        resolved_spec_json=json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"],
+        status="running",
+        started_at=None,
+        completed_at=None,
+    )
+    recorder = AgentTraceRecorder(run)
+    sink = AgentExecutionEventSink(include_details=True)
+    sink.bind_trace_recorder(recorder)
+    common = {"agent_run_id": run.id, "dispatch_id": "dispatch-1", "work_id": "work-1", "ordinal": 0, "worker_node_id": "retrieval_worker", "attempt": 1}
+    await sink.emit("dispatch.started", {"agent_run_id": run.id, "dispatch_id": "dispatch-1", "planned": 1})
+    await sink.emit("worker.started", common)
+    await sink.emit("worker.completed", {**common, "elapsed_ms": 4})
+    await sink.emit("dispatch.barrier_reached", {"agent_run_id": run.id, "dispatch_id": "dispatch-1", "result_count": 1})
+    await sink.emit("aggregation.completed", {"agent_run_id": run.id, "dispatch_id": "dispatch-1", "planned": 1, "completed": 1})
+    projection = project_parallel_events(sink.parallel_events())
+    worker = next(item["data"] for item in projection["journal"] if item["event"] == "worker.completed")
+    assert worker["span_id"] == "worker:work-1:attempt:1"
+    assert worker["parent_span_id"] == "dispatch:dispatch-1"
+    run.status = "completed"
+    debug = recorder.finalize(run=run, chat_turn_id=None, metrics={"parallel_worker_completed": 1})
+    spans = {span["span_id"]: span for span in debug["trace"]["spans"]}
+    assert spans["dispatch:dispatch-1"]["parent_span_id"] == "run:run-trace"
+    assert spans["worker:work-1:attempt:1"]["parent_span_id"] == "dispatch:dispatch-1"
+
+    out_of_order = project_parallel_events([
+        {"event": "worker.timed_out", "data": {**common, "status": "timed_out"}},
+        {"event": "aggregation.partial", "data": {"dispatch_id": "dispatch-1", "partial_evidence": True}},
+        {"event": "worker.started", "data": common},
+        {"event": "dispatch.started", "data": {"dispatch_id": "dispatch-1", "planned": 1}},
+    ])
+    assert out_of_order["summary"]["timed_out"] == 1
+    assert out_of_order["summary"]["barrier_state"] == "reached"
+    assert out_of_order["summary"]["aggregation_state"] == "partial"
 
 
 def test_parallel_validator_rejects_extra_worker_exit_and_hitl_inside_region():
@@ -569,3 +665,112 @@ async def test_checkpoint_resume_reuses_completed_parallel_pending_writes(monkey
     assert calls["retrieval_worker"] == 1
     assert calls["durable_memory_worker"] == 1
     assert result["parallel_summary"]["partial_evidence"] is True
+
+
+@pytest.mark.asyncio
+async def test_compiled_parallel_zero_workers_continues_to_synthesis():
+    spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
+    registry = NodeRegistry()
+
+    async def context_loader(_state, _config):
+        return {"pre_fetch_bundle": {"context": "prefetched"}, "node_events": []}
+
+    async def planner(_state, _config):
+        return {"route": "execute", "execution_plan": [], "work_item_proposals": [], "node_events": []}
+
+    async def synthesizer(state, _config):
+        assert state["parallel_summary"]["no_workers_dispatched"] is True
+        return {"final_answer": "prefetched answer", "node_events": []}
+
+    async def finalizer(state, _config):
+        return {"final_answer": state["final_answer"], "node_events": []}
+
+    registry._nodes.update({"context_loader": context_loader, "planner": planner, "synthesizer": synthesizer, "finalizer": finalizer})
+    result = await WorkflowCompiler(registry).compile(spec).ainvoke(
+        _compiled_initial(spec, []),
+        config={"configurable": {"thread_id": "zero-workers"}, "max_concurrency": 4},
+    )
+    assert result["final_answer"] == "prefetched answer"
+    assert result["parallel_summary"]["planned"] == 0
+
+
+@pytest.mark.asyncio
+async def test_active_worker_is_capped_by_absolute_dispatch_deadline(monkeypatch):
+    registry = NodeRegistry()
+    item = {
+        "dispatch_id": "dispatch-deadline", "dispatch_visit": 1, "work_id": "work-deadline",
+        "ordinal": 0, "worker_node_id": "retrieval_worker", "worker_type": "retrieval_worker",
+        "query": "slow", "evidence_kind": "document", "attempt": 1, "timeout_ms": 30_000,
+    }
+
+    async def slow_worker(*_args, **_kwargs):
+        await asyncio.sleep(1)
+        return {}
+
+    monkeypatch.setattr(registry, "_run_sequential_tool_worker", slow_worker)
+    state = {
+        **_state(),
+        "work_item": item,
+        "parallel_policy": normalized_parallel_policy({"max_attempts": 2}),
+        "dispatch_deadline_epoch_ms": int(time.time() * 1000) + 25,
+    }
+    with pytest.raises(ParallelWorkerError) as raised:
+        await registry._parallel_tool_worker("retrieval_worker", state, {})
+    assert raised.value.status == "timed_out"
+    assert isinstance(raised.value.error, ParallelDispatchDeadlineExceeded)
+
+
+@pytest.mark.asyncio
+async def test_langgraph_worker_timeout_produces_partial_evidence():
+    spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
+    spec["config"]["parallel_policy"].update({
+        "default_worker_timeout_ms": 1_000,
+        "dispatch_timeout_ms": 5_000,
+        "max_attempts": 2,
+    })
+    registry = NodeRegistry()
+
+    async def context_loader(_state, _config):
+        return {"pre_fetch_bundle": {}, "node_events": []}
+
+    async def planner(_state, _config):
+        return {
+            "route": "execute",
+            "execution_plan": ["retrieval_worker", "durable_memory_worker"],
+            "work_item_proposals": [
+                {"worker_node_id": "retrieval_worker", "query": "slow documents"},
+                {"worker_node_id": "durable_memory_worker", "query": "fast memory"},
+            ],
+            "node_events": [],
+        }
+
+    async def worker_runner(node_name, _state, _config):
+        if node_name == "retrieval_worker":
+            await asyncio.sleep(2)
+        return {
+            "evidence_packets": [{"kind": "durable_memory", "content": "remembered evidence"}],
+            "document_sources": [], "web_sources": [], "used_chat_ids": [], "used_memory_ids": [],
+            "node_events": [{"status": "completed"}], "tool_events": [],
+        }
+
+    async def synthesizer(_state, _config):
+        return {"final_answer": "partial answer", "node_events": []}
+
+    async def finalizer(state, _config):
+        return {"final_answer": state["final_answer"], "node_events": []}
+
+    registry._nodes.update({
+        "context_loader": context_loader,
+        "planner": planner,
+        "synthesizer": synthesizer,
+        "finalizer": finalizer,
+    })
+    registry._run_sequential_tool_worker = worker_runner
+    result = await WorkflowCompiler(registry).compile(spec).ainvoke(
+        _compiled_initial(spec, ["retrieval_worker", "durable_memory_worker"]),
+        config={"configurable": {"thread_id": "partial-timeout"}, "max_concurrency": 4},
+    )
+    assert result["parallel_summary"]["completed"] == 1
+    assert result["parallel_summary"]["timed_out"] == 1
+    assert result["parallel_summary"]["partial_evidence"] is True
+    assert result["final_answer"] == "partial answer"

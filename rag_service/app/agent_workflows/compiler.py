@@ -12,6 +12,13 @@ from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.routes import route_function_for_edge
 from app.agent_workflows.state import RouterRagState
 from app.agent_workflows.parallel_runtime import normalized_parallel_policy, parallel_retryable_error
+from app.agent_workflows.parallel_contracts import (
+    PARALLEL_RETRIEVAL_WORKER_TYPES,
+    PARALLEL_RETRY_BACKOFF_FACTOR,
+    PARALLEL_RETRY_INITIAL_INTERVAL_SECONDS,
+    PARALLEL_RETRY_JITTER,
+    PARALLEL_RETRY_MAX_INTERVAL_SECONDS,
+)
 
 if TYPE_CHECKING:
     from app.agent_workflows.graph import NodeRegistry
@@ -212,13 +219,6 @@ class WorkflowCompiler(WorkflowMaterializer):
                 dynamic_targets[source] = tuple(dict.fromkeys((*dynamic_targets.get(source, ()), *targets)))
         config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
         parallel_policy = normalized_parallel_policy(config.get("parallel_policy"))
-        parallel_worker_types = {
-            WorkflowNodeType.RETRIEVAL_WORKER.value,
-            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
-            WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
-            WorkflowNodeType.THREAD_EVENTS_WORKER.value,
-            WorkflowNodeType.WEB_WORKER.value,
-        }
         parallel_worker_ids = {
             str(edge.get("to"))
             for edge in graph_spec.get("edges", [])
@@ -229,13 +229,13 @@ class WorkflowCompiler(WorkflowMaterializer):
             add_options: Dict[str, Any] = {}
             if node["id"] in dynamic_targets:
                 add_options["destinations"] = dynamic_targets[node["id"]]
-            if node["id"] in parallel_worker_ids and node["type"] in parallel_worker_types:
+            if node["id"] in parallel_worker_ids and node["type"] in PARALLEL_RETRIEVAL_WORKER_TYPES:
                 add_options["retry_policy"] = RetryPolicy(
                     max_attempts=parallel_policy["max_attempts"],
-                    initial_interval=0.25,
-                    backoff_factor=2.0,
-                    max_interval=1.0,
-                    jitter=True,
+                    initial_interval=PARALLEL_RETRY_INITIAL_INTERVAL_SECONDS,
+                    backoff_factor=PARALLEL_RETRY_BACKOFF_FACTOR,
+                    max_interval=PARALLEL_RETRY_MAX_INTERVAL_SECONDS,
+                    jitter=PARALLEL_RETRY_JITTER,
                     retry_on=parallel_retryable_error,
                 )
                 add_options["error_handler"] = self.registry.get_parallel_error_handler_for_spec(node)

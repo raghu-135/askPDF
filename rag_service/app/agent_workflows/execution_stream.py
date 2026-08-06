@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.agent_workflows.trace_sanitization import _bounded_value
+from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
+from app.agent_workflows.parallel_observability import enrich_parallel_event
 
 
 _background_tasks: set[asyncio.Task[Any]] = set()
@@ -31,8 +33,8 @@ class AgentExecutionEventSink:
         self.closed = True
 
     def _event(self, event: str, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        payload = dict(data or {})
-        if event.startswith(("dispatch.", "worker.", "aggregation.")):
+        payload = enrich_parallel_event(event, data or {}) if event.startswith(PARALLEL_EVENT_PREFIXES) else dict(data or {})
+        if event.startswith(PARALLEL_EVENT_PREFIXES):
             payload.setdefault("occurred_at", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         if not self.include_details:
             payload.pop("detail", None)
@@ -48,10 +50,10 @@ class AgentExecutionEventSink:
             return
         envelope = self._event(event, data)
         async with self._emit_lock:
-            if event.startswith(("dispatch.", "worker.", "aggregation.")):
+            if event.startswith(PARALLEL_EVENT_PREFIXES):
                 self._parallel_events.append(envelope)
-                if len(self._parallel_events) > 256:
-                    del self._parallel_events[:-256]
+                if len(self._parallel_events) > PARALLEL_EVENT_JOURNAL_LIMIT:
+                    del self._parallel_events[:-PARALLEL_EVENT_JOURNAL_LIMIT]
                 if self._trace_recorder is not None and hasattr(self._trace_recorder, "record_runtime_event"):
                     self._trace_recorder.record_runtime_event(
                         event,

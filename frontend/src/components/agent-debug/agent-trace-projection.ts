@@ -4,6 +4,12 @@ import {
   formatNodeLabel,
 } from '../agent-graph/agent-node-labels.js';
 import type { AgentGraphEdge, AgentGraphNode, AgentNodeCatalog } from '../agent-graph/agent-graph-types';
+import {
+  PARALLEL_TERMINAL_WORKER_STATUSES,
+  ParallelRuntimeEvent,
+  ParallelWorkerStatus,
+  parallelWorkerStatusForEvent,
+} from '../../lib/parallel-runtime.ts';
 
 export interface TraceNodeView {
   id: string;
@@ -96,32 +102,58 @@ const asOptionalStringArray = (value: any): string[] | undefined => {
 const projectParallelEvents = (events: Record<string, any>[]) => {
   const tasks = new Map<string, Record<string, any>>();
   let summary: Record<string, any> = {};
+  let barrierReached = false;
+  let aggregationState = 'pending';
   events.forEach((envelope) => {
     const event = String(envelope.event || '');
     const data = asObject(envelope.data);
     if (event.startsWith('dispatch.') || event.startsWith('aggregation.')) {
       summary = { ...summary, ...data, event };
     }
+    if (event === ParallelRuntimeEvent.BarrierReached) barrierReached = true;
+    if (event === ParallelRuntimeEvent.DispatchCancelled) aggregationState = 'cancelled';
+    else if (event === ParallelRuntimeEvent.AggregationPartial && aggregationState !== 'cancelled') {
+      aggregationState = 'partial';
+      barrierReached = true;
+    } else if (event === ParallelRuntimeEvent.AggregationCompleted && aggregationState === 'pending') {
+      aggregationState = 'completed';
+      barrierReached = true;
+    }
     if (!event.startsWith('worker.') || typeof data.work_id !== 'string') return;
     const previous = tasks.get(data.work_id) || { attempts: [] };
     const attempts = Array.isArray(previous.attempts) ? [...previous.attempts] : [];
     const attempt = Number(data.attempt || 1);
     const attemptIndex = attempts.findIndex((item) => Number(item.attempt || 1) === attempt);
+    const status = parallelWorkerStatusForEvent(event);
+    const previousAttempt = attemptIndex >= 0 ? attempts[attemptIndex] : {};
+    const previousStatus = String(previousAttempt.status || '');
+    const preserveTerminal = PARALLEL_TERMINAL_WORKER_STATUSES.has(previousStatus) && !PARALLEL_TERMINAL_WORKER_STATUSES.has(status);
     const attemptRow = {
       ...(attemptIndex >= 0 ? attempts[attemptIndex] : {}),
       ...data,
       attempt,
       event,
-      status: event.slice('worker.'.length),
+      status: preserveTerminal ? previousStatus : status,
     };
     if (attemptIndex >= 0) attempts[attemptIndex] = attemptRow;
     else attempts.push(attemptRow);
     attempts.sort((a, b) => Number(a.attempt || 1) - Number(b.attempt || 1));
-    tasks.set(data.work_id, { ...previous, ...data, event, status: event.slice('worker.'.length), attempts });
+    tasks.set(data.work_id, { ...previous, ...data, event, status: preserveTerminal ? previousStatus : status, attempts });
   });
+  const taskRows = [...tasks.values()].sort((a, b) => Number(a.ordinal || 0) - Number(b.ordinal || 0));
+  const counts = Object.fromEntries([
+    ParallelWorkerStatus.Queued, ParallelWorkerStatus.Active, ParallelWorkerStatus.Retrying,
+    ParallelWorkerStatus.Completed, ParallelWorkerStatus.Skipped, ParallelWorkerStatus.Failed,
+    ParallelWorkerStatus.TimedOut, ParallelWorkerStatus.Cancelled,
+  ].map((status) => [status, taskRows.filter((task) => task.status === status).length]));
   return {
-    summary,
-    tasks: [...tasks.values()].sort((a, b) => Number(a.ordinal || 0) - Number(b.ordinal || 0)),
+    summary: {
+      ...counts,
+      ...summary,
+      barrier_state: barrierReached ? 'reached' : 'pending',
+      aggregation_state: aggregationState,
+    },
+    tasks: taskRows,
   };
 };
 

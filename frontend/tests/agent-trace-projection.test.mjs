@@ -484,3 +484,17 @@ test('retained trace projection restores expandable parallel attempts', () => {
   assert.equal(view.parallel.tasks[0].attempts[0].status, 'retrying');
   assert.equal(view.parallel.tasks[0].attempts[1].status, 'completed');
 });
+
+test('parallel projection preserves terminal attempts and lifecycle under out-of-order events', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'worker.timed_out', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, attempt: 1 } },
+    { id: 2, event: 'aggregation.partial', data: { dispatch_id: 'dispatch-1', planned: 1, timed_out: 1, partial_evidence: true } },
+    { id: 3, event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, attempt: 1 } },
+    { id: 4, event: 'dispatch.started', data: { dispatch_id: 'dispatch-1', planned: 1 } },
+  ]);
+
+  assert.equal(view.parallel.tasks[0].status, 'timed_out');
+  assert.equal(view.parallel.tasks[0].attempts[0].status, 'timed_out');
+  assert.equal(view.parallel.summary.barrier_state, 'reached');
+  assert.equal(view.parallel.summary.aggregation_state, 'partial');
+});

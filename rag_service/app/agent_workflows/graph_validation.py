@@ -7,6 +7,10 @@ from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
 )
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
+from app.agent_workflows.parallel_contracts import (
+    PARALLEL_FORBIDDEN_CUMULATIVE_CHANNELS,
+    PARALLEL_RETRIEVAL_WORKER_TYPES,
+)
 from app.agent_workflows.enums import GraphSentinel, RouteFunctionId, WorkflowNodeType
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
@@ -280,13 +284,6 @@ class GenericGraphValidator:
         )
         if dispatch_edge is None:
             errors.append("parallel_dispatch must declare one parallel_dispatch_route conditional edge")
-        worker_types = {
-            WorkflowNodeType.RETRIEVAL_WORKER.value,
-            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
-            WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
-            WorkflowNodeType.THREAD_EVENTS_WORKER.value,
-            WorkflowNodeType.WEB_WORKER.value,
-        }
         dynamic_workers = {
             str(edge.get("to"))
             for edge in edges
@@ -296,18 +293,13 @@ class GenericGraphValidator:
             errors.append("parallel_dispatch must declare at least one dynamic worker target")
         for worker_id in sorted(dynamic_workers):
             worker_type = node_types_by_id.get(worker_id)
-            if worker_type not in worker_types:
+            if worker_type not in PARALLEL_RETRIEVAL_WORKER_TYPES:
                 errors.append(f"parallel dispatch target {worker_id} must be a read-only retrieval worker")
             metadata = _default_get_node_catalog().get(str(worker_type), {})
             parallel_writes = metadata.get("parallel_state_writes") if isinstance(metadata, dict) else None
             if not isinstance(parallel_writes, list) or "worker_result_packets" not in parallel_writes:
                 errors.append(f"parallel worker {worker_id} must declare reducer-safe parallel_state_writes")
-            legacy_writes = {
-                "evidence", "evidence_packets", "document_sources", "web_sources",
-                "used_chat_ids", "used_memory_ids", "node_events", "tool_events",
-                "errors", "skipped_nodes", "node_visit_counts", "node_visit_sequence",
-            }
-            unsafe = sorted(set(parallel_writes or []) & legacy_writes)
+            unsafe = sorted(set(parallel_writes or []) & PARALLEL_FORBIDDEN_CUMULATIVE_CHANNELS)
             if unsafe:
                 errors.append(f"parallel worker {worker_id} declares unsafe cumulative writes: {', '.join(unsafe)}")
             outgoing = [

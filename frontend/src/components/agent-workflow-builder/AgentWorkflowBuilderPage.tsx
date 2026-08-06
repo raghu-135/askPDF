@@ -1017,6 +1017,7 @@ export default function AgentWorkflowBuilderPage() {
                     onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
                     onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
                     onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
+                    onUpdateParallelPolicy={(patch) => updateState((previous) => ({ ...previous, parallel_policy: { ...(previous.parallel_policy || {}), ...patch } }))}
                   />
                 }
                 palette={<BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />}
