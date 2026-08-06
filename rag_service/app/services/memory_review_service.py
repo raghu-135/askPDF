@@ -23,6 +23,7 @@ from app.models.memory_manager_input_budget import (
     compute_memory_manager_input_budget,
 )
 from app.models.retry import invoke_with_retry
+from app.models.memory_tools import normalize_memory_attributes
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.services.memory_repair_scheduler import schedule_global_representation_repair
@@ -82,11 +83,10 @@ async def build_conversation_review_batch(
             result = await session.execute(
                 select(ChatTurn)
                 .where(*base_filters)
-                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
+                .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
                 .limit(MAX_REVIEW_FETCH_ROWS)
             )
             candidates = list(result.scalars().all())
-            remaining = 0
         else:
             after_cursor = or_(
                 ChatTurn.created_at > cursor_at,
@@ -109,22 +109,19 @@ async def build_conversation_review_batch(
             turns.append(candidate)
             used_chars += len(serialized)
 
-        if cursor_at is None:
-            turns.reverse()
+        if turns:
+            last = turns[-1]
+            remaining = int((await session.execute(
+                select(func.count(ChatTurn.id)).where(
+                    *base_filters,
+                    or_(
+                        ChatTurn.created_at > last.created_at,
+                        and_(ChatTurn.created_at == last.created_at, ChatTurn.id > last.id),
+                    ),
+                )
+            )).scalar() or 0)
         else:
-            if turns:
-                last = turns[-1]
-                remaining = int((await session.execute(
-                    select(func.count(ChatTurn.id)).where(
-                        *base_filters,
-                        or_(
-                            ChatTurn.created_at > last.created_at,
-                            and_(ChatTurn.created_at == last.created_at, ChatTurn.id > last.id),
-                        ),
-                    )
-                )).scalar() or 0)
-            else:
-                remaining = 0
+            remaining = 0
     reviewed_through = turns[-1] if turns else None
     return {
         "turns": [_turn_text(turn) for turn in turns],
@@ -319,7 +316,7 @@ async def build_memory_review_batch(
         review_state = await session.get(MemoryReviewState, (context_type, context_id))
         all_memories = list((await session.execute(
             select(Memory).where(or_(*clauses))
-            .order_by(Memory.scope_type, Memory.updated_at.asc().nullsfirst(), Memory.created_at, Memory.id)
+            .order_by(Memory.scope_type, Memory.semantic_updated_at.asc(), Memory.created_at, Memory.id)
         )).scalars().all())
         candidate_global_ids = {
             memory.id for memory in all_memories
@@ -346,8 +343,8 @@ async def build_memory_review_batch(
         anchors = [
             memory for memory in all_memories
             if not review_state or not review_state.last_reviewed_at
-            or (memory.updated_at or memory.created_at) > review_state.last_reviewed_at
-            if (memory.updated_at or memory.created_at) <= cutoff
+            or memory.semantic_updated_at > review_state.last_reviewed_at
+            if memory.semantic_updated_at <= cutoff
         ]
         ids = [memory.id for memory in all_memories]
         edges = list((await session.execute(select(MemoryOverride).where(or_(
@@ -430,7 +427,11 @@ async def build_memory_review_batch(
                         "scope_id": by_id[item].scope_id,
                         "scope_rank": SCOPE_RANK[by_id[item].scope_type],
                         "content": by_id[item].content,
+                        "attributes": normalize_memory_attributes(by_id[item].attributes_json),
+                        "source_refs": by_id[item].source_refs_json or {},
+                        "index_status": by_id[item].index_status,
                         "updated_at": iso_utc_z(by_id[item].updated_at or by_id[item].created_at),
+                        "semantic_updated_at": iso_utc_z(by_id[item].semantic_updated_at),
                     } for item in member_ids],
                     "override_edges": _review_override_edges(member_ids, edges),
                 }

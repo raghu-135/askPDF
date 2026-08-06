@@ -477,6 +477,10 @@ class Memory(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), onupdate=func.now())
     )
+    semantic_updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
 
     events: List["MemoryEvent"] = Relationship(
         back_populates="memory",
@@ -503,6 +507,7 @@ class Memory(SQLModel, table=True):
         Index("idx_memory_scope", "scope_type", "scope_id"),
         Index("idx_memory_index_retry", "index_status", "updated_at"),
         Index("idx_memory_created_at", "created_at"),
+        Index("idx_memory_semantic_updated_at", "semantic_updated_at"),
     )
 
 
@@ -607,6 +612,32 @@ class MemoryReviewState(SQLModel, table=True):
     )
 
 
+class MemoryManagerIdempotency(SQLModel, table=True):
+    """Durable claim and result record for confirmed memory-manager plans."""
+    __tablename__ = "memory_manager_idempotency"
+
+    idempotency_key: str = Field(primary_key=True)
+    plan_hash: str = Field(index=True)
+    status: str = Field(default="in_progress", index=True)
+    result_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict)
+    )
+    actor_id: str = Field(default="ui")
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(idempotency_key)) > 0", name="ck_memory_manager_idempotency_key_nonempty"),
+        CheckConstraint("length(btrim(plan_hash)) > 0", name="ck_memory_manager_idempotency_plan_hash_nonempty"),
+        CheckConstraint("status in ('in_progress', 'committed')", name="ck_memory_manager_idempotency_status"),
+    )
 class MemoryEvent(SQLModel, table=True):
     """Audit event for durable memory changes."""
     __tablename__ = "memory_events"

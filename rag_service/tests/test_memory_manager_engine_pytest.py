@@ -15,6 +15,8 @@ from app.models.requests import (
     MemoryManagerMessage,
     MemoryChangeOperation,
     MemoryManagerConversationRequest,
+    MemoryManagerApplyRequest,
+    MemoryManagerPlan,
     MemoryReviewCursor,
 )
 from app.models.memory_tools import (
@@ -25,9 +27,10 @@ from app.models.memory_tools import (
     MemoryPrepareChangeInput,
     MemorySearchInput,
 )
-from app.services import memory_manager_engine, memory_review_service, memory_tool_service
+from app.services import memory_manager_engine, memory_manager_service, memory_review_service, memory_tool_service
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
+from app.models.memory_manager_input_budget import MAX_REVIEW_FETCH_ROWS
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -91,6 +94,79 @@ async def _workspace(maker):
             )
             session.add_all([project, thread])
     return project, thread
+
+
+def _idempotent_apply_request(key="idempotency-test", plan_hash="plan-hash"):
+    plan = MemoryManagerPlan(
+        plan_id="plan-id",
+        plan_hash=plan_hash,
+        mode="direct_edit",
+        context=MemoryManagerContext(
+            selected_scope_type="thread",
+            selected_scope_id="curator-thread",
+            thread_id="curator-thread",
+            project_id="curator-project",
+        ),
+    )
+    return MemoryManagerApplyRequest(
+        plan=plan,
+        plan_hash=plan_hash,
+        idempotency_key=key,
+        confirmed=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_apply_idempotency_is_durable(curator_sessionmaker):
+    request = _idempotent_apply_request()
+    assert await memory_manager_service._claim_apply(request) is None
+    response = {"status": "committed", "plan_id": request.plan.plan_id}
+    await memory_manager_service._commit_apply(request, response)
+    assert await memory_manager_service._claim_apply(request) == response
+
+    with pytest.raises(ValueError, match="different memory-manager plan"):
+        await memory_manager_service._claim_apply(_idempotent_apply_request(plan_hash="other-hash"))
+
+
+@pytest.mark.asyncio
+async def test_conversation_review_does_not_skip_turns_beyond_fetch_limit(curator_sessionmaker):
+    _project, thread = await _workspace(curator_sessionmaker)
+    started = utc_now() - timedelta(days=3)
+    total = MAX_REVIEW_FETCH_ROWS + 5
+    async with curator_sessionmaker() as session:
+        async with session.begin():
+            for index in range(total):
+                occurred_at = started + timedelta(seconds=index)
+                session.add(ChatTurn(
+                    id=f"overflow-{index:03d}",
+                    thread_id=thread.id,
+                    status="completed",
+                    payload={"question": f"Q{index}", "answer": f"A{index}"},
+                    created_at=occurred_at,
+                    completed_at=occurred_at,
+                ))
+
+    first = await memory_review_service.build_conversation_review_batch(
+        thread, context_window=100000, session_factory=curator_sessionmaker
+    )
+    assert first["reviewed_count"] == MAX_REVIEW_FETCH_ROWS
+    assert first["turns"][0]["id"] == "overflow-000"
+    assert first["turns"][-1]["id"] == f"overflow-{MAX_REVIEW_FETCH_ROWS - 1:03d}"
+    assert first["remaining_count"] == 5
+
+    async with curator_sessionmaker() as session:
+        async with session.begin():
+            stored_thread = await session.get(Thread, thread.id)
+            stored_thread.thread_metadata = {"memory_curator": first["cursor"]}
+        await session.refresh(stored_thread)
+
+    second = await memory_review_service.build_conversation_review_batch(
+        stored_thread, context_window=100000, session_factory=curator_sessionmaker
+    )
+    assert [turn["id"] for turn in second["turns"]] == [
+        f"overflow-{index:03d}" for index in range(MAX_REVIEW_FETCH_ROWS, total)
+    ]
+    assert second["remaining_count"] == 0
 
 
 def _context():
@@ -650,8 +726,10 @@ async def test_review_batch_size_scales_with_context_then_continues_after_cursor
         session_factory=curator_sessionmaker,
     )
     assert 1 <= first["reviewed_count"] < large["reviewed_count"] <= 25
-    assert first["turns"][-1]["id"] == "initial-24"
-    assert large["turns"][-1]["id"] == "initial-24"
+    assert first["turns"][0]["id"] == "initial-00"
+    assert first["turns"][-1]["id"] == f"initial-{first['reviewed_count'] - 1:02d}"
+    assert large["turns"][0]["id"] == "initial-00"
+    assert large["turns"][-1]["id"] == f"initial-{large['reviewed_count'] - 1:02d}"
 
     async with curator_sessionmaker() as session:
         async with session.begin():
@@ -683,8 +761,8 @@ async def test_review_batch_size_scales_with_context_then_continues_after_cursor
         session_factory=curator_sessionmaker,
     )
     assert second["reviewed_count"] == first["reviewed_count"]
-    assert second["remaining_count"] == 25 - second["reviewed_count"]
-    assert second["turns"][0]["id"] == "later-25"
+    assert second["remaining_count"] == 50 - first["reviewed_count"] - second["reviewed_count"]
+    assert second["turns"][0]["id"] == f"initial-{first['reviewed_count']:02d}"
 
 
 @pytest.mark.asyncio

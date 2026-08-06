@@ -6,13 +6,22 @@ import hashlib
 import json
 import uuid
 from collections import OrderedDict
+from datetime import timedelta
 from typing import Any, Dict, Iterable, List
+
+from sqlalchemy.future import select
 
 from app.models.memory_manager_budget import (
     compute_memory_manager_budget,
     pack_candidate_groups,
     operation_cost,
 )
+from app.db.connection_sqlmodel import async_session_maker
+from app.db.models_sqlmodel import Memory, MemoryManagerIdempotency, MemoryReviewState, Thread
+from app.models.memory_tools import normalize_memory_attributes
+from app.services.effective_memory_service import serialize_memories_with_relationships
+from app.services.memory_service import memory_content_hash
+from app.time_utils import utc_now
 from app.models.requests import (
     MemoryConsistencyReviewCursor,
     MemoryChangeApplyRequest,
@@ -34,8 +43,140 @@ from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.services.memory_review_service import get_memory_review_status
 
 
-_APPLIED_RESULTS: OrderedDict[str, Dict[str, Any]] = OrderedDict()
-_MAX_APPLIED_RESULTS = 512
+IDEMPOTENCY_STALE_AFTER = timedelta(minutes=30)
+
+
+async def _claim_apply(req: MemoryManagerApplyRequest) -> Dict[str, Any] | None:
+    """Claim a plan apply durably, returning a committed replay if available."""
+
+    now = utc_now()
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(
+                MemoryManagerIdempotency,
+                req.idempotency_key,
+                with_for_update=True,
+            )
+            if row is None:
+                session.add(MemoryManagerIdempotency(
+                    idempotency_key=req.idempotency_key,
+                    plan_hash=req.plan_hash,
+                    status="in_progress",
+                    actor_id=req.actor_id,
+                    created_at=now,
+                    updated_at=now,
+                ))
+                return None
+            if row.plan_hash != req.plan_hash:
+                raise ValueError("Idempotency key was already used for a different memory-manager plan")
+            if row.status == "committed":
+                return dict(row.result_json or {})
+            if row.updated_at and now - row.updated_at < IDEMPOTENCY_STALE_AFTER:
+                raise ValueError("Memory-manager apply is already in progress for this idempotency key")
+            row.updated_at = now
+            row.actor_id = req.actor_id
+            return {"__recover__": True}
+
+
+async def _recover_applied_plan(req: MemoryManagerApplyRequest) -> Dict[str, Any] | None:
+    """Reconstruct a response when a worker died after the canonical DB commit."""
+
+    operations = req.plan.operations
+    ids = {
+        str(operation.memory_id)
+        for operation in operations
+        if operation.memory_id
+    }
+    async with async_session_maker() as session:
+        rows = list((await session.execute(
+            select(Memory).where(Memory.id.in_(ids))
+        )).scalars().all()) if ids else []
+        by_id = {row.id: row for row in rows}
+        for operation in operations:
+            if operation.type == "memory_create":
+                memory = by_id.get(str(operation.memory_id))
+                if memory is None or memory.content_hash != memory_content_hash(operation.content or ""):
+                    return None
+            elif operation.type in {
+                "memory_update", "relationship_replace", "memory_move", "memory_merge"
+            }:
+                memory = by_id.get(str(operation.memory_id))
+                if memory is None or (
+                    operation.content is not None
+                    and memory.content_hash != memory_content_hash(operation.content)
+                ):
+                    return None
+                if operation.attributes is not None and normalize_memory_attributes(memory.attributes_json) != normalize_memory_attributes(
+                    operation.attributes.model_dump(mode="json")
+                ):
+                    return None
+            elif operation.type == "memory_delete" and str(operation.memory_id) in by_id:
+                return None
+
+        if req.plan.mode == "conversation_extract" and req.plan.next_cursor:
+            cursor = req.plan.next_cursor
+            thread = await session.get(Thread, cursor.get("thread_id"))
+            metadata = thread.thread_metadata if thread and isinstance(thread.thread_metadata, dict) else {}
+            curator = metadata.get("memory_curator") if isinstance(metadata.get("memory_curator"), dict) else {}
+            if curator.get("reviewed_through_turn_id") != cursor.get("reviewed_through_turn_id"):
+                return None
+        if req.plan.mode == "consistency_review" and req.plan.next_cursor:
+            cursor = req.plan.next_cursor
+            state = await session.get(MemoryReviewState, (cursor.get("context_type"), cursor.get("context_id")))
+            if cursor.get("remaining_anchor_count") == 0 and (
+                state is None
+                or dict(state.reviewed_scope_versions_json or {}) != dict(cursor.get("snapshot_scope_versions") or {})
+            ):
+                return None
+
+    changed_ids = [
+        str(operation.memory_id)
+        for operation in operations
+        if operation.type != "memory_delete" and operation.memory_id
+    ]
+    changed = await serialize_memories_with_relationships([by_id[memory_id] for memory_id in dict.fromkeys(changed_ids) if memory_id in by_id])
+    result = {
+        "changed_memories": changed,
+        "deleted_memory_ids": [
+            str(operation.memory_id)
+            for operation in operations
+            if operation.type == "memory_delete" and operation.memory_id
+        ],
+        "warnings": [],
+        "review_cursor_advanced": req.plan.mode == "conversation_extract",
+        "memory_review_completed": (
+            req.plan.mode == "consistency_review"
+            and bool(req.plan.next_cursor)
+            and req.plan.next_cursor.get("remaining_anchor_count") == 0
+        ),
+        "memory_review_cursor": req.plan.next_cursor if req.plan.mode == "consistency_review" else None,
+        "plan_id": req.plan.plan_id,
+        "plan_hash": req.plan.plan_hash,
+        "idempotency_key": req.idempotency_key,
+        "status": "committed" if all(item.get("index_status") == "indexed" for item in changed) else "indexing_pending",
+        "review_id": req.plan.review_id,
+    }
+    return result
+
+
+async def _commit_apply(req: MemoryManagerApplyRequest, response: Dict[str, Any]) -> Dict[str, Any]:
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(
+                MemoryManagerIdempotency,
+                req.idempotency_key,
+                with_for_update=True,
+            )
+            if row is None:
+                raise ValueError("Memory-manager idempotency claim disappeared")
+            if row.plan_hash != req.plan_hash:
+                raise ValueError("Idempotency key was already used for a different memory-manager plan")
+            if row.status == "committed":
+                return dict(row.result_json or {})
+            row.status = "committed"
+            row.result_json = response
+            row.updated_at = utc_now()
+            return response
 
 
 def _review_context(req: MemoryManagerPlanRequest) -> tuple[str, str] | None:
@@ -333,9 +474,14 @@ async def create_memory_manager_plan(req: MemoryManagerPlanRequest) -> Dict[str,
 async def apply_memory_manager_plan(req: MemoryManagerApplyRequest) -> Dict[str, Any]:
     if req.plan_hash != req.plan.plan_hash or req.plan_hash != _stable_plan_hash(req.plan.model_dump(mode="json")):
         raise ValueError("Memory manager plan hash is invalid")
-    cached = _APPLIED_RESULTS.get(req.idempotency_key)
+    cached = await _claim_apply(req)
     if cached is not None:
-        return cached
+        if cached.get("__recover__"):
+            recovered = await _recover_applied_plan(req)
+            if recovered is not None:
+                return await _commit_apply(req, recovered)
+        else:
+            return cached
     current_req = MemoryManagerPlanRequest(
         mode=req.plan.mode,
         context=req.plan.context,
@@ -364,17 +510,18 @@ async def apply_memory_manager_plan(req: MemoryManagerApplyRequest) -> Dict[str,
         ),
         actor_id=req.actor_id,
     )
-    result = await apply_memory_change_set(curator_req)
-    response = {
-        **result,
-        "plan_id": req.plan.plan_id,
-        "plan_hash": req.plan.plan_hash,
-        "idempotency_key": req.idempotency_key,
-        "status": "committed" if not result.get("warnings") else "indexing_pending",
-        "review_id": req.plan.review_id,
-    }
-    _APPLIED_RESULTS[req.idempotency_key] = response
-    _APPLIED_RESULTS.move_to_end(req.idempotency_key)
-    while len(_APPLIED_RESULTS) > _MAX_APPLIED_RESULTS:
-        _APPLIED_RESULTS.popitem(last=False)
-    return response
+    try:
+        result = await apply_memory_change_set(curator_req)
+        response = {
+            **result,
+            "plan_id": req.plan.plan_id,
+            "plan_hash": req.plan.plan_hash,
+            "idempotency_key": req.idempotency_key,
+            "status": "committed" if not result.get("warnings") else "indexing_pending",
+            "review_id": req.plan.review_id,
+        }
+        return await _commit_apply(req, response)
+    except Exception:
+        # The claim is intentionally left recoverable. A later retry can reclaim
+        # it after the stale window if the canonical transaction did not commit.
+        raise

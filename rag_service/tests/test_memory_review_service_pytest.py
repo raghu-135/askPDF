@@ -91,6 +91,7 @@ def test_memory_review_prompt_teaches_scope_precedence_and_existing_overrides():
     assert "changes behavior for every project or thread" in prompt
     assert "Unrelated and additive memories require no operation" in prompt
     assert "Do not create unrelated new memories from reviewer inference" in prompt_flat
+    assert "attributes and source references" in prompt_flat
     assert 'mode` is `conversation_review' in prompt
     assert 'only `create` intents with `scope_type="thread"`' in prompt
     assert "Do not save incidental context, episode summaries, temporary task state, inferred personal facts" in prompt_flat

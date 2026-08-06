@@ -29,6 +29,7 @@ from app.db.models_sqlmodel import (
     GlobalMemoryRepresentation,
     MemoryScopeActivity,
     MemoryReviewState,
+    MemoryManagerIdempotency,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,

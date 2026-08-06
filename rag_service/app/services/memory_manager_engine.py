@@ -621,6 +621,13 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
             for index, raw in enumerate(parsed.get("choices") or [])
             if (choice := _normalize_choice(raw, index)) is not None
         ][:6]
+        if state == "clarification" and not choices:
+            choices = [{
+                "id": "retry-memory-curator",
+                "label": "Retry memory review",
+                "description": "Ask the memory curator to produce a valid decision again.",
+                "user_message": "Retry the memory curator decision.",
+            }]
         if latest_prepared is None:
             intents = [
                 intent
@@ -1064,6 +1071,7 @@ async def apply_memory_change_set(req: MemoryChangeApplyRequest) -> Dict[str, An
                             if operation.attributes is not None:
                                 memory.attributes_json = operation.attributes.model_dump(mode="json")
                             memory.updated_at = now
+                            memory.semantic_updated_at = now
                             session.add(MemoryEvent(
                                 memory_id=memory.id,
                                 event_type="curator_updated",

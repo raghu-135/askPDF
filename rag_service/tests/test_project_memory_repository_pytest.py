@@ -170,12 +170,14 @@ async def test_memory_repository_index_lifecycle_and_audit(repo_sessionmaker):
         content_hash="atlas-hash",
         actor_id="test",
     )
+    semantic_before_indexing = memory.semantic_updated_at
     indexing = await repo.mark_memory_indexing(memory.id)
     indexed = await repo.mark_memory_indexed(memory.id)
 
     assert indexing.index_attempts == 1
     assert indexed.index_status == "indexed"
     assert indexed.indexed_at is not None
+    assert indexed.semantic_updated_at == semantic_before_indexing
     async with repo_sessionmaker() as session:
         event_result = await session.execute(select(MemoryEvent).where(MemoryEvent.memory_id == memory.id))
         assert len(list(event_result.scalars().all())) == 1
@@ -203,6 +205,7 @@ async def test_memory_repository_updates_same_canonical_record(repo_sessionmaker
     assert updated.id == memory.id
     assert updated.content == "New preference."
     assert updated.index_status == "pending"
+    assert updated.semantic_updated_at > memory.semantic_updated_at
     async with repo_sessionmaker() as session:
         rows = list((await session.execute(
             select(Memory).where(Memory.id == memory.id)

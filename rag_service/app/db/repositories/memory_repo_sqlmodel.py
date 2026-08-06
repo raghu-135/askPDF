@@ -206,6 +206,7 @@ class MemoryRepository:
             memory.indexed_at = None
             memory.index_error = None
             memory.updated_at = now
+            memory.semantic_updated_at = now
             session.add(MemoryEvent(
                 memory_id=memory.id,
                 event_type=_require_nonempty(event_type, "event_type"),

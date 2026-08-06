@@ -107,6 +107,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
     from app.services import (
         effective_memory_service,
         memory_manager_engine,
+        memory_manager_service,
         memory_tool_service,
         thread_management_service,
     )
@@ -128,6 +129,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_management_service,
         effective_memory_service,
         memory_manager_engine,
+        memory_manager_service,
         memory_tool_service,
         agent_workflow_repository,
         chat_cancellation,

@@ -24,6 +24,7 @@ EXPECTED_MODEL_TABLES = {
     "global_memory_representations",
     "memory_scope_activity",
     "memory_review_states",
+    "memory_manager_idempotency",
     "project_files",
     "thread_document_annotations",
     "thread_files",
@@ -53,7 +54,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["7f3c1a9d5e2b"]
+    assert scripts.get_heads() == ["c4e8a1b6d2f0"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -67,6 +68,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("6d2f8a9b3c1e").down_revision == "4b7e2d9a1c5f"
     assert scripts.get_revision("d1e8f4a9b2c7").down_revision == "6d2f8a9b3c1e"
     assert scripts.get_revision("7f3c1a9d5e2b").down_revision == "d1e8f4a9b2c7"
+    assert scripts.get_revision("c4e8a1b6d2f0").down_revision == "7f3c1a9d5e2b"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():

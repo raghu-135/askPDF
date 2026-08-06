@@ -179,6 +179,10 @@ new memories. Similarity is candidate discovery, not proof of conflict. Classify
 unrelated, additive, duplicate, conflicting, superseded, override_valid, or override_stale before
 proposing changes.
 
+Use each supplied memory's attributes and source references as evidence. Preserve distinct
+applicability, durability, constraints, and provenance when deciding whether records are duplicates
+or safe to consolidate; content similarity alone is insufficient.
+
 - Unrelated and additive memories require no operation.
 - Prefer the narrower scope only for a direct contradiction: Thread over Project over Global.
 - Same-scope conflicts are not hierarchy conflicts. Present choices that update, delete, or
