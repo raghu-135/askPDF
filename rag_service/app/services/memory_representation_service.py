@@ -26,10 +26,15 @@ from app.time_utils import iso_utc_z, utc_now
 logger = logging.getLogger(__name__)
 
 
-def representation_payload(row: GlobalMemoryRepresentation) -> Dict[str, Any]:
+def representation_payload(
+    row: GlobalMemoryRepresentation,
+    *,
+    active_models: set[str] | None = None,
+) -> Dict[str, Any]:
     return {
         "embedding_model": row.embedding_model,
         "primary": False,
+        "active": active_models is None or row.embedding_model in active_models,
         "index_status": row.index_status,
         "index_attempts": row.index_attempts,
         "indexed_at": iso_utc_z(row.indexed_at) if row.indexed_at else None,
@@ -158,6 +163,9 @@ async def index_global_representation(memory_id: str, embedding_model: str) -> i
         async with async_session_maker() as session:
             async with session.begin():
                 row = await session.get(GlobalMemoryRepresentation, (memory_id, model))
+                current_memory = await session.get(Memory, memory_id)
+                if current_memory is None or current_memory.content_hash != content_hash:
+                    raise RuntimeError("Global memory changed while secondary embedding was running")
                 if row:
                     row.index_status = "indexed"
                     row.content_hash = content_hash
@@ -270,14 +278,16 @@ async def list_memory_representations(
         rows = list((await session.execute(
             select(GlobalMemoryRepresentation).where(GlobalMemoryRepresentation.memory_id.in_(memory_ids))
         )).scalars().all())
+        active_models = set((await session.execute(select(Project.embedding_model).distinct())).scalars().all())
     else:
         async with async_session_maker() as owned_session:
             rows = list((await owned_session.execute(
                 select(GlobalMemoryRepresentation).where(GlobalMemoryRepresentation.memory_id.in_(memory_ids))
             )).scalars().all())
+            active_models = set((await owned_session.execute(select(Project.embedding_model).distinct())).scalars().all())
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault(row.memory_id, []).append(representation_payload(row))
+        grouped.setdefault(row.memory_id, []).append(representation_payload(row, active_models=active_models))
     return grouped
 
 
@@ -300,5 +310,10 @@ async def cleanup_unused_global_representation_model(embedding_model: str) -> bo
         async with session.begin():
             await session.execute(delete(GlobalMemoryRepresentation).where(
                 GlobalMemoryRepresentation.embedding_model == embedding_model
+            ))
+            from app.db.models_sqlmodel import EmbeddingJob
+            await session.execute(delete(EmbeddingJob).where(
+                EmbeddingJob.resource_type == "global_memory",
+                EmbeddingJob.embedding_model == embedding_model,
             ))
     return bool(rows)

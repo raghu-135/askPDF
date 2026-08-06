@@ -350,6 +350,7 @@ export interface MemoryRecord {
 export interface MemoryRepresentation {
   embedding_model: string;
   primary: boolean;
+  active?: boolean;
   index_status: string;
   index_attempts?: number;
   indexed_at?: string | null;

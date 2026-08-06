@@ -105,6 +105,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import (
+        embedding_materialization_service,
         effective_memory_service,
         memory_manager_engine,
         memory_manager_service,
@@ -131,6 +132,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         memory_manager_engine,
         memory_manager_service,
         memory_tool_service,
+        embedding_materialization_service,
         agent_workflow_repository,
         chat_cancellation,
     ):

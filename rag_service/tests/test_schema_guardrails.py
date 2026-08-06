@@ -25,6 +25,7 @@ EXPECTED_MODEL_TABLES = {
     "memory_scope_activity",
     "memory_review_states",
     "memory_manager_idempotency",
+    "embedding_jobs",
     "project_files",
     "thread_document_annotations",
     "thread_files",
@@ -54,7 +55,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["c4e8a1b6d2f0"]
+    assert scripts.get_heads() == ["d5f1a2b3c4e6"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -182,6 +183,17 @@ def test_global_memory_representations_are_model_aware_and_cascade():
         for element in constraint.elements
         if constraint.ondelete == "CASCADE"
     } == {"memory_id"}
+
+
+def test_embedding_jobs_are_durable_and_deduplicated():
+    table = models_sqlmodel.EmbeddingJob.__table__
+    assert [column.name for column in table.primary_key.columns] == ["id"]
+    assert "uq_embedding_job_target" in {
+        constraint.name for constraint in table.constraints if constraint.name
+    }
+    assert {"idx_embedding_job_claim", "idx_embedding_job_model_status"} <= {
+        index.name for index in table.indexes
+    }
 
 
 def test_memory_review_state_tables_have_context_keys():

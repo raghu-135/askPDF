@@ -52,6 +52,7 @@ from app.services.memory_service import (
     retry_pending_memory_indexes,
 )
 from app.services.memory_repair_scheduler import shutdown_memory_repairs
+from app.services.embedding_materialization_service import embedding_job_worker
 
 
 async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
@@ -97,12 +98,16 @@ async def lifespan(app: FastAPI):
     memory_maintenance_task = asyncio.create_task(
         _memory_maintenance_loop(memory_maintenance_stop)
     )
+    embedding_job_stop = asyncio.Event()
+    embedding_job_task = asyncio.create_task(embedding_job_worker(embedding_job_stop))
     try:
         yield
     finally:
         logger.info("--- RAG Service Shutting Down ---")
         memory_maintenance_stop.set()
         await memory_maintenance_task
+        embedding_job_stop.set()
+        await embedding_job_task
         await shutdown_memory_repairs()
         try:
             logger.info("Closing database connections...")

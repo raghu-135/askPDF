@@ -170,6 +170,8 @@ async def hard_delete_memory(memory_id: str) -> Dict[str, Any]:
     if memory is None:
         return {"deleted": False, "vector_cleanup": "not_found"}
     vector_cleanup = await _delete_memory_vectors(memory)
+    from app.services.embedding_materialization_service import cancel_embedding_jobs_for_memory
+    await cancel_embedding_jobs_for_memory(memory_id)
     deleted = await delete_memory(memory_id)
     return {"deleted": deleted, "vector_cleanup": vector_cleanup}
 

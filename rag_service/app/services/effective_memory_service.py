@@ -233,11 +233,14 @@ async def serialize_memories_with_relationships(memories: Sequence[Memory]) -> L
                 GlobalMemoryRepresentation.memory_id.in_(selected_ids)
             )
         )).scalars().all())
+        active_models = set((await session.execute(select(Project.embedding_model).distinct())).scalars().all())
     by_id = {memory.id: memory for memory in related}
     from app.services.memory_representation_service import representation_payload
     representations: Dict[str, List[Dict[str, Any]]] = {}
     for row in representation_rows:
-        representations.setdefault(row.memory_id, []).append(representation_payload(row))
+        representations.setdefault(row.memory_id, []).append(
+            representation_payload(row, active_models=active_models)
+        )
     outgoing: Dict[str, List[Memory]] = {}
     incoming: Dict[str, List[Memory]] = {}
     for edge in edges:

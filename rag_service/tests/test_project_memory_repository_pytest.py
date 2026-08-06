@@ -10,7 +10,15 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import MemoryScopeType
-from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryEvent, MemoryOverride, Project
+from app.db.models_sqlmodel import (
+    ChatTurnStatus,
+    EmbeddingJob,
+    GlobalMemoryRepresentation,
+    Memory,
+    MemoryEvent,
+    MemoryOverride,
+    Project,
+)
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
@@ -40,6 +48,7 @@ def repo_sessionmaker(engine, monkeypatch):
     import app.db.repositories.project_file_repo_sqlmodel as project_file_repo
     import app.db.repositories.thread_repo_sqlmodel as thread_repo
     import app.services.effective_memory_service as effective_memory_service
+    import app.services.embedding_materialization_service as embedding_materialization_service
 
     monkeypatch.setattr(memory_repo, "async_session_maker", maker)
     monkeypatch.setattr(message_repo, "async_session_maker", maker)
@@ -47,7 +56,63 @@ def repo_sessionmaker(engine, monkeypatch):
     monkeypatch.setattr(project_file_repo, "async_session_maker", maker)
     monkeypatch.setattr(thread_repo, "async_session_maker", maker)
     monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
+    monkeypatch.setattr(embedding_materialization_service, "async_session_maker", maker)
     return maker
+
+
+@pytest.mark.asyncio
+async def test_embedding_jobs_are_deduplicated_and_refresh_source_version(repo_sessionmaker):
+    from app.services.embedding_materialization_service import ensure_embedding_job
+
+    first = await ensure_embedding_job(
+        resource_type="global_memory",
+        resource_id="memory-job-1",
+        scope_id="default",
+        embedding_model="text-embedding-nomic-embed-text-v1.5",
+        source_version="hash-a",
+    )
+    second = await ensure_embedding_job(
+        resource_type="global_memory",
+        resource_id="memory-job-1",
+        scope_id="default",
+        embedding_model="text-embedding-nomic-embed-text-v1.5",
+        source_version="hash-b",
+    )
+
+    assert first.id == second.id
+    async with repo_sessionmaker() as session:
+        rows = list((await session.execute(select(EmbeddingJob))).scalars().all())
+    assert len(rows) == 1
+    assert rows[0].source_version == "hash-b"
+    assert rows[0].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_global_model_backfill_creates_only_missing_representations(repo_sessionmaker):
+    from app.services.embedding_materialization_service import enqueue_global_model_jobs
+
+    async with repo_sessionmaker() as session:
+        async with session.begin():
+            session.add(Project(id="job-project-a", name="A", embedding_model="model-a"))
+            session.add(Project(id="job-project-b", name="B", embedding_model="model-b"))
+            memory = Memory(
+                id="job-memory-1",
+                scope_type=MemoryScopeType.USER.value,
+                scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+                content="A durable preference",
+                embedding_model="BAAI/bge-m3",
+                content_hash="job-hash",
+            )
+            session.add(memory)
+
+    assert await enqueue_global_model_jobs("model-a") == 1
+    assert await enqueue_global_model_jobs("model-a") == 1
+
+    async with repo_sessionmaker() as session:
+        reps = list((await session.execute(select(GlobalMemoryRepresentation))).scalars().all())
+        jobs = list((await session.execute(select(EmbeddingJob))).scalars().all())
+    assert {(row.memory_id, row.embedding_model) for row in reps} == {("job-memory-1", "model-a")}
+    assert {(row.resource_id, row.embedding_model) for row in jobs} == {("job-memory-1", "model-a")}
 
 
 @pytest.mark.asyncio
@@ -639,7 +704,7 @@ async def test_normal_recall_merges_project_and_default_user_memory_in_one_model
 
 @pytest.mark.asyncio
 async def test_normal_recall_never_falls_back_when_global_representation_is_missing(monkeypatch):
-    from app.services import memory_representation_service, memory_service
+    from app.services import embedding_materialization_service, memory_service
 
     class EmptyScalars:
         def all(self):
@@ -673,7 +738,8 @@ async def test_normal_recall_never_falls_back_when_global_representation_is_miss
         updated_at=None,
     )
     vector_db = SimpleNamespace(search_memory=AsyncMock(return_value=[]))
-    warm = AsyncMock(return_value={"indexed_ids": [], "failed_ids": []})
+    enqueue = AsyncMock(return_value=1)
+    drain = AsyncMock(return_value=0)
     monkeypatch.setattr(memory_service, "async_session_maker", lambda: EmptySession())
     monkeypatch.setattr(memory_service, "resolve_thread_embedding_context", AsyncMock(return_value=context))
     monkeypatch.setattr(memory_service, "resolve_effective_memory_context", AsyncMock(return_value={
@@ -695,7 +761,8 @@ async def test_normal_recall_never_falls_back_when_global_representation_is_miss
         lambda _model: SimpleNamespace(aembed_query=AsyncMock(return_value=[0.1])),
     )
     monkeypatch.setattr(memory_service, "get_vector_db", lambda: vector_db)
-    monkeypatch.setattr(memory_representation_service, "warm_global_representations_for_model", warm)
+    monkeypatch.setattr(embedding_materialization_service, "enqueue_global_model_jobs", enqueue)
+    monkeypatch.setattr(embedding_materialization_service, "drain_embedding_jobs", drain)
 
     result = await memory_service.search_thread_memory(thread_id="thread-1", query="preference")
     await asyncio.sleep(0)
@@ -708,7 +775,7 @@ async def test_normal_recall_never_falls_back_when_global_representation_is_miss
         "reason": "global_representation_warming",
     }]
     assert {call.kwargs["embedding_model"] for call in vector_db.search_memory.await_args_list} == {project_model}
-    warm.assert_awaited_once_with(project_model)
+    enqueue.assert_awaited_once_with(project_model)
 
 
 @pytest.mark.asyncio

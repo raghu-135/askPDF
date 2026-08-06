@@ -14,6 +14,7 @@ from app.models.memory_tools import (
 )
 from app.models.requests import MemorySearchRequest
 from app.services import (
+    embedding_materialization_service,
     memory_repair_scheduler,
     memory_representation_service,
     memory_service,
@@ -100,7 +101,8 @@ async def test_memory_repair_scheduler_deduplicates_by_key(monkeypatch):
         await release.wait()
         return {"indexed_ids": []}
 
-    monkeypatch.setattr(memory_representation_service, "warm_global_representations_for_model", repair)
+    monkeypatch.setattr(embedding_materialization_service, "enqueue_global_model_jobs", repair)
+    monkeypatch.setattr(embedding_materialization_service, "drain_embedding_jobs", AsyncMock(return_value=0))
     first = memory_repair_scheduler.schedule_global_representation_repair("model-a")
     await started.wait()
     second = memory_repair_scheduler.schedule_global_representation_repair("model-a")

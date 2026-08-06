@@ -80,6 +80,8 @@ class MemoryRepository:
             from app.services.memory_representation_service import invalidate_global_representations
             await bump_memory_scope_activity([(scope_type, scope_id)], session=session)
             await invalidate_global_representations(memory, session=session)
+            from app.services.embedding_materialization_service import enqueue_global_jobs_for_active_models
+            await enqueue_global_jobs_for_active_models(memory, session=session)
             session.add(
                 MemoryEvent(
                     memory_id=memory.id,
@@ -219,6 +221,8 @@ class MemoryRepository:
             from app.services.memory_representation_service import invalidate_global_representations
             await bump_memory_scope_activity([(memory.scope_type, memory.scope_id)], session=session)
             await invalidate_global_representations(memory, session=session)
+            from app.services.embedding_materialization_service import enqueue_global_jobs_for_active_models
+            await enqueue_global_jobs_for_active_models(memory, session=session)
             if memory.scope_type == MemoryScopeType.PROJECT.value:
                 await touch_project_activity(session, memory.scope_id, occurred_at=now)
             return memory

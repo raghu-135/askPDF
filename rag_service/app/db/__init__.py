@@ -30,6 +30,7 @@ from app.db.models_sqlmodel import (
     MemoryScopeActivity,
     MemoryReviewState,
     MemoryManagerIdempotency,
+    EmbeddingJob,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,

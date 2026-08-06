@@ -134,7 +134,7 @@ function MemoryDetails({
               <Chip size="small" variant="outlined" label={representation.primary ? 'Primary' : 'Secondary'} />
               <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>{representation.embedding_model}</Typography>
               <Chip size="small" color={memoryIndexStatusColor(representation.index_status)} label={representation.index_status} />
-              {['failed', 'pending'].includes(representation.index_status) && (
+              {representation.active !== false && ['failed', 'pending'].includes(representation.index_status) && (
                 <Tooltip title={`Retry ${representation.embedding_model}`}>
                   <span>
                     <IconButton size="small" disabled={busy} onClick={() => onRetry(representation.primary ? undefined : representation.embedding_model)}>

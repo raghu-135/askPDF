@@ -50,8 +50,12 @@ def schedule_global_representation_repair(embedding_model: str) -> asyncio.Task[
         raise ValueError("embedding_model is required")
 
     async def repair() -> Any:
-        from app.services.memory_representation_service import warm_global_representations_for_model
-        return await warm_global_representations_for_model(model)
+        from app.services.embedding_materialization_service import (
+            enqueue_global_model_jobs,
+            drain_embedding_jobs,
+        )
+        await enqueue_global_model_jobs(model)
+        return await drain_embedding_jobs()
 
     return schedule_memory_repair(f"global-representations:{model}", repair)
 
@@ -69,4 +73,3 @@ async def shutdown_memory_repairs() -> None:
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _repair_tasks.clear()
-

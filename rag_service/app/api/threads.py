@@ -168,6 +168,8 @@ async def _delete_thread_resources(thread_id: str) -> bool:
     db = get_vector_db()
     await db.delete_thread_data(thread_id)
     await hard_delete_thread_memory_resources(thread_id)
+    from app.services.embedding_materialization_service import cancel_embedding_jobs_for_scope
+    await cancel_embedding_jobs_for_scope(thread_id)
 
     deleted = await delete_thread(thread_id)
     if not deleted:

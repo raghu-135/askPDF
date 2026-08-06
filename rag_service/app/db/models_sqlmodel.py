@@ -638,6 +638,53 @@ class MemoryManagerIdempotency(SQLModel, table=True):
         CheckConstraint("length(btrim(plan_hash)) > 0", name="ck_memory_manager_idempotency_plan_hash_nonempty"),
         CheckConstraint("status in ('in_progress', 'committed')", name="ck_memory_manager_idempotency_status"),
     )
+
+
+class EmbeddingJob(SQLModel, table=True):
+    """Durable, deduplicated work item for model-specific vector materialization."""
+    __tablename__ = "embedding_jobs"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    resource_type: str = Field(index=True)
+    resource_id: str = Field(index=True)
+    scope_id: str = Field(index=True)
+    embedding_model: str = Field(index=True)
+    source_version: str
+    status: str = Field(default="pending", index=True)
+    attempts: int = Field(default=0)
+    error: Optional[str] = None
+    available_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    claimed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("resource_type in ('document', 'chat_memory', 'global_memory')", name="ck_embedding_job_resource_type"),
+        CheckConstraint("status in ('pending', 'running', 'completed', 'failed')", name="ck_embedding_job_status"),
+        CheckConstraint("attempts >= 0", name="ck_embedding_job_attempts"),
+        CheckConstraint("length(btrim(resource_id)) > 0", name="ck_embedding_job_resource_id_nonempty"),
+        CheckConstraint("length(btrim(scope_id)) > 0", name="ck_embedding_job_scope_id_nonempty"),
+        CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_embedding_job_model_nonempty"),
+        CheckConstraint("length(btrim(source_version)) > 0", name="ck_embedding_job_source_version_nonempty"),
+        UniqueConstraint(
+            "resource_type", "resource_id", "scope_id", "embedding_model",
+            name="uq_embedding_job_target",
+        ),
+        Index("idx_embedding_job_claim", "status", "available_at"),
+        Index("idx_embedding_job_model_status", "resource_type", "embedding_model", "status"),
+    )
+
+
 class MemoryEvent(SQLModel, table=True):
     """Audit event for durable memory changes."""
     __tablename__ = "memory_events"

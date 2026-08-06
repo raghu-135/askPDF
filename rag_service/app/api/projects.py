@@ -32,9 +32,6 @@ from app.services.project_lifecycle_service import (
     delete_project,
     get_project_lifecycle_summary,
 )
-from app.services.memory_representation_service import (
-    ensure_global_representations_for_model,
-)
 from app.services.memory_repair_scheduler import schedule_global_representation_repair
 from app.services.memory_review_service import get_memory_review_status
 
@@ -88,7 +85,6 @@ async def create_project_endpoint(req: ProjectCreateRequest):
         description=req.description,
         settings_json=req.settings_json,
     )
-    await ensure_global_representations_for_model(project.embedding_model)
     schedule_global_representation_repair(project.embedding_model)
     return _project_payload(project)
 

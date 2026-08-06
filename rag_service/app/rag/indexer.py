@@ -40,7 +40,6 @@ from app.models.llm_server_client import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
-from app.rag.enums import ReembedSkipReason
 
 logger = logging.getLogger(__name__)
 
@@ -1068,16 +1067,6 @@ async def index_web_search_for_thread(
         return {"status": OperationResultStatus.ERROR.value, "message": str(e)}
 
 
-_reembed_locks: Dict[str, asyncio.Lock] = {}
-
-
-def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
-    """Return the per-thread lock used to avoid concurrent re-embed runs."""
-    if thread_id not in _reembed_locks:
-        _reembed_locks[thread_id] = asyncio.Lock()
-    return _reembed_locks[thread_id]
-
-
 async def trigger_reembed_for_missing_sources(
     thread_id: str,
     embedding_model: str,
@@ -1087,91 +1076,8 @@ async def trigger_reembed_for_missing_sources(
     Lazy backfill for sources and chat-memory vectors missing in vector DB.
     Called when a thread is opened.
     """
-    from app.db import get_effective_thread_files, get_thread_turns
-    if not await embedding_model_check(thread_id, embedding_model):
-        return {
-            "status": OperationResultStatus.SKIPPED.value,
-            "reason": ReembedSkipReason.EMBEDDING_MODEL_NOT_READY.value,
-        }
-
-    lock = _thread_reembed_lock(thread_id)
-    if lock.locked():
-        return {
-            "status": OperationResultStatus.SKIPPED.value,
-            "reason": ReembedSkipReason.REEMBED_IN_PROGRESS.value,
-        }
-
-    async with lock:
-        files = await get_effective_thread_files(thread_id)
-        if file_hashes:
-            wanted = set(file_hashes)
-            files = [f for f in files if f.file_hash in wanted]
-
-        db = get_vector_db()
-        reindexed_files: List[Dict[str, str]] = []
-        reindexed_chat_messages: List[str] = []
-
-        for f in files:
-            try:
-                if not await embedding_model_check(thread_id, embedding_model, during_run=True):
-                    logger.warning(
-                        "Stopping re-embed for thread %s: embed model '%s' became unavailable",
-                        thread_id,
-                        embedding_model,
-                    )
-                    break
-                if await db.has_file_indexed(thread_id, f.file_hash, embedding_model):
-                    continue
-                result = await index_document_for_thread(
-                    thread_id=thread_id,
-                    file_hash=f.file_hash,
-                    embedding_model=embedding_model,
-                )
-                if result.get("status") == OperationResultStatus.SUCCESS.value:
-                    reindexed_files.append({"file_hash": f.file_hash, "source_type": FileSourceType.PDF.value})
-            except Exception as item_err:
-                logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
-
-        try:
-            turns = await get_thread_turns(thread_id, limit=10000)
-            for turn in turns:
-                if not await embedding_model_check(thread_id, embedding_model, during_run=True):
-                    logger.warning(
-                        "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
-                        thread_id,
-                        embedding_model,
-                    )
-                    break
-                payload = turn.payload or {}
-                answer = (payload.get("answer") or "").strip()
-                if not answer:
-                    continue
-                metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-                compact_text = (metadata.get("context_compact") or "").strip()
-                if not compact_text:
-                    continue
-                if await db.has_chat_memory_indexed(thread_id, turn.id):
-                    continue
-                chat_result = await index_chat_memory_from_compact_for_thread(
-                    thread_id=thread_id,
-                    message_id=turn.id,
-                    compact_text=compact_text,
-                    answer=answer,
-                    embedding_model=embedding_model,
-                    message_created_at=turn.completed_at or turn.created_at,
-                )
-                if chat_result.get("status") == OperationResultStatus.SUCCESS.value:
-                    reindexed_chat_messages.append(turn.id)
-        except Exception as chat_err:
-            logger.warning("Skipping chat-memory backfill for thread %s: %s", thread_id, chat_err)
-
-        return {
-            "status": "completed",
-            "file_count": len(reindexed_files),
-            "chat_memory_count": len(reindexed_chat_messages),
-            "files": reindexed_files,
-            "chat_message_ids": reindexed_chat_messages,
-        }
+    from app.services.embedding_materialization_service import reconcile_thread_embedding_targets
+    return await reconcile_thread_embedding_targets(thread_id, embedding_model, file_hashes=file_hashes)
 
 
 async def embedding_model_check(

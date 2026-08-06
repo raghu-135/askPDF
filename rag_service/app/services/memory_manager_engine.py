@@ -1124,6 +1124,10 @@ async def apply_memory_change_set(req: MemoryChangeApplyRequest) -> Dict[str, An
                     await touch_project_activity(session, project_id, occurred_at=now)
                 from app.services.memory_review_service import bump_memory_scope_activity
                 from app.services.memory_representation_service import invalidate_global_representations
+                from app.services.embedding_materialization_service import (
+                    cancel_embedding_jobs_for_memory,
+                    enqueue_global_jobs_for_active_models,
+                )
                 await bump_memory_scope_activity(
                     [_operation_scope(operation) for operation in operations],
                     session=session,
@@ -1132,6 +1136,10 @@ async def apply_memory_change_set(req: MemoryChangeApplyRequest) -> Dict[str, An
                 for memory in changed:
                     if memory.id in reindexed_ids:
                         await invalidate_global_representations(memory, session=session)
+                    if memory.scope_type == MemoryScopeType.USER.value:
+                        await enqueue_global_jobs_for_active_models(memory, session=session)
+                for memory_id in deleted_ids:
+                    await cancel_embedding_jobs_for_memory(memory_id, session=session)
                 from app.services.memory_representation_service import list_memory_representations
                 metadata_only_representations = await list_memory_representations(
                     [memory.id for memory in changed if memory.id not in reindexed_ids],
