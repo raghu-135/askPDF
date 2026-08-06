@@ -317,7 +317,13 @@ export default function Home() {
       return;
     }
 
-    const newTab = createPdfTabFromUpload(data);
+    // Upload responses intentionally contain only file data. Add the local
+    // association metadata immediately so actions work before the next reload.
+    const newTab = {
+      ...createPdfTabFromUpload(data),
+      associationScope: activeThread ? 'thread' as const : 'project' as const,
+      isProjectKnowledge: Boolean(activeProject),
+    };
 
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
