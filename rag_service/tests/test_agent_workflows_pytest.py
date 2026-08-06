@@ -123,6 +123,23 @@ def test_builder_test_initial_state_includes_only_transient_request_history():
 
 
 @pytest.mark.asyncio
+async def test_serial_dispatch_keeps_node_and_dispatch_statuses_separate():
+    update = await NodeRegistry().serial_dispatch(
+        {
+            "agent_run_id": "run-serial-status",
+            "work_item_proposals": [],
+            "node_events": [],
+        },
+        {"configurable": {}},
+    )
+
+    event = update["node_events"][-1]
+    assert event["status"] == "completed"
+    assert event["dispatch_status"] == "ready_to_aggregate"
+    assert update["dispatch_summary"]["status"] == "ready_to_aggregate"
+
+
+@pytest.mark.asyncio
 async def test_answer_quality_evaluator_passes_revises_and_finalizes_cautiously(monkeypatch):
     registry = NodeRegistry()
     responses = iter([

@@ -361,6 +361,39 @@ test('trace projection keeps visit metadata optional for older traces', () => {
   assert.equal(view.tools[0].callerVisitIndex, undefined);
 });
 
+test('retained terminal node spans cannot remain visually active', () => {
+  const completedRun = {
+    ...backendDebug,
+    summary: {
+      ...backendDebug.summary,
+      nodes: [
+        {
+          id: 'serial_dispatch',
+          type: 'serial_dispatch',
+          status: 'running',
+          skipped: false,
+          warningCodes: [],
+          span: { end_time: '2026-08-06T20:00:01Z' },
+          raw: { dispatch_status: 'running', visit_index: 1 },
+        },
+        {
+          id: 'serial_dispatch',
+          type: 'serial_dispatch',
+          status: 'ready_to_aggregate',
+          skipped: false,
+          warningCodes: [],
+          span: { end_time: '2026-08-06T20:00:02Z' },
+          raw: { dispatch_status: 'ready_to_aggregate', visit_index: 2 },
+        },
+      ],
+    },
+  };
+
+  const view = buildRunTraceView({ ...traceBackedRun, debug: completedRun });
+
+  assert.deepEqual(view.nodes.map((node) => node.status), ['completed', 'completed']);
+});
+
 test('trace projection handles null debug payload', () => {
   assert.equal(buildRunTraceView({ id: 'run-empty', debug: null }), undefined);
 });

@@ -10,6 +10,7 @@ import {
   ParallelWorkerStatus,
   parallelWorkerStatusForEvent,
 } from '../../lib/parallel-runtime.ts';
+import { normalizeAgentExecutionStatus } from '../agent-graph/agent-execution-status.ts';
 
 export interface TraceNodeView {
   id: string;
@@ -189,6 +190,17 @@ export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
   return runDetails.metrics_json || {};
 };
 
+const retainedNodeStatus = (row: Record<string, any>): string | undefined => {
+  const status = typeof row.status === 'string' ? row.status : undefined;
+  const span = asObject(row.span);
+  const spanEnded = Boolean(span.end_time ?? span.endTime);
+  if (!spanEnded) return status;
+  const normalized = normalizeAgentExecutionStatus(status);
+  return normalized === 'active' || normalized === 'inactive' || normalized === 'planned'
+    ? 'completed'
+    : status;
+};
+
 const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCatalog): TraceNodeView => {
   const raw = asObject(row.raw);
   const id = String(row.id || row.node || row.name || raw.node || 'unknown_node');
@@ -209,7 +221,7 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
       || asNonEmptyString(raw.node_name),
     instanceLabel: formatNodeInstanceLabel(id, type),
     visitIndex: asNumber(row.visitIndex ?? row.visit_index ?? raw.visit_index ?? raw.visitIndex),
-    status: typeof row.status === 'string' ? row.status : undefined,
+    status: retainedNodeStatus(row),
     skipped: row.skipped === true || row.status === 'skipped',
     durationMs: asNumber(row.durationMs ?? row.duration_ms),
     route: typeof row.route === 'string' ? row.route : undefined,

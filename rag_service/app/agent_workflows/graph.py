@@ -937,7 +937,11 @@ class NodeRegistry:
             "completed_or_terminal": len(terminal_ids),
             "status": "running" if len(terminal_ids) < len(work_items) else "ready_to_aggregate",
         }
-        event_data = {"status": NodeEventStatus.COMPLETED.value, **summary}
+        event_data = {
+            **summary,
+            "dispatch_status": summary["status"],
+            "status": NodeEventStatus.COMPLETED.value,
+        }
         _log_node_end(state, WorkflowNodeType.SERIAL_DISPATCH.value, started, event_data)
         return {
             "dispatch_id": dispatch_id,
