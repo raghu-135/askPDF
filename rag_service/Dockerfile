@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     espeak-ng \
     curl \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements.txt

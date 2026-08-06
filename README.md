@@ -278,6 +278,7 @@ Environment variables are now managed using a `.env` file for better security an
 |----------|---------|-------------|
 | `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-m3` | Single local embedding model to use |
 | `LOCAL_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Single local reranker model to use |
+| `HF_TOKEN` | (optional) | Hugging Face token for higher model-download rate limits |
 | `EMBEDDING_DEVICE` | `cpu` | Device for embedding models (cpu/cuda/mps) |
 | `RERANKER_DEVICE` | `cpu` | Device for reranker models (cpu/cuda/mps) |
 
