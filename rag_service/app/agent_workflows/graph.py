@@ -24,6 +24,7 @@ from app.agent_workflows.prompting import (
     build_router_prompt,
 )
 from app.agent_workflows.answer_nodes import (
+    answer_from_context_node,
     direct_answer_node,
     final_context_from_state as _final_context_from_state,
     finalizer_node,
@@ -37,6 +38,7 @@ from app.agent_workflows.decision_nodes import (
     JsonDecisionNodeSpec,
     build_decision_node_event_data,
     invoke_json_decision_node,
+    invoke_validated_json_decision_node,
 )
 from app.agent_workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
@@ -46,7 +48,7 @@ from app.agent_workflows.evidence import (
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
-from app.agent_workflows.enums import EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, WorkflowNodeType
+from app.agent_workflows.enums import AnswerQualityRoute, EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, WorkflowNodeType
 from app.agent_workflows.hitl_runtime import (
     WEB_APPROVAL_GATE_ID,
     hitl_gate_node,
@@ -63,6 +65,8 @@ from app.agent_workflows.planning import (
     normalize_execution_plan,
     normalize_replanner_execution_plan as _normalize_replanner_execution_plan,
     replan_budget as _replan_budget,
+    worker_decision_contract_errors,
+    worker_decisions_need_coverage_review,
 )
 from app.agent_workflows.parallel_runtime import (
     aggregate_parallel_results,
@@ -122,6 +126,7 @@ from app.agent_workflows.state import (
     with_visit_accounting as _with_visit_accounting,
 )
 from app.time_utils import iso_utc_z, utc_now
+from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, MAX_ANSWER_QUALITY_ISSUES, MAX_ANSWER_REVISIONS, WORKER_TERMINAL_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +151,10 @@ class NodeRegistry:
             WorkflowNodeType.FINALIZER.value: self.finalizer,
             WorkflowNodeType.HITL_GATE.value: self.hitl_gate,
             WorkflowNodeType.PARALLEL_DISPATCH.value: self.parallel_dispatch,
+            WorkflowNodeType.SERIAL_DISPATCH.value: self.serial_dispatch,
             WorkflowNodeType.AGGREGATOR.value: self.aggregator,
+            WorkflowNodeType.ANSWER_EVALUATOR.value: self.answer_evaluator,
+            WorkflowNodeType.ANSWER_REVISER.value: self.answer_reviser,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -298,6 +306,7 @@ class NodeRegistry:
                 "code": f"parallel_worker_{status}",
                 "type": type(original).__name__,
                 "message": compact_preview(str(original) or status, limit=700),
+                "raw_message": compact_preview(str(original) or status, limit=700),
                 "retryable": retryable,
             }
             lifecycle = {
@@ -345,6 +354,7 @@ class NodeRegistry:
                 context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
                 use_web_search=state.get("use_web_search", False),
                 use_reranker=state.get("use_reranker", True),
+                prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),
             )
             transient_history = str(state.get("transient_history_text") or "").strip()
             if transient_history:
@@ -416,7 +426,7 @@ class NodeRegistry:
                 "Do not return the clarify route. Choose the best answer-producing route and "
                 "make a reasonable best-effort interpretation from the available context."
             )
-        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+        response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,
             config,
             started=started,
@@ -438,6 +448,12 @@ class NodeRegistry:
             prompt_summary=prompt_summary,
             invoke_llm_for_node=_invoke_llm_for_node,
             safe_json_object=_safe_json_object,
+            validate=lambda value: worker_decision_contract_errors(
+                value,
+                worker_nodes=state.get("available_worker_nodes"),
+                use_web_search=bool(state.get("use_web_search", False)),
+            ),
+            review_when=lambda value: worker_decisions_need_coverage_review(value),
         )
         normalized = normalize_execution_plan(
             parsed,
@@ -446,12 +462,11 @@ class NodeRegistry:
             bypass_clarification=bool(state.get("bypass_clarification")),
             worker_nodes=state.get("available_worker_nodes"),
         )
-        if state.get("parallel_enabled"):
-            normalized["work_item_proposals"] = work_item_proposals(
-                parsed,
-                normalized["execution_plan"],
-                str(state.get("question") or ""),
-            )
+        normalized["work_item_proposals"] = work_item_proposals(
+            parsed,
+            normalized["execution_plan"],
+            str(state.get("question") or ""),
+        )
         worker_summary = selected_and_skipped_workers(
             normalized["execution_plan"],
             available_worker_node_ids(state.get("available_worker_nodes")) or WORKER_NODE_ORDER,
@@ -475,6 +490,7 @@ class NodeRegistry:
                 "execution_plan": normalized["execution_plan"],
                 "clarification_option_count": len(normalized.get("clarification_options") or []),
                 "normalization_notes": normalized.get("normalization_notes") or [],
+                "structured_contract_repair": contract_repair,
                 "llm": _llm_result_metadata(
                     response,
                     model_name=state.get("llm_model"),
@@ -593,8 +609,39 @@ class NodeRegistry:
             "route": route,
             "route_reason": route_reason,
             "clarification_options": clarification_options if route == RouterRoute.CLARIFY.value else None,
+            "execution_plan": self._router_execution_plan(route, state),
+            "work_item_proposals": self._router_work_item_proposals(route, parsed, state),
             "node_events": _append_event(state, WorkflowNodeType.ROUTER.value, data, started=started, config=config),
         }
+
+    @staticmethod
+    def _router_execution_plan(route: str, state: RouterRagState) -> list[str]:
+        route_to_type = {
+            RouterRoute.DOCUMENT.value: WorkflowNodeType.RETRIEVAL_WORKER.value,
+            RouterRoute.THREAD_CONVERSATION_HISTORY.value: WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+            RouterRoute.DURABLE_MEMORY.value: WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+            RouterRoute.THREAD_EVENTS.value: WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+            RouterRoute.WEB.value: WorkflowNodeType.WEB_WORKER.value,
+        }
+        wanted_type = route_to_type.get(route)
+        if not wanted_type:
+            return []
+        candidates = [
+            str(item.get("id")) for item in state.get("available_worker_nodes") or []
+            if isinstance(item, dict) and item.get("type") == wanted_type and item.get("id")
+        ]
+        return candidates[:1]
+
+    @classmethod
+    def _router_work_item_proposals(cls, route: str, parsed: Dict[str, Any], state: RouterRagState) -> list[Dict[str, Any]]:
+        return [
+            {
+                "worker_node_id": worker_id,
+                "query": str(parsed.get("query") or state.get("question") or ""),
+                "reason": str(parsed.get("reason") or "router source selection"),
+            }
+            for worker_id in cls._router_execution_plan(route, state)
+        ]
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._tool_worker(WorkflowNodeType.RETRIEVAL_WORKER.value, state, config)
@@ -614,6 +661,15 @@ class NodeRegistry:
     async def _tool_worker(self, node_name: str, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         if isinstance(state.get("work_item"), dict):
             return await self._parallel_tool_worker(node_name, state, config)
+        proposal = next(
+            (
+                item for item in state.get("work_item_proposals") or []
+                if isinstance(item, dict) and item.get("worker_node_id") == runtime_node_id(config, node_name)
+            ),
+            None,
+        )
+        if proposal and str(proposal.get("query") or "").strip():
+            state = {**state, "question": str(proposal["query"]).strip()}
         started = time.perf_counter()
         spec = tool_worker_spec(node_name)
         spec = replace(spec, tool=globals().get(spec.tool_name, spec.tool))
@@ -681,6 +737,7 @@ class NodeRegistry:
                 "worker_node_id": item.get("worker_node_id"),
                 "worker_type": item.get("worker_type"),
                 "status": lifecycle_status,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                 **data,
             }
             lifecycle_events.append(payload)
@@ -689,12 +746,13 @@ class NodeRegistry:
             elif studio_queue is not None:
                 await studio_queue.put({"event": name, "data": payload})
 
-        def exhausted_retry_delta(error: BaseException, status: str) -> Dict[str, Any]:
+        def terminal_failure_delta(error: BaseException, status: str, *, retryable: bool) -> Dict[str, Any]:
             error_payload = {
                 "code": f"parallel_worker_{status}",
                 "type": type(error).__name__,
                 "message": compact_preview(str(error) or status, limit=700),
-                "retryable": True,
+                "raw_message": compact_preview(str(error) or status, limit=700),
+                "retryable": retryable,
             }
             return worker_terminal_delta(
                 item,
@@ -758,18 +816,16 @@ class NodeRegistry:
             })
             if retryable and attempt < normalized_parallel_policy(state.get("parallel_policy"))["max_attempts"]:
                 await emit(ParallelEventName.WORKER_RETRYING, {"attempt": attempt, "next_attempt": attempt + 1, "status": "timed_out"})
-            elif retryable:
-                return exhausted_retry_delta(timeout_error, "timed_out")
-            raise ParallelWorkerError(timeout_error, attempt=attempt, status="timed_out") from exc
+                raise ParallelWorkerError(timeout_error, attempt=attempt, status="timed_out") from exc
+            return terminal_failure_delta(timeout_error, "timed_out", retryable=retryable)
         except Exception as exc:
             retryable = parallel_retryable_error(exc)
             status = "timed_out" if isinstance(exc, TimeoutError) else "failed"
             await emit(f"worker.{status}", {"attempt": attempt, "retryable": retryable})
             if retryable and attempt < normalized_parallel_policy(state.get("parallel_policy"))["max_attempts"]:
                 await emit(ParallelEventName.WORKER_RETRYING, {"attempt": attempt, "next_attempt": attempt + 1, "status": status})
-            elif retryable:
-                return exhausted_retry_delta(exc, status)
-            raise ParallelWorkerError(exc, attempt=attempt, status=status) from exc
+                raise ParallelWorkerError(exc, attempt=attempt, status=status) from exc
+            return terminal_failure_delta(exc, status, retryable=retryable)
 
         latest = (output.get("node_events") or [{}])[-1]
         status = "skipped" if latest.get("status") == NodeEventStatus.SKIPPED.value else "completed"
@@ -824,6 +880,83 @@ class NodeRegistry:
             append_event=_append_event,
             append_tool_event=_append_tool_event,
         )
+
+    async def serial_dispatch(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        """Checkpoint a typed plan and dispatch exactly one unfinished worker per visit."""
+
+        started = time.perf_counter()
+        node_id = runtime_node_id(config, WorkflowNodeType.SERIAL_DISPATCH.value)
+        existing_items = [item for item in state.get("work_items") or [] if isinstance(item, dict)]
+        current_dispatch_id = str(state.get("dispatch_id") or "")
+        current_proposals = state.get("work_item_proposals") or []
+        proposal_signature = repr((int(state.get("replan_count") or 0), current_proposals))
+        expected_dispatch_visit = int(state.get("replan_count") or 0) + 1
+        start_new_dispatch = not existing_items or int(state.get("dispatch_visit") or 0) < expected_dispatch_visit
+        if start_new_dispatch:
+            visit = int(state.get("dispatch_visit") or 0) + 1
+            work_items = normalize_work_items(
+                current_proposals,
+                state=state,
+                dispatch_node_id=node_id,
+                dispatch_visit=visit,
+            )
+            import hashlib
+            dispatch_id = (
+                str(work_items[0].get("dispatch_id")) if work_items
+                else hashlib.sha256(f"{state.get('agent_run_id')}:{node_id}:{visit}".encode()).hexdigest()[:24]
+            )
+            dispatch_started_epoch_ms = int(time.time() * 1000)
+            policy = normalized_parallel_policy(state.get("parallel_policy"))
+            serial_budget_ms = sum(int(item.get("timeout_ms") or policy["default_worker_timeout_ms"]) for item in work_items)
+            deadline_epoch_ms = dispatch_started_epoch_ms + max(policy["dispatch_timeout_ms"], serial_budget_ms)
+            work_items = [
+                {
+                    **item,
+                    "dispatch_node_id": node_id,
+                    "dispatch_started_epoch_ms": dispatch_started_epoch_ms,
+                    "dispatch_deadline_epoch_ms": deadline_epoch_ms,
+                }
+                for item in work_items
+            ]
+        else:
+            visit = int(state.get("dispatch_visit") or 1)
+            work_items = existing_items
+            dispatch_id = current_dispatch_id
+            dispatch_started_epoch_ms = int(state.get("dispatch_started_epoch_ms") or int(time.time() * 1000))
+            deadline_epoch_ms = int(state.get("dispatch_deadline_epoch_ms") or 0)
+        terminal_ids = {
+            str(packet.get("work_id")) for packet in state.get("worker_result_packets") or []
+            if isinstance(packet, dict)
+            and packet.get("dispatch_id") == dispatch_id
+            and packet.get("status") in WORKER_TERMINAL_STATUSES
+        }
+        summary = {
+            "dispatch_id": dispatch_id,
+            "mode": "serial",
+            "planned": len(work_items),
+            "completed_or_terminal": len(terminal_ids),
+            "status": "running" if len(terminal_ids) < len(work_items) else "ready_to_aggregate",
+        }
+        event_data = {"status": NodeEventStatus.COMPLETED.value, **summary}
+        _log_node_end(state, WorkflowNodeType.SERIAL_DISPATCH.value, started, event_data)
+        return {
+            "dispatch_id": dispatch_id,
+            "dispatch_node_id": node_id,
+            "dispatch_mode": "serial",
+            "dispatch_visit": visit,
+            "dispatch_started_epoch_ms": dispatch_started_epoch_ms,
+            "dispatch_deadline_epoch_ms": deadline_epoch_ms,
+            "dispatch_proposal_signature": proposal_signature,
+            "work_items": work_items,
+            "dispatch_summary": summary,
+            "node_events": _append_event(
+                state,
+                WorkflowNodeType.SERIAL_DISPATCH.value,
+                event_data,
+                started=started,
+                config=config,
+            ),
+        }
 
     async def parallel_dispatch(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
@@ -884,6 +1017,8 @@ class NodeRegistry:
             "work_items": work_items,
             "worker_result_packets": [],
             "parallel_summary": summary,
+            "dispatch_mode": "parallel",
+            "dispatch_summary": {**summary, "mode": "parallel"},
         }
         update["node_events"] = _append_event(
             state,
@@ -900,26 +1035,30 @@ class NodeRegistry:
 
     async def aggregator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        is_parallel = str(state.get("dispatch_mode") or "parallel") == "parallel"
         sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
         studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
-        if sink is not None:
+        if is_parallel and sink is not None:
             await sink.emit(ParallelEventName.BARRIER_REACHED, {
                 "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
                 "result_count": len(state.get("worker_result_packets") or []),
             })
-        elif studio_queue is not None:
+        elif is_parallel and studio_queue is not None:
             await studio_queue.put({"event": ParallelEventName.BARRIER_REACHED, "data": {
                 "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
                 "result_count": len(state.get("worker_result_packets") or []),
             }})
         update = aggregate_parallel_results(state)
-        summary = dict(update.get("parallel_summary") or {})
+        summary = dict(update.get("dispatch_summary") or update.get("parallel_summary") or {})
         summary.setdefault("agent_run_id", state.get("agent_run_id"))
         summary["barrier_state"] = "reached"
         summary["aggregation_state"] = "partial" if summary.get("partial_evidence") else "completed"
         update["parallel_summary"] = summary
+        update["dispatch_summary"] = {**summary, "mode": str(state.get("dispatch_mode") or "parallel")}
+        if not is_parallel:
+            update["parallel_summary"] = {}
         aggregation_event = {
             "status": NodeEventStatus.COMPLETED.value,
             **summary,
@@ -933,17 +1072,86 @@ class NodeRegistry:
             started=started,
             config=config,
         )
-        if sink is not None:
+        _log_node_end(state, WorkflowNodeType.AGGREGATOR.value, started, aggregation_event)
+        if is_parallel and sink is not None:
             await sink.emit(
                 ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 summary,
             )
-        elif studio_queue is not None:
+        elif is_parallel and studio_queue is not None:
             await studio_queue.put({
                 "event": ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 "data": summary,
             })
         return update
+
+    async def answer_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        llm = get_llm(state["llm_model"])
+        revision_count = max(0, int(state.get("answer_revision_count") or 0))
+        prompt = (
+            "Review the draft answer against the user's request and the available evidence. "
+            "Evaluate completeness, factual grounding, citation/source alignment, uncertainty, and instruction following. "
+            "Do not rewrite the answer. Return only JSON with pass (boolean), reason (string), and "
+            "issues (array of concise strings).\n\n"
+            f"Question:\n{compact_preview(state.get('question'), limit=3000)}\n\n"
+            f"Draft answer:\n{compact_preview(state.get('final_answer'), limit=10000)}\n\n"
+            f"Evidence:\n{compact_preview(state.get('evidence') or _format_prefetch_summary(state.get('pre_fetch_bundle') or {}), limit=12000)}"
+        )
+        response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
+            state,
+            config,
+            started=started,
+            spec=JsonDecisionNodeSpec(
+                node_name=WorkflowNodeType.ANSWER_EVALUATOR.value,
+                prompt_section="Answer Quality Review",
+                system_message="You are a strict answer-quality evaluator. Return only the requested JSON object.",
+                prompt=prompt,
+                failure_data={"input_preview": {"question": compact_preview(state.get("question")), "answer": compact_preview(state.get("final_answer"))}},
+            ),
+            validate=lambda value: [] if isinstance(value.get("pass"), bool) and isinstance(value.get("reason"), str) and isinstance(value.get("issues"), list) else ["pass must be boolean, reason string, and issues an array"],
+            llm=llm,
+            llm_retry_observer=_llm_retry_observer,
+            prompt_summary=prompt_summary,
+            invoke_llm_for_node=_invoke_llm_for_node,
+            safe_json_object=_safe_json_object,
+        )
+        passed = parsed.get("pass") is True
+        route = (
+            AnswerQualityRoute.PASS.value
+            if passed
+            else AnswerQualityRoute.REVISE.value
+            if revision_count < MAX_ANSWER_REVISIONS
+            else AnswerQualityRoute.FINALIZE_CAUTIOUS.value
+        )
+        report = {
+            "passed": passed,
+            "reason": compact_preview(parsed.get("reason"), limit=800),
+            "issues": [compact_preview(item, limit=300) for item in parsed.get("issues") or [] if str(item).strip()][:MAX_ANSWER_QUALITY_ISSUES],
+            "revision_count": revision_count,
+            "contract_repair": contract_repair,
+        }
+        final_answer = str(state.get("final_answer") or "")
+        if route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value and report["issues"]:
+            final_answer = final_answer.rstrip() + "\n\nLimitations: " + "; ".join(report["issues"])
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "answer_quality_route": route,
+            "answer_quality_report": report,
+            "prompt_summary": prompt_details,
+            "llm_result_summary": {"llm": _llm_result_metadata(response, model_name=state.get("llm_model"), retry_attempts=retry_attempts)},
+        }
+        _log_node_end(state, WorkflowNodeType.ANSWER_EVALUATOR.value, started, data)
+        return {
+            "answer_quality_route": route,
+            "answer_quality_report": report,
+            "final_answer": final_answer,
+            "node_events": _append_event(state, WorkflowNodeType.ANSWER_EVALUATOR.value, data, started=started, config=config),
+        }
+
+    async def answer_reviser(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        update = await answer_from_context_node(state, config, node_name=WorkflowNodeType.ANSWER_REVISER.value)
+        return {**update, "answer_revision_count": max(0, int(state.get("answer_revision_count") or 0)) + 1}
 
     async def evidence_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
@@ -1048,7 +1256,7 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_replanner_prompt(state)
-        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+        response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,
             config,
             started=started,
@@ -1071,6 +1279,13 @@ class NodeRegistry:
             prompt_summary=prompt_summary,
             invoke_llm_for_node=_invoke_llm_for_node,
             safe_json_object=_safe_json_object,
+            validate=lambda value: worker_decision_contract_errors(
+                value,
+                worker_nodes=state.get("available_worker_nodes"),
+                use_web_search=bool(state.get("use_web_search", False)),
+                require_route=False,
+            ),
+            review_when=lambda value: worker_decisions_need_coverage_review(value, require_route=False),
         )
         normalized = _normalize_replanner_execution_plan(
             parsed,
@@ -1109,6 +1324,7 @@ class NodeRegistry:
                 "parsed": bool(parsed),
                 "execution_plan": normalized["execution_plan"],
                 "normalization_notes": normalized.get("normalization_notes") or [],
+                "structured_contract_repair": contract_repair,
                 "llm": _llm_result_metadata(
                     response,
                     model_name=state.get("llm_model"),
@@ -1125,6 +1341,11 @@ class NodeRegistry:
         _log_node_end(state, WorkflowNodeType.REPLANNER.value, started, data)
         return {
             "execution_plan": normalized["execution_plan"],
+            "work_item_proposals": work_item_proposals(
+                parsed,
+                normalized["execution_plan"],
+                str(state.get("question") or ""),
+            ),
             "replan_count": replan_count,
             "replan_reason": normalized["reason"],
             "replan_history": replan_history,

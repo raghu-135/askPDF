@@ -158,10 +158,19 @@ def hitl_gate_routes(gate: Dict[str, Any], target_node_id: str, edges: List[Dict
     return routes
 
 
-def insert_before_gate(edges: List[Dict[str, Any]], gate_id: str, target_node_id: str) -> List[Dict[str, Any]]:
+def insert_before_gate(
+    edges: List[Dict[str, Any]],
+    gate_id: str,
+    target_node_id: str,
+    *,
+    excluded_sources: set[str] | None = None,
+) -> List[Dict[str, Any]]:
     updated: List[Dict[str, Any]] = []
     for edge in edges:
         edge = dict(edge)
+        if str(edge.get("from") or "") in (excluded_sources or set()):
+            updated.append(edge)
+            continue
         if edge.get("conditional") and isinstance(edge.get("routes"), dict):
             routes = dict(edge["routes"])
             changed = False
@@ -206,6 +215,27 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
     for gate_id, raw_gate in gates.items():
         if not isinstance(gate_id, str) or gate_id in existing_node_ids:
             continue
+        if gate_id == WEB_APPROVAL_GATE_ID:
+            supplied = dict(raw_gate) if isinstance(raw_gate, dict) else {}
+            supplied_target = supplied.get("target") if isinstance(supplied.get("target"), dict) else {}
+            if not supplied_target or supplied_target.get("node_id") == WorkflowNodeType.WEB_WORKER.value:
+                dispatch_target = next(
+                    (
+                        node_id for node_id, node_type in node_types.items()
+                        if node_type in {
+                            WorkflowNodeType.SERIAL_DISPATCH.value,
+                            WorkflowNodeType.PARALLEL_DISPATCH.value,
+                        }
+                    ),
+                    None,
+                )
+                if dispatch_target:
+                    supplied["target"] = {"node_id": dispatch_target, "node_type": node_types[dispatch_target]}
+                    supplied["routes"] = {
+                        AgentRunResumeAction.APPROVE.value: dispatch_target,
+                        AgentRunResumeAction.CONTINUE_WITHOUT.value: dispatch_target,
+                    }
+            raw_gate = supplied
         gate = _normalize_hitl_gate_policy(gate_id, raw_gate)
         if gate.get("enabled", True) is False:
             continue
@@ -230,7 +260,26 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
                 gate["default_action"] = AgentRunResumeAction.APPROVE.value
         gates[gate_id] = gate
         if phase == HitlPhase.BEFORE.value:
-            edges = insert_before_gate(edges, gate_id, target_node_id)
+            excluded_sources = (
+                {
+                    node_id for node_id, node_type in node_types.items()
+                    if node_type in {
+                        WorkflowNodeType.RETRIEVAL_WORKER.value,
+                        WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+                        WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+                        WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+                        WorkflowNodeType.WEB_WORKER.value,
+                    }
+                }
+                if node_types.get(target_node_id) == WorkflowNodeType.SERIAL_DISPATCH.value
+                else set()
+            )
+            edges = insert_before_gate(
+                edges,
+                gate_id,
+                target_node_id,
+                excluded_sources=excluded_sources,
+            )
         elif phase == HitlPhase.AFTER.value:
             edges = insert_after_gate(edges, gate_id, target_node_id)
         else:

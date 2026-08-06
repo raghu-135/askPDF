@@ -128,6 +128,90 @@ def available_worker_node_ids(worker_nodes: Any) -> List[str]:
     return ids
 
 
+def worker_decision_contract_errors(
+    parsed: Dict[str, Any],
+    *,
+    worker_nodes: Any,
+    use_web_search: bool,
+    require_route: bool = True,
+) -> List[str]:
+    """Validate exhaustive typed worker selection without making semantic choices."""
+
+    available = available_worker_node_ids(worker_nodes)
+    decisions = parsed.get("worker_decisions")
+    errors: List[str] = []
+    if require_route and parsed.get("route") not in PLANNER_ROUTES:
+        errors.append("route must be one of execute, direct, or clarify")
+    if not isinstance(decisions, list):
+        return [*errors, "worker_decisions must be an array containing one decision for every available worker"]
+
+    seen: set[str] = set()
+    selected = 0
+    by_type = _worker_nodes_by_type(worker_nodes)
+    web_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
+    for index, decision in enumerate(decisions):
+        if not isinstance(decision, dict):
+            errors.append(f"worker_decisions[{index}] must be an object")
+            continue
+        worker_id = decision.get("worker_node_id")
+        if worker_id not in available:
+            errors.append(f"worker_decisions[{index}].worker_node_id must be an exact available worker id")
+            continue
+        if worker_id in seen:
+            errors.append(f"worker_decisions contains duplicate worker id {worker_id}")
+        seen.add(worker_id)
+        if not isinstance(decision.get("selected"), bool):
+            errors.append(f"worker decision for {worker_id} must contain boolean selected")
+            continue
+        if decision["selected"]:
+            selected += 1
+            if not str(decision.get("query") or "").strip():
+                errors.append(f"selected worker {worker_id} must contain a non-empty query")
+            if worker_id in web_ids and not use_web_search:
+                errors.append(f"worker {worker_id} cannot be selected while live web search is disabled")
+        if not str(decision.get("reason") or "").strip():
+            errors.append(f"worker decision for {worker_id} must contain a reason")
+
+    missing = [worker_id for worker_id in available if worker_id not in seen]
+    if missing:
+        errors.append("worker_decisions is missing: " + ", ".join(missing))
+    route = parsed.get("route")
+    if require_route and route == PlannerRoute.EXECUTE.value and selected == 0:
+        errors.append("execute route must select at least one worker")
+    if require_route and route in {PlannerRoute.DIRECT.value, PlannerRoute.CLARIFY.value} and selected:
+        errors.append(f"{route} route must not select workers")
+    return errors
+
+
+def selected_worker_decisions(parsed: Dict[str, Any], *, worker_nodes: Any) -> List[Dict[str, Any]]:
+    decisions = parsed.get("worker_decisions")
+    if not isinstance(decisions, list):
+        return []
+    available = set(available_worker_node_ids(worker_nodes))
+    selected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for decision in decisions:
+        if not isinstance(decision, dict) or decision.get("selected") is not True:
+            continue
+        worker_id = decision.get("worker_node_id")
+        if worker_id not in available or worker_id in seen:
+            continue
+        seen.add(worker_id)
+        selected.append(decision)
+    return selected
+
+
+def worker_decisions_need_coverage_review(parsed: Dict[str, Any], *, require_route: bool = True) -> bool:
+    """Review every valid executable plan once; the review remains model-semantic."""
+
+    if require_route and parsed.get("route") != PlannerRoute.EXECUTE.value:
+        return False
+    decisions = parsed.get("worker_decisions")
+    if not isinstance(decisions, list):
+        return False
+    return bool(decisions)
+
+
 def _resolve_worker_reference(value: Any, *, by_id: Dict[str, Dict[str, Any]], by_type: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
     node = None
     if isinstance(value, str):
@@ -189,7 +273,8 @@ def normalize_execution_plan(
     worker_nodes: Any = None,
 ) -> Dict[str, Any]:
     route = parsed.get("route") if parsed.get("route") in PLANNER_ROUTES else PlannerRoute.EXECUTE.value
-    required_steps = infer_required_plan_steps(question)
+    has_worker_decisions = isinstance(parsed.get("worker_decisions"), list)
+    required_steps = [] if has_worker_decisions else infer_required_plan_steps(question)
     normalization_notes: List[str] = []
     if route == PlannerRoute.CLARIFY.value and bypass_clarification:
         route = PlannerRoute.DIRECT.value
@@ -197,7 +282,12 @@ def normalize_execution_plan(
     if route == PlannerRoute.DIRECT.value and required_steps:
         route = PlannerRoute.EXECUTE.value
         normalization_notes.append("direct_route_clamped_to_execute")
-    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
+    selected_decisions = selected_worker_decisions(parsed, worker_nodes=worker_nodes)
+    raw_steps = (
+        [decision.get("worker_node_id") for decision in selected_decisions]
+        if has_worker_decisions
+        else parsed.get("execution_plan") or parsed.get("steps") or []
+    )
     steps: List[str] = []
     by_type = _worker_nodes_by_type(worker_nodes)
     by_id = {str(node["id"]): node for nodes in by_type.values() for node in nodes}
@@ -306,7 +396,12 @@ def normalize_replanner_execution_plan(
     worker_nodes: Any = None,
 ) -> Dict[str, Any]:
     normalization_notes: List[str] = []
-    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
+    selected_decisions = selected_worker_decisions(parsed, worker_nodes=worker_nodes)
+    raw_steps = (
+        [decision.get("worker_node_id") for decision in selected_decisions]
+        if isinstance(parsed.get("worker_decisions"), list)
+        else parsed.get("execution_plan") or parsed.get("steps") or []
+    )
     steps: List[str] = []
     by_type = _worker_nodes_by_type(worker_nodes)
     by_id = {str(node["id"]): node for nodes in by_type.values() for node in nodes}

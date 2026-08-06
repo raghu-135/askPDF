@@ -39,33 +39,21 @@
             "routes": {
               "clarify": "finalizer",
               "direct": "direct_answer",
-              "execute": "retrieval_worker"
+              "execute": "serial_dispatch"
             }
           },
-          {
-            "from": "direct_answer",
-            "to": "finalizer"
-          },
-          {
-            "from": "retrieval_worker",
-            "to": "thread_conversation_history_worker"
-          },
-          {
-            "from": "thread_conversation_history_worker",
-            "to": "durable_memory_worker"
-          },
-          {
-            "from": "durable_memory_worker",
-            "to": "thread_events_worker"
-          },
-          {
-            "from": "thread_events_worker",
-            "to": "web_worker"
-          },
-          {
-            "from": "web_worker",
-            "to": "evidence_evaluator"
-          },
+          {"conditional": true, "from": "serial_dispatch", "route_fn": "serial_dispatch_route", "routes": {"dispatch": "aggregator"}},
+          {"dynamic": true, "from": "serial_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "serial_dispatch"},
+          {"from": "thread_conversation_history_worker", "to": "serial_dispatch"},
+          {"from": "durable_memory_worker", "to": "serial_dispatch"},
+          {"from": "thread_events_worker", "to": "serial_dispatch"},
+          {"from": "web_worker", "to": "serial_dispatch"},
+          {"from": "aggregator", "to": "evidence_evaluator"},
           {
             "conditional": true,
             "from": "evidence_evaluator",
@@ -78,12 +66,12 @@
           },
           {
             "from": "replanner",
-            "to": "retrieval_worker"
+            "to": "serial_dispatch"
           },
-          {
-            "from": "synthesizer",
-            "to": "finalizer"
-          },
+          {"from": "direct_answer", "to": "answer_evaluator"},
+          {"from": "synthesizer", "to": "answer_evaluator"},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
           {
             "from": "finalizer",
             "to": "END"
@@ -102,6 +90,7 @@
             "id": "direct_answer",
             "type": "direct_answer"
           },
+          {"id": "serial_dispatch", "type": "serial_dispatch"},
           {
             "id": "retrieval_worker",
             "type": "retrieval_worker"
@@ -122,6 +111,7 @@
             "id": "web_worker",
             "type": "web_worker"
           },
+          {"id": "aggregator", "type": "aggregator"},
           {
             "id": "evidence_evaluator",
             "type": "evidence_evaluator"
@@ -134,6 +124,8 @@
             "id": "synthesizer",
             "type": "synthesizer"
           },
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
           {
             "id": "finalizer",
             "type": "finalizer"
@@ -146,7 +138,7 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 18,
+        "max_total_visits": 40,
         "node_visit_limits": {
           "evidence_evaluator": 2,
           "thread_conversation_history_worker": 2,
@@ -154,11 +146,16 @@
           "replanner": 1,
           "retrieval_worker": 2,
           "thread_events_worker": 2,
-          "web_worker": 2
+          "web_worker": 2,
+          "serial_dispatch": 20,
+          "aggregator": 2,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
         }
       },
       "prefetch_policy": {
-        "enabled": true
+        "enabled": true,
+        "mode": "routing"
       },
       "replans": 1,
       "system_role": "",
@@ -172,7 +169,9 @@
       "failure_context": "Compiled Evaluator/Replanner RAG Agent execution failed gracefully.",
       "failure_reason_prefix": "Exception during Evaluator/Replanner RAG execution",
       "features": {
-        "supports_replans": true
+        "supports_replans": true,
+        "supports_serial_dispatch": true,
+        "supports_answer_quality": true
       },
       "kind": "compiled_rag",
       "label": "Evaluator/Replanner RAG",
@@ -180,7 +179,7 @@
       "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent workflow."
     },
     "schema_version": 2,
-    "version": 4
+    "version": 5
   },
   "visibility": "builtin"
 }

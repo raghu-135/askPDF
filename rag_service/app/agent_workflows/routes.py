@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict
 
 from app.agent_workflows.enums import (
     AgentRunResumeAction,
+    AnswerQualityRoute,
     EvaluatorRoute,
     PlannerRoute,
     RouteFunctionId,
@@ -11,9 +12,10 @@ from app.agent_workflows.enums import (
     EVALUATOR_ROUTES,
     PLANNER_ROUTES,
     ROUTER_ROUTES,
+    ANSWER_QUALITY_ROUTES,
 )
 from app.agent_workflows.route_registry import route_function_allowed_for_node_type
-from app.agent_workflows.parallel_runtime import dispatch_sends
+from app.agent_workflows.parallel_runtime import dispatch_sends, serial_dispatch_next
 
 
 def router_route(state: Dict[str, Any]) -> str:
@@ -29,6 +31,11 @@ def planner_route(state: Dict[str, Any]) -> str:
 def evaluator_route(state: Dict[str, Any]) -> str:
     route = state.get("evaluator_route")
     return route if route in EVALUATOR_ROUTES else EvaluatorRoute.ANSWER.value
+
+
+def answer_quality_route(state: Dict[str, Any]) -> str:
+    route = state.get("answer_quality_route")
+    return route if route in ANSWER_QUALITY_ROUTES else AnswerQualityRoute.PASS.value
 
 
 def hitl_gate_route(state: Dict[str, Any]) -> str:
@@ -66,6 +73,10 @@ def route_function_for_edge(
             return router_route
         if route_fn_id == RouteFunctionId.PARALLEL_DISPATCH.value:
             return dispatch_sends
+        if route_fn_id == RouteFunctionId.SERIAL_DISPATCH.value:
+            return serial_dispatch_next
+        if route_fn_id == RouteFunctionId.ANSWER_QUALITY.value:
+            return answer_quality_route
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
     raise ValueError(f"Conditional edge from {source} must declare route_fn")

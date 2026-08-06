@@ -15,6 +15,7 @@ from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.planning import worker_nodes_from_spec
 from app.agent_workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from app.agent_workflows.parallel_contracts import ParallelEventName
+from app.agent_workflows.state import merge_parallel_deltas
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from app.db import (
     AgentRunStatus,
@@ -40,6 +41,9 @@ async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: D
                 latest_state = chunk
     except ChatRunCancellationRequested as exc:
         exc.state = {**latest_state, **dict(exc.state or {})}
+        raise
+    except Exception as exc:
+        exc.agent_workflow_state = latest_state
         raise
     return latest_state
 
@@ -381,7 +385,7 @@ async def handle_router_rag_chat(
     checkpointer: Any = None,
     **_kwargs: Any,
 ) -> Dict[str, Any]:
-    """Execute the router RAG workflow runtime."""
+    """Execute the Router workflow runtime."""
 
     return await execute_compiled_rag_chat(
         thread_id,
@@ -484,6 +488,7 @@ async def _handle_compiled_rag_chat(
     hitl_policy = workflow_config.get("hitl_policy") if isinstance(workflow_config.get("hitl_policy"), dict) else {}
     loop_policy = workflow_config.get("loop_policy") if isinstance(workflow_config.get("loop_policy"), dict) else {}
     context_policy = workflow_config.get("context_policy") if isinstance(workflow_config.get("context_policy"), dict) else {}
+    prefetch_policy = workflow_config.get("prefetch_policy") if isinstance(workflow_config.get("prefetch_policy"), dict) else {}
     runtime_features = workflow_runtime_features(resolved_spec)
     parallel_enabled = bool(runtime_features.get("supports_parallel_dispatch"))
     parallel_policy = normalized_parallel_policy(workflow_config.get("parallel_policy"))
@@ -540,9 +545,11 @@ async def _handle_compiled_rag_chat(
         "hitl_policy": hitl_policy,
         "loop_policy": loop_policy,
         "context_policy": context_policy,
+        "prefetch_policy": prefetch_policy,
         "parallel_enabled": parallel_enabled,
         "parallel_policy": parallel_policy,
         "parallel_aggregator_id": parallel_aggregator_id,
+        "dispatch_aggregator_id": parallel_aggregator_id,
         "worker_result_packets": [],
         "parallel_evidence_deltas": [],
         "parallel_document_source_deltas": [],
@@ -708,7 +715,14 @@ async def _handle_compiled_rag_chat(
         )
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        partial_result = result if isinstance(locals().get("result"), dict) else state
+        exception_state = getattr(exc, "agent_workflow_state", None)
+        partial_result = (
+            exception_state
+            if isinstance(exception_state, dict)
+            else result
+            if isinstance(locals().get("result"), dict)
+            else state
+        )
         logger.exception(
             "%s run failed | run_id=%s thread_id=%s elapsed_ms=%.1f",
             runtime_label,
@@ -726,8 +740,14 @@ async def _handle_compiled_rag_chat(
             "raw_message": str(exc),
             "retryable": not parallel_feature_unavailable,
         }
-        node_events = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
-        tool_events = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
+        node_events = merge_parallel_deltas(
+            partial_result.get("node_events") or telemetry_sink.get("node_events") or [],
+            partial_result.get("parallel_node_event_deltas") or [],
+        )
+        tool_events = merge_parallel_deltas(
+            partial_result.get("tool_events") or telemetry_sink.get("tool_events") or [],
+            partial_result.get("parallel_tool_event_deltas") or [],
+        )
         route = partial_result.get("route")
         route_reason = partial_result.get("route_reason")
         for event in reversed(node_events):
@@ -739,7 +759,10 @@ async def _handle_compiled_rag_chat(
                 route_reason = event.get("route_reason")
             if route is not None and route_reason is not None:
                 break
-        errors = [*partial_result.get("errors", []), error_payload]
+        errors = [
+            *(partial_result.get("errors") or partial_result.get("parallel_error_deltas") or []),
+            error_payload,
+        ]
         failure_result = {
             **partial_result,
             "node_events": node_events,

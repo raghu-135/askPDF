@@ -44,7 +44,7 @@ export const HOME_INSTRUCTION_SECTIONS: HomeInstructionSection[] = [
     title: 'Agent Workflows',
     items: [
       'Open the Agent Workflow Builder from the toolbar to customize the assistant route used by chat.',
-      'Start from Router RAG, Plan Execute, Evaluator Replanner, or a saved custom workflow.',
+      'Start from Router, Plan Execute, Evaluator Replanner, Orchestrator-Worker, or a saved custom workflow.',
       'Edit the graph, add nodes, configure HITL gates and tool permissions, validate, save, and inspect the generated spec.',
       'Use Builder Test to try a workflow against a selected thread before choosing it in chat settings.',
     ],

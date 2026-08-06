@@ -774,7 +774,7 @@ class TestThreadEndpoints:
         assert "execution_plan" in prompt
 
     def test_prompt_preview_unknown_pattern_falls_back_to_router(self, client):
-        """Unknown preview pattern IDs should preserve Router RAG default behavior."""
+        """Unknown preview pattern IDs should preserve Router default behavior."""
         response = client.post(
             "/api/threads/prompt-preview",
             json={

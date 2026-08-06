@@ -92,6 +92,8 @@ const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
   [BuiltinAgentNodeType.EvidenceEvaluator]: RouteFunctionId.Evaluator,
   [BuiltinAgentNodeType.HitlGate]: RouteFunctionId.HitlGate,
   [BuiltinAgentNodeType.ParallelDispatch]: RouteFunctionId.ParallelDispatch,
+  [BuiltinAgentNodeType.SerialDispatch]: RouteFunctionId.SerialDispatch,
+  [BuiltinAgentNodeType.AnswerEvaluator]: RouteFunctionId.AnswerQuality,
 };
 
 const REPEATABLE_NODE_TYPES = new Set([
@@ -573,9 +575,7 @@ export function assembleAgentWorkflowSpec(
   overrides: Record<string, any> = {},
 ): AgentWorkflowBuilderSpec {
   const hitlPolicy = materializeHitlPolicy(state);
-  const hasParallel = state.nodes.some((node) => (
-    node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator
-  ));
+  const hasParallel = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
   const runtime = clone(state.runtime || defaultRuntime(false));
   if (hasParallel) {
     runtime.features = { ...(runtime.features || {}), supports_parallel_dispatch: true };
@@ -674,9 +674,7 @@ export function normalizeBuilderState(
       return Boolean(edge.from && edge.to);
     }),
   };
-  const hasParallelRegion = nodes.some((node) => (
-    node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator
-  ));
+  const hasParallelRegion = nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
   if (hasParallelRegion) {
     normalized.parallel_policy = normalizeParallelPolicy(catalog, state.parallel_policy);
   } else {

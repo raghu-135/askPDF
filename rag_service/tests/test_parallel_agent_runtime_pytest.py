@@ -24,6 +24,11 @@ from app.agent_workflows.parallel_contracts import (
     PARALLEL_REFERENCE_WORKFLOW_ID,
 )
 from app.agent_workflows.parallel_observability import project_parallel_events
+from app.agent_workflows.planning import (
+    normalize_execution_plan,
+    worker_decision_contract_errors,
+    worker_decisions_need_coverage_review,
+)
 from app.agent_workflows.parallel_runtime import (
     ParallelWorkerError,
     ParallelDispatchDeadlineExceeded,
@@ -33,6 +38,7 @@ from app.agent_workflows.parallel_runtime import (
     normalize_work_items,
     normalized_parallel_policy,
     parallel_runtime_authorized,
+    work_item_proposals,
 )
 from app.agent_workflows.state import merge_parallel_deltas
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
@@ -89,6 +95,17 @@ def _compiled_initial(spec, worker_types):
     return state
 
 
+def _install_passing_answer_quality(registry: NodeRegistry) -> None:
+    async def answer_evaluator(_state, _config):
+        return {
+            "answer_quality_route": "pass",
+            "answer_quality_report": {"passed": True, "reason": "test fixture", "issues": []},
+            "node_events": [],
+        }
+
+    registry._nodes["answer_evaluator"] = answer_evaluator
+
+
 def test_work_item_normalization_is_stable_bounded_and_read_only():
     state = _state()
     proposals = [
@@ -106,6 +123,104 @@ def test_work_item_normalization_is_stable_bounded_and_read_only():
     assert [item["ordinal"] for item in first] == [0, 1]
     assert len({item["work_id"] for item in first}) == 2
     assert first[0]["timeout_ms"] == 30_000
+
+
+def test_explicit_work_items_cannot_omit_workers_selected_by_execution_plan():
+    proposals = work_item_proposals(
+        {
+            "work_items": [
+                {"worker_node_id": "documents", "query": "document evidence", "reason": "documents"},
+                {"worker_node_id": "memory", "query": "memory evidence", "reason": "memory"},
+            ]
+        },
+        ["documents", "memory", "web", "events", "history"],
+        "compare all relevant evidence",
+    )
+
+    assert [item["worker_node_id"] for item in proposals] == ["documents", "memory", "web", "events", "history"]
+    assert proposals[0]["query"] == "document evidence"
+    assert proposals[2]["query"] == "compare all relevant evidence"
+
+
+def test_typed_worker_decisions_require_explicit_coverage_without_semantic_keyword_rules():
+    worker_nodes = _state()["available_worker_nodes"]
+    parsed = {
+        "route": "execute",
+        "reason": "Use complementary sources.",
+        "worker_decisions": [
+            {
+                "worker_node_id": "documents",
+                "selected": True,
+                "query": "paper evidence",
+                "reason": "Primary source",
+            },
+            {
+                "worker_node_id": "memory",
+                "selected": False,
+                "query": None,
+                "reason": "Not relevant",
+            },
+            {
+                "worker_node_id": "web",
+                "selected": False,
+                "query": None,
+                "reason": "Live web is disabled",
+            },
+        ],
+    }
+
+    assert worker_decision_contract_errors(
+        parsed,
+        worker_nodes=worker_nodes,
+        use_web_search=False,
+    ) == []
+    normalized = normalize_execution_plan(
+        parsed,
+        use_web_search=False,
+        question="arbitrary wording without routing keywords",
+        worker_nodes=worker_nodes,
+    )
+    assert normalized["execution_plan"] == ["documents"]
+    assert [item["worker_node_id"] for item in work_item_proposals(parsed, normalized["execution_plan"], "fallback")] == ["documents"]
+    assert worker_decisions_need_coverage_review(parsed) is True
+
+
+def test_typed_worker_decision_contract_requests_repair_for_omitted_candidate():
+    errors = worker_decision_contract_errors(
+        {
+            "route": "execute",
+            "worker_decisions": [
+                {
+                    "worker_node_id": "documents",
+                    "selected": True,
+                    "query": "paper evidence",
+                    "reason": "Primary source",
+                }
+            ],
+        },
+        worker_nodes=_state()["available_worker_nodes"],
+        use_web_search=False,
+    )
+
+    assert any("missing: memory, web" in error for error in errors)
+
+
+def test_coverage_review_is_structural_and_does_not_inspect_query_keywords():
+    assert worker_decisions_need_coverage_review(
+        {
+            "route": "execute",
+            "worker_decisions": [
+                {"worker_node_id": "alpha", "selected": True},
+                {"worker_node_id": "beta", "selected": False},
+            ],
+        }
+    )
+    assert not worker_decisions_need_coverage_review(
+        {
+            "route": "direct",
+            "worker_decisions": [{"worker_node_id": "alpha", "selected": False}],
+        }
+    )
 
 
 def test_dispatch_sends_only_incomplete_work_with_dynamic_timeout():
@@ -263,6 +378,7 @@ def test_parallel_validator_rejects_extra_worker_exit_and_hitl_inside_region():
 async def test_compiled_orchestrator_fans_out_and_joins_once():
     spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
     registry = NodeRegistry()
+    _install_passing_answer_quality(registry)
 
     async def context_loader(state, _config):
         return {"pre_fetch_bundle": {}, "node_events": []}
@@ -431,10 +547,11 @@ async def test_parallel_worker_does_not_retry_contract_errors(monkeypatch):
     monkeypatch.setattr(registry, "_run_sequential_tool_worker", runner)
     state = {**_state(), "work_item": item, "dispatch_deadline_epoch_ms": 9_999_999_999_999}
 
-    with pytest.raises(ParallelWorkerError) as raised:
-        await registry._parallel_tool_worker("retrieval_worker", state, {})
+    update = await registry._parallel_tool_worker("retrieval_worker", state, {})
 
-    assert raised.value.attempt == 1
+    assert update["worker_result_packets"][0]["status"] == "failed"
+    assert update["worker_result_packets"][0]["attempt"] == 1
+    assert update["parallel_error_deltas"][0]["retryable"] is False
     assert runner.await_count == 1
 
 
@@ -458,10 +575,11 @@ async def test_queued_worker_after_dispatch_deadline_is_non_retryable(monkeypatc
     monkeypatch.setattr(registry, "_run_sequential_tool_worker", runner)
     state = {**_state(), "work_item": item, "dispatch_deadline_epoch_ms": 1}
 
-    with pytest.raises(ParallelWorkerError) as raised:
-        await registry._parallel_tool_worker("retrieval_worker", state, {})
+    update = await registry._parallel_tool_worker("retrieval_worker", state, {})
 
-    assert isinstance(raised.value.error, ParallelDispatchDeadlineExceeded)
+    assert update["worker_result_packets"][0]["status"] == "timed_out"
+    assert update["parallel_error_deltas"][0]["type"] == "ParallelDispatchDeadlineExceeded"
+    assert update["parallel_error_deltas"][0]["retryable"] is False
     assert runner.await_count == 0
 
 
@@ -504,6 +622,7 @@ def test_cancellation_materializes_queued_and_active_terminal_work():
 async def test_compiled_worker_retry_is_owned_by_langgraph(monkeypatch):
     spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
     registry = NodeRegistry()
+    _install_passing_answer_quality(registry)
 
     async def context_loader(_state, _config):
         return {"pre_fetch_bundle": {}, "node_events": []}
@@ -569,6 +688,7 @@ async def test_compiled_worker_retry_is_owned_by_langgraph(monkeypatch):
 async def test_checkpoint_resume_reuses_completed_parallel_pending_writes(monkeypatch):
     spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
     registry = NodeRegistry()
+    _install_passing_answer_quality(registry)
 
     async def context_loader(_state, _config):
         return {"pre_fetch_bundle": {}, "node_events": []}
@@ -600,11 +720,7 @@ async def test_checkpoint_resume_reuses_completed_parallel_pending_writes(monkey
     memory_can_finish = False
 
     async def worker_runner(node_name, _state, _config):
-        nonlocal memory_can_finish
         calls[node_name] += 1
-        if node_name == "durable_memory_worker" and not memory_can_finish:
-            await asyncio.sleep(0.05)
-            raise ValueError("forced first-superstep failure")
         return {
             "evidence_packets": [{"kind": "document", "content": node_name}],
             "document_sources": [],
@@ -616,6 +732,16 @@ async def test_checkpoint_resume_reuses_completed_parallel_pending_writes(monkey
         }
 
     monkeypatch.setattr(registry, "_run_sequential_tool_worker", worker_runner)
+    normal_parallel_worker = registry._parallel_tool_worker
+
+    async def interrupting_parallel_worker(node_name, state, config):
+        if node_name == "durable_memory_worker" and not memory_can_finish:
+            calls[node_name] += 1
+            await asyncio.sleep(0.05)
+            raise ValueError("forced first-superstep failure")
+        return await normal_parallel_worker(node_name, state, config)
+
+    monkeypatch.setattr(registry, "_parallel_tool_worker", interrupting_parallel_worker)
     normal_error_handler = registry.get_parallel_error_handler_for_spec
 
     def error_handler(node_spec):
@@ -671,6 +797,7 @@ async def test_checkpoint_resume_reuses_completed_parallel_pending_writes(monkey
 async def test_compiled_parallel_zero_workers_continues_to_synthesis():
     spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
     registry = NodeRegistry()
+    _install_passing_answer_quality(registry)
 
     async def context_loader(_state, _config):
         return {"pre_fetch_bundle": {"context": "prefetched"}, "node_events": []}
@@ -714,10 +841,9 @@ async def test_active_worker_is_capped_by_absolute_dispatch_deadline(monkeypatch
         "parallel_policy": normalized_parallel_policy({"max_attempts": 2}),
         "dispatch_deadline_epoch_ms": int(time.time() * 1000) + 25,
     }
-    with pytest.raises(ParallelWorkerError) as raised:
-        await registry._parallel_tool_worker("retrieval_worker", state, {})
-    assert raised.value.status == "timed_out"
-    assert isinstance(raised.value.error, ParallelDispatchDeadlineExceeded)
+    update = await registry._parallel_tool_worker("retrieval_worker", state, {})
+    assert update["worker_result_packets"][0]["status"] == "timed_out"
+    assert update["parallel_error_deltas"][0]["type"] == "ParallelDispatchDeadlineExceeded"
 
 
 @pytest.mark.asyncio
@@ -729,6 +855,7 @@ async def test_langgraph_worker_timeout_produces_partial_evidence():
         "max_attempts": 2,
     })
     registry = NodeRegistry()
+    _install_passing_answer_quality(registry)
 
     async def context_loader(_state, _config):
         return {"pre_fetch_bundle": {}, "node_events": []}

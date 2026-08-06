@@ -124,22 +124,22 @@ const catalog = {
       allowed_route_functions: ['router_route'],
       allowed_tool_contract_ids: ['clarify_intent'],
       allowed_parent_types: ['context_loader', 'hitl_gate'],
-      allowed_child_types: ['retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'direct_answer', 'finalizer', 'hitl_gate'],
+      allowed_child_types: ['planner', 'serial_dispatch', 'retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'direct_answer', 'finalizer', 'hitl_gate'],
     }),
     planner: node({
       type: 'planner',
       display_name: 'Planner',
       allowed_route_functions: ['planner_route'],
       allowed_tool_contract_ids: ['clarify_intent'],
-      allowed_parent_types: ['context_loader', 'hitl_gate'],
-      allowed_child_types: ['retrieval_worker', 'finalizer', 'hitl_gate'],
+      allowed_parent_types: ['context_loader', 'router', 'hitl_gate'],
+      allowed_child_types: ['serial_dispatch', 'retrieval_worker', 'finalizer', 'hitl_gate'],
     }),
     retrieval_worker: node({
       type: 'retrieval_worker',
       display_name: 'Document Retrieval',
       allowed_tool_contract_ids: ['document_evidence', 'focused_document_evidence'],
-      allowed_parent_types: ['router', 'planner', 'replanner', 'hitl_gate'],
-      allowed_child_types: ['evidence_evaluator', 'synthesizer', 'finalizer', 'hitl_gate'],
+      allowed_parent_types: ['router', 'planner', 'replanner', 'serial_dispatch', 'hitl_gate'],
+      allowed_child_types: ['serial_dispatch', 'evidence_evaluator', 'synthesizer', 'finalizer', 'hitl_gate'],
       max_instances: 4,
     }),
     thread_conversation_history_worker: node({
@@ -209,21 +209,50 @@ const catalog = {
       type: 'hitl_gate',
       display_name: 'HITL Gate',
       allowed_route_functions: ['hitl_gate_route'],
-      allowed_parent_types: ['START', 'context_loader', 'router', 'planner', 'retrieval_worker', 'evidence_evaluator', 'synthesizer', 'finalizer'],
-      allowed_child_types: ['router', 'planner', 'retrieval_worker', 'synthesizer', 'finalizer', 'END'],
+      allowed_parent_types: ['START', 'context_loader', 'router', 'planner', 'retrieval_worker', 'evidence_evaluator', 'synthesizer', 'aggregator', 'answer_evaluator', 'finalizer'],
+      allowed_child_types: ['router', 'planner', 'serial_dispatch', 'retrieval_worker', 'synthesizer', 'answer_evaluator', 'finalizer', 'END'],
       max_instances: 8,
+    }),
+    serial_dispatch: node({
+      type: 'serial_dispatch',
+      display_name: 'Serial Dispatch',
+      allowed_route_functions: ['serial_dispatch_route'],
+      allowed_parent_types: ['router', 'planner', 'replanner', 'retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'web_worker', 'hitl_gate'],
+      allowed_child_types: ['retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'web_worker', 'aggregator'],
+    }),
+    aggregator: node({
+      type: 'aggregator',
+      display_name: 'Result Aggregator',
+      allowed_parent_types: ['serial_dispatch', 'retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'web_worker'],
+      allowed_child_types: ['evidence_evaluator', 'synthesizer', 'hitl_gate'],
+      max_instances: 2,
+    }),
+    answer_evaluator: node({
+      type: 'answer_evaluator',
+      display_name: 'Answer Quality Review',
+      allowed_route_functions: ['answer_quality_route'],
+      allowed_parent_types: ['direct_answer', 'synthesizer', 'answer_reviser'],
+      allowed_child_types: ['answer_reviser', 'finalizer'],
+      max_instances: 2,
+    }),
+    answer_reviser: node({
+      type: 'answer_reviser',
+      display_name: 'Answer Reviser',
+      allowed_parent_types: ['answer_evaluator'],
+      allowed_child_types: ['answer_evaluator'],
     }),
   },
   route_functions: {
     router_route: {
       allowed_source_types: ['router'],
-      route_labels: ['document', 'thread_conversation_history', 'durable_memory', 'thread_events', 'web', 'direct', 'clarify'],
+      route_labels: ['document', 'thread_conversation_history', 'durable_memory', 'thread_events', 'web', 'compound', 'direct', 'clarify'],
       target_types_by_label: {
-        document: ['retrieval_worker'],
-        thread_conversation_history: ['thread_conversation_history_worker'],
-        durable_memory: ['durable_memory_worker'],
-        thread_events: ['thread_events_worker'],
-        web: ['web_worker'],
+        document: ['retrieval_worker', 'serial_dispatch'],
+        thread_conversation_history: ['thread_conversation_history_worker', 'serial_dispatch'],
+        durable_memory: ['durable_memory_worker', 'serial_dispatch'],
+        thread_events: ['thread_events_worker', 'serial_dispatch'],
+        web: ['web_worker', 'serial_dispatch'],
+        compound: ['planner'],
         direct: ['direct_answer'],
         clarify: ['finalizer'],
       },
@@ -232,7 +261,7 @@ const catalog = {
       allowed_source_types: ['planner'],
       route_labels: ['execute', 'direct', 'clarify'],
       target_types_by_label: {
-        execute: ['retrieval_worker', 'thread_conversation_history_worker', 'thread_events_worker', 'web_worker'],
+        execute: ['serial_dispatch', 'retrieval_worker', 'thread_conversation_history_worker', 'thread_events_worker', 'web_worker'],
         direct: ['direct_answer', 'finalizer'],
         clarify: ['finalizer'],
       },
@@ -250,6 +279,12 @@ const catalog = {
       allowed_source_types: ['hitl_gate'],
       route_labels: null,
       target_types_by_label: null,
+    },
+    serial_dispatch_route: { allowed_source_types: ['serial_dispatch'], route_labels: null, target_types_by_label: null },
+    answer_quality_route: {
+      allowed_source_types: ['answer_evaluator'],
+      route_labels: ['pass', 'revise', 'finalize_cautious'],
+      target_types_by_label: { pass: ['finalizer'], revise: ['answer_reviser'], finalize_cautious: ['finalizer'] },
     },
   },
   tool_contracts: {
@@ -361,6 +396,8 @@ test('creates a router starter spec with canonical node ids and route function m
   assert.deepEqual(state.nodes.map((item) => item.id), [
     'context_loader',
     'router',
+    'planner',
+    'serial_dispatch',
     'retrieval_worker',
     'thread_conversation_history_worker',
     'durable_memory_worker',
@@ -368,6 +405,9 @@ test('creates a router starter spec with canonical node ids and route function m
     'web_worker',
     'direct_answer',
     'synthesizer',
+    'aggregator',
+    'answer_evaluator',
+    'answer_reviser',
     'finalizer',
   ]);
   assert.equal(spec.schema_version, 2);
@@ -376,11 +416,12 @@ test('creates a router starter spec with canonical node ids and route function m
   assert.deepEqual(spec.config.allowed_tool_ids, ['document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
-    document: 'retrieval_worker',
-    thread_conversation_history: 'thread_conversation_history_worker',
-    durable_memory: 'durable_memory_worker',
-    thread_events: 'thread_events_worker',
-    web: 'web_worker',
+    document: 'serial_dispatch',
+    thread_conversation_history: 'serial_dispatch',
+    durable_memory: 'serial_dispatch',
+    thread_events: 'serial_dispatch',
+    web: 'serial_dispatch',
+    compound: 'planner',
     direct: 'direct_answer',
     clarify: 'finalizer',
   });
@@ -475,19 +516,19 @@ test('stores canvas positions and notes as builder-only metadata', () => {
 
 test('generates HITL gate nodes with matching conditional route and policy entries', () => {
   const state = createInitialBuilderState(catalog, 'router');
-  const incomingPath = getIncomingPaths(state, 'retrieval_worker')
+  const incomingPath = getIncomingPaths(state, 'serial_dispatch')
     .find((path) => path.source === 'router' && path.route === 'document');
-  const gated = createHitlGateForTarget(catalog, state, 'retrieval_worker', {
+  const gated = createHitlGateForTarget(catalog, state, 'serial_dispatch', {
     id: 'review_retrieval',
     incomingPath,
     title: 'Review retrieval',
-    defaultAction: 'continue_without',
+    defaultAction: 'approve',
   });
   const spec = assembleAgentWorkflowSpec(gated);
 
   assert.equal(gated.nodes.find((item) => item.id === 'review_retrieval')?.type, 'hitl_gate');
   assert.equal(spec.config.hitl_policy.enabled, true);
-  assert.deepEqual(spec.config.hitl_policy.gates.review_retrieval.target, { node_id: 'retrieval_worker' });
+  assert.deepEqual(spec.config.hitl_policy.gates.review_retrieval.target, { node_id: 'serial_dispatch' });
   assert.equal(
     gated.edges.find((edge) => edge.from === 'router')?.routes?.document,
     'review_retrieval',
@@ -497,9 +538,8 @@ test('generates HITL gate nodes with matching conditional route and policy entri
     'hitl_gate_route',
   );
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'review_retrieval')?.routes, {
-    approve: 'retrieval_worker',
+    approve: 'serial_dispatch',
     reject: 'END',
-    continue_without: 'synthesizer',
   });
 });
 
@@ -521,11 +561,11 @@ test('inserts a HITL gate between context loading and planning as a compatible p
 
 test('resolves HITL bypasses only for a unique immediate successor', () => {
   const sequential = createInitialBuilderState(catalog, 'router');
-  assert.deepEqual(getImmediateSuccessorIds(sequential, 'retrieval_worker'), ['synthesizer']);
+  assert.deepEqual(getImmediateSuccessorIds(sequential, 'retrieval_worker'), ['serial_dispatch']);
   const retrievalGate = createHitlGateForTarget(catalog, sequential, 'retrieval_worker', { id: 'review_retrieval' });
   const retrievalRoutes = retrievalGate.edges.find((edge) => edge.from === 'review_retrieval')?.routes;
   assert.equal(retrievalRoutes.approve, 'retrieval_worker');
-  assert.equal(retrievalRoutes.continue_without, 'synthesizer');
+  assert.equal(retrievalRoutes.continue_without, 'serial_dispatch');
 
   const routerGate = createHitlGateForTarget(catalog, sequential, 'router', { id: 'review_router' });
   const routerNode = routerGate.nodes.find((item) => item.id === 'review_router');
@@ -538,11 +578,11 @@ test('resolves HITL bypasses only for a unique immediate successor', () => {
 test('updates and clears a HITL continue-without target atomically', () => {
   const state = createInitialBuilderState(catalog, 'router');
   const gated = createHitlGateForTarget(catalog, state, 'router', { id: 'review_router' });
-  const enabled = setHitlContinueWithoutTarget(gated, 'review_router', 'retrieval_worker');
+  const enabled = setHitlContinueWithoutTarget(gated, 'review_router', 'serial_dispatch');
   const enabledNode = enabled.nodes.find((item) => item.id === 'review_router');
   const enabledEdge = enabled.edges.find((edge) => edge.from === 'review_router');
-  assert.equal(enabledNode.hitl.routes.continue_without, 'retrieval_worker');
-  assert.equal(enabledEdge.routes.continue_without, 'retrieval_worker');
+  assert.equal(enabledNode.hitl.routes.continue_without, 'serial_dispatch');
+  assert.equal(enabledEdge.routes.continue_without, 'serial_dispatch');
   assert.equal(enabledNode.hitl.allowed_actions.includes('continue_without'), true);
 
   enabledNode.hitl.default_action = 'continue_without';

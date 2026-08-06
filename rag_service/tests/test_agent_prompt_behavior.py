@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 
 from app.agent.prompting import get_tool_catalog, normalize_tool_instructions, format_runtime_datetime_context
-from app.agent_workflows.prompting import build_agent_workflow_prompt_preview, build_planner_prompt, build_router_prompt
+from app.agent_workflows.prompting import (
+    build_agent_workflow_prompt_preview,
+    build_planner_prompt,
+    build_replanner_prompt,
+    build_router_prompt,
+)
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -56,13 +61,36 @@ def test_plan_execute_agent_prompt_preview_uses_planner_prompt():
 
     assert "# Planner Node Prompt" in prompt
     assert "# Final Answer Prompt" in prompt
-    assert "execution_plan" in prompt
-    assert "include `thread_events_worker`" in prompt
-    assert "For prior conversation recall without time/order wording" in prompt
+    assert "worker_decisions" in prompt
+    assert "exactly one object for every available worker" in prompt
+    assert "Do not select workers by keyword matching alone" in prompt
     assert "Clarification options must contain 2-4 complete, self-contained questions" in prompt
     assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
-    assert "`retrieval_worker` queries should preserve named files, pages, sections, citations, or quoted text" in prompt
-    assert "`web_worker` queries should use concise keyword-rich queries" in prompt
+    assert "Include every available worker that has a reasonable chance" in prompt
+    assert "do not minimize the worker count merely to reduce retrieval calls" in prompt
+
+
+def test_planner_and_replanner_prefer_comprehensive_relevant_worker_coverage():
+    state = {
+        "question": "Compare all relevant sources",
+        "use_web_search": True,
+        "pre_fetch_bundle": {},
+        "available_worker_nodes": [
+            {"id": "retrieval_worker", "type": "retrieval_worker"},
+            {"id": "web_worker", "type": "web_worker"},
+        ],
+    }
+
+    planner_prompt = build_planner_prompt(state)
+    replanner_prompt = build_replanner_prompt(state)
+
+    assert "Build a comprehensive retrieval plan" in planner_prompt
+    assert "When uncertain whether a relevant worker could help, include it" in planner_prompt
+    assert "worker_decisions" in planner_prompt
+    assert "exactly one object for every available worker" in planner_prompt
+    assert "Use as many relevant workers as needed to address the gaps comprehensively" in replanner_prompt
+    assert "worker_decisions" in replanner_prompt
+    assert "Prefer the smallest plan" not in replanner_prompt
 
 
 def test_runtime_graph_prompt_builders_include_datetime_context():

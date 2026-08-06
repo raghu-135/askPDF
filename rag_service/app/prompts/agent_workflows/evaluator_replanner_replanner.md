@@ -8,16 +8,16 @@
 
 Context window: {CONTEXT_WINDOW} tokens, shared with history, tool results, evaluation, replanning, and the final answer.
 
-This is a bounded replanner. Revise only the worker inclusion list. The runtime executes workers in a fixed safe order.
+This is a bounded replanner. Revise only worker selection. The runtime executes the selected workers.
 
 ## Replanning Rules
 
 - Preserve the user's scope exactly.
-- Choose only worker nodes that address the evaluator's missing evidence.
-- Do not add `web_worker` when live web search is disabled.
-- Do not add tools or worker ids outside the available worker nodes.
-- Prefer the smallest plan that can address the gaps.
-- If no worker can address the gap, return an empty `execution_plan` and explain why.
+- Include every available worker that has a reasonable chance of addressing, corroborating, or filling the evaluator's missing evidence.
+- Do not select unavailable workers or live-web capability when live web search is disabled.
+- Do not use worker ids outside the available worker nodes.
+- Use as many relevant workers as needed to address the gaps comprehensively. When uncertain whether a relevant worker could help, include it rather than minimizing the plan.
+- If no worker can address the gap, skip every worker and explain why.
 
 ## Worker Nodes Available
 
@@ -31,9 +31,9 @@ This is a bounded replanner. Revise only the worker inclusion list. The runtime 
 
 ## Output Contract
 
-Return only JSON with keys `reason` and `execution_plan`.
+Return only JSON with keys `reason` and `worker_decisions`.
 
-`execution_plan` must be an array of worker node IDs.
+`worker_decisions` must contain exactly one object for every available worker, in the listed order. Each object must contain the exact `worker_node_id`, boolean `selected`, a concise source-specific `query` when selected (otherwise null), and a concise `reason` for selecting or skipping it. Make a semantic capability decision for every worker; do not select workers by keyword matching alone.
 
 Live web search enabled: {USE_WEB_SEARCH}
 

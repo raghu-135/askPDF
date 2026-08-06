@@ -110,6 +110,24 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
     for node_id, node_type in node_types.items():
         if node_type == WorkflowNodeType.REPLANNER.value:
             node_visit_limits[node_id] = replans
+        elif node_type == WorkflowNodeType.SERIAL_DISPATCH.value:
+            worker_count = sum(
+                1 for value in node_types.values()
+                if value in {
+                    WorkflowNodeType.RETRIEVAL_WORKER.value,
+                    WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+                    WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+                    WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+                    WorkflowNodeType.WEB_WORKER.value,
+                }
+            )
+            node_visit_limits[node_id] = (worker_count + 1) * (replans + 1)
+        elif node_type == WorkflowNodeType.AGGREGATOR.value:
+            node_visit_limits[node_id] = replans + 1
+        elif node_type == WorkflowNodeType.ANSWER_EVALUATOR.value:
+            node_visit_limits[node_id] = 2
+        elif node_type == WorkflowNodeType.ANSWER_REVISER.value:
+            node_visit_limits[node_id] = 1
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
     return {
         "max_total_visits": max_total_visits,

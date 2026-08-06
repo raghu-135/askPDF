@@ -29,6 +29,7 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.ROUTER.value: 1,
     WorkflowNodeType.PLANNER.value: 1,
     WorkflowNodeType.PARALLEL_DISPATCH.value: 2,
+    WorkflowNodeType.SERIAL_DISPATCH.value: 2,
     WorkflowNodeType.RETRIEVAL_WORKER.value: 2,
     WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value: 3,
     WorkflowNodeType.DURABLE_MEMORY_WORKER.value: 4,
@@ -39,8 +40,10 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.REPLANNER.value: 8,
     WorkflowNodeType.DIRECT_ANSWER.value: 9,
     WorkflowNodeType.SYNTHESIZER.value: 10,
-    WorkflowNodeType.FINALIZER.value: 11,
-    WorkflowNodeType.HITL_GATE.value: 12,
+    WorkflowNodeType.ANSWER_EVALUATOR.value: 11,
+    WorkflowNodeType.ANSWER_REVISER.value: 12,
+    WorkflowNodeType.FINALIZER.value: 13,
+    WorkflowNodeType.HITL_GATE.value: 14,
 }
 
 
@@ -100,6 +103,8 @@ class WorkflowMaterializer:
             WorkflowNodeType.EVIDENCE_EVALUATOR.value: RouteFunctionId.EVALUATOR.value,
             WorkflowNodeType.HITL_GATE.value: RouteFunctionId.HITL_GATE.value,
             WorkflowNodeType.PARALLEL_DISPATCH.value: RouteFunctionId.PARALLEL_DISPATCH.value,
+            WorkflowNodeType.SERIAL_DISPATCH.value: RouteFunctionId.SERIAL_DISPATCH.value,
+            WorkflowNodeType.ANSWER_EVALUATOR.value: RouteFunctionId.ANSWER_QUALITY.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):
@@ -213,7 +218,7 @@ class WorkflowCompiler(WorkflowMaterializer):
             targets: list[str] = []
             if edge.get("dynamic") is True and edge.get("to"):
                 targets.append(str(edge["to"]))
-            if edge.get("route_fn") == RouteFunctionId.PARALLEL_DISPATCH.value:
+            if edge.get("route_fn") in {RouteFunctionId.PARALLEL_DISPATCH.value, RouteFunctionId.SERIAL_DISPATCH.value}:
                 targets.extend(str(value) for value in (edge.get("routes") or {}).values() if value)
             if source and targets:
                 dynamic_targets[source] = tuple(dict.fromkeys((*dynamic_targets.get(source, ()), *targets)))
@@ -256,7 +261,7 @@ class WorkflowCompiler(WorkflowMaterializer):
                     source=str(source),
                     node_types=node_types,
                 )
-                if node_types.get(str(source)) == WorkflowNodeType.PARALLEL_DISPATCH.value:
+                if node_types.get(str(source)) in {WorkflowNodeType.PARALLEL_DISPATCH.value, WorkflowNodeType.SERIAL_DISPATCH.value}:
                     workflow.add_conditional_edges(source, route_fn)
                     continue
                 routes = {

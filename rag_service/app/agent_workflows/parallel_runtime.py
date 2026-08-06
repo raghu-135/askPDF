@@ -168,9 +168,34 @@ def normalize_work_items(
 
 
 def work_item_proposals(parsed: Mapping[str, Any], execution_plan: Sequence[str], question: str) -> List[Dict[str, Any]]:
+    decisions = parsed.get("worker_decisions")
+    if isinstance(decisions, list):
+        proposals = [
+            {
+                "worker_node_id": item.get("worker_node_id"),
+                "query": item.get("query") or question,
+                "reason": item.get("reason") or "planner worker decision",
+            }
+            for item in decisions
+            if isinstance(item, dict) and item.get("selected") is True
+        ]
+        proposed_worker_ids = {_proposal_worker_id(item) for item in proposals}
+        proposals.extend(
+            {"worker_node_id": worker_id, "query": question, "reason": "planner execution plan"}
+            for worker_id in execution_plan
+            if worker_id not in proposed_worker_ids
+        )
+        return proposals
     proposals = parsed.get("work_items")
     if isinstance(proposals, list):
-        return [item for item in proposals if isinstance(item, (dict, str))]
+        normalized = [item for item in proposals if isinstance(item, (dict, str))]
+        proposed_worker_ids = {_proposal_worker_id(item) for item in normalized}
+        normalized.extend(
+            {"worker_node_id": worker_id, "query": question, "reason": "planner execution plan"}
+            for worker_id in execution_plan
+            if worker_id not in proposed_worker_ids
+        )
+        return normalized
     return [{"worker_node_id": worker_id, "query": question, "reason": "planner execution plan"} for worker_id in execution_plan]
 
 
@@ -206,6 +231,39 @@ def dispatch_sends(state: Mapping[str, Any]) -> List[Send]:
         )
         for item in pending
     ]
+
+
+def serial_dispatch_next(state: Mapping[str, Any]) -> Send | str:
+    """Dispatch the next unfinished work item, preserving deterministic planner order."""
+
+    policy = normalized_parallel_policy(state.get("parallel_policy"))
+    terminal_ids = {
+        str(packet.get("work_id"))
+        for packet in state.get("worker_result_packets", [])
+        if isinstance(packet, dict) and packet.get("status") in TERMINAL_WORKER_STATUSES
+    }
+    pending = [
+        item for item in state.get("work_items", [])
+        if isinstance(item, dict) and str(item.get("work_id")) not in terminal_ids
+    ]
+    if not pending:
+        aggregator = str(state.get("dispatch_aggregator_id") or state.get("parallel_aggregator_id") or "")
+        return aggregator
+    item = min(pending, key=_sort_key)
+    return Send(
+        str(item["worker_node_id"]),
+        {
+            **dict(state),
+            "question": str(item.get("query") or state.get("question") or ""),
+            "work_item": dict(item),
+        },
+        timeout=TimeoutPolicy(
+            run_timeout=parallel_timeout_watchdog_seconds(
+                int(item.get("timeout_ms") or policy["default_worker_timeout_ms"]),
+                policy["max_attempts"],
+            )
+        ),
+    )
 
 
 def _sort_key(packet: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -552,8 +610,13 @@ def _peak_concurrency(packets: Sequence[Mapping[str, Any]], *, maximum: int) -> 
 
 
 def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
+    current_dispatch_id = str(state.get("dispatch_id") or "")
     packets = sorted(
-        [dict(item) for item in state.get("worker_result_packets", []) if isinstance(item, dict)],
+        [
+            dict(item) for item in state.get("worker_result_packets", [])
+            if isinstance(item, dict)
+            and (not current_dispatch_id or str(item.get("dispatch_id") or "") == current_dispatch_id)
+        ],
         key=_sort_key,
     )
     final_by_work: Dict[str, Dict[str, Any]] = {}
@@ -634,6 +697,7 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
         lambda item: (
             str(item.get("work_id") or "serial"),
             int(item.get("attempt") or 1),
+            str(item.get("node_id") or item.get("node") or item.get("worker_node_id") or ""),
             str(item.get("name") or item.get("event") or item.get("event_name") or item.get("status") or ""),
             int(item.get("visit_index") or item.get("node_visit_index") or 1),
         ),
@@ -718,5 +782,6 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
         "node_visit_counts": counts,
         "node_visit_sequence": visits,
         "parallel_summary": summary,
+        "dispatch_summary": {**summary, "mode": str(state.get("dispatch_mode") or "parallel")},
         "parallel_attempt_records": list(state.get("parallel_attempt_records") or []),
     }

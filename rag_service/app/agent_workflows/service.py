@@ -46,7 +46,7 @@ def _workflow_version_info(workflow: Any) -> SimpleNamespace:
 
 
 class AgentRunService:
-    """Runs the selected agent workflow, defaulting to the compiled Router RAG graph."""
+    """Runs the selected agent workflow, defaulting to the compiled Router graph."""
 
     def __init__(
         self,

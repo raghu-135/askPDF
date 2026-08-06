@@ -51,6 +51,7 @@ class RouterRoute(str, Enum):
     DURABLE_MEMORY = "durable_memory"
     THREAD_EVENTS = "thread_events"
     WEB = "web"
+    COMPOUND = "compound"
     DIRECT = "direct"
     CLARIFY = "clarify"
 
@@ -67,12 +68,20 @@ class EvaluatorRoute(str, Enum):
     ANSWER_BUDGET_EXHAUSTED = "answer_budget_exhausted"
 
 
+class AnswerQualityRoute(str, Enum):
+    PASS = "pass"
+    REVISE = "revise"
+    FINALIZE_CAUTIOUS = "finalize_cautious"
+
+
 class RouteFunctionId(str, Enum):
     ROUTER = "router_route"
     PLANNER = "planner_route"
     EVALUATOR = "evaluator_route"
     HITL_GATE = "hitl_gate_route"
     PARALLEL_DISPATCH = "parallel_dispatch_route"
+    SERIAL_DISPATCH = "serial_dispatch_route"
+    ANSWER_QUALITY = "answer_quality_route"
 
 
 class WorkflowNodeType(str, Enum):
@@ -91,7 +100,10 @@ class WorkflowNodeType(str, Enum):
     FINALIZER = "finalizer"
     HITL_GATE = "hitl_gate"
     PARALLEL_DISPATCH = "parallel_dispatch"
+    SERIAL_DISPATCH = "serial_dispatch"
     AGGREGATOR = "aggregator"
+    ANSWER_EVALUATOR = "answer_evaluator"
+    ANSWER_REVISER = "answer_reviser"
 
 
 class ToolName(str, Enum):
@@ -159,6 +171,9 @@ class NodeCapability(str, Enum):
     HITL_INTERRUPT = "hitl.interrupt"
     PARALLEL_DISPATCH = "parallel.dispatch"
     PARALLEL_AGGREGATE = "parallel.aggregate"
+    SERIAL_DISPATCH = "serial.dispatch"
+    EVALUATE_ANSWER = "evaluate.answer"
+    REVISE_ANSWER = "answer.revise"
 
 
 class ContextPolicyMode(str, Enum):
@@ -261,6 +276,7 @@ class ToolContractId(str, Enum):
 ROUTER_ROUTES = {route.value for route in RouterRoute}
 PLANNER_ROUTES = {route.value for route in PlannerRoute}
 EVALUATOR_ROUTES = {route.value for route in EvaluatorRoute}
+ANSWER_QUALITY_ROUTES = {route.value for route in AnswerQualityRoute}
 HITL_ACTIONS = {action.value for action in AgentRunResumeAction}
 RESUME_ACTIONS = {
     AgentRunResumeAction.APPROVE.value,

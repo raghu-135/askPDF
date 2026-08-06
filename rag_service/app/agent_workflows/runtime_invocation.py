@@ -246,7 +246,7 @@ def log_node_end(
 ) -> None:
     payload = data or {}
     logger.info(
-        "Router RAG node completed | run_id=%s thread_id=%s node=%s elapsed_ms=%.1f route=%s evidence_chars=%s document_sources=%s web_sources=%s used_chat_ids=%s",
+        "Agent workflow node completed | run_id=%s thread_id=%s node=%s elapsed_ms=%.1f route=%s evidence_chars=%s document_sources=%s web_sources=%s used_chat_ids=%s",
         state.get("agent_run_id"),
         state.get("thread_id"),
         node,

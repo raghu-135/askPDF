@@ -29,6 +29,7 @@ from app.rag.retrieval import (
     rerank_document_chunks,
 )
 from app.time_utils import maybe_iso_utc_z
+from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ async def prefetch_context(
     context_window: int,
     use_web_search: bool,
     use_reranker: bool,
+    prefetch_mode: str = DEFAULT_PREFETCH_MODE,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
@@ -137,6 +139,8 @@ async def prefetch_context(
         return {"stats": stats, "documents": documents}
 
     async def _fetch_semantic() -> tuple:
+        if prefetch_mode != PREFETCH_MODE_EVIDENCE:
+            return "", [], []
         try:
             return await fetch_semantic_history(
                 thread_id=thread_id,
@@ -153,6 +157,8 @@ async def prefetch_context(
             return "", [], []
 
     async def _fetch_documents() -> tuple:
+        if prefetch_mode != PREFETCH_MODE_EVIDENCE:
+            return "", []
         try:
             db = get_vector_db()
             limit = budget["document_limit"]

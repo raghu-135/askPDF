@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from app.agent_workflows.enums import (
+    AnswerQualityRoute,
     EvaluatorRoute,
     PlannerRoute,
     RouteFunctionId,
@@ -17,11 +18,12 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "allowed_source_types": [WorkflowNodeType.ROUTER.value],
         "route_labels": [route.value for route in RouterRoute],
         "target_types_by_label": {
-            RouterRoute.DOCUMENT.value: [WorkflowNodeType.RETRIEVAL_WORKER.value],
-            RouterRoute.THREAD_CONVERSATION_HISTORY.value: [WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value],
-            RouterRoute.DURABLE_MEMORY.value: [WorkflowNodeType.DURABLE_MEMORY_WORKER.value],
-            RouterRoute.THREAD_EVENTS.value: [WorkflowNodeType.THREAD_EVENTS_WORKER.value],
-            RouterRoute.WEB.value: [WorkflowNodeType.WEB_WORKER.value],
+            RouterRoute.DOCUMENT.value: [WorkflowNodeType.RETRIEVAL_WORKER.value, WorkflowNodeType.SERIAL_DISPATCH.value],
+            RouterRoute.THREAD_CONVERSATION_HISTORY.value: [WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value, WorkflowNodeType.SERIAL_DISPATCH.value],
+            RouterRoute.DURABLE_MEMORY.value: [WorkflowNodeType.DURABLE_MEMORY_WORKER.value, WorkflowNodeType.SERIAL_DISPATCH.value],
+            RouterRoute.THREAD_EVENTS.value: [WorkflowNodeType.THREAD_EVENTS_WORKER.value, WorkflowNodeType.SERIAL_DISPATCH.value],
+            RouterRoute.WEB.value: [WorkflowNodeType.WEB_WORKER.value, WorkflowNodeType.SERIAL_DISPATCH.value],
+            RouterRoute.COMPOUND.value: [WorkflowNodeType.PLANNER.value],
             RouterRoute.DIRECT.value: [WorkflowNodeType.DIRECT_ANSWER.value],
             RouterRoute.CLARIFY.value: [WorkflowNodeType.FINALIZER.value],
         },
@@ -32,6 +34,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "target_types_by_label": {
             PlannerRoute.EXECUTE.value: [
                 WorkflowNodeType.PARALLEL_DISPATCH.value,
+                WorkflowNodeType.SERIAL_DISPATCH.value,
                 WorkflowNodeType.RETRIEVAL_WORKER.value,
                 WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
                 WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
@@ -64,6 +67,20 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "route_labels": None,
         "target_types_by_label": None,
     },
+    RouteFunctionId.SERIAL_DISPATCH.value: {
+        "allowed_source_types": [WorkflowNodeType.SERIAL_DISPATCH.value],
+        "route_labels": None,
+        "target_types_by_label": None,
+    },
+    RouteFunctionId.ANSWER_QUALITY.value: {
+        "allowed_source_types": [WorkflowNodeType.ANSWER_EVALUATOR.value],
+        "route_labels": [route.value for route in AnswerQualityRoute],
+        "target_types_by_label": {
+            AnswerQualityRoute.PASS.value: [WorkflowNodeType.FINALIZER.value],
+            AnswerQualityRoute.REVISE.value: [WorkflowNodeType.ANSWER_REVISER.value],
+            AnswerQualityRoute.FINALIZE_CAUTIOUS.value: [WorkflowNodeType.FINALIZER.value],
+        },
+    },
 }
 
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -73,8 +90,9 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         RouterRoute.DURABLE_MEMORY.value: {"display_name": "Durable Memory", "description": "Recall durable user, project, or thread memory.", "order": 2},
         RouterRoute.THREAD_EVENTS.value: {"display_name": "Thread Events", "description": "Search chronological thread events.", "order": 3},
         RouterRoute.WEB.value: {"display_name": "Current information", "description": "Search approved external sources.", "order": 4},
-        RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 5},
-        RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 6},
+        RouterRoute.COMPOUND.value: {"display_name": "Multi-source request", "description": "Escalate to a bounded retrieval plan.", "order": 5},
+        RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 6},
+        RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 7},
     },
     RouteFunctionId.PLANNER.value: {
         PlannerRoute.EXECUTE.value: {"display_name": "Run the plan", "description": "Continue through planned retrieval.", "order": 0},
@@ -85,6 +103,11 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         EvaluatorRoute.ANSWER.value: {"display_name": "Evidence is sufficient", "description": "Continue to synthesis.", "order": 0},
         EvaluatorRoute.REPLAN.value: {"display_name": "Search again", "description": "Evidence gaps require another bounded search.", "order": 1},
         EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value: {"display_name": "Answer with available evidence", "description": "The replan budget is exhausted.", "order": 2},
+    },
+    RouteFunctionId.ANSWER_QUALITY.value: {
+        AnswerQualityRoute.PASS.value: {"display_name": "Quality passed", "description": "Finalize the reviewed answer.", "order": 0},
+        AnswerQualityRoute.REVISE.value: {"display_name": "Revise once", "description": "Apply the bounded quality critique.", "order": 1},
+        AnswerQualityRoute.FINALIZE_CAUTIOUS.value: {"display_name": "Finalize cautiously", "description": "Return the best available answer with limitations.", "order": 2},
     },
 }
 

@@ -247,7 +247,9 @@ class GenericGraphValidator:
         errors: list[str] = []
         dispatch_ids = [node_id for node_id, node_type in node_types_by_id.items() if node_type == WorkflowNodeType.PARALLEL_DISPATCH.value]
         aggregator_ids = [node_id for node_id, node_type in node_types_by_id.items() if node_type == WorkflowNodeType.AGGREGATOR.value]
-        if not dispatch_ids and not aggregator_ids:
+        # Aggregators are shared by serial and parallel execution. Parallel-only
+        # topology and feature-gate rules apply only when a parallel dispatcher exists.
+        if not dispatch_ids:
             return errors
         runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
         features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
@@ -270,7 +272,21 @@ class GenericGraphValidator:
                 or dispatch_id in set((edge.get("routes") or {}).values())
             )
         ]
-        if len(incoming_dispatch) != 1 or node_types_by_id.get(str(incoming_dispatch[0].get("from"))) != WorkflowNodeType.PLANNER.value:
+        dispatch_parent = str(incoming_dispatch[0].get("from")) if len(incoming_dispatch) == 1 else ""
+        parent_is_planner = node_types_by_id.get(dispatch_parent) == WorkflowNodeType.PLANNER.value
+        parent_is_pre_dispatch_gate = (
+            node_types_by_id.get(dispatch_parent) == WorkflowNodeType.HITL_GATE.value
+            and any(
+                isinstance(edge, dict)
+                and (
+                    edge.get("to") == dispatch_parent
+                    or dispatch_parent in set((edge.get("routes") or {}).values())
+                )
+                and node_types_by_id.get(str(edge.get("from"))) == WorkflowNodeType.PLANNER.value
+                for edge in edges
+            )
+        )
+        if len(incoming_dispatch) != 1 or not (parent_is_planner or parent_is_pre_dispatch_gate):
             errors.append("parallel_dispatch must have exactly one Planner parent")
         dispatch_edge = next(
             (
@@ -593,7 +609,8 @@ class GenericGraphValidator:
                     f"loop_policy.node_visit_limits.{node_id} exceeds allowed max for node type {node_type}"
                 )
 
-        if has_cycle and max_total_visits_value > 0 and default_max_value > 0:
+        has_dynamic_parallel_dispatch = WorkflowNodeType.PARALLEL_DISPATCH.value in set(node_types_by_id.values())
+        if has_cycle and not has_dynamic_parallel_dispatch and max_total_visits_value > 0 and default_max_value > 0:
             effective_total = 0
             for node_id in node_ids:
                 raw_limit = node_visit_limits.get(node_id, default_max_value)
@@ -689,6 +706,7 @@ class GenericGraphValidator:
                     "durable_memory_worker",
                     "thread_events_worker",
                     "web_worker",
+                    "aggregator",
                 },
                 adjacency,
                 node_types_by_id,

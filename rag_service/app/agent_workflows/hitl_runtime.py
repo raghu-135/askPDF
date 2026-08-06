@@ -240,6 +240,25 @@ async def hitl_gate_node(
             "hitl_gate_routes": routes,
         }
 
+    if node_id == WEB_APPROVAL_GATE_ID:
+        web_worker_ids = {
+            str(item.get("id")) for item in state.get("available_worker_nodes") or []
+            if isinstance(item, dict) and item.get("type") == WorkflowNodeType.WEB_WORKER.value
+        }
+        proposals = [item for item in state.get("work_item_proposals") or [] if isinstance(item, dict)]
+        web_planned = any(
+            item.get("worker_node_id") in web_worker_ids
+            or item.get("worker_type") == WorkflowNodeType.WEB_WORKER.value
+            for item in proposals
+        )
+        if proposals and not web_planned:
+            routes = dict(state.get("hitl_gate_routes") or {})
+            routes[node_id] = AgentRunResumeAction.APPROVE.value
+            return skipped_worker_update(state, config, node_id, started, "web_not_planned") | {
+                "hitl_gate_route": AgentRunResumeAction.APPROVE.value,
+                "hitl_gate_routes": routes,
+            }
+
     mode = str(gate_policy.get("mode") or HitlMode.APPROVAL.value)
     phase = str(gate_policy.get("phase") or HitlPhase.BEFORE.value)
     target = gate_policy.get("target") if isinstance(gate_policy.get("target"), dict) else {}
@@ -392,6 +411,19 @@ async def hitl_gate_node(
         update["execution_plan"] = execution_plan_update
     elif isinstance(execution_plan, list):
         update["execution_plan"] = execution_plan
+
+    if node_id == WEB_APPROVAL_GATE_ID and action == AgentRunResumeAction.CONTINUE_WITHOUT.value:
+        web_worker_ids = {
+            str(item.get("id")) for item in state.get("available_worker_nodes") or []
+            if isinstance(item, dict) and item.get("type") == WorkflowNodeType.WEB_WORKER.value
+        }
+        update["work_item_proposals"] = [
+            item for item in state.get("work_item_proposals") or []
+            if isinstance(item, dict) and item.get("worker_node_id") not in web_worker_ids
+        ]
+        update["execution_plan"] = [
+            item for item in state.get("execution_plan") or [] if item not in web_worker_ids
+        ]
 
     if mode == HitlMode.REVIEW.value:
         update["human_review_decision"] = {

@@ -56,10 +56,19 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
             label="Evaluator report",
             limit=evidence_text_limit(state),
         )
+    if node_name == WorkflowNodeType.ANSWER_REVISER.value and state.get("answer_quality_report"):
+        context = combine_evidence(
+            context,
+            json.dumps(state.get("answer_quality_report") or {}, ensure_ascii=True, sort_keys=True),
+            label="Quality-review issues to correct in this single revision",
+            limit=evidence_text_limit(state),
+        )
     parallel_summary = state.get("parallel_summary") if isinstance(state.get("parallel_summary"), dict) else {}
-    if parallel_summary.get("partial_evidence"):
+    dispatch_summary = state.get("dispatch_summary") if isinstance(state.get("dispatch_summary"), dict) else {}
+    retrieval_summary = parallel_summary or dispatch_summary
+    if retrieval_summary.get("partial_evidence"):
         coverage = {
-            key: parallel_summary.get(key)
+            key: retrieval_summary.get(key)
             for key in ("planned", "completed", "skipped", "failed", "timed_out")
         }
         context = combine_evidence(

@@ -14,6 +14,7 @@ from app.models.llm_server_client import (
     MAX_SYSTEM_ROLE_CHARS,
     REPLANS_LIMIT,
 )
+from app.agent_workflows.execution_contracts import PREFETCH_MODES
 
 
 CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
@@ -77,10 +78,14 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
     prefetch_policy = config.get("prefetch_policy", {})
     if not isinstance(prefetch_policy, dict):
         errors.append("prefetch_policy must be an object")
-    elif set(prefetch_policy) - {"enabled"}:
-        errors.append("prefetch_policy only supports the enabled key")
-    elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
-        errors.append("prefetch_policy.enabled must be a boolean")
+    else:
+        unknown_prefetch_keys = set(prefetch_policy) - {"enabled", "mode"}
+        if unknown_prefetch_keys:
+            errors.append("prefetch_policy only supports enabled and mode")
+        if "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
+            errors.append("prefetch_policy.enabled must be a boolean")
+        if "mode" in prefetch_policy and prefetch_policy["mode"] not in PREFETCH_MODES:
+            errors.append("prefetch_policy.mode must be evidence or routing")
 
     context_policy = config.get("context_policy", {})
     if not isinstance(context_policy, dict):

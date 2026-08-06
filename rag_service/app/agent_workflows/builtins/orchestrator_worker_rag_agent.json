@@ -36,7 +36,7 @@
               "execute": "parallel_dispatch"
             }
           },
-          {"from": "direct_answer", "to": "finalizer"},
+          {"from": "direct_answer", "to": "answer_evaluator"},
           {
             "conditional": true,
             "from": "parallel_dispatch",
@@ -54,7 +54,9 @@
           {"from": "thread_events_worker", "to": "aggregator"},
           {"from": "web_worker", "to": "aggregator"},
           {"from": "aggregator", "to": "synthesizer"},
-          {"from": "synthesizer", "to": "finalizer"},
+          {"from": "synthesizer", "to": "answer_evaluator"},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
           {"from": "finalizer", "to": "END"}
         ],
         "nodes": [
@@ -69,13 +71,15 @@
           {"id": "aggregator", "type": "aggregator"},
           {"id": "direct_answer", "type": "direct_answer"},
           {"id": "synthesizer", "type": "synthesizer"},
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
           {"id": "finalizer", "type": "finalizer"}
         ]
       },
       "hitl_policy": {"enabled": false, "gates": {}},
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 16,
+        "max_total_visits": 17,
         "node_visit_limits": {
           "parallel_dispatch": 1,
           "aggregator": 1,
@@ -83,7 +87,9 @@
           "thread_conversation_history_worker": 1,
           "durable_memory_worker": 1,
           "thread_events_worker": 1,
-          "web_worker": 1
+          "web_worker": 1,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
         }
       },
       "parallel_policy": {
@@ -97,7 +103,7 @@
         "minimum_successes": 1,
         "continue_on_partial_failure": true
       },
-      "prefetch_policy": {"enabled": true},
+      "prefetch_policy": {"enabled": true, "mode": "routing"},
       "system_role": "",
       "tool_instructions": {},
       "use_reranker": true,
@@ -110,7 +116,8 @@
       "failure_reason_prefix": "Exception during Orchestrator-Worker RAG execution",
       "features": {
         "supports_replans": false,
-        "supports_parallel_dispatch": true
+        "supports_parallel_dispatch": true,
+        "supports_answer_quality": true
       },
       "kind": "compiled_rag",
       "label": "Orchestrator-Worker RAG",
@@ -118,7 +125,7 @@
       "success_context": "Context retrieved by compiled Orchestrator-Worker RAG Agent workflow."
     },
     "schema_version": 2,
-    "version": 1
+    "version": 2
   },
   "visibility": "builtin"
 }

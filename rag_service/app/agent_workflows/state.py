@@ -20,15 +20,32 @@ def _parallel_identity(value: Any) -> str:
         if value.get("timeline_event_at"):
             source_record_id = value.get("message_id") or value.get("file_hash") or value.get("url") or value.get("title") or ""
             return f"timeline|{value.get('source_type') or ''}|{source_record_id}|{value.get('timeline_event_at')}"
-        for fields in (
-            ("node_id", "dispatch_id", "work_id", "attempt", "visit_index"),
-            ("work_id", "attempt", "name"),
-            ("work_id", "attempt", "tool_name", "invocation_sequence"),
-            ("work_id", "attempt", "code"),
-            ("work_id", "attempt", "status"),
-        ):
-            if any(field in value for field in fields):
-                return "|".join(str(value.get(field) or "") for field in fields)
+        work_id = str(value.get("work_id") or "")
+        attempt = str(value.get("attempt") or 1)
+        if value.get("tool_name") or value.get("tool"):
+            return "|".join(("tool", work_id, attempt, str(value.get("tool_name") or value.get("tool") or ""), str(value.get("invocation_sequence") or value.get("sequence") or 1)))
+        if value.get("code") or value.get("error_code"):
+            return "|".join(("error", work_id, attempt, str(value.get("code") or value.get("error_code") or "")))
+        if work_id and any(key in value for key in ("name", "event", "event_name", "node", "node_id")):
+            return "|".join((
+                "event",
+                work_id,
+                attempt,
+                str(value.get("node_id") or value.get("node") or value.get("worker_node_id") or ""),
+                str(value.get("name") or value.get("event") or value.get("event_name") or value.get("status") or ""),
+                str(value.get("visit_index") or value.get("node_visit_index") or 1),
+            ))
+        if value.get("node_id") or value.get("node"):
+            return "|".join((
+                "visit",
+                str(value.get("node_id") or value.get("node") or ""),
+                str(value.get("dispatch_id") or "serial"),
+                work_id,
+                attempt,
+                str(value.get("visit_index") or value.get("node_visit_index") or 1),
+            ))
+        if work_id and value.get("status"):
+            return "|".join(("result", work_id, attempt, str(value.get("status") or "")))
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -49,8 +66,9 @@ class WorkerWorkItem(TypedDict):
     dispatch_id: str
     dispatch_node_id: str
     dispatch_visit: int
-    dispatch_deadline_epoch_ms: int
     dispatch_started_epoch_ms: int
+    dispatch_deadline_epoch_ms: int
+    dispatch_proposal_signature: str
     work_id: str
     ordinal: int
     worker_node_id: str
@@ -101,6 +119,7 @@ class RouterRagState(TypedDict, total=False):
     client_now_iso: Optional[str]
     transient_history_text: str
     pre_fetch_bundle: Dict[str, Any]
+    prefetch_policy: Dict[str, Any]
     route: RouterRoute | str
     route_reason: str
     clarification_options: Optional[List[str]]
@@ -144,6 +163,8 @@ class RouterRagState(TypedDict, total=False):
     parallel_enabled: bool
     parallel_runtime_override: bool
     parallel_aggregator_id: str
+    dispatch_aggregator_id: str
+    dispatch_mode: Literal["serial", "parallel"]
     dispatch_id: str
     dispatch_visit: int
     work_item: WorkerWorkItem
@@ -163,6 +184,10 @@ class RouterRagState(TypedDict, total=False):
     parallel_visit_records: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_attempt_records: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_summary: Dict[str, Any]
+    dispatch_summary: Dict[str, Any]
+    answer_quality_route: str
+    answer_quality_report: Dict[str, Any]
+    answer_revision_count: int
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:
@@ -272,7 +297,11 @@ def node_visit_limit(state: RouterRagState, *, node_id: str, node_type: str) -> 
         except (TypeError, ValueError):
             return 1
     try:
-        default_limit = int(policy.get("default_max_node_visits", node_type_default_max_visits(node_type)))
+        default_limit = int(
+            node_type_default_max_visits(node_type)
+            if node_type == "hitl_gate"
+            else policy.get("default_max_node_visits", node_type_default_max_visits(node_type))
+        )
     except (TypeError, ValueError):
         default_limit = node_type_default_max_visits(node_type)
     return max(1, min(default_limit, node_type_max_visits(node_type)))

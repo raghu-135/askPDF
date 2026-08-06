@@ -1,8 +1,8 @@
 {
   "builtin_key": "router_rag_agent",
-  "description": "A compiled LangGraph workflow that loads context, routes to document retrieval, thread conversation history, durable memory, thread events, direct answer, or clarification, then synthesizes a final response.",
+  "description": "A fast routing workflow that uses one retrieval task when possible and escalates compound requests to a bounded serial plan.",
   "is_builtin": true,
-  "name": "Router RAG Agent",
+  "name": "Router",
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
@@ -39,41 +39,47 @@
             "routes": {
               "clarify": "finalizer",
               "direct": "direct_answer",
-              "document": "retrieval_worker",
-              "durable_memory": "durable_memory_worker",
-              "thread_conversation_history": "thread_conversation_history_worker",
-              "thread_events": "thread_events_worker",
-              "web": "web_worker"
+              "document": "serial_dispatch",
+              "durable_memory": "serial_dispatch",
+              "thread_conversation_history": "serial_dispatch",
+              "thread_events": "serial_dispatch",
+              "web": "serial_dispatch",
+              "compound": "planner"
             }
           },
           {
-            "from": "retrieval_worker",
-            "to": "synthesizer"
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {"clarify": "finalizer", "direct": "direct_answer", "execute": "serial_dispatch"}
           },
           {
-            "from": "thread_conversation_history_worker",
-            "to": "synthesizer"
+            "conditional": true,
+            "from": "serial_dispatch",
+            "route_fn": "serial_dispatch_route",
+            "routes": {"dispatch": "aggregator"}
           },
-          {
-            "from": "durable_memory_worker",
-            "to": "synthesizer"
-          },
-          {
-            "from": "thread_events_worker",
-            "to": "synthesizer"
-          },
-          {
-            "from": "web_worker",
-            "to": "synthesizer"
-          },
+          {"dynamic": true, "from": "serial_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "serial_dispatch"},
+          {"from": "thread_conversation_history_worker", "to": "serial_dispatch"},
+          {"from": "durable_memory_worker", "to": "serial_dispatch"},
+          {"from": "thread_events_worker", "to": "serial_dispatch"},
+          {"from": "web_worker", "to": "serial_dispatch"},
+          {"from": "aggregator", "to": "synthesizer"},
           {
             "from": "direct_answer",
-            "to": "finalizer"
+            "to": "answer_evaluator"
           },
           {
             "from": "synthesizer",
-            "to": "finalizer"
+            "to": "answer_evaluator"
           },
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
           {
             "from": "finalizer",
             "to": "END"
@@ -88,6 +94,8 @@
             "id": "router",
             "type": "router"
           },
+          {"id": "planner", "type": "planner"},
+          {"id": "serial_dispatch", "type": "serial_dispatch"},
           {
             "id": "retrieval_worker",
             "type": "retrieval_worker"
@@ -116,6 +124,9 @@
             "id": "synthesizer",
             "type": "synthesizer"
           },
+          {"id": "aggregator", "type": "aggregator"},
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
           {
             "id": "finalizer",
             "type": "finalizer"
@@ -128,17 +139,21 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 10,
+        "max_total_visits": 26,
         "node_visit_limits": {
           "durable_memory_worker": 2,
           "thread_conversation_history_worker": 2,
           "retrieval_worker": 2,
           "thread_events_worker": 2,
-          "web_worker": 2
+          "web_worker": 2,
+          "serial_dispatch": 10,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
         }
       },
       "prefetch_policy": {
-        "enabled": true
+        "enabled": true,
+        "mode": "evidence"
       },
       "system_role": "",
       "tool_instructions": {},
@@ -148,18 +163,20 @@
     "workflow_id": "router_rag_agent",
     "runtime": {
       "failure_code": "router_rag_execution_failed",
-      "failure_context": "Compiled Router RAG Agent execution failed gracefully.",
-      "failure_reason_prefix": "Exception during Router RAG execution",
+      "failure_context": "Router execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Router execution",
       "features": {
-        "supports_replans": false
+        "supports_replans": false,
+        "supports_serial_dispatch": true,
+        "supports_answer_quality": true
       },
       "kind": "compiled_rag",
-      "label": "Router RAG",
+      "label": "Router",
       "prompt_preview": "router",
-      "success_context": "Context retrieved by compiled Router RAG Agent workflow."
+      "success_context": "Context retrieved by the Router workflow."
     },
     "schema_version": 2,
-    "version": 3
+    "version": 4
   },
   "visibility": "builtin"
 }

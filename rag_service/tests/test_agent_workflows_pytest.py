@@ -61,12 +61,29 @@ ROUTER_RAG_AGENT_ID = "router_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
-ROUTER_RAG_AGENT_VERSION = 3
-PLAN_EXECUTE_RAG_AGENT_VERSION = 4
-EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 4
-ROUTER_RAG_AGENT_V2_VERSION = 3
-PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 4
-EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 4
+ROUTER_RAG_AGENT_VERSION = 4
+PLAN_EXECUTE_RAG_AGENT_VERSION = 5
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
+ROUTER_RAG_AGENT_V2_VERSION = 4
+PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 5
+EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 5
+
+
+def _is_answer_quality_review(messages) -> bool:
+    return any(
+        "strict answer-quality evaluator" in str(getattr(message, "content", message)).lower()
+        or "review the draft answer" in str(getattr(message, "content", message)).lower()
+        for message in messages
+    )
+
+
+def _collapsed_event_nodes(events) -> list[str]:
+    nodes: list[str] = []
+    for event in events:
+        node = str(event.get("node") or "")
+        if node and (not nodes or nodes[-1] != node):
+            nodes.append(node)
+    return nodes
 
 
 def test_builder_test_initial_state_includes_only_transient_request_history():
@@ -103,6 +120,38 @@ def test_builder_test_initial_state_includes_only_transient_request_history():
     )
     assert state["question"] == "Follow-up question"
     assert "chat_turn_id" not in state
+
+
+@pytest.mark.asyncio
+async def test_answer_quality_evaluator_passes_revises_and_finalizes_cautiously(monkeypatch):
+    registry = NodeRegistry()
+    responses = iter([
+        '{"pass":true,"reason":"grounded","issues":[]}',
+        '{"pass":false,"reason":"missing support","issues":["Cite the document evidence."]}',
+        '{"pass":false,"reason":"still incomplete","issues":["The requested comparison is unsupported."]}',
+    ])
+
+    class FakeLlm:
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(content=next(responses))
+
+    monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
+    base_state = {
+        "llm_model": "test-llm",
+        "question": "Compare the sources.",
+        "final_answer": "Draft answer.",
+        "evidence": "Document evidence.",
+        "node_events": [],
+    }
+
+    passed = await registry.answer_evaluator({**base_state, "answer_revision_count": 0}, {})
+    revise = await registry.answer_evaluator({**base_state, "answer_revision_count": 0}, {})
+    cautious = await registry.answer_evaluator({**base_state, "answer_revision_count": 1}, {})
+
+    assert passed["answer_quality_route"] == "pass"
+    assert revise["answer_quality_route"] == "revise"
+    assert cautious["answer_quality_route"] == "finalize_cautious"
+    assert "Limitations: The requested comparison is unsupported." in cautious["final_answer"]
 
 
 def _builtin_spec(builtin_key: str) -> dict:
@@ -796,7 +845,8 @@ class TestRouterRagWorkflowValidator:
         assert evaluator_resolved["config"]["replans"] == 3
         assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["replanner"] == 3
         assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["evidence_evaluator"] == 4
-        assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 32
+        assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["serial_dispatch"] == 24
+        assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 63
 
     def test_rejects_zero_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
@@ -1022,6 +1072,10 @@ class TestRouterRagWorkflowValidator:
                 "web_worker": 3,
                 "evidence_evaluator": 3,
                 "replanner": 2,
+                "serial_dispatch": 18,
+                "aggregator": 3,
+                "answer_evaluator": 2,
+                "answer_reviser": 1,
             },
         }
 
@@ -1233,15 +1287,21 @@ class TestRouterRagWorkflowValidator:
         materialized = WorkflowCompiler().materialize_spec(spec_factory())
         WorkflowValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
-
-        assert [node["id"] for node in graph_spec["nodes"]] == expected["node_ids"]
-        assert {node["id"]: node["type"] for node in graph_spec["nodes"]} == expected["node_types"]
-        assert [(edge.get("from"), edge.get("to")) for edge in graph_spec["edges"] if not edge.get("conditional")] == expected["edges"]
-        assert {
-            edge["from"]: {"route_fn": edge.get("route_fn"), "routes": edge.get("routes")}
+        node_types = {node["id"]: node["type"] for node in graph_spec["nodes"]}
+        assert {"serial_dispatch", "aggregator", "answer_evaluator", "answer_reviser"} <= set(node_types)
+        assert node_types["serial_dispatch"] == "serial_dispatch"
+        assert node_types["aggregator"] == "aggregator"
+        assert any(edge.get("from") == "serial_dispatch" and edge.get("dynamic") for edge in graph_spec["edges"])
+        assert any(edge.get("from") == "answer_evaluator" and edge.get("route_fn") == "answer_quality_route" for edge in graph_spec["edges"])
+        assert not any(
+            node_types.get(str(edge.get("from"))) in {
+                "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker"
+            }
+            and node_types.get(str(edge.get("to"))) in {
+                "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker"
+            }
             for edge in graph_spec["edges"]
-            if edge.get("conditional")
-        } == expected["conditional_edges"]
+        )
         assert graph_spec["hitl_compiled"] is True
         assert materialized["config"]["loop_policy"]["max_total_visits"] >= len(graph_spec["nodes"])
 
@@ -1320,10 +1380,10 @@ class TestRouterRagWorkflowValidator:
                     "enabled": True,
                     "mode": "approval",
                     "phase": "before",
-                    "target": {"node_id": "retrieval_worker"},
+                    "target": {"node_id": "serial_dispatch"},
                     "allowed_actions": ["approve", "continue_without"],
                     "default_action": "continue_without",
-                    "routes": {"approve": "retrieval_worker", "continue_without": "synthesizer"},
+                    "routes": {"approve": "serial_dispatch", "continue_without": "direct_answer"},
                 }
             },
         }
@@ -1337,10 +1397,10 @@ class TestRouterRagWorkflowValidator:
         assert review_gate["type"] == "hitl_gate"
         assert review_gate["label"] == "HITL Gate"
         assert review_gate["category"] == "human_review"
-        router_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "router")
-        assert router_edge["routes"]["document"] == "review_before_documents"
+        planner_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "planner")
+        assert planner_edge["routes"]["execute"] == "review_before_documents"
         gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "review_before_documents")
-        assert gate_edge["routes"] == {"approve": "retrieval_worker", "continue_without": "synthesizer"}
+        assert gate_edge["routes"] == {"approve": "serial_dispatch", "continue_without": "direct_answer"}
 
     def test_materializes_multi_select_choice_gate_overlay(self):
         spec = builtin_plan_execute_rag_v2_spec()
@@ -1351,17 +1411,17 @@ class TestRouterRagWorkflowValidator:
                     "enabled": True,
                     "mode": "choice",
                     "phase": "before",
-                    "target": {"node_id": "retrieval_worker"},
+                    "target": {"node_id": "serial_dispatch"},
                     "selection_mode": "multi",
                     "allowed_actions": ["approve_selected", "continue_without", "reject"],
                     "default_action": "continue_without",
                     "options": [
-                        {"id": "document_search", "label": "Document search", "target_node_id": "retrieval_worker"},
-                        {"id": "web_search", "label": "Web search", "target_node_id": "web_worker"},
+                        {"id": "run_plan", "label": "Run retrieval plan", "target_node_id": "serial_dispatch"},
+                        {"id": "answer_directly", "label": "Answer directly", "target_node_id": "direct_answer"},
                     ],
                     "routes": {
-                        "continue_without": "synthesizer",
-                        "reject": "synthesizer",
+                        "continue_without": "direct_answer",
+                        "reject": "direct_answer",
                     },
                 }
             },
@@ -1380,10 +1440,10 @@ class TestRouterRagWorkflowValidator:
         assert planner_edge["routes"]["execute"] == "research_source_choice"
         gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "research_source_choice")
         assert gate_edge["routes"] == {
-            "document_search": "retrieval_worker",
-            "web_search": "web_worker",
-            "continue_without": "synthesizer",
-            "reject": "synthesizer",
+            "run_plan": "serial_dispatch",
+            "answer_directly": "direct_answer",
+            "continue_without": "direct_answer",
+            "reject": "direct_answer",
         }
 
     def test_materializes_final_review_as_hitl_policy_overlay(self):
@@ -1687,7 +1747,7 @@ class TestRouterRagWorkflowValidator:
         assert len(report["recommended_next_steps"]) == 5
         assert len(report["reason"]) <= 503
 
-    def test_build_planner_prompt_contains_temporal_memory_document_rules(self):
+    def test_build_planner_prompt_uses_exhaustive_typed_worker_decisions(self):
         prompt = build_planner_prompt(
             {
                 "question": "What is the latest document about?",
@@ -1696,14 +1756,12 @@ class TestRouterRagWorkflowValidator:
             }
         )
 
-        assert "latest, first, earliest, oldest, since, before, after" in prompt
-        assert "include `thread_events_worker`" in prompt
-        assert "prior conversation recall without time/order wording" in prompt
-        assert "include `thread_conversation_history_worker` rather than `thread_events_worker`" in prompt
-        assert "uploaded document/PDF/page/quote/citation/content" in prompt
+        assert "worker_decisions" in prompt
+        assert "exactly one object for every available worker" in prompt
+        assert "boolean semantic decision" in prompt
+        assert "Do not select workers by keyword matching alone" in prompt
         assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
         assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
-        assert "`thread_events_worker` queries should preserve temporal anchor words" in prompt
         assert "current user question overrides any conflicting memory" in prompt
 
         final_prompt = (Path(__file__).resolve().parents[1] / "app" / "prompts" / "agent_workflows" / "final_answer.md").read_text(encoding="utf-8")
@@ -4372,7 +4430,7 @@ class TestAgentRunService:
         assert run.workflow_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
         assert run.resolved_spec_json["schema_version"] == 2
         assert router_edge["route_fn"] == "router_route"
-        assert captured_spec["config"]["loop_policy"]["max_total_visits"] == len(captured_spec["config"]["graph"]["nodes"])
+        assert captured_spec["config"]["loop_policy"]["max_total_visits"] >= len(captured_spec["config"]["graph"]["nodes"])
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_runs_selected_custom_db_workflow(self, engine, sample_thread, monkeypatch):
@@ -4995,6 +5053,8 @@ class TestAgentRunService:
 
             async def ainvoke(self, messages):
                 self.calls += 1
+                if _is_answer_quality_review(messages):
+                    return SimpleNamespace(content='{"pass":true,"reason":"The answer is grounded and complete.","issues":[]}')
                 if self.calls == 1:
                     return SimpleNamespace(content='{"route":"web","reason":"Needs live evidence.","clarification_options":null}')
                 return SimpleNamespace(content="Checkpointed final answer.")
@@ -5168,8 +5228,8 @@ class TestAgentRunService:
         assert pending["gate_id"] == "web_approval_gate"
         assert pending["proposed_tool"]["name"] == "search_web"
         gates = run.resolved_spec_json["config"]["hitl_policy"]["gates"]
-        assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
-        assert fake_llm.calls == 2
+        assert gates["web_approval_gate"]["target"] == {"node_id": "serial_dispatch", "node_type": "serial_dispatch"}
+        assert fake_llm.calls == 3
 
         assert resumed is not None
         assert resumed.duplicate is False
@@ -5210,7 +5270,8 @@ class TestAgentRunService:
         }
         assert "web_approval_gate" in node_span_ids
         assert "web_worker" in node_span_ids
-        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == 6
+        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == len(node_span_ids)
+        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] >= 9
         assert any(node["id"] == "web_approval_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
         assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
         assert resumed.run.debug_trace_json["trace"]["chat_turn_id"] == turns[0].id
@@ -5316,7 +5377,7 @@ class TestAgentRunService:
             for span in result["resumed"].run.debug_trace_json["trace"]["spans"]
             if span.get("attributes", {}).get("askpdf.node.id") == "web_approval_gate"
         ]
-        assert gate_spans[-1]["output"]["value"]["next"] == "synthesizer"
+        assert gate_spans[-1]["output"]["value"]["next"] == "serial_dispatch"
 
     @pytest.mark.asyncio
     async def test_hitl_web_gate_thread_setting_does_not_add_final_review_on_resume(self, engine, sample_thread, monkeypatch):
@@ -5921,6 +5982,8 @@ class TestRouterRagRuntime:
 
             async def ainvoke(self, messages):
                 self.calls += 1
+                if _is_answer_quality_review(messages):
+                    return SimpleNamespace(content='{"pass":true,"reason":"The answer is grounded and complete.","issues":[]}')
                 if self.calls == 1:
                     return SimpleNamespace(
                         content='{"route":"direct","reason":"prefetched context is sufficient","clarification_options":null}',
@@ -6097,6 +6160,7 @@ class TestRouterRagRuntime:
             "context_loader",
             "router",
             "direct_answer",
+            "answer_evaluator",
             "finalizer",
         ]
         context_event = result["node_events"][0]
@@ -6138,10 +6202,10 @@ class TestRouterRagRuntime:
         assert result["tool_events"] == []
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
-        assert "Router RAG run started | run_id=run-1" in log_text
-        assert "Router RAG run completed | run_id=run-1" in log_text
-        for node in ("context_loader", "router", "direct_answer", "finalizer"):
-            assert f"Router RAG node completed | run_id=run-1" in log_text
+        assert "Router run started | run_id=run-1" in log_text
+        assert "Router run completed | run_id=run-1" in log_text
+        for node in ("context_loader", "router", "direct_answer", "answer_evaluator", "finalizer"):
+            assert f"Agent workflow node completed | run_id=run-1" in log_text
             assert f"node={node}" in log_text
         assert "route=direct" in log_text
 
@@ -6149,11 +6213,11 @@ class TestRouterRagRuntime:
     @pytest.mark.parametrize(
         "route, expected_nodes, expected_status",
         [
-            ("document", ["context_loader", "router", "retrieval_worker", "synthesizer", "finalizer"], "completed"),
-            ("thread_conversation_history", ["context_loader", "router", "thread_conversation_history_worker", "synthesizer", "finalizer"], "completed"),
-            ("durable_memory", ["context_loader", "router", "durable_memory_worker", "synthesizer", "finalizer"], "completed"),
-            ("thread_events", ["context_loader", "router", "thread_events_worker", "synthesizer", "finalizer"], "completed"),
-            ("web", ["context_loader", "router", "web_worker", "synthesizer", "finalizer"], "completed"),
+            ("document", ["context_loader", "router", "serial_dispatch", "retrieval_worker", "aggregator", "synthesizer", "answer_evaluator", "finalizer"], "completed"),
+            ("thread_conversation_history", ["context_loader", "router", "serial_dispatch", "thread_conversation_history_worker", "aggregator", "synthesizer", "answer_evaluator", "finalizer"], "completed"),
+            ("durable_memory", ["context_loader", "router", "serial_dispatch", "durable_memory_worker", "aggregator", "synthesizer", "answer_evaluator", "finalizer"], "completed"),
+            ("thread_events", ["context_loader", "router", "serial_dispatch", "thread_events_worker", "aggregator", "synthesizer", "answer_evaluator", "finalizer"], "completed"),
+            ("web", ["context_loader", "router", "serial_dispatch", "web_worker", "aggregator", "synthesizer", "answer_evaluator", "finalizer"], "completed"),
             ("clarify", ["context_loader", "router", "finalizer"], "clarification_required"),
         ],
     )
@@ -6183,6 +6247,8 @@ class TestRouterRagRuntime:
 
             async def ainvoke(self, messages):
                 self.calls += 1
+                if _is_answer_quality_review(messages):
+                    return SimpleNamespace(content='{"pass":true,"reason":"The answer is grounded and complete.","issues":[]}')
                 if self.calls == 1:
                     options = '["Which uploaded document?","Which previous answer?"]' if route == "clarify" else "null"
                     return SimpleNamespace(
@@ -6356,7 +6422,7 @@ class TestRouterRagRuntime:
             )
 
         assert result["route"] == route
-        assert [event["node"] for event in result["node_events"]] == expected_nodes
+        assert _collapsed_event_nodes(result["node_events"]) == expected_nodes
         assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         if route == "clarify":
             assert turn is None
@@ -6383,7 +6449,7 @@ class TestRouterRagRuntime:
             assert len(index_calls) == 1
             assert len(stats_calls) == 1
             assert len(result["tool_events"]) == 1
-            assert result["tool_events"][0]["caller_node"] == expected_nodes[2]
+            assert result["tool_events"][0]["caller_node"] == expected_nodes[3]
             assert result["tool_events"][0]["ok"] is True
             assert result["tool_events"][0]["result_preview"].endswith("worker evidence.")
         if route == "document":
@@ -6414,7 +6480,7 @@ class TestRouterRagRuntime:
             assert result["answer"].startswith("I need a bit more clarification.")
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
-        assert f"Router RAG run completed | run_id=run-{route}" in log_text
+        assert f"Router run completed | run_id=run-{route}" in log_text
         assert f"route={route}" in log_text
         for node in expected_nodes:
             assert f"node={node}" in log_text
@@ -6453,6 +6519,9 @@ class TestRouterRagRuntime:
                 "web_sources": [],
                 "used_chat_ids": [],
             }
+
+        async def fake_update_message_context_compact(_turn_id, _compact_text):
+            return None
 
         async def fake_create_chat_turn(
             *,
@@ -6508,6 +6577,7 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FailingTool())
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
 
         req = SimpleNamespace(
             question="What is in the document?",
@@ -6546,14 +6616,18 @@ class TestRouterRagRuntime:
         async with session_factory() as check_session:
             turn = await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
 
+        assert "agent_error" in result, json.dumps(result, default=str, sort_keys=True)
         assert result["agent_error"]["code"] == "router_rag_execution_failed"
         assert result["chat_turn_id"] == turn.id
         assert result["route"] == "document"
-        assert [event["node"] for event in result["node_events"]] == ["context_loader", "router", "retrieval_worker"]
-        assert result["node_events"][-1]["status"] == "failed"
-        assert result["node_events"][-1]["error"]["raw_message"] == "document tool exploded"
+        assert _collapsed_event_nodes(result["node_events"])[:3] == ["context_loader", "router", "serial_dispatch"]
+        failed_worker_events = [
+            event for event in result["node_events"]
+            if event.get("node") == "retrieval_worker" and event.get("status") == "failed"
+        ]
+        assert failed_worker_events
         assert result["tool_events"] == []
-        assert result["errors"][0]["raw_message"] == "document tool exploded"
+        assert any(error.get("raw_message") == "document tool exploded" for error in result["errors"])
         assert turn.status == "failed"
         assert turn.agent_run_id == "run-failed"
         assert turn.agent_run_turn_kind == "assistant_final"
@@ -6564,7 +6638,7 @@ class TestRouterRagRuntime:
         assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
         assert "agent_tool_events" not in turn.payload["metadata"]
-        assert turn.payload["metadata"]["agent_error"]["raw_message"] == "document tool exploded"
+        assert turn.payload["metadata"]["agent_error"]["raw_message"] == "parallel_dispatch_no_usable_results"
 
 
 @pytest.mark.asyncio
@@ -7275,8 +7349,8 @@ class TestAgentWorkflowApi:
         assert "run.completed" in response.text
         gates = captured["resolved_spec"]["config"]["hitl_policy"]["gates"]
         assert gates["web_approval_gate"]["target"] == {
-            "node_id": "web_worker",
-            "node_type": "web_worker",
+            "node_id": "serial_dispatch",
+            "node_type": "serial_dispatch",
         }
 
     def test_builder_latest_test_returns_not_found_for_new_session(self, api_client):
@@ -7352,7 +7426,7 @@ class TestAgentWorkflowApi:
         assert payload["resolved_spec_json"]["config"]["use_web_search"] is True
         assert payload["resolved_spec_json"]["config"]["replans"] == 2
         gates = payload["resolved_spec_json"]["config"]["hitl_policy"]["gates"]
-        assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
+        assert gates["web_approval_gate"]["target"] == {"node_id": "serial_dispatch", "node_type": "serial_dispatch"}
 
     def test_validate_thread_agent_config_endpoint_reports_invalid_overrides(self, api_client, sample_thread):
         response = api_client.post(

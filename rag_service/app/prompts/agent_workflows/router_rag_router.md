@@ -1,4 +1,4 @@
-# Router RAG Router Prompt
+# Router Prompt
 
 ## Runtime Date/Time Context
 
@@ -8,7 +8,7 @@
 
 Context window: {CONTEXT_WINDOW} tokens, shared with history, tool results, and the final answer.
 
-Prefer targeted retrieval routes over broad ones. Choose `direct` only when pre-fetched context directly answers the question.
+Choose the simplest route that fully covers the request. Use `compound` when the request needs more than one independent evidence source or retrieval operation.
 
 Durable memories in pre-fetched context are defaults. The current user question overrides any conflicting memory for this run.
 
@@ -27,9 +27,11 @@ Route this askPDF question to exactly one route.
 ## Routes
 
 - `document`: answer needs uploaded document evidence or cached web snippets.
-- `memory`: answer needs non-temporal prior conversation memory.
-- `timeline`: answer depends on chronology, first/latest, before/after, since, or event ordering.
+- `thread_conversation_history`: answer needs prior messages from this thread.
+- `durable_memory`: answer needs saved user, project, or thread memory.
+- `thread_events`: answer depends on chronology, first/latest, before/after, since, or event ordering.
 - `web`: answer needs live internet evidence and web search is enabled.
+- `compound`: the request requires a bounded multi-source plan rather than one retrieval route.
 - `direct`: pre-fetched context is enough for a concise answer.
 - `clarify`: the question is ambiguous and needs 2-4 options.
 
@@ -39,11 +41,12 @@ Route this askPDF question to exactly one route.
 - Choose `direct` only when pre-fetched context directly answers the question.
 - Do not choose `direct` for latest, first, since, before, after, or current questions unless pre-fetched context includes explicit timeline evidence.
 - Do not choose `direct` for citation or source-specific questions unless pre-fetched context includes source labels.
-- Prefer `timeline` when the wording depends on latest, most recent, current, first, earliest, oldest, before, after, since, chronology, sequence, order, date, or time.
-- Prefer `memory` for prior conversation recall when the question does not depend on ordering or event time.
-- Prefer `memory` when the user asks about stored preferences, durable instructions, decisions, constraints, profile facts, or what the app remembers.
+- Use `compound` whenever satisfying the full request requires two or more routes; do not discard an explicit source or scope requirement merely to choose one route.
+- Prefer `thread_events` when the wording depends on latest, most recent, current, first, earliest, oldest, before, after, since, chronology, sequence, order, date, or time.
+- Prefer `thread_conversation_history` for prior conversation recall when the question does not depend on ordering or event time.
+- Prefer `durable_memory` when the user asks about stored preferences, durable instructions, decisions, constraints, profile facts, or what the app remembers.
 - Prefer `document` for uploaded document, PDF, file, page, section, quote, citation, excerpt, summary, or content questions.
-- Do not choose `web` when live web search is disabled; choose document, memory, direct, or clarify instead.
+- Do not choose `web` when live web search is disabled; choose another enabled route or clarify instead.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
 - Clarification options must contain 2-4 complete, self-contained questions.
 - Infer the most likely distinct meanings of the user's message.

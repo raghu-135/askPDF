@@ -140,6 +140,8 @@ export const RouteFunctionId = {
   Evaluator: 'evaluator_route',
   HitlGate: 'hitl_gate_route',
   ParallelDispatch: 'parallel_dispatch_route',
+  SerialDispatch: 'serial_dispatch_route',
+  AnswerQuality: 'answer_quality_route',
 } as const;
 export type RouteFunctionId = typeof RouteFunctionId[keyof typeof RouteFunctionId];
 
@@ -150,6 +152,9 @@ export const BuiltinAgentNodeType = {
   EvidenceEvaluator: 'evidence_evaluator',
   HitlGate: 'hitl_gate',
   ParallelDispatch: 'parallel_dispatch',
+  SerialDispatch: 'serial_dispatch',
   Aggregator: 'aggregator',
+  AnswerEvaluator: 'answer_evaluator',
+  AnswerReviser: 'answer_reviser',
 } as const;
 export type BuiltinAgentNodeType = typeof BuiltinAgentNodeType[keyof typeof BuiltinAgentNodeType];
