@@ -16,7 +16,6 @@ from app.db.enums import MemoryScopeType
 from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, Project
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import get_embedding_model
-from app.models.memory_limits import MAX_MEMORY_ROWS
 from app.models.retry import invoke_with_retry
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
@@ -182,28 +181,6 @@ async def index_global_representation(memory_id: str, embedding_model: str) -> i
                     row.index_error = str(exc)[:2000]
                     row.updated_at = utc_now()
         raise
-
-
-async def warm_global_representations_for_model(embedding_model: str, *, limit: int = 100) -> Dict[str, Any]:
-    await ensure_global_representations_for_model(embedding_model)
-    async with async_session_maker() as session:
-        rows = list((await session.execute(
-            select(GlobalMemoryRepresentation)
-            .where(
-                GlobalMemoryRepresentation.embedding_model == embedding_model,
-                GlobalMemoryRepresentation.index_status.in_(("pending", "failed")),
-            )
-            .order_by(GlobalMemoryRepresentation.updated_at)
-            .limit(max(1, min(limit, MAX_MEMORY_ROWS)))
-        )).scalars().all())
-    indexed, failed = [], []
-    for row in rows:
-        try:
-            await index_global_representation(row.memory_id, row.embedding_model)
-            indexed.append(row.memory_id)
-        except Exception:
-            failed.append(row.memory_id)
-    return {"embedding_model": embedding_model, "indexed_ids": indexed, "failed_ids": failed}
 
 
 async def global_representation_status_for_model(embedding_model: str) -> Dict[str, Any]:

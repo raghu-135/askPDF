@@ -1078,36 +1078,3 @@ async def trigger_reembed_for_missing_sources(
     """
     from app.services.embedding_materialization_service import reconcile_thread_embedding_targets
     return await reconcile_thread_embedding_targets(thread_id, embedding_model, file_hashes=file_hashes)
-
-
-async def embedding_model_check(
-    thread_id: str, embedding_model: str, during_run: bool = False
-) -> bool:
-    """
-    Verify embedding-model availability for re-index paths.
-    Returns False on both hard not-ready and check failures.
-    """
-    from app.models.llm_server_client import check_embedding_model_ready
-
-    try:
-        ready = await check_embedding_model_ready(embedding_model, use_cache=False)
-    except Exception as ready_err:
-        phase = "during re-embed run" if during_run else "before re-embed trigger"
-        logger.warning(
-            "Skipping re-embed for thread %s: embed-model readiness check failed %s for '%s': %s",
-            thread_id,
-            phase,
-            embedding_model,
-            ready_err,
-        )
-        return False
-
-    if not ready:
-        logger.info(
-            "Skipping re-embed for thread %s: embed model '%s' is not ready",
-            thread_id,
-            embedding_model,
-        )
-        return False
-
-    return True
