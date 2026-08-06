@@ -1,4 +1,5 @@
 import type {
+  AgentWorkflow,
   AgentWorkflowBuilderSpec,
   AgentWorkflowCatalogResponse,
   AgentWorkflowGraphSpec,
@@ -15,14 +16,9 @@ import {
   RouteFunctionId,
 } from './enums.ts';
 
-export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner' | 'orchestrator_worker';
-
-export const AGENT_WORKFLOW_STARTER_WORKFLOW_IDS: Record<AgentWorkflowStarter, string> = {
-  router: 'router_rag_agent',
-  plan_execute: 'plan_execute_rag_agent',
-  evaluator_replanner: 'evaluator_replanner_rag_agent',
-  orchestrator_worker: 'orchestrator_worker_rag_agent',
-};
+export const getAgentWorkflowSourceKey = (workflow: AgentWorkflow): string => (
+  workflow.builtin_key?.trim() || workflow.id
+);
 
 export interface BuilderNodeState {
   id: string;

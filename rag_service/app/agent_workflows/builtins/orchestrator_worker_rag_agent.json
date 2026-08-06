@@ -1,8 +1,8 @@
 {
   "builtin_key": "orchestrator_worker_rag_agent",
-  "description": "A bounded orchestrator-worker RAG workflow that plans typed retrieval work, executes read-only workers concurrently, deterministically aggregates evidence, and synthesizes a final response.",
+  "description": "A bounded orchestrator-worker workflow that plans typed retrieval work, executes read-only workers concurrently, deterministically aggregates evidence, and synthesizes a final response.",
   "is_builtin": true,
-  "name": "Orchestrator-Worker RAG Agent",
+  "name": "Orchestrator-Worker Agent",
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
@@ -112,17 +112,17 @@
     "workflow_id": "orchestrator_worker_rag_agent",
     "runtime": {
       "failure_code": "orchestrator_worker_rag_execution_failed",
-      "failure_context": "Compiled Orchestrator-Worker RAG Agent execution failed gracefully.",
-      "failure_reason_prefix": "Exception during Orchestrator-Worker RAG execution",
+      "failure_context": "Orchestrator-Worker Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Orchestrator-Worker Agent execution",
       "features": {
         "supports_replans": false,
         "supports_parallel_dispatch": true,
         "supports_answer_quality": true
       },
       "kind": "compiled_rag",
-      "label": "Orchestrator-Worker RAG",
+      "label": "Orchestrator-Worker Agent",
       "prompt_preview": "planner",
-      "success_context": "Context retrieved by compiled Orchestrator-Worker RAG Agent workflow."
+      "success_context": "Context retrieved by the Orchestrator-Worker Agent workflow."
     },
     "schema_version": 2,
     "version": 2

@@ -1,4 +1,4 @@
-# Plan-and-Execute RAG Planner Prompt
+# Plan-and-Execute Planner Prompt
 
 ## Runtime Date/Time Context
 

@@ -142,7 +142,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     label="Agent workflow"
                     value={agentWorkflowId}
                     onChange={(e) => onAgentWorkflowChange(e.target.value)}
-                    helperText="Router remains the default; advanced workflows are opt-in."
+                    helperText="Router Agent remains the default; advanced workflows are opt-in."
                     SelectProps={{ onOpen: onAgentWorkflowMenuOpen }}
                 >
                     {agentWorkflows.map((pattern) => (

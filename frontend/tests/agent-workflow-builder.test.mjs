@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  AGENT_WORKFLOW_STARTER_WORKFLOW_IDS,
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
@@ -14,6 +13,7 @@ import {
   canInsertNodeTypeBefore,
   createHitlGateForTarget,
   getIncomingPaths,
+  getAgentWorkflowSourceKey,
   getImmediateSuccessorIds,
   getAllowedRouteFunctionsForNode,
   getAllowedToolContractsForNode,
@@ -28,18 +28,20 @@ import {
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
 
+test('uses the backend canonical key to load a legacy built-in workflow row', () => {
+  assert.equal(getAgentWorkflowSourceKey({
+    id: 'legacy-database-uuid',
+    builtin_key: 'router_rag_agent',
+    name: 'Router Agent',
+    is_builtin: true,
+  }), 'router_rag_agent');
+});
+
 const seededStarterSpecs = {
   router: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/router_rag_agent.json', import.meta.url))).spec_json,
   plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
   evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
 };
-
-test('exposes the orchestrator-worker built-in as a builder starter', () => {
-  assert.equal(
-    AGENT_WORKFLOW_STARTER_WORKFLOW_IDS.orchestrator_worker,
-    'orchestrator_worker_rag_agent',
-  );
-});
 
 test('parallel workflow assembly enables bounded parallel runtime metadata', () => {
   const spec = assembleAgentWorkflowSpec({

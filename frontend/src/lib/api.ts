@@ -751,10 +751,12 @@ export interface AgentWorkflowCatalogResponse {
 export interface AgentWorkflow {
   id: string;
   workflow_id?: string;
+  builtin_key?: string | null;
   name: string;
   description?: string;
   visibility?: string;
   is_builtin?: boolean;
+  is_default?: boolean;
   supports_replans?: boolean;
   created_at?: string | null;
   updated_at?: string | null;

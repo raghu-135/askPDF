@@ -1140,7 +1140,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseThreadMemory(true);
         setUseProjectMemory(true);
         setUseGlobalMemory(false);
-        setAgentWorkflowId(agentWorkflows[0]?.id || '');
+        setAgentWorkflowId(agentWorkflows.find((workflow) => workflow.is_default)?.id || agentWorkflows[0]?.id || '');
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {

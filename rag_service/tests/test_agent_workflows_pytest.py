@@ -6202,8 +6202,8 @@ class TestRouterRagRuntime:
         assert result["tool_events"] == []
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
-        assert "Router run started | run_id=run-1" in log_text
-        assert "Router run completed | run_id=run-1" in log_text
+        assert "Router Agent run started | run_id=run-1" in log_text
+        assert "Router Agent run completed | run_id=run-1" in log_text
         for node in ("context_loader", "router", "direct_answer", "answer_evaluator", "finalizer"):
             assert f"Agent workflow node completed | run_id=run-1" in log_text
             assert f"node={node}" in log_text
@@ -6480,7 +6480,7 @@ class TestRouterRagRuntime:
             assert result["answer"].startswith("I need a bit more clarification.")
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
-        assert f"Router run completed | run_id=run-{route}" in log_text
+        assert f"Router Agent run completed | run_id=run-{route}" in log_text
         assert f"route={route}" in log_text
         for node in expected_nodes:
             assert f"node={node}" in log_text
@@ -7050,6 +7050,57 @@ async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
     assert response["detail"]["checkpoint_after"]["replan_count"] == 1
 
 
+def test_workflow_payload_exposes_canonical_key_for_legacy_builtin_row():
+    import app.api.agent_workflows as agent_workflows_api
+
+    workflow = SimpleNamespace(
+        id="legacy-database-uuid",
+        name="Router Agent",
+        description="",
+        visibility="builtin",
+        is_builtin=True,
+        spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "runtime": {"features": {}}},
+        metadata_json={"builtin_key": ROUTER_RAG_AGENT_ID},
+        created_at=None,
+        updated_at=None,
+    )
+
+    payload = agent_workflows_api._workflow_payload(workflow)
+
+    assert payload["id"] == "legacy-database-uuid"
+    assert payload["builtin_key"] == ROUTER_RAG_AGENT_ID
+    assert payload["is_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_builtin_source_accepts_legacy_builtin_row_id(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+
+    workflow = SimpleNamespace(
+        id="legacy-database-uuid",
+        name="Router Agent",
+        description="",
+        visibility="builtin",
+        is_builtin=True,
+        spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "runtime": {"features": {}}},
+        metadata_json={"builtin_key": ROUTER_RAG_AGENT_ID},
+        created_at=None,
+        updated_at=None,
+    )
+
+    async def fake_get_workflow(_self, workflow_id, *, include_custom=False):
+        assert workflow_id == "legacy-database-uuid"
+        assert include_custom is False
+        return workflow
+
+    monkeypatch.setattr(AgentWorkflowRepository, "get_workflow", fake_get_workflow)
+
+    payload = await agent_workflows_api.get_builtin_agent_workflow_source("legacy-database-uuid")
+
+    assert payload["builtin_key"] == ROUTER_RAG_AGENT_ID
+    assert payload["name"] == "Router Agent"
+
+
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentWorkflowApi:
     def test_list_and_get_builtin_agent_workflow(self, api_client):
@@ -7061,6 +7112,11 @@ class TestAgentWorkflowApi:
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
         }
+        listed_by_id = {item["id"]: item for item in listed.json()["agent_workflows"]}
+        assert listed_by_id[ROUTER_RAG_AGENT_ID]["name"] == "Router Agent"
+        assert listed_by_id[ROUTER_RAG_AGENT_ID]["builtin_key"] == ROUTER_RAG_AGENT_ID
+        assert listed_by_id[ROUTER_RAG_AGENT_ID]["is_default"] is True
+        assert sum(bool(item["is_default"]) for item in listed_by_id.values()) == 1
 
         detail = api_client.get(f"/api/agent-workflows/{ROUTER_RAG_AGENT_ID}")
         assert detail.status_code == 200

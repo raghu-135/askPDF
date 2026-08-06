@@ -2,7 +2,7 @@
   "builtin_key": "router_rag_agent",
   "description": "A fast routing workflow that uses one retrieval task when possible and escalates compound requests to a bounded serial plan.",
   "is_builtin": true,
-  "name": "Router",
+  "name": "Router Agent",
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
@@ -163,17 +163,17 @@
     "workflow_id": "router_rag_agent",
     "runtime": {
       "failure_code": "router_rag_execution_failed",
-      "failure_context": "Router execution failed gracefully.",
-      "failure_reason_prefix": "Exception during Router execution",
+      "failure_context": "Router Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Router Agent execution",
       "features": {
         "supports_replans": false,
         "supports_serial_dispatch": true,
         "supports_answer_quality": true
       },
       "kind": "compiled_rag",
-      "label": "Router",
+      "label": "Router Agent",
       "prompt_preview": "router",
-      "success_context": "Context retrieved by the Router workflow."
+      "success_context": "Context retrieved by the Router Agent workflow."
     },
     "schema_version": 2,
     "version": 4

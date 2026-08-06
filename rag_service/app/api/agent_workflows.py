@@ -134,13 +134,26 @@ class BuilderTestRunResumeRequest(AgentRunResumeRequest):
 
 def _workflow_payload(workflow) -> Dict[str, Any]:
     spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+    metadata = workflow.metadata_json if isinstance(workflow.metadata_json, dict) else {}
+    known_builtin_keys = set(builtin_workflow_keys())
+    builtin_key = None
+    if workflow.is_builtin:
+        metadata_key = str(metadata.get("builtin_key") or "").strip()
+        spec_key = str(spec.get("workflow_id") or "").strip()
+        row_key = str(workflow.id or "").strip()
+        builtin_key = next(
+            (key for key in (metadata_key, spec_key, row_key) if key in known_builtin_keys),
+            None,
+        )
     return {
         "id": workflow.id,
         "workflow_id": workflow.id,
+        "builtin_key": builtin_key,
         "name": workflow.name,
         "description": workflow.description,
         "visibility": workflow.visibility,
         "is_builtin": workflow.is_builtin,
+        "is_default": builtin_key == default_agent_workflow_key(),
         "supports_replans": workflow_supports_replans(spec),
         "created_at": iso_utc_z(workflow.created_at) if workflow.created_at else None,
         "updated_at": iso_utc_z(workflow.updated_at) if workflow.updated_at else None,
@@ -356,10 +369,20 @@ async def list_agent_workflows():
 @router.get("/agent-workflows/builtins/{builtin_key}/source")
 async def get_builtin_agent_workflow_source(builtin_key: str):
     """Return the immutable-on-disk definition used to seed a built-in workflow."""
+    requested_key = builtin_key
     workflow = next(
         (item for item in load_builtin_workflows() if item.get("builtin_key") == builtin_key),
         None,
     )
+    if workflow is None:
+        stored_workflow = await AgentWorkflowRepository().get_workflow(requested_key)
+        if stored_workflow is not None:
+            canonical_key = _workflow_payload(stored_workflow).get("builtin_key")
+            workflow = next(
+                (item for item in load_builtin_workflows() if item.get("builtin_key") == canonical_key),
+                None,
+            )
+            builtin_key = canonical_key or requested_key
     if workflow is None:
         raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
     return {

@@ -24,12 +24,11 @@ import {
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
 import type { AgentWorkflow } from '../../lib/api';
-import type { AgentWorkflowStarter } from '../../lib/agent-workflow-builder';
 import { WorkbenchToolbarTrailingActions } from '../workbench/WorkbenchToolbar';
 
 export default function BuilderActionsBar({
   starter,
-  customWorkflows,
+  workflows,
   disabled,
   onStarterChange,
   onReset,
@@ -56,9 +55,9 @@ export default function BuilderActionsBar({
   layoutControl,
 }: {
   starter: string;
-  customWorkflows?: AgentWorkflow[];
+  workflows?: AgentWorkflow[];
   disabled?: boolean;
-  onStarterChange: (starter: AgentWorkflowStarter | string) => void;
+  onStarterChange: (workflowId: string) => void;
   onReset: () => void;
   onValidate: () => void;
   validating: boolean;
@@ -82,7 +81,9 @@ export default function BuilderActionsBar({
   onGoHome: () => void;
   layoutControl?: React.ReactNode;
 }) {
-  const customOptions = customWorkflows || [];
+  const workflowOptions = workflows || [];
+  const builtinOptions = workflowOptions.filter((workflow) => workflow.is_builtin);
+  const customOptions = workflowOptions.filter((workflow) => !workflow.is_builtin);
   const testButtonDisabled = !testMode && Boolean(testDisabled);
 
   return (
@@ -115,14 +116,15 @@ export default function BuilderActionsBar({
             value={starter}
             onChange={(event: SelectChangeEvent) => onStarterChange(event.target.value)}
           >
-            <MenuItem value="router">Router</MenuItem>
-            <MenuItem value="plan_execute">Plan Execute</MenuItem>
-            <MenuItem value="evaluator_replanner">Evaluator/Replanner</MenuItem>
-            <MenuItem value="orchestrator_worker">Orchestrator/Worker RAG</MenuItem>
+            {builtinOptions.map((workflow) => (
+              <MenuItem key={workflow.id} value={workflow.id}>
+                {workflow.name || workflow.id}
+              </MenuItem>
+            ))}
             {customOptions.length ? <Divider /> : null}
-            {customOptions.map((pattern) => (
-              <MenuItem key={pattern.id} value={`custom:${pattern.id}`}>
-                {pattern.name || pattern.id}
+            {customOptions.map((workflow) => (
+              <MenuItem key={workflow.id} value={workflow.id}>
+                {workflow.name || workflow.id}
               </MenuItem>
             ))}
           </Select>

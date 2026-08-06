@@ -2,7 +2,7 @@
   "builtin_key": "plan_execute_rag_agent",
   "description": "A scoped compiled RAG workflow that loads context, plans a bounded set of retrieval workers, executes them in a fixed safe order, then synthesizes a final response.",
   "is_builtin": true,
-  "name": "Plan-and-Execute RAG Agent",
+  "name": "Plan-and-Execute Agent",
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
@@ -140,17 +140,17 @@
     "workflow_id": "plan_execute_rag_agent",
     "runtime": {
       "failure_code": "plan_execute_rag_execution_failed",
-      "failure_context": "Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
-      "failure_reason_prefix": "Exception during Plan-and-Execute RAG execution",
+      "failure_context": "Plan-and-Execute Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Plan-and-Execute Agent execution",
       "features": {
         "supports_replans": false,
         "supports_serial_dispatch": true,
         "supports_answer_quality": true
       },
       "kind": "compiled_rag",
-      "label": "Plan-and-Execute RAG",
+      "label": "Plan-and-Execute Agent",
       "prompt_preview": "planner",
-      "success_context": "Context retrieved by compiled Plan-and-Execute RAG Agent workflow."
+      "success_context": "Context retrieved by the Plan-and-Execute Agent workflow."
     },
     "schema_version": 2,
     "version": 5
