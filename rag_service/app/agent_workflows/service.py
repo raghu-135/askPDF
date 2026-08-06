@@ -169,6 +169,8 @@ class AgentRunService:
 
         started = time.perf_counter()
         trace_recorder = AgentTraceRecorder(run)
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
+            execution_event_sink.bind_trace_recorder(trace_recorder)
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -201,6 +203,8 @@ class AgentRunService:
                     **stream_kwargs,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "parallel_events"):
+                result["parallel_attempts"] = execution_event_sink.parallel_events()
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else None
             if status is None:
@@ -212,6 +216,7 @@ class AgentRunService:
                     else AgentRunStatus.COMPLETED.value
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
+            result.pop("_parallel_attempt_records", None)
             if status == AgentRunStatus.CANCELLED.value:
                 try:
                     await self.repository.complete_run(
@@ -426,6 +431,8 @@ class AgentRunService:
             from app.agent_workflows.router_runtime import resume_compiled_rag_chat
 
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
+                execution_event_sink.bind_trace_recorder(resume_trace_recorder)
             async with open_agent_checkpointer() as checkpointer:
                 stream_kwargs = {"execution_event_sink": execution_event_sink} if execution_event_sink is not None else {}
                 result = await resume_compiled_rag_chat(
@@ -435,11 +442,14 @@ class AgentRunService:
                     trace_recorder=resume_trace_recorder,
                     **stream_kwargs,
                 )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "parallel_events"):
+                result["parallel_attempts"] = execution_event_sink.parallel_events()
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {
                 **prior_metrics,
                 **build_run_metrics(result, duration_ms=float(result.get("duration_ms") or 0)),
             }
+            result.pop("_parallel_attempt_records", None)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
             if status == AgentRunStatus.AWAITING_HUMAN.value:

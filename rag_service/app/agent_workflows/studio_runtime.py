@@ -13,6 +13,9 @@ from sqlalchemy.future import select
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
+from app.agent_workflows.parallel_runtime import normalized_parallel_policy
+from app.agent_workflows.workflow_runtime import workflow_runtime_features
+from app.agent_workflows.enums import WorkflowNodeType
 from app.agent_workflows.router_runtime import (
     _pending_interrupt_from_result,
     _runtime_config,
@@ -156,6 +159,10 @@ def initial_studio_state(
     embedding_model: str,
 ) -> Dict[str, Any]:
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    features = workflow_runtime_features(spec)
+    parallel_enabled = bool(features.get("supports_parallel_dispatch"))
+    parallel_policy = normalized_parallel_policy(config.get("parallel_policy"))
+    graph_nodes = ((config.get("graph") or {}).get("nodes") or []) if isinstance(config.get("graph"), dict) else []
     transient_messages = getattr(request, "transient_messages", None) or []
     transient_history = "\n".join(
         f"{str(getattr(message, 'role', '')).capitalize()}: {str(getattr(message, 'content', '')).strip()}"
@@ -179,6 +186,23 @@ def initial_studio_state(
         "hitl_policy": dict(config.get("hitl_policy") or {}),
         "loop_policy": dict(config.get("loop_policy") or {}),
         "context_policy": dict(config.get("context_policy") or {}),
+        "parallel_enabled": parallel_enabled,
+        "parallel_policy": parallel_policy,
+        "parallel_aggregator_id": next((str(node.get("id")) for node in graph_nodes if isinstance(node, dict) and node.get("type") == WorkflowNodeType.AGGREGATOR.value), ""),
+        "worker_result_packets": [],
+        "parallel_runtime_override": True,
+        "parallel_evidence_deltas": [],
+        "parallel_document_source_deltas": [],
+        "parallel_web_source_deltas": [],
+        "parallel_chat_id_deltas": [],
+        "parallel_memory_ref_deltas": [],
+        "parallel_timeline_ref_deltas": [],
+        "parallel_node_event_deltas": [],
+        "parallel_tool_event_deltas": [],
+        "parallel_error_deltas": [],
+        "parallel_skipped_work_deltas": [],
+        "parallel_visit_records": [],
+        "parallel_attempt_records": [],
         "node_visit_counts": {},
         "node_visit_sequence": [],
         "evidence_packets": [],
@@ -221,6 +245,7 @@ async def stream_builder_test(
         use_reranker=request.use_reranker,
         telemetry_sink=telemetry,
         trace_recorder=recorder,
+        max_concurrency=normalized_parallel_policy((spec.get("config") or {}).get("parallel_policy"))["max_concurrency"] if workflow_runtime_features(spec).get("supports_parallel_dispatch") else None,
     )
     config["configurable"]["studio_event_queue"] = queue
     app = WorkflowCompiler().compile(spec, checkpointer=checkpointer)

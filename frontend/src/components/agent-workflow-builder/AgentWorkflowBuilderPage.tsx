@@ -33,6 +33,7 @@ import {
 } from '../../lib/api';
 import {
   assembleAgentWorkflowSpec,
+  AGENT_WORKFLOW_STARTER_WORKFLOW_IDS,
   canAddNodeType,
   canConnectNodes,
   canConnectNodeTypeToTarget,
@@ -55,7 +56,7 @@ import {
   type BuilderIncomingPath,
   type BuilderNodeState,
 } from '../../lib/agent-workflow-builder';
-import { BuiltinAgentNodeType } from '../../lib/enums';
+import { BuiltinAgentNodeType, RouteFunctionId } from '../../lib/enums';
 import BuilderActionsBar from './BuilderActionsBar';
 import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
@@ -96,19 +97,13 @@ const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
 
-const BUILTIN_STARTERS: AgentWorkflowStarter[] = ['router', 'plan_execute', 'evaluator_replanner'];
+const BUILTIN_STARTERS: AgentWorkflowStarter[] = ['router', 'plan_execute', 'evaluator_replanner', 'orchestrator_worker'];
 
 const isBuiltinStarter = (value: string): value is AgentWorkflowStarter => (
   BUILTIN_STARTERS.includes(value as AgentWorkflowStarter)
 );
 
 const customStarterValue = (workflowId: string) => `custom:${workflowId}`;
-
-const BUILTIN_STARTER_WORKFLOW_IDS: Record<AgentWorkflowStarter, string> = {
-  router: 'router_rag_agent',
-  plan_execute: 'plan_execute_rag_agent',
-  evaluator_replanner: 'evaluator_replanner_rag_agent',
-};
 
 const builderStateFromWorkflowSpec = (
   catalog: AgentWorkflowCatalogResponse,
@@ -261,7 +256,7 @@ export default function AgentWorkflowBuilderPage() {
     Promise.all([
       getInternalAgentWorkflowCatalog(),
       listAgentWorkflows().catch(() => ({ agent_workflows: [] })),
-      getBuiltinAgentWorkflowSource(BUILTIN_STARTER_WORKFLOW_IDS.router),
+      getBuiltinAgentWorkflowSource(AGENT_WORKFLOW_STARTER_WORKFLOW_IDS.router),
     ])
       .then(([nextCatalog, patternList, routerWorkflow]) => {
         if (cancelled) return;
@@ -351,7 +346,7 @@ export default function AgentWorkflowBuilderPage() {
   const resetToStarter = useCallback(async (nextStarter: AgentWorkflowStarter = 'router') => {
     if (!catalog || authoringDisabled) return;
     try {
-      const workflow = await getBuiltinAgentWorkflowSource(BUILTIN_STARTER_WORKFLOW_IDS[nextStarter]);
+      const workflow = await getBuiltinAgentWorkflowSource(AGENT_WORKFLOW_STARTER_WORKFLOW_IDS[nextStarter]);
       setBuilderState(builderStateFromWorkflowSpec(catalog, workflow.spec_json));
       setStarter(nextStarter);
       setSelection(null);
@@ -491,8 +486,37 @@ export default function AgentWorkflowBuilderPage() {
     route?: string,
   ): AgentWorkflowBuilderState => {
     if (!catalog || !canConnectNodes(catalog, previous, source, target).ok) return previous;
+    const sourceType = previous.nodes.find((node) => node.id === source)?.type;
+    const targetType = previous.nodes.find((node) => node.id === target)?.type;
+    if (sourceType === BuiltinAgentNodeType.ParallelDispatch) {
+      if (targetType === BuiltinAgentNodeType.Aggregator) {
+        const existing = previous.edges.findIndex((edge) => edge.from === source && edge.conditional);
+        const parallelEdge = {
+          from: source,
+          conditional: true,
+          route_fn: RouteFunctionId.ParallelDispatch,
+          routes: { dispatch: target },
+        };
+        return {
+          ...previous,
+          edges: existing >= 0
+            ? previous.edges.map((edge, index) => index === existing ? parallelEdge : edge)
+            : [...previous.edges, parallelEdge],
+        };
+      }
+      const workerTypes = new Set([
+        'retrieval_worker',
+        'thread_conversation_history_worker',
+        'durable_memory_worker',
+        'thread_events_worker',
+        'web_worker',
+      ]);
+      if (targetType && workerTypes.has(targetType)) {
+        const duplicate = previous.edges.some((edge) => edge.dynamic && edge.from === source && edge.to === target);
+        return duplicate ? previous : { ...previous, edges: [...previous.edges, { from: source, to: target, dynamic: true }] };
+      }
+    }
     if (route) {
-      const sourceType = previous.nodes.find((node) => node.id === source)?.type;
       const routeFn = sourceType ? getAllowedRouteFunctionsForNode(catalog, sourceType)[0] : undefined;
       if (!routeFn) return previous;
       const edgeIndex = previous.edges.findIndex((edge) => edge.from === source && edge.conditional);
@@ -641,11 +665,9 @@ export default function AgentWorkflowBuilderPage() {
     : workflowIsValid
       ? undefined
       : 'Fix validation errors before testing';
-  const baseWorkflowId = workflowIdFromCustomStarter(starter) || ({
-    router: 'router_rag_agent',
-    plan_execute: 'plan_execute_rag_agent',
-    evaluator_replanner: 'evaluator_replanner_rag_agent',
-  } as Record<string, string>)[starter] || String(spec?.workflow_id || 'router_rag_agent');
+  const baseWorkflowId = workflowIdFromCustomStarter(starter)
+    || AGENT_WORKFLOW_STARTER_WORKFLOW_IDS[starter as AgentWorkflowStarter]
+    || String(spec?.workflow_id || 'router_rag_agent');
   const previousTestWorkflowId = useRef(baseWorkflowId);
   useEffect(() => {
     if (previousTestWorkflowId.current !== baseWorkflowId) {

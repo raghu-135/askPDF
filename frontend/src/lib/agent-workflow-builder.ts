@@ -15,7 +15,14 @@ import {
   RouteFunctionId,
 } from './enums.ts';
 
-export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner';
+export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner' | 'orchestrator_worker';
+
+export const AGENT_WORKFLOW_STARTER_WORKFLOW_IDS: Record<AgentWorkflowStarter, string> = {
+  router: 'router_rag_agent',
+  plan_execute: 'plan_execute_rag_agent',
+  evaluator_replanner: 'evaluator_replanner_rag_agent',
+  orchestrator_worker: 'orchestrator_worker_rag_agent',
+};
 
 export interface BuilderNodeState {
   id: string;
@@ -83,6 +90,7 @@ const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
   [BuiltinAgentNodeType.Planner]: RouteFunctionId.Planner,
   [BuiltinAgentNodeType.EvidenceEvaluator]: RouteFunctionId.Evaluator,
   [BuiltinAgentNodeType.HitlGate]: RouteFunctionId.HitlGate,
+  [BuiltinAgentNodeType.ParallelDispatch]: RouteFunctionId.ParallelDispatch,
 };
 
 const REPEATABLE_NODE_TYPES = new Set([
@@ -106,6 +114,18 @@ const defaultRuntime = (supportsReplans = false, promptPreview = 'router') => ({
   features: { supports_replans: supportsReplans },
   prompt_preview: promptPreview,
 });
+
+const defaultParallelPolicy = {
+  enabled: true,
+  max_concurrency: 4,
+  max_work_items: 8,
+  dispatch_timeout_ms: 60000,
+  default_worker_timeout_ms: 30000,
+  web_worker_timeout_ms: 45000,
+  max_attempts: 2,
+  minimum_successes: 1,
+  continue_on_partial_failure: true,
+};
 
 const nodeTypeById = (nodes: BuilderNodeState[]) => (
   new Map(nodes.map((node) => [node.id, node.type]))
@@ -220,6 +240,22 @@ export function canConnectNodes(
       : { ok: false, reason: `${source?.type || sourceId} cannot end the graph.` };
   }
   const types = nodeTypeById(state.nodes);
+  const sourceType = types.get(sourceId);
+  const targetType = types.get(targetId);
+  const hasParallelRegion = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
+  const workerTypes = new Set([
+    'retrieval_worker',
+    'thread_conversation_history_worker',
+    BuiltinAgentNodeType.DurableMemoryWorker,
+    'thread_events_worker',
+    'web_worker',
+  ]);
+  if (hasParallelRegion && targetType && workerTypes.has(targetType) && sourceType !== BuiltinAgentNodeType.ParallelDispatch) {
+    return { ok: false, reason: 'Parallel workers can only accept their dispatcher as a parent.' };
+  }
+  if (hasParallelRegion && sourceType && workerTypes.has(sourceType) && targetType !== BuiltinAgentNodeType.Aggregator) {
+    return { ok: false, reason: 'Parallel workers must join the graph aggregator directly.' };
+  }
   return canConnectNodeTypes(catalog, types.get(sourceId), types.get(targetId));
 }
 
@@ -527,11 +563,25 @@ export function assembleAgentWorkflowSpec(
   overrides: Record<string, any> = {},
 ): AgentWorkflowBuilderSpec {
   const hitlPolicy = materializeHitlPolicy(state);
+  const hasParallel = state.nodes.some((node) => (
+    node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator
+  ));
+  const runtime = clone(state.runtime || defaultRuntime(false));
+  if (hasParallel) {
+    runtime.features = { ...(runtime.features || {}), supports_parallel_dispatch: true };
+  }
   const config = {
     ...(state.extraConfig || {}),
     ...(state.context_policy ? { context_policy: clone(state.context_policy) } : {}),
     ...(state.loop_policy ? { loop_policy: clone(state.loop_policy) } : {}),
     ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
+    ...(hasParallel ? {
+      parallel_policy: {
+        ...defaultParallelPolicy,
+        ...((state.extraConfig || {}).parallel_policy || {}),
+        enabled: true,
+      },
+    } : {}),
     allowed_tool_ids: [...(state.allowed_tool_ids?.length ? state.allowed_tool_ids : collectAllowedToolIds(state.nodes))],
     builder_ui: {
       ...(state.builder_ui || {}),
@@ -550,7 +600,7 @@ export function assembleAgentWorkflowSpec(
     schema_version: 2,
     workflow_id: state.workflowId || 'custom_rag_agent',
     workflow_type: state.workflowType || 'custom_rag_agent',
-    runtime: clone(state.runtime || defaultRuntime(false)),
+    runtime,
     config,
   };
 }

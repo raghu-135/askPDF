@@ -70,6 +70,10 @@ export interface TraceRunView {
   };
   finalOutput?: AgentRunFinalOutput;
   detailManifest: AgentRunNodeDetailManifest[];
+  parallel?: {
+    summary: Record<string, any>;
+    tasks: Record<string, any>[];
+  };
 }
 
 const asObject = (value: any): Record<string, any> => (
@@ -87,6 +91,38 @@ const asStringArray = (value: any): string[] => (
 const asOptionalStringArray = (value: any): string[] | undefined => {
   const items = asStringArray(value).filter((item) => item.length > 0);
   return items.length > 0 ? items : undefined;
+};
+
+const projectParallelEvents = (events: Record<string, any>[]) => {
+  const tasks = new Map<string, Record<string, any>>();
+  let summary: Record<string, any> = {};
+  events.forEach((envelope) => {
+    const event = String(envelope.event || '');
+    const data = asObject(envelope.data);
+    if (event.startsWith('dispatch.') || event.startsWith('aggregation.')) {
+      summary = { ...summary, ...data, event };
+    }
+    if (!event.startsWith('worker.') || typeof data.work_id !== 'string') return;
+    const previous = tasks.get(data.work_id) || { attempts: [] };
+    const attempts = Array.isArray(previous.attempts) ? [...previous.attempts] : [];
+    const attempt = Number(data.attempt || 1);
+    const attemptIndex = attempts.findIndex((item) => Number(item.attempt || 1) === attempt);
+    const attemptRow = {
+      ...(attemptIndex >= 0 ? attempts[attemptIndex] : {}),
+      ...data,
+      attempt,
+      event,
+      status: event.slice('worker.'.length),
+    };
+    if (attemptIndex >= 0) attempts[attemptIndex] = attemptRow;
+    else attempts.push(attemptRow);
+    attempts.sort((a, b) => Number(a.attempt || 1) - Number(b.attempt || 1));
+    tasks.set(data.work_id, { ...previous, ...data, event, status: event.slice('worker.'.length), attempts });
+  });
+  return {
+    summary,
+    tasks: [...tasks.values()].sort((a, b) => Number(a.ordinal || 0) - Number(b.ordinal || 0)),
+  };
 };
 
 const asNumber = (value: any): number | undefined => {
@@ -227,6 +263,8 @@ export const buildRunTraceView = (
     const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
+    const retainedParallel = projectParallelEvents(asArray(metrics.parallel_attempts));
+    const retainedParallelSummary = asObject(metrics.parallel_summary);
     return {
       debug,
       trace: getRunTrace(runDetails),
@@ -250,6 +288,12 @@ export const buildRunTraceView = (
       } : undefined,
       finalOutput: runDetails.final_output || debug.final_output,
       detailManifest: Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [],
+      parallel: Object.keys(retainedParallelSummary).length > 0 || retainedParallel.tasks.length > 0
+        ? {
+          ...retainedParallel,
+          summary: { ...retainedParallel.summary, ...retainedParallelSummary },
+        }
+        : undefined,
     };
   } catch (err) {
     if (typeof console !== 'undefined') {
@@ -269,6 +313,7 @@ export const buildLiveTraceView = (
   let route: string | undefined;
   let routeReason: string | undefined;
   const runErrors: Record<string, any>[] = [];
+  const parallelProjection = projectParallelEvents(events as unknown as Record<string, any>[]);
 
   events.forEach((envelope) => {
     const data = asObject(envelope.data);
@@ -346,6 +391,9 @@ export const buildLiveTraceView = (
       available: true,
       truncated: Boolean(node.raw.detail?.safety?.truncated),
     })),
+    parallel: parallelProjection.tasks.length > 0 || Object.keys(parallelProjection.summary).length > 0
+      ? parallelProjection
+      : undefined,
   };
 };
 
@@ -383,6 +431,7 @@ export const mergeLiveAndRetainedTraceViews = (
     errors: nodes.map((node) => node.error).filter((nodeError): nodeError is Record<string, any> => Boolean(nodeError && Object.keys(nodeError).length)),
     finalOutput: live.finalOutput || retained.finalOutput,
     detailManifest: [...detailManifest.values()],
+    parallel: live.parallel || retained.parallel,
   };
 };
 

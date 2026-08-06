@@ -59,6 +59,7 @@ TRACE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docs" / "agent_debug_
 
 ROUTER_RAG_AGENT_ID = "router_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
+ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 ROUTER_RAG_AGENT_VERSION = 3
 PLAN_EXECUTE_RAG_AGENT_VERSION = 4
@@ -2924,6 +2925,7 @@ class TestAgentWorkflowRepository:
             ROUTER_RAG_AGENT_ID,
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
+            ORCHESTRATOR_WORKER_RAG_AGENT_ID,
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
@@ -6983,6 +6985,7 @@ class TestAgentWorkflowApi:
             ROUTER_RAG_AGENT_ID,
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
+            ORCHESTRATOR_WORKER_RAG_AGENT_ID,
         }
 
         detail = api_client.get(f"/api/agent-workflows/{ROUTER_RAG_AGENT_ID}")

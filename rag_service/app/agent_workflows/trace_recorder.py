@@ -403,6 +403,11 @@ class AgentTraceRecorder:
                 "askpdf.node.category": node_metadata.get("category"),
                 "askpdf.node.capabilities": node_metadata.get("capabilities"),
                 "askpdf.node.visit_index": event.get("visit_index"),
+                "askpdf.parallel.dispatch_id": event.get("dispatch_id"),
+                "askpdf.parallel.work_id": event.get("work_id"),
+                "askpdf.parallel.ordinal": event.get("ordinal"),
+                "askpdf.parallel.attempt": event.get("attempt"),
+                "askpdf.parallel.parent_node_id": event.get("parent_node_id"),
                 "askpdf.node.name": node_display_name,
                 "askpdf.observability.span_kind": observability.get("span_kind"),
                 "askpdf.observability.event_prefix": observability.get("event_prefix"),
@@ -448,9 +453,10 @@ class AgentTraceRecorder:
             }
         )
         links = _span_links_from_refs(event.get("output_refs"))
+        parent_span_id = self._node_span_by_node.get(str(event.get("parent_node_id") or "")) or self.run_span_id
         self._start_span(
             span_id=span_id,
-            parent_span_id=self.run_span_id,
+            parent_span_id=parent_span_id,
             name=node_display_name,
             kind=_node_kind(node, node_type),
             status=status,

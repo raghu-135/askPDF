@@ -65,6 +65,8 @@ function AgentRunDebugPanel({
   const executionResolvedSpec = runDetails?.resolved_spec_json;
   const executionStatus = runDetails?.status || (running ? 'running' : undefined);
   const executionDetailsAvailable = Boolean(runDetails && !running);
+  const parallelSummary = liveTraceView?.parallel?.summary || runDetails?.parallel_summary || runDetails?.metrics_json?.parallel_summary;
+  const parallelTasks = liveTraceView?.parallel?.tasks || [];
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -224,6 +226,45 @@ function AgentRunDebugPanel({
         <Typography variant="caption" color="error">
           {error}
         </Typography>
+      )}
+      {parallelSummary && (
+        <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: parallelSummary.partial_evidence ? 'warning.main' : 'divider' }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+            Parallel dispatch{parallelSummary.partial_evidence ? ' · partial evidence' : ''}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+            {Number(parallelSummary.completed || 0)}/{Number(parallelSummary.planned || 0)} completed
+            {Number(parallelSummary.failed || 0) ? ` · ${parallelSummary.failed} failed` : ''}
+            {Number(parallelSummary.timed_out || 0) ? ` · ${parallelSummary.timed_out} timed out` : ''}
+            {Number(parallelSummary.retried || 0) ? ` · ${parallelSummary.retried} retries` : ''}
+            {parallelSummary.elapsed_ms != null ? ` · ${Math.round(Number(parallelSummary.elapsed_ms))} ms worker time` : ''}
+          </Typography>
+          {parallelSummary.dispatch_id && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+              Dispatch {parallelSummary.dispatch_id}
+            </Typography>
+          )}
+          {parallelTasks.length > 0 && (
+            <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+              {parallelTasks.map((task) => (
+                <Box component="details" key={String(task.work_id)} sx={{ '& summary': { cursor: 'pointer' } }}>
+                  <Typography component="summary" variant="caption" color="text.secondary">
+                    {Number(task.ordinal || 0) + 1}. {task.worker_node_id || task.worker_type || 'worker'} · {task.status || 'queued'}
+                    {Number(task.attempt || 0) > 1 ? ` · attempt ${task.attempt}` : ''}
+                    {task.elapsed_ms != null ? ` · ${Math.round(Number(task.elapsed_ms))} ms` : ''}
+                  </Typography>
+                  {(Array.isArray(task.attempts) ? task.attempts : []).map((attempt: Record<string, any>) => (
+                    <Typography key={`${task.work_id}:${attempt.attempt}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 2 }}>
+                      Attempt {Number(attempt.attempt || 1)} · {attempt.status || 'unknown'}
+                      {attempt.reason ? ` · ${attempt.reason}` : ''}
+                      {attempt.elapsed_ms != null ? ` · ${Math.round(Number(attempt.elapsed_ms))} ms` : ''}
+                    </Typography>
+                  ))}
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
       )}
       {pendingInterrupt && (
         <Box

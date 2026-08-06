@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TypedDict
+import json
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from langchain_core.runnables import RunnableConfig
 
@@ -12,6 +13,74 @@ from app.agent_workflows.node_catalog import (
 
 
 NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
+
+
+def _parallel_identity(value: Any) -> str:
+    if isinstance(value, dict):
+        if value.get("timeline_event_at"):
+            source_record_id = value.get("message_id") or value.get("file_hash") or value.get("url") or value.get("title") or ""
+            return f"timeline|{value.get('source_type') or ''}|{source_record_id}|{value.get('timeline_event_at')}"
+        for fields in (
+            ("node_id", "dispatch_id", "work_id", "attempt", "visit_index"),
+            ("work_id", "attempt", "name"),
+            ("work_id", "attempt", "tool_name", "invocation_sequence"),
+            ("work_id", "attempt", "code"),
+            ("work_id", "attempt", "status"),
+        ):
+            if any(field in value for field in fields):
+                return "|".join(str(value.get(field) or "") for field in fields)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def merge_parallel_deltas(left: List[Any], right: List[Any]) -> List[Any]:
+    """Append immutable parallel deltas once across retries and checkpoint replay."""
+
+    result = list(left or [])
+    seen = {_parallel_identity(item) for item in result}
+    for item in right or []:
+        identity = _parallel_identity(item)
+        if identity not in seen:
+            result.append(item)
+            seen.add(identity)
+    return result
+
+
+class WorkerWorkItem(TypedDict):
+    dispatch_id: str
+    dispatch_node_id: str
+    dispatch_visit: int
+    dispatch_deadline_epoch_ms: int
+    dispatch_started_epoch_ms: int
+    work_id: str
+    ordinal: int
+    worker_node_id: str
+    worker_type: str
+    query: str
+    evidence_kind: str
+    dedupe_key: str
+    attempt: int
+    timeout_ms: int
+
+
+class WorkerResultPacket(TypedDict):
+    dispatch_id: str
+    work_id: str
+    ordinal: int
+    worker_node_id: str
+    worker_type: str
+    attempt: int
+    status: Literal["completed", "skipped", "failed", "timed_out", "cancelled"]
+    evidence_packets: List[Dict[str, Any]]
+    document_sources: List[Dict[str, Any]]
+    web_sources: List[Dict[str, Any]]
+    chat_ids: List[str]
+    memory_refs: List[Dict[str, Any]]
+    node_events: List[Dict[str, Any]]
+    tool_events: List[Dict[str, Any]]
+    errors: List[Dict[str, Any]]
+    started_at: str
+    completed_at: str
+    elapsed_ms: float
 
 
 class RouterRagState(TypedDict, total=False):
@@ -71,6 +140,29 @@ class RouterRagState(TypedDict, total=False):
     evidence_gaps: List[str]
     evaluation_confidence: float
     evaluator_route: str
+    parallel_policy: Dict[str, Any]
+    parallel_enabled: bool
+    parallel_runtime_override: bool
+    parallel_aggregator_id: str
+    dispatch_id: str
+    dispatch_visit: int
+    work_item: WorkerWorkItem
+    work_items: List[WorkerWorkItem]
+    work_item_proposals: List[Dict[str, Any]]
+    worker_result_packets: Annotated[List[WorkerResultPacket], merge_parallel_deltas]
+    parallel_evidence_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_document_source_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_web_source_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_chat_id_deltas: Annotated[List[str], merge_parallel_deltas]
+    parallel_memory_ref_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_timeline_ref_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_node_event_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_tool_event_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_error_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_skipped_work_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_visit_records: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_attempt_records: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    parallel_summary: Dict[str, Any]
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:

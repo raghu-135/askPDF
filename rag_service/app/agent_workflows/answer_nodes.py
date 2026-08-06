@@ -56,6 +56,18 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
             label="Evaluator report",
             limit=evidence_text_limit(state),
         )
+    parallel_summary = state.get("parallel_summary") if isinstance(state.get("parallel_summary"), dict) else {}
+    if parallel_summary.get("partial_evidence"):
+        coverage = {
+            key: parallel_summary.get(key)
+            for key in ("planned", "completed", "skipped", "failed", "timed_out")
+        }
+        context = combine_evidence(
+            context,
+            json.dumps(coverage, ensure_ascii=True, sort_keys=True),
+            label="Retrieval coverage; answer cautiously where evidence is incomplete",
+            limit=evidence_text_limit(state),
+        )
     messages = build_final_answer_messages(state, context)
     retry_attempts, retry_observer = llm_retry_observer()
     prompt_details = prompt_summary(

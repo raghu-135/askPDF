@@ -31,6 +31,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "route_labels": [route.value for route in PlannerRoute],
         "target_types_by_label": {
             PlannerRoute.EXECUTE.value: [
+                WorkflowNodeType.PARALLEL_DISPATCH.value,
                 WorkflowNodeType.RETRIEVAL_WORKER.value,
                 WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
                 WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
@@ -55,6 +56,11 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     RouteFunctionId.HITL_GATE.value: {
         "allowed_source_types": [WorkflowNodeType.HITL_GATE.value],
+        "route_labels": None,
+        "target_types_by_label": None,
+    },
+    RouteFunctionId.PARALLEL_DISPATCH.value: {
+        "allowed_source_types": [WorkflowNodeType.PARALLEL_DISPATCH.value],
         "route_labels": None,
         "target_types_by_label": None,
     },

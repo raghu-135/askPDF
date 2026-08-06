@@ -72,6 +72,7 @@ class RouteFunctionId(str, Enum):
     PLANNER = "planner_route"
     EVALUATOR = "evaluator_route"
     HITL_GATE = "hitl_gate_route"
+    PARALLEL_DISPATCH = "parallel_dispatch_route"
 
 
 class WorkflowNodeType(str, Enum):
@@ -89,6 +90,8 @@ class WorkflowNodeType(str, Enum):
     SYNTHESIZER = "synthesizer"
     FINALIZER = "finalizer"
     HITL_GATE = "hitl_gate"
+    PARALLEL_DISPATCH = "parallel_dispatch"
+    AGGREGATOR = "aggregator"
 
 
 class ToolName(str, Enum):
@@ -154,6 +157,8 @@ class NodeCapability(str, Enum):
     ANSWER_SYNTHESIZE = "answer.synthesize"
     ANSWER_FINAL = "answer.final"
     HITL_INTERRUPT = "hitl.interrupt"
+    PARALLEL_DISPATCH = "parallel.dispatch"
+    PARALLEL_AGGREGATE = "parallel.aggregate"
 
 
 class ContextPolicyMode(str, Enum):

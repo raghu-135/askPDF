@@ -153,7 +153,15 @@ def build_router_prompt(state: Dict[str, Any]) -> str:
 
 
 def build_planner_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("agent_workflows/plan_execute_planner.md", _prompt_context(state))
+    prompt = _render_prompt("agent_workflows/plan_execute_planner.md", _prompt_context(state))
+    if state.get("parallel_enabled"):
+        prompt += (
+            "\n\nThis workflow executes retrieval workers in parallel. For the execute route, also return "
+            "`work_items`, an array of objects with `worker_node_id`, `query`, and `reason`. Use only exact "
+            "worker ids from AVAILABLE_WORKER_NODES. Give each worker a concise, source-specific query. "
+            "Return no more than eight items. `execution_plan` must contain the distinct selected worker ids."
+        )
+    return prompt
 
 
 def _json_preview(value: Any, *, limit: int = 4000) -> str:

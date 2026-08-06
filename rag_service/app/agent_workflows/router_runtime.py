@@ -13,7 +13,8 @@ from app.agent_workflows.chat_cancellation import (
 )
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.planning import worker_nodes_from_spec
-from app.agent_workflows.workflow_runtime import runtime_execution_options
+from app.agent_workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
+from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from app.db import (
     AgentRunStatus,
     ChatTurnStatus,
@@ -32,9 +33,13 @@ logger = logging.getLogger(__name__)
 
 async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: Dict[str, Any]) -> Dict[str, Any]:
     latest_state = dict(graph_input) if isinstance(graph_input, dict) else {}
-    async for chunk in app.astream(graph_input, config=config, stream_mode="values"):
-        if isinstance(chunk, dict):
-            latest_state = chunk
+    try:
+        async for chunk in app.astream(graph_input, config=config, stream_mode="values"):
+            if isinstance(chunk, dict):
+                latest_state = chunk
+    except ChatRunCancellationRequested as exc:
+        exc.state = {**latest_state, **dict(exc.state or {})}
+        raise
     return latest_state
 
 
@@ -50,6 +55,7 @@ def _runtime_config(
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    max_concurrency: int | None = None,
 ) -> Dict[str, Any]:
     configurable = {
         "thread_id": checkpoint_thread_id,
@@ -70,7 +76,10 @@ def _runtime_config(
         configurable["use_web_search"] = use_web_search
     if use_reranker is not None:
         configurable["use_reranker"] = use_reranker
-    return {"configurable": configurable}
+    result: Dict[str, Any] = {"configurable": configurable}
+    if isinstance(max_concurrency, int) and max_concurrency > 0:
+        result["max_concurrency"] = max_concurrency
+    return result
 
 
 def _first_interrupt(result: Dict[str, Any]) -> Any:
@@ -193,6 +202,8 @@ def _clarification_response(
         "agent_run_turn_kind": None,
         "agent_run_sequence": None,
         "agent_trace_refs": None,
+        "parallel_summary": result.get("parallel_summary"),
+        "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
         "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
         "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
         "checkpoint_thread_id": None,
@@ -230,6 +241,8 @@ def _cancelled_response(
         "agent_run_turn_kind": None,
         "agent_run_sequence": None,
         "agent_trace_refs": None,
+        "parallel_summary": result.get("parallel_summary"),
+        "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
         "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
         "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
         "checkpoint_thread_id": None,
@@ -318,6 +331,8 @@ async def _persist_success_turn(
         "agent_run_turn_kind": "assistant_final",
         "agent_run_sequence": 0,
         "agent_trace_refs": None,
+        "parallel_summary": result.get("parallel_summary"),
+        "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
         **agent_run_context,
     }
 
@@ -468,6 +483,18 @@ async def _handle_compiled_rag_chat(
     hitl_policy = workflow_config.get("hitl_policy") if isinstance(workflow_config.get("hitl_policy"), dict) else {}
     loop_policy = workflow_config.get("loop_policy") if isinstance(workflow_config.get("loop_policy"), dict) else {}
     context_policy = workflow_config.get("context_policy") if isinstance(workflow_config.get("context_policy"), dict) else {}
+    runtime_features = workflow_runtime_features(resolved_spec)
+    parallel_enabled = bool(runtime_features.get("supports_parallel_dispatch"))
+    parallel_policy = normalized_parallel_policy(workflow_config.get("parallel_policy"))
+    graph_nodes = ((workflow_config.get("graph") or {}).get("nodes") or []) if isinstance(workflow_config.get("graph"), dict) else []
+    parallel_aggregator_id = next(
+        (
+            str(node.get("id"))
+            for node in graph_nodes
+            if isinstance(node, dict) and node.get("type") == WorkflowNodeType.AGGREGATOR.value
+        ),
+        "",
+    )
     try:
         replans = max(1, int(workflow_config.get("replans", 1)))
     except (TypeError, ValueError):
@@ -491,6 +518,7 @@ async def _handle_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
     )
     state = {
         "agent_run_id": agent_run_id,
@@ -511,6 +539,22 @@ async def _handle_compiled_rag_chat(
         "hitl_policy": hitl_policy,
         "loop_policy": loop_policy,
         "context_policy": context_policy,
+        "parallel_enabled": parallel_enabled,
+        "parallel_policy": parallel_policy,
+        "parallel_aggregator_id": parallel_aggregator_id,
+        "worker_result_packets": [],
+        "parallel_evidence_deltas": [],
+        "parallel_document_source_deltas": [],
+        "parallel_web_source_deltas": [],
+        "parallel_chat_id_deltas": [],
+        "parallel_memory_ref_deltas": [],
+        "parallel_timeline_ref_deltas": [],
+        "parallel_node_event_deltas": [],
+        "parallel_tool_event_deltas": [],
+        "parallel_error_deltas": [],
+        "parallel_skipped_work_deltas": [],
+        "parallel_visit_records": [],
+        "parallel_attempt_records": [],
         "node_visit_counts": {},
         "node_visit_sequence": [],
         "evidence_packets": [],
@@ -580,6 +624,8 @@ async def _handle_compiled_rag_chat(
                 "status": AgentRunStatus.AWAITING_HUMAN.value,
                 "pending_interrupt": pending_interrupt,
                 "agent_trace_refs": {"interrupt_id": pending_interrupt.get("interrupt_id")},
+                "parallel_summary": partial.get("parallel_summary"),
+                "_parallel_attempt_records": partial.get("parallel_attempt_records") or [],
                 **agent_run_context,
             }
 
@@ -621,6 +667,27 @@ async def _handle_compiled_rag_chat(
     except ChatRunCancellationRequested as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         partial_result = _without_runtime_keys(exc.state or state)
+        parallel_events = (
+            execution_event_sink.parallel_events()
+            if execution_event_sink is not None and hasattr(execution_event_sink, "parallel_events")
+            else []
+        )
+        if partial_result.get("parallel_enabled") and (partial_result.get("work_items") or parallel_events):
+            cancellation_update = cancelled_parallel_dispatch(partial_result, parallel_events)
+            partial_result.update(cancellation_update)
+            if execution_event_sink is not None:
+                for packet in cancellation_update.get("worker_result_packets", []):
+                    await execution_event_sink.emit("worker.cancelled", {
+                        "agent_run_id": agent_run_id,
+                        "dispatch_id": packet.get("dispatch_id"),
+                        "work_id": packet.get("work_id"),
+                        "ordinal": packet.get("ordinal"),
+                        "worker_node_id": packet.get("worker_node_id"),
+                        "worker_type": packet.get("worker_type"),
+                        "attempt": packet.get("attempt"),
+                        "status": "cancelled",
+                    })
+                await execution_event_sink.emit("dispatch.cancelled", cancellation_update.get("parallel_summary") or {})
         partial_result["node_events"] = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
         partial_result["tool_events"] = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
         logger.info(
@@ -652,10 +719,11 @@ async def _handle_compiled_rag_chat(
             "I'm sorry, I encountered a technical error while processing your request. "
             "Please try again in a moment or try rephrasing your question."
         )
+        parallel_feature_unavailable = str(exc) == "agent_workflow_parallel_v1 is disabled"
         error_payload = {
-            "code": failure_code,
+            "code": "agent_workflow_parallel_v1_disabled" if parallel_feature_unavailable else failure_code,
             "raw_message": str(exc),
-            "retryable": True,
+            "retryable": not parallel_feature_unavailable,
         }
         node_events = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
         tool_events = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
@@ -729,6 +797,8 @@ async def _handle_compiled_rag_chat(
             "agent_run_turn_kind": "assistant_final",
             "agent_run_sequence": 0,
             "agent_trace_refs": None,
+            "parallel_summary": partial_result.get("parallel_summary"),
+            "_parallel_attempt_records": partial_result.get("parallel_attempt_records") or [],
             **agent_run_context,
         }
 

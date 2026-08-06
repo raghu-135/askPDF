@@ -1087,6 +1087,18 @@ export interface AgentRunDetails {
   workflow_id: string;
   resolved_spec_json?: Record<string, any>;
   metrics_json?: Record<string, any>;
+  parallel_summary?: {
+    dispatch_id?: string;
+    planned?: number;
+    completed?: number;
+    skipped?: number;
+    failed?: number;
+    timed_out?: number;
+    cancelled?: number;
+    retried?: number;
+    partial_evidence?: boolean;
+    elapsed_ms?: number;
+  } | null;
   error_json?: Record<string, any> | null;
   started_at?: string;
   completed_at?: string | null;

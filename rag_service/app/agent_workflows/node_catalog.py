@@ -32,6 +32,8 @@ NODE_DIRECT_ANSWER = WorkflowNodeType.DIRECT_ANSWER.value
 NODE_SYNTHESIZER = WorkflowNodeType.SYNTHESIZER.value
 NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
 NODE_HITL_GATE = WorkflowNodeType.HITL_GATE.value
+NODE_PARALLEL_DISPATCH = WorkflowNodeType.PARALLEL_DISPATCH.value
+NODE_AGGREGATOR = WorkflowNodeType.AGGREGATOR.value
 START_NODE = GraphSentinel.START.value
 END_NODE = GraphSentinel.END.value
 
@@ -57,11 +59,14 @@ CAP_ANSWER_DIRECT = NodeCapability.ANSWER_DIRECT.value
 CAP_ANSWER_SYNTHESIZE = NodeCapability.ANSWER_SYNTHESIZE.value
 CAP_ANSWER_FINAL = NodeCapability.ANSWER_FINAL.value
 CAP_HITL_INTERRUPT = NodeCapability.HITL_INTERRUPT.value
+CAP_PARALLEL_DISPATCH = NodeCapability.PARALLEL_DISPATCH.value
+CAP_PARALLEL_AGGREGATE = NodeCapability.PARALLEL_AGGREGATE.value
 
 ROUTE_ROUTER = RouteFunctionId.ROUTER.value
 ROUTE_PLANNER = RouteFunctionId.PLANNER.value
 ROUTE_EVALUATOR = RouteFunctionId.EVALUATOR.value
 ROUTE_HITL_GATE = RouteFunctionId.HITL_GATE.value
+ROUTE_PARALLEL_DISPATCH = RouteFunctionId.PARALLEL_DISPATCH.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
@@ -143,7 +148,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [ROUTE_PLANNER],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_DIRECT_ANSWER, NODE_FINALIZER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_PARALLEL_DISPATCH, NODE_DIRECT_ANSWER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
     NODE_RETRIEVAL_WORKER: {
@@ -152,7 +157,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_RETRIEVAL_DOCUMENT],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_DOCUMENT_EVIDENCE, TOOL_FOCUSED_DOCUMENT_EVIDENCE],
-        "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_REPLANNER, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "allowed_child_types": [
             NODE_THREAD_CONVERSATION_HISTORY_WORKER,
             NODE_DURABLE_MEMORY_WORKER,
@@ -162,6 +167,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_SYNTHESIZER,
             NODE_FINALIZER,
             NODE_HITL_GATE,
+            NODE_AGGREGATOR,
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -171,7 +177,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_THREAD_CONVERSATION_HISTORY],
-        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "allowed_child_types": [
             NODE_THREAD_EVENTS_WORKER,
             NODE_DURABLE_MEMORY_WORKER,
@@ -180,6 +186,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_SYNTHESIZER,
             NODE_FINALIZER,
             NODE_HITL_GATE,
+            NODE_AGGREGATOR,
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -189,7 +196,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_RETRIEVAL_DURABLE_MEMORY],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_DURABLE_MEMORY],
-        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "allowed_child_types": [
             NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
@@ -197,6 +204,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_SYNTHESIZER,
             NODE_FINALIZER,
             NODE_HITL_GATE,
+            NODE_AGGREGATOR,
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -206,8 +214,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_RETRIEVAL_THREAD_EVENTS],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_THREAD_EVENTS],
-        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_AGGREGATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     NODE_WEB_WORKER: {
@@ -225,8 +233,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             TOOL_STACKEXCHANGE_REFERENCE,
             TOOL_YAHOO_FINANCE_NEWS,
         ],
-        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_EVENTS_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_EVENTS_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_AGGREGATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     NODE_EVIDENCE_EVALUATOR: {
@@ -273,6 +281,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
             NODE_HITL_GATE,
+            NODE_AGGREGATOR,
         ],
         "allowed_child_types": [NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
@@ -306,6 +315,40 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [],
         "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER],
         "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER, END_NODE],
+        "limits": {"default_max_visits": 1},
+    },
+    NODE_PARALLEL_DISPATCH: {
+        "display_name": "Parallel Dispatch",
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_PARALLEL_DISPATCH],
+        "allowed_route_functions": [ROUTE_PARALLEL_DISPATCH],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_PLANNER],
+        "allowed_child_types": [
+            NODE_RETRIEVAL_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
+            NODE_WEB_WORKER,
+            NODE_AGGREGATOR,
+        ],
+        "limits": {"default_max_visits": 1},
+    },
+    NODE_AGGREGATOR: {
+        "display_name": "Parallel Aggregator",
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_PARALLEL_AGGREGATE],
+        "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [
+            NODE_PARALLEL_DISPATCH,
+            NODE_RETRIEVAL_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
+            NODE_WEB_WORKER,
+        ],
+        "allowed_child_types": [NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
 }
@@ -354,6 +397,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_RETRIEVAL_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "use_reranker", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "tool_events"],
+        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -367,6 +411,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_chat_ids", "tool_events"],
+        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -380,6 +425,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_DURABLE_MEMORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_memory_ids", "tool_events"],
+        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -393,6 +439,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_THREAD_EVENTS_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "tool_events"],
+        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -406,6 +453,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     NODE_WEB_WORKER: {
         "state_reads": ["question", "use_web_search", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "web_sources", "tool_events"],
+        "parallel_state_writes": ["worker_result_packets", "parallel_evidence_deltas", "parallel_document_source_deltas", "parallel_web_source_deltas", "parallel_chat_id_deltas", "parallel_memory_ref_deltas", "parallel_timeline_ref_deltas", "parallel_node_event_deltas", "parallel_tool_event_deltas", "parallel_error_deltas", "parallel_skipped_work_deltas", "parallel_visit_records", "parallel_attempt_records"],
         "prompt_slots": ["web_search_mandate"],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
@@ -456,7 +504,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "max_instances": 1,
     },
     NODE_SYNTHESIZER: {
-        "state_reads": ["question", "evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids"],
+        "state_reads": ["question", "evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids", "parallel_summary"],
         "state_writes": ["final_answer", "reasoning", "reasoning_available", "reasoning_format"],
         "prompt_slots": ["final_answer"],
         "context_policy": {"mode": POLICY_ASSEMBLE_ANSWER, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_ANSWER},
@@ -493,6 +541,32 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
             "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 8,
+    },
+    NODE_PARALLEL_DISPATCH: {
+        "state_reads": ["work_items", "worker_result_packets", "parallel_policy"],
+        "state_writes": ["dispatch_id", "work_items", "parallel_summary"],
+        "prompt_slots": [],
+        "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_DECISION, "output_budget": BUDGET_DECISION},
+        "observability": {
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_PARALLEL_DISPATCH,
+            "summary_fields": ["dispatch_id", "planned"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
+        "max_instances": 1,
+    },
+    NODE_AGGREGATOR: {
+        "state_reads": ["worker_result_packets", "work_items", "parallel_policy"],
+        "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids", "used_memory_ids", "node_events", "tool_events", "errors", "skipped_nodes", "node_visit_counts", "node_visit_sequence", "parallel_summary"],
+        "prompt_slots": [],
+        "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_BOUNDED_EVIDENCE},
+        "observability": {
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_AGGREGATOR,
+            "summary_fields": ["completed", "failed", "timed_out", "partial_evidence"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
+        "max_instances": 1,
     },
 }
 
@@ -673,6 +747,28 @@ NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
         "uses_llm": False,
         "uses_tools": False,
     },
+    NODE_PARALLEL_DISPATCH: {
+        "summary": "Fans a bounded planner work list out to read-only retrieval workers.",
+        "use_when": "Use after a Planner in the fixed parallel RAG pattern.",
+        "category_label": "Parallel",
+        "icon": "plan",
+        "keywords": ["parallel", "dispatch", "fan out", "workers"],
+        "input_label": "Typed work items",
+        "output_label": "Parallel branches",
+        "uses_llm": False,
+        "uses_tools": False,
+    },
+    NODE_AGGREGATOR: {
+        "summary": "Waits for dispatched workers and deterministically combines their evidence.",
+        "use_when": "Use as the single join for a Parallel Dispatch region.",
+        "category_label": "Parallel",
+        "icon": "synthesize",
+        "keywords": ["parallel", "aggregate", "join", "barrier"],
+        "input_label": "Worker result packets",
+        "output_label": "Deterministic evidence",
+        "uses_llm": False,
+        "uses_tools": False,
+    },
 }
 
 
@@ -700,6 +796,10 @@ def collect_node_catalog_errors(catalog: Dict[str, Dict[str, Any]] | None = None
             value = metadata.get(key)
             if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
                 errors.append(f"{node_type}.{key} must be a list of non-empty strings")
+        if "parallel_state_writes" in metadata:
+            value = metadata.get("parallel_state_writes")
+            if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+                errors.append(f"{node_type}.parallel_state_writes must be a list of non-empty strings")
 
         limits = metadata.get("limits")
         if not isinstance(limits, dict):

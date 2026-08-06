@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.agent_workflows.trace_sanitization import _bounded_value
@@ -16,12 +17,23 @@ class AgentExecutionEventSink:
         self.queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
         self.include_details = include_details
         self.closed = False
+        self._emit_lock = asyncio.Lock()
+        self._parallel_events: list[Dict[str, Any]] = []
+        self._trace_recorder: Any = None
+
+    def bind_trace_recorder(self, recorder: Any) -> None:
+        self._trace_recorder = recorder
+
+    def parallel_events(self) -> list[Dict[str, Any]]:
+        return [dict(item) for item in self._parallel_events]
 
     def close(self) -> None:
         self.closed = True
 
     def _event(self, event: str, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payload = dict(data or {})
+        if event.startswith(("dispatch.", "worker.", "aggregation.")):
+            payload.setdefault("occurred_at", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         if not self.include_details:
             payload.pop("detail", None)
             payload.pop("checkpoint_before", None)
@@ -32,8 +44,20 @@ class AgentExecutionEventSink:
         return {"event": event, "data": _bounded_value(payload)}
 
     async def emit(self, event: str, data: Dict[str, Any] | None = None) -> None:
-        if not self.closed:
-            await self.queue.put(self._event(event, data))
+        if self.closed:
+            return
+        envelope = self._event(event, data)
+        async with self._emit_lock:
+            if event.startswith(("dispatch.", "worker.", "aggregation.")):
+                self._parallel_events.append(envelope)
+                if len(self._parallel_events) > 256:
+                    del self._parallel_events[:-256]
+                if self._trace_recorder is not None and hasattr(self._trace_recorder, "record_runtime_event"):
+                    self._trace_recorder.record_runtime_event(
+                        event,
+                        attributes=envelope.get("data") or {},
+                    )
+            await self.queue.put(envelope)
 
     def emit_nowait(self, event: str, data: Dict[str, Any] | None = None) -> None:
         if not self.closed:

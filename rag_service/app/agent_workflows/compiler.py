@@ -4,12 +4,14 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import RetryPolicy
 
 from app.agent_workflows.enums import GraphSentinel, RouteFunctionId, WorkflowNodeType
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.routes import route_function_for_edge
 from app.agent_workflows.state import RouterRagState
+from app.agent_workflows.parallel_runtime import normalized_parallel_policy, parallel_retryable_error
 
 if TYPE_CHECKING:
     from app.agent_workflows.graph import NodeRegistry
@@ -19,12 +21,14 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.CONTEXT_LOADER.value: 0,
     WorkflowNodeType.ROUTER.value: 1,
     WorkflowNodeType.PLANNER.value: 1,
+    WorkflowNodeType.PARALLEL_DISPATCH.value: 2,
     WorkflowNodeType.RETRIEVAL_WORKER.value: 2,
     WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value: 3,
     WorkflowNodeType.DURABLE_MEMORY_WORKER.value: 4,
     WorkflowNodeType.THREAD_EVENTS_WORKER.value: 5,
     WorkflowNodeType.WEB_WORKER.value: 6,
-    WorkflowNodeType.EVIDENCE_EVALUATOR.value: 7,
+    WorkflowNodeType.AGGREGATOR.value: 7,
+    WorkflowNodeType.EVIDENCE_EVALUATOR.value: 8,
     WorkflowNodeType.REPLANNER.value: 8,
     WorkflowNodeType.DIRECT_ANSWER.value: 9,
     WorkflowNodeType.SYNTHESIZER.value: 10,
@@ -54,6 +58,8 @@ class WorkflowMaterializer:
             config.get("loop_policy"),
             graph_spec=config["graph"],
         )
+        if "parallel_policy" in config:
+            config["parallel_policy"] = normalized_parallel_policy(config.get("parallel_policy"))
         materialized["config"] = config
         return materialized
 
@@ -86,6 +92,7 @@ class WorkflowMaterializer:
             WorkflowNodeType.PLANNER.value: RouteFunctionId.PLANNER.value,
             WorkflowNodeType.EVIDENCE_EVALUATOR.value: RouteFunctionId.EVALUATOR.value,
             WorkflowNodeType.HITL_GATE.value: RouteFunctionId.HITL_GATE.value,
+            WorkflowNodeType.PARALLEL_DISPATCH.value: RouteFunctionId.PARALLEL_DISPATCH.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):
@@ -140,6 +147,7 @@ class WorkflowMaterializer:
                 "allowed_tool_contract_ids",
                 "state_reads",
                 "state_writes",
+                "parallel_state_writes",
                 "prompt_slots",
                 "context_policy",
                 "observability",
@@ -190,14 +198,56 @@ class WorkflowCompiler(WorkflowMaterializer):
             for edge in graph_spec.get("edges", [])
             if edge.get("conditional") and isinstance(edge.get("routes"), dict)
         }
+        dynamic_targets: Dict[str, tuple[str, ...]] = {}
+        for edge in graph_spec.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("from") or "")
+            targets: list[str] = []
+            if edge.get("dynamic") is True and edge.get("to"):
+                targets.append(str(edge["to"]))
+            if edge.get("route_fn") == RouteFunctionId.PARALLEL_DISPATCH.value:
+                targets.extend(str(value) for value in (edge.get("routes") or {}).values() if value)
+            if source and targets:
+                dynamic_targets[source] = tuple(dict.fromkeys((*dynamic_targets.get(source, ()), *targets)))
+        config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+        parallel_policy = normalized_parallel_policy(config.get("parallel_policy"))
+        parallel_worker_types = {
+            WorkflowNodeType.RETRIEVAL_WORKER.value,
+            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+            WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+            WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+            WorkflowNodeType.WEB_WORKER.value,
+        }
+        parallel_worker_ids = {
+            str(edge.get("to"))
+            for edge in graph_spec.get("edges", [])
+            if isinstance(edge, dict) and edge.get("dynamic") is True
+        }
         for node in graph_spec.get("nodes", []):
             node_types[node["id"]] = node["type"]
+            add_options: Dict[str, Any] = {}
+            if node["id"] in dynamic_targets:
+                add_options["destinations"] = dynamic_targets[node["id"]]
+            if node["id"] in parallel_worker_ids and node["type"] in parallel_worker_types:
+                add_options["retry_policy"] = RetryPolicy(
+                    max_attempts=parallel_policy["max_attempts"],
+                    initial_interval=0.25,
+                    backoff_factor=2.0,
+                    max_interval=1.0,
+                    jitter=True,
+                    retry_on=parallel_retryable_error,
+                )
+                add_options["error_handler"] = self.registry.get_parallel_error_handler_for_spec(node)
             workflow.add_node(
                 node["id"],
                 self.registry.get_for_spec(node, route_labels=outgoing_route_labels.get(str(node["id"]))),
+                **add_options,
             )
 
         for edge in graph_spec.get("edges", []):
+            if edge.get("dynamic"):
+                continue
             source = edge.get("from")
             target = edge.get("to")
             if edge.get("conditional"):
@@ -206,6 +256,9 @@ class WorkflowCompiler(WorkflowMaterializer):
                     source=str(source),
                     node_types=node_types,
                 )
+                if node_types.get(str(source)) == WorkflowNodeType.PARALLEL_DISPATCH.value:
+                    workflow.add_conditional_edges(source, route_fn)
+                    continue
                 routes = {
                     key: END if value == GraphSentinel.END.value else value
                     for key, value in dict(edge["routes"]).items()

@@ -13,6 +13,15 @@ from app.models.llm_server_client import (
 
 CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
 CONTEXT_EVIDENCE_COMPRESSION_MODES = {mode.value for mode in EvidenceCompressionMode}
+PARALLEL_POLICY_LIMITS = {
+    "max_concurrency": (1, 16),
+    "max_work_items": (1, 32),
+    "dispatch_timeout_ms": (1_000, 300_000),
+    "default_worker_timeout_ms": (1_000, 120_000),
+    "web_worker_timeout_ms": (1_000, 180_000),
+    "max_attempts": (1, 5),
+    "minimum_successes": (1, 32),
+}
 
 
 def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]:
@@ -24,6 +33,31 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
     for key in ("use_web_search", "use_reranker"):
         if key in config and not isinstance(config[key], bool):
             errors.append(f"{key} must be a boolean")
+
+    parallel_policy = config.get("parallel_policy")
+    if parallel_policy is not None:
+        if not isinstance(parallel_policy, dict):
+            errors.append("parallel_policy must be an object")
+        else:
+            known = {"enabled", "continue_on_partial_failure", *PARALLEL_POLICY_LIMITS}
+            unknown = sorted(set(parallel_policy) - known)
+            if unknown:
+                errors.append(f"parallel_policy has unknown keys: {', '.join(unknown)}")
+            for key in ("enabled", "continue_on_partial_failure"):
+                if key in parallel_policy and not isinstance(parallel_policy[key], bool):
+                    errors.append(f"parallel_policy.{key} must be a boolean")
+            for key, (minimum, maximum) in PARALLEL_POLICY_LIMITS.items():
+                if key not in parallel_policy:
+                    continue
+                value = parallel_policy[key]
+                if not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(f"parallel_policy.{key} must be an integer")
+                elif value < minimum or value > maximum:
+                    errors.append(f"parallel_policy.{key} must be between {minimum} and {maximum}")
+            successes = parallel_policy.get("minimum_successes", 1)
+            work_items = parallel_policy.get("max_work_items", 8)
+            if isinstance(successes, int) and isinstance(work_items, int) and successes > work_items:
+                errors.append("parallel_policy.minimum_successes cannot exceed max_work_items")
 
     if "replans" in config:
         replans = config.get("replans")

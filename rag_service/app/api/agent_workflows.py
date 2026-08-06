@@ -228,6 +228,7 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
+        "parallel_summary": (run.metrics_json or {}).get("parallel_summary") if isinstance(run.metrics_json, dict) else None,
         "debug": _debug_payload_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
@@ -253,6 +254,7 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
+        "parallel_summary": metrics.get("parallel_summary") if isinstance(metrics.get("parallel_summary"), dict) else None,
         "metrics": {
             "duration_ms": metrics.get("duration_ms"),
             "route": metrics.get("route"),
@@ -273,9 +275,14 @@ def _run_summary_payload(run) -> Dict[str, Any]:
 
 
 def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
+    runtime = spec_json.get("runtime") if isinstance(spec_json.get("runtime"), dict) else {}
+    features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
+    config = spec_json.get("config") if isinstance(spec_json.get("config"), dict) else {}
     return {
         "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
         "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
+        "supports_parallel_dispatch": bool(features.get("supports_parallel_dispatch")),
+        "parallel_policy": config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else None,
     }
 
 

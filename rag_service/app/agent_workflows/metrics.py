@@ -42,7 +42,7 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         if event.get("evaluation_confidence") is not None:
             evaluation_confidence = event.get("evaluation_confidence")
 
-    return {
+    metrics = {
         "duration_ms": round(float(duration_ms), 2),
         "route": result.get("route"),
         "node_event_count": len(node_events),
@@ -60,3 +60,19 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         "replan_count": replan_count,
         "evaluation_confidence": evaluation_confidence,
     }
+    parallel = result.get("parallel_summary") if isinstance(result.get("parallel_summary"), dict) else None
+    if parallel:
+        metrics["parallel_summary"] = dict(parallel)
+        attempts = result.get("parallel_attempts")
+        if not isinstance(attempts, list):
+            attempts = [
+                {"event": f"worker.{item.get('status') or 'unknown'}", "data": dict(item)}
+                for item in (result.get("_parallel_attempt_records") or result.get("parallel_attempt_records") or [])
+                if isinstance(item, dict)
+            ]
+        if isinstance(attempts, list):
+            metrics["parallel_attempts"] = [dict(item) for item in attempts[-256:] if isinstance(item, dict)]
+        for key in ("planned", "completed", "skipped", "failed", "timed_out", "cancelled", "retried"):
+            metrics[f"parallel_worker_{key}"] = int(parallel.get(key) or 0)
+        metrics["parallel_partial_evidence"] = bool(parallel.get("partial_evidence"))
+    return metrics

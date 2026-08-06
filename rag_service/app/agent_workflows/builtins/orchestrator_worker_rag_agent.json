@@ -1,0 +1,124 @@
+{
+  "builtin_key": "orchestrator_worker_rag_agent",
+  "description": "A bounded orchestrator-worker RAG workflow that plans typed retrieval work, executes read-only workers concurrently, deterministically aggregates evidence, and synthesizes a final response.",
+  "is_builtin": true,
+  "name": "Orchestrator-Worker RAG Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "document_evidence",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {"from": "START", "to": "context_loader"},
+          {"from": "context_loader", "to": "planner"},
+          {
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "execute": "parallel_dispatch"
+            }
+          },
+          {"from": "direct_answer", "to": "finalizer"},
+          {
+            "conditional": true,
+            "from": "parallel_dispatch",
+            "route_fn": "parallel_dispatch_route",
+            "routes": {"dispatch": "aggregator"}
+          },
+          {"dynamic": true, "from": "parallel_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "aggregator"},
+          {"from": "thread_conversation_history_worker", "to": "aggregator"},
+          {"from": "durable_memory_worker", "to": "aggregator"},
+          {"from": "thread_events_worker", "to": "aggregator"},
+          {"from": "web_worker", "to": "aggregator"},
+          {"from": "aggregator", "to": "synthesizer"},
+          {"from": "synthesizer", "to": "finalizer"},
+          {"from": "finalizer", "to": "END"}
+        ],
+        "nodes": [
+          {"id": "context_loader", "type": "context_loader"},
+          {"id": "planner", "type": "planner"},
+          {"id": "parallel_dispatch", "type": "parallel_dispatch"},
+          {"id": "retrieval_worker", "type": "retrieval_worker"},
+          {"id": "thread_conversation_history_worker", "type": "thread_conversation_history_worker"},
+          {"id": "durable_memory_worker", "type": "durable_memory_worker"},
+          {"id": "thread_events_worker", "type": "thread_events_worker"},
+          {"id": "web_worker", "type": "web_worker"},
+          {"id": "aggregator", "type": "aggregator"},
+          {"id": "direct_answer", "type": "direct_answer"},
+          {"id": "synthesizer", "type": "synthesizer"},
+          {"id": "finalizer", "type": "finalizer"}
+        ]
+      },
+      "hitl_policy": {"enabled": false, "gates": {}},
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 16,
+        "node_visit_limits": {
+          "parallel_dispatch": 1,
+          "aggregator": 1,
+          "retrieval_worker": 1,
+          "thread_conversation_history_worker": 1,
+          "durable_memory_worker": 1,
+          "thread_events_worker": 1,
+          "web_worker": 1
+        }
+      },
+      "parallel_policy": {
+        "enabled": true,
+        "max_concurrency": 4,
+        "max_work_items": 8,
+        "dispatch_timeout_ms": 60000,
+        "default_worker_timeout_ms": 30000,
+        "web_worker_timeout_ms": 45000,
+        "max_attempts": 2,
+        "minimum_successes": 1,
+        "continue_on_partial_failure": true
+      },
+      "prefetch_policy": {"enabled": true},
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "workflow_id": "orchestrator_worker_rag_agent",
+    "runtime": {
+      "failure_code": "orchestrator_worker_rag_execution_failed",
+      "failure_context": "Compiled Orchestrator-Worker RAG Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Orchestrator-Worker RAG execution",
+      "features": {
+        "supports_replans": false,
+        "supports_parallel_dispatch": true
+      },
+      "kind": "compiled_rag",
+      "label": "Orchestrator-Worker RAG",
+      "prompt_preview": "planner",
+      "success_context": "Context retrieved by compiled Orchestrator-Worker RAG Agent workflow."
+    },
+    "schema_version": 2,
+    "version": 1
+  },
+  "visibility": "builtin"
+}

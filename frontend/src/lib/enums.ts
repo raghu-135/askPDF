@@ -139,6 +139,7 @@ export const RouteFunctionId = {
   Planner: 'planner_route',
   Evaluator: 'evaluator_route',
   HitlGate: 'hitl_gate_route',
+  ParallelDispatch: 'parallel_dispatch_route',
 } as const;
 export type RouteFunctionId = typeof RouteFunctionId[keyof typeof RouteFunctionId];
 
@@ -148,5 +149,7 @@ export const BuiltinAgentNodeType = {
   DurableMemoryWorker: 'durable_memory_worker',
   EvidenceEvaluator: 'evidence_evaluator',
   HitlGate: 'hitl_gate',
+  ParallelDispatch: 'parallel_dispatch',
+  Aggregator: 'aggregator',
 } as const;
 export type BuiltinAgentNodeType = typeof BuiltinAgentNodeType[keyof typeof BuiltinAgentNodeType];

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  AGENT_WORKFLOW_STARTER_WORKFLOW_IDS,
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
@@ -31,6 +32,39 @@ const seededStarterSpecs = {
   plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
   evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
 };
+
+test('exposes the orchestrator-worker built-in as a builder starter', () => {
+  assert.equal(
+    AGENT_WORKFLOW_STARTER_WORKFLOW_IDS.orchestrator_worker,
+    'orchestrator_worker_rag_agent',
+  );
+});
+
+test('parallel workflow assembly enables bounded parallel runtime metadata', () => {
+  const spec = assembleAgentWorkflowSpec({
+    workflowId: 'parallel-custom',
+    workflowType: 'custom_rag_agent',
+    nodes: [
+      { id: 'planner', type: 'planner' },
+      { id: 'dispatch', type: 'parallel_dispatch' },
+      { id: 'worker', type: 'retrieval_worker' },
+      { id: 'aggregate', type: 'aggregator' },
+    ],
+    edges: [
+      { from: 'planner', conditional: true, route_fn: 'planner_route', routes: { execute: 'dispatch' } },
+      { from: 'dispatch', to: 'worker', dynamic: true },
+      { from: 'dispatch', conditional: true, route_fn: 'parallel_dispatch_route', routes: { dispatch: 'aggregate' } },
+      { from: 'worker', to: 'aggregate' },
+    ],
+    allowed_tool_ids: ['document_evidence'],
+    runtime: { kind: 'compiled_rag', features: { supports_replans: false } },
+  });
+
+  assert.equal(spec.runtime.features.supports_parallel_dispatch, true);
+  assert.equal(spec.config.parallel_policy.enabled, true);
+  assert.equal(spec.config.parallel_policy.max_concurrency, 4);
+  assert.equal(spec.config.graph.edges[1].dynamic, true);
+});
 
 const createInitialBuilderState = (currentCatalog, starter = 'router') => {
   return normalizeBuilderState(currentCatalog, loadBuilderStateFromSpec(seededStarterSpecs[starter]));
@@ -634,4 +668,41 @@ test('offers only isolated existing nodes and detects paths that would form cycl
     edges: [{ from: 'retrieval_worker', to: 'synthesizer_2' }, { from: 'synthesizer_2', to: 'finalizer' }],
   };
   assert.equal(wouldCreateBuilderCycle(cyclic, 'finalizer', 'retrieval_worker'), true);
+});
+
+test('blocks manual connections that bypass a parallel region', () => {
+  const parallelCatalog = structuredClone(catalog);
+  parallelCatalog.node_catalog.parallel_dispatch = node({
+    type: 'parallel_dispatch',
+    display_name: 'Parallel Dispatch',
+    allowed_parent_types: ['planner'],
+    allowed_child_types: ['retrieval_worker', 'aggregator'],
+  });
+  parallelCatalog.node_catalog.aggregator = node({
+    type: 'aggregator',
+    display_name: 'Aggregator',
+    allowed_parent_types: ['parallel_dispatch', 'retrieval_worker'],
+    allowed_child_types: ['synthesizer'],
+  });
+  parallelCatalog.node_catalog.planner.allowed_child_types.push('parallel_dispatch');
+  parallelCatalog.node_catalog.retrieval_worker.allowed_parent_types.push('parallel_dispatch');
+  parallelCatalog.node_catalog.retrieval_worker.allowed_child_types.push('aggregator');
+  parallelCatalog.node_catalog.synthesizer.allowed_parent_types.push('aggregator');
+
+  const state = {
+    ...createInitialBuilderState(parallelCatalog, 'router'),
+    nodes: [
+      { id: 'planner', type: 'planner' },
+      { id: 'dispatch', type: 'parallel_dispatch' },
+      { id: 'worker', type: 'retrieval_worker' },
+      { id: 'aggregate', type: 'aggregator' },
+      { id: 'synthesizer', type: 'synthesizer' },
+    ],
+    edges: [],
+  };
+
+  assert.equal(canConnectNodes(parallelCatalog, state, 'dispatch', 'worker').ok, true);
+  assert.equal(canConnectNodes(parallelCatalog, state, 'worker', 'aggregate').ok, true);
+  assert.equal(canConnectNodes(parallelCatalog, state, 'planner', 'worker').ok, false);
+  assert.equal(canConnectNodes(parallelCatalog, state, 'worker', 'synthesizer').ok, false);
 });

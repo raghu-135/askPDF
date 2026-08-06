@@ -13,6 +13,7 @@ from app.agent_workflows.enums import (
     ROUTER_ROUTES,
 )
 from app.agent_workflows.route_registry import route_function_allowed_for_node_type
+from app.agent_workflows.parallel_runtime import dispatch_sends
 
 
 def router_route(state: Dict[str, Any]) -> str:
@@ -63,6 +64,8 @@ def route_function_for_edge(
             return evaluator_route
         if route_fn_id == RouteFunctionId.ROUTER.value:
             return router_route
+        if route_fn_id == RouteFunctionId.PARALLEL_DISPATCH.value:
+            return dispatch_sends
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
     raise ValueError(f"Conditional edge from {source} must declare route_fn")

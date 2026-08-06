@@ -447,3 +447,40 @@ test('live and retained projections merge repeated visits without duplicating id
   assert.deepEqual(merged.nodes.map((node) => `${node.id}:${node.visitIndex}`), ['router:1', 'worker:1', 'worker:2']);
   assert.equal(merged.nodes[1].status, 'completed');
 });
+
+test('live trace projection correlates parallel worker progress by work id', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'dispatch.started', data: { dispatch_id: 'dispatch-1', planned: 2 } },
+    { id: 2, event: 'worker.queued', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents' } },
+    { id: 3, event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
+    { id: 4, event: 'worker.completed', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1, elapsed_ms: 12 } },
+    { id: 5, event: 'aggregation.partial', data: { dispatch_id: 'dispatch-1', planned: 2, completed: 1, failed: 1, partial_evidence: true } },
+  ]);
+
+  assert.equal(view.parallel.summary.dispatch_id, 'dispatch-1');
+  assert.equal(view.parallel.summary.partial_evidence, true);
+  assert.equal(view.parallel.tasks.length, 1);
+  assert.equal(view.parallel.tasks[0].work_id, 'work-1');
+  assert.equal(view.parallel.tasks[0].status, 'completed');
+  assert.equal(view.parallel.tasks[0].elapsed_ms, 12);
+});
+
+test('retained trace projection restores expandable parallel attempts', () => {
+  const debug = structuredClone(backendDebug);
+  debug.summary.metrics = {
+    parallel_summary: { dispatch_id: 'dispatch-1', planned: 1, completed: 1, retried: 1 },
+    parallel_attempts: [
+      { event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
+      { event: 'worker.retrying', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
+      { event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 2 } },
+      { event: 'worker.completed', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 2, elapsed_ms: 18 } },
+      { event: 'dispatch.barrier_reached', data: { dispatch_id: 'dispatch-1', result_count: 1 } },
+    ],
+  };
+  const view = buildRunTraceView({ id: 'run-1', thread_id: 'thread-1', workflow_id: 'workflow-1', status: 'completed', debug });
+
+  assert.equal(view.parallel.summary.event, 'dispatch.barrier_reached');
+  assert.equal(view.parallel.tasks[0].attempts.length, 2);
+  assert.equal(view.parallel.tasks[0].attempts[0].status, 'retrying');
+  assert.equal(view.parallel.tasks[0].attempts[1].status, 'completed');
+});

@@ -118,6 +118,7 @@ export default function BuilderActionsBar({
             <MenuItem value="router">Router</MenuItem>
             <MenuItem value="plan_execute">Plan Execute</MenuItem>
             <MenuItem value="evaluator_replanner">Evaluator/Replanner</MenuItem>
+            <MenuItem value="orchestrator_worker">Orchestrator/Worker RAG</MenuItem>
             {customOptions.length ? <Divider /> : null}
             {customOptions.map((pattern) => (
               <MenuItem key={pattern.id} value={`custom:${pattern.id}`}>

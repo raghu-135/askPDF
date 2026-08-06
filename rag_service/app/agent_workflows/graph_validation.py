@@ -7,7 +7,7 @@ from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
 )
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.enums import GraphSentinel
+from app.agent_workflows.enums import GraphSentinel, RouteFunctionId, WorkflowNodeType
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
 from app.agent_workflows.node_catalog import (
@@ -230,6 +230,125 @@ class GenericGraphValidator:
                 route_registry=route_registry,
             )
         )
+        errors.extend(self._collect_parallel_graph_errors(spec, nodes, edges, node_types_by_id))
+        return errors
+
+    def _collect_parallel_graph_errors(
+        self,
+        spec: Dict[str, Any],
+        nodes: list[Any],
+        edges: list[Any],
+        node_types_by_id: dict[str, str],
+    ) -> list[str]:
+        errors: list[str] = []
+        dispatch_ids = [node_id for node_id, node_type in node_types_by_id.items() if node_type == WorkflowNodeType.PARALLEL_DISPATCH.value]
+        aggregator_ids = [node_id for node_id, node_type in node_types_by_id.items() if node_type == WorkflowNodeType.AGGREGATOR.value]
+        if not dispatch_ids and not aggregator_ids:
+            return errors
+        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
+        features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
+        config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+        policy = config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else {}
+        if not features.get("supports_parallel_dispatch"):
+            errors.append("parallel nodes require runtime.features.supports_parallel_dispatch=true")
+        if policy.get("enabled") is not True:
+            errors.append("parallel nodes require parallel_policy.enabled=true")
+        if len(dispatch_ids) != 1 or len(aggregator_ids) != 1:
+            errors.append("parallel workflows require exactly one parallel_dispatch and one aggregator node")
+            return errors
+        dispatch_id = dispatch_ids[0]
+        aggregator_id = aggregator_ids[0]
+        incoming_dispatch = [
+            edge for edge in edges
+            if isinstance(edge, dict)
+            and (
+                edge.get("to") == dispatch_id
+                or dispatch_id in set((edge.get("routes") or {}).values())
+            )
+        ]
+        if len(incoming_dispatch) != 1 or node_types_by_id.get(str(incoming_dispatch[0].get("from"))) != WorkflowNodeType.PLANNER.value:
+            errors.append("parallel_dispatch must have exactly one Planner parent")
+        dispatch_edge = next(
+            (
+                edge for edge in edges
+                if isinstance(edge, dict)
+                and edge.get("from") == dispatch_id
+                and edge.get("conditional")
+                and edge.get("route_fn") == RouteFunctionId.PARALLEL_DISPATCH.value
+            ),
+            None,
+        )
+        if dispatch_edge is None:
+            errors.append("parallel_dispatch must declare one parallel_dispatch_route conditional edge")
+        worker_types = {
+            WorkflowNodeType.RETRIEVAL_WORKER.value,
+            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+            WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+            WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+            WorkflowNodeType.WEB_WORKER.value,
+        }
+        dynamic_workers = {
+            str(edge.get("to"))
+            for edge in edges
+            if isinstance(edge, dict) and edge.get("from") == dispatch_id and edge.get("dynamic") is True
+        }
+        if not dynamic_workers:
+            errors.append("parallel_dispatch must declare at least one dynamic worker target")
+        for worker_id in sorted(dynamic_workers):
+            worker_type = node_types_by_id.get(worker_id)
+            if worker_type not in worker_types:
+                errors.append(f"parallel dispatch target {worker_id} must be a read-only retrieval worker")
+            metadata = _default_get_node_catalog().get(str(worker_type), {})
+            parallel_writes = metadata.get("parallel_state_writes") if isinstance(metadata, dict) else None
+            if not isinstance(parallel_writes, list) or "worker_result_packets" not in parallel_writes:
+                errors.append(f"parallel worker {worker_id} must declare reducer-safe parallel_state_writes")
+            legacy_writes = {
+                "evidence", "evidence_packets", "document_sources", "web_sources",
+                "used_chat_ids", "used_memory_ids", "node_events", "tool_events",
+                "errors", "skipped_nodes", "node_visit_counts", "node_visit_sequence",
+            }
+            unsafe = sorted(set(parallel_writes or []) & legacy_writes)
+            if unsafe:
+                errors.append(f"parallel worker {worker_id} declares unsafe cumulative writes: {', '.join(unsafe)}")
+            outgoing = [
+                edge for edge in edges
+                if isinstance(edge, dict) and edge.get("from") == worker_id
+            ]
+            incoming = [
+                edge for edge in edges
+                if isinstance(edge, dict) and edge.get("to") == worker_id
+            ]
+            if any(edge.get("from") != dispatch_id or edge.get("dynamic") is not True for edge in incoming):
+                errors.append(f"parallel worker {worker_id} cannot have parents outside dispatcher {dispatch_id}")
+            joins = [edge for edge in outgoing if edge.get("to") == aggregator_id and not edge.get("conditional")]
+            if len(joins) != 1:
+                errors.append(f"parallel worker {worker_id} must join aggregator {aggregator_id} exactly once")
+            if len(outgoing) != 1:
+                errors.append(f"parallel worker {worker_id} cannot have exits outside aggregator {aggregator_id}")
+        aggregator_parents = {
+            str(edge.get("from"))
+            for edge in edges
+            if isinstance(edge, dict) and edge.get("to") == aggregator_id
+        }
+        allowed_parents = dynamic_workers | {dispatch_id}
+        bypasses = sorted(aggregator_parents - allowed_parents)
+        if bypasses:
+            errors.append(f"aggregator cannot have bypass parents: {', '.join(bypasses)}")
+        if any(node_types_by_id.get(node_id) == WorkflowNodeType.HITL_GATE.value for node_id in dynamic_workers):
+            errors.append("HITL gates are not allowed inside parallel branches")
+        if any(
+            isinstance(edge, dict)
+            and edge.get("from") in dynamic_workers
+            and (
+                edge.get("conditional")
+                or node_types_by_id.get(str(edge.get("to"))) in {
+                    WorkflowNodeType.HITL_GATE.value,
+                    WorkflowNodeType.PARALLEL_DISPATCH.value,
+                }
+            )
+            for edge in edges
+        ):
+            errors.append("parallel regions cannot contain HITL, nested dispatch, conditional exits, or cycles")
         return errors
 
     def _collect_catalog_route_function_errors(
@@ -532,7 +651,7 @@ class GenericGraphValidator:
         outgoing_edges: dict[str, list[Dict[str, Any]]] = {}
         for edge in edges:
             source = edge.get("from")
-            if isinstance(source, str):
+            if isinstance(source, str) and not edge.get("dynamic"):
                 outgoing_edges.setdefault(source, []).append(edge)
 
         for source, source_edges in sorted(outgoing_edges.items()):

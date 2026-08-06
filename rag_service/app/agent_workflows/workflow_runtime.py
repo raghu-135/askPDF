@@ -40,6 +40,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "context_policy",
     "loop_policy",
     "builder_ui",
+    "parallel_policy",
 }
 
 
