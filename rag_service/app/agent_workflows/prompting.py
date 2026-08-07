@@ -11,7 +11,7 @@ from app.agent.prompting import (
     sanitize_system_role,
 )
 from app.agent_workflows.enums import PromptProfile, ToolName
-from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from app.agent_workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from app.agent_workflows.planning import WORKER_NODE_ORDER
 from app.prompts.loaders import get_web_search_mandate, load_prompt
@@ -80,6 +80,13 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
     if workers is None:
         workers = [{"id": node_type, "type": node_type, "label": node_type} for node_type in WORKER_NODE_ORDER]
     if not isinstance(workers, list) or not workers:
+        return "No worker nodes are available for this workflow."
+    if state_or_settings.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and not corrective_memory_recall_allowed(state_or_settings):
+        workers = [
+            worker for worker in workers
+            if not isinstance(worker, dict) or worker.get("type") != "durable_memory_worker"
+        ]
+    if not workers:
         return "No worker nodes are available for this workflow."
     lines = [
         "Use these exact worker node ids in `execution_plan`; do not output worker type aliases unless the id is exactly the same.",
@@ -242,6 +249,10 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
         "DRAFT_ANSWER": str(state.get("final_answer") or "")[:12_000],
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
         "EVIDENCE_CONTEXT": corrective_evidence_context(state),
+        "RETRIEVAL_CONTRADICTIONS": _json_preview(
+            (state.get("retrieval_quality_report") or {}).get("material_contradictions") or [],
+            limit=5_000,
+        ),
     })
 
 

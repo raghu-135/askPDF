@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
@@ -25,6 +26,43 @@ EVIDENCE_PACKET_LIMIT = 12
 EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
 EVIDENCE_TEXT_LIMIT = EVIDENCE_PACKET_LIMIT * (EVIDENCE_PACKET_CONTENT_LIMIT + 128)
 FINAL_CONTEXT_CHAR_LIMIT = EVIDENCE_TEXT_LIMIT
+
+_INSTRUCTION_INJECTION_PATTERNS = (
+    (
+        "instruction_override",
+        re.compile(r"\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b(?:system|developer|previous|prior)\b.{0,40}\b(?:instruction|message|prompt|policy)s?\b", re.IGNORECASE | re.DOTALL),
+    ),
+    (
+        "secret_exfiltration",
+        re.compile(r"\b(?:reveal|expose|print|return|show|leak)\b.{0,80}\b(?:secret|api[- ]?key|password|credential|system prompt)s?\b", re.IGNORECASE | re.DOTALL),
+    ),
+    (
+        "tool_authorization",
+        re.compile(
+            r"\b(?:(?:authorize|enable|allow)\b.{0,40}\b(?:assistant|agent|model)\b.{0,40}\b(?:invoke|call|run|execute)"
+            r"|(?:you|assistant|agent|model)\b.{0,30}\b(?:must|should|may|can)\b.{0,30}\b(?:invoke|call|run|execute))"
+            r"\b.{0,40}\b(?:tool|web search|shell|command)s?\b",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    ),
+    (
+        "role_manipulation",
+        re.compile(r"\b(?:you are now|act as|assume the role of|switch (?:your )?role)\b", re.IGNORECASE),
+    ),
+    (
+        "citation_fabrication",
+        re.compile(r"\b(?:fabricate|invent|make up|fake)\b.{0,60}\b(?:citation|source|reference)s?\b", re.IGNORECASE | re.DOTALL),
+    ),
+)
+
+
+def instruction_injection_reason_codes(value: Any) -> List[str]:
+    """Return high-confidence reason codes without treating benign instructions as unsafe."""
+
+    text = normalized_evidence_text(value)[:EVIDENCE_PACKET_CONTENT_LIMIT]
+    if not text:
+        return []
+    return [code for code, pattern in _INSTRUCTION_INJECTION_PATTERNS if pattern.search(text)]
 
 
 def _runtime_node_id(config: Optional[RunnableConfig], fallback: str) -> str:

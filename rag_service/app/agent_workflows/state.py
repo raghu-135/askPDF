@@ -212,8 +212,10 @@ class RouterRagState(TypedDict, total=False):
     corrective_wave: int
     corrective_history: List[Dict[str, Any]]
     corrective_wave_records: Annotated[List[Dict[str, Any]], merge_corrective_wave_records]
+    corrective_policy_filtered_proposals: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     corrective_budget_usage: Dict[str, int]
     corrective_budget_exhausted_reason: str
+    corrective_termination_reason: str
     retrieval_quality_report: Dict[str, Any]
     evidence_assessments: List[Dict[str, Any]]
     source_assessments: List[Dict[str, Any]]

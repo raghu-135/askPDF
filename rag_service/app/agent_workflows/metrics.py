@@ -9,7 +9,7 @@ from app.agent_workflows.parallel_contracts import (
     ParallelEventName,
 )
 from app.agent_workflows.parallel_observability import project_parallel_events
-from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from app.agent_workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 
 
 def _dict_events(events: Any) -> List[Dict[str, Any]]:
@@ -150,7 +150,11 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
                 "partial": bool(record.get("partial")),
                 "started_at": record.get("started_at"),
                 "completed_at": record.get("completed_at"),
-                "latency_ms": round(float(record.get("elapsed_ms") or 0.0), 2),
+                "latency_ms": (
+                    round(float(record["elapsed_ms"]), 2)
+                    if isinstance(record.get("elapsed_ms"), (int, float)) else None
+                ),
+                "latency_unavailable": bool(record.get("latency_unavailable")) or not isinstance(record.get("elapsed_ms"), (int, float)),
                 "source_expansion": bool(record.get("source_expansion")),
                 "work_items": [{
                     key: item.get(key)
@@ -172,14 +176,28 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
             "accepted_packets": sum(1 for item in assessments if isinstance(item, dict) and item.get("eligible")),
             "rejected_packets": sum(1 for item in assessments if isinstance(item, dict) and not item.get("eligible")),
             "source_expansions": sum(1 for item in result_packets if item.get("source_expansion")),
+            "policy_filtered_memory_proposals": [
+                dict(item) for item in corrective_result.get("corrective_policy_filtered_proposals") or []
+                if isinstance(item, dict)
+            ][-8:],
             "support_ratio": float(grounding.get("supported_claim_ratio") or 0.0),
+            "usefulness": (
+                grounding.get("usefulness")
+                if grounding.get("usefulness") in {"yes", "no", "maybe"}
+                else None
+            ),
             "unsupported_claims": sum(1 for item in grounding.get("claims") or [] if isinstance(item, dict) and item.get("support") != "full"),
             "citation_violations": len(grounding.get("citation_violations") or []),
             "contradictions": len(grounding.get("contradictions") or retrieval.get("material_contradictions") or []),
             "unresolved_gaps": len(grounding.get("unresolved_gaps") or retrieval.get("missing_requirements") or []),
             "partial_wave": bool((result.get("parallel_summary") or {}).get("partial_evidence")),
             "corrective_latency_ms": round(sum(_elapsed_ms(event) for event in node_events if (event.get("node") or event.get("name")) in {"retrieval_quality_grader", "replanner", "grounded_answer_verifier"}), 2),
-            "exhausted_budget_type": corrective_result.get("corrective_budget_exhausted_reason") or None,
+            "termination_reason": corrective_result.get("corrective_termination_reason") or None,
+            "exhausted_budget_type": (
+                corrective_result.get("corrective_budget_exhausted_reason")
+                if corrective_result.get("corrective_budget_exhausted_reason") in CORRECTIVE_BUDGET_REASONS
+                else None
+            ),
             "history": [dict(item) for item in corrective_result.get("corrective_history") or [] if isinstance(item, dict)][-8:],
             "wave_outcomes": wave_outcomes[-8:],
         }

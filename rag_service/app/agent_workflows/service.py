@@ -165,10 +165,11 @@ class AgentRunService:
             from app.agent_workflows import router_runtime
 
             async with open_agent_checkpointer() as checkpointer:
-                stream_kwargs = {}
+                stream_kwargs = {
+                    "cancellation_checker": lambda: chat_run_cancel_requested(run.id),
+                }
                 if execution_event_sink is not None:
                     stream_kwargs["execution_event_sink"] = execution_event_sink
-                    stream_kwargs["cancellation_checker"] = lambda: chat_run_cancel_requested(run.id)
                 result = await router_runtime.execute_compiled_rag_chat(
                     thread_id,
                     req,
@@ -412,7 +413,11 @@ class AgentRunService:
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
             async with open_agent_checkpointer() as checkpointer:
-                stream_kwargs = {"execution_event_sink": execution_event_sink} if execution_event_sink is not None else {}
+                stream_kwargs = {
+                    "cancellation_checker": lambda: chat_run_cancel_requested(resolution.run.id),
+                }
+                if execution_event_sink is not None:
+                    stream_kwargs["execution_event_sink"] = execution_event_sink
                 result = await resume_compiled_rag_chat(
                     resolution.run,
                     interrupt=resolution.interrupt,

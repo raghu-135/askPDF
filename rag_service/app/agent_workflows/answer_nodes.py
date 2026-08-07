@@ -11,13 +11,15 @@ from langchain_core.runnables import RunnableConfig
 from app.agent.reasoning import normalize_ai_response
 from app.agent_workflows.evidence import (
     combine_evidence,
+    corrective_evidence_packets,
     evidence_text_limit,
     final_context_from_state,
     prefetch_refs,
     state_evidence_refs,
 )
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
-from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from app.agent.evidence_contract import normalized_canonical_source_id
+from app.agent_workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from app.agent_workflows.prompting import build_final_answer_messages
 from app.agent_workflows.runtime_invocation import (
     append_event,
@@ -150,16 +152,41 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):
-        contradictions = [item for item in state.get("contradiction_report") or [] if isinstance(item, dict)]
+        valid_source_ids = {
+            normalized
+            for packet in corrective_evidence_packets(state)
+            for source_id in packet.get("source_ids") or []
+            if (normalized := normalized_canonical_source_id(source_id))
+        }
+        contradictions = []
+        invalid_citation_count = 0
+        for raw in state.get("contradiction_report") or []:
+            if not isinstance(raw, dict):
+                continue
+            source_ids = []
+            for value in raw.get("source_ids") or []:
+                normalized = normalized_canonical_source_id(value)
+                if normalized and normalized in valid_source_ids:
+                    source_ids.append(normalized)
+                else:
+                    invalid_citation_count += 1
+            contradictions.append({**raw, "source_ids": sorted(set(source_ids))})
         contradicted_claim_ids = {
             str(claim_id) for item in contradictions for claim_id in item.get("claim_ids") or [] if claim_id
         }
-        verified = [
-            item for item in state.get("verified_claims") or []
-            if isinstance(item, dict)
-            and item.get("claim")
-            and item.get("claim_id") not in contradicted_claim_ids
-        ]
+        verified = []
+        for raw in state.get("verified_claims") or []:
+            if not isinstance(raw, dict) or not raw.get("claim") or raw.get("claim_id") in contradicted_claim_ids:
+                continue
+            source_ids = []
+            for value in raw.get("source_ids") or []:
+                normalized = normalized_canonical_source_id(value)
+                if normalized and normalized in valid_source_ids:
+                    source_ids.append(normalized)
+                else:
+                    invalid_citation_count += 1
+            if source_ids:
+                verified.append({**raw, "source_ids": sorted(set(source_ids))})
         if contradictions and any(not item.get("claim_ids") for item in contradictions):
             verified = []
         gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
@@ -173,13 +200,14 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             answer = "I could not verify a substantive answer from the available evidence."
         if contradictions:
             answer += "\n\nUnresolved source disagreements:\n" + "\n".join(
-                f"- {item.get('claim') or item.get('reason') or 'Conflicting evidence'} ({', '.join(item.get('source_ids') or [])})"
+                f"- {item.get('claim') or item.get('reason') or 'Conflicting evidence'}"
+                + (f" ({', '.join(item.get('source_ids') or [])})" if item.get("source_ids") else "")
                 for item in contradictions
             )
         if gaps:
             answer += "\n\nUnresolved evidence gaps:\n" + "\n".join(f"- {gap}" for gap in gaps)
         reason = str(state.get("corrective_budget_exhausted_reason") or "")
-        if reason:
+        if reason in CORRECTIVE_BUDGET_REASONS:
             answer += f"\n\nCorrection stopped because the {reason.replace('_', ' ')} budget was exhausted."
         data = {
             "status": NodeEventStatus.COMPLETED.value,
@@ -189,6 +217,8 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "unresolved_gap_count": len(gaps),
             "contradiction_count": len(contradictions),
             "budget_exhausted_reason": reason,
+            "termination_reason": state.get("corrective_termination_reason") or None,
+            "invalid_final_citation_count": invalid_citation_count,
             "output_refs": state_evidence_refs(state),
             "output_preview": {"answer": compact_preview(answer)},
         }

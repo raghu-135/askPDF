@@ -9,6 +9,8 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from app.agent_workflows.enums import NodeEventStatus
+from app.agent_workflows.chat_cancellation import raise_if_chat_run_cancelled
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from app.agent_workflows.events import append_node_event, append_tool_event
 from app.agent_workflows.evidence import state_evidence_refs
 from app.agent_workflows.node_catalog import node_type_capabilities
@@ -109,6 +111,8 @@ async def invoke_llm_for_node(
 ) -> Any:
     try:
         response = await invoke_with_retry(func, messages, retry_observer=retry_observer)
+        cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
+        await raise_if_chat_run_cancelled(cancellation_checker, state)
         trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
         if trace_recorder is not None and hasattr(trace_recorder, "record_llm_detail"):
             trace_recorder.record_llm_detail(
@@ -150,6 +154,14 @@ async def invoke_tool_for_node(
     started: float,
 ) -> Any:
     try:
+        cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
+        await raise_if_chat_run_cancelled(cancellation_checker, state)
+        if (
+            state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
+            and runtime_node_type(config, node) == "durable_memory_worker"
+            and not corrective_memory_recall_allowed(state)
+        ):
+            raise PermissionError("corrective durable-memory retrieval has no policy-readable scope")
         return await tool.ainvoke(tool_input, config=config)
     except Exception as exc:
         append_failed_node_event(

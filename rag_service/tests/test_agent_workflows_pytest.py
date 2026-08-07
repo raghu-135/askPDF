@@ -4111,13 +4111,14 @@ class TestAgentRunService:
         assert retained_turns == []
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("run_delete_fails", [False, True])
+    @pytest.mark.parametrize(("run_delete_fails", "with_event_sink"), [(False, False), (False, True), (True, True)])
     async def test_run_thread_chat_discards_canceled_run_and_checkpoint(
         self,
         engine,
         sample_thread,
         monkeypatch,
         run_delete_fails,
+        with_event_sink,
     ):
         session_factory = async_sessionmaker(
             engine,
@@ -4191,7 +4192,7 @@ class TestAgentRunService:
                 sample_thread.id,
                 self._agent_req("Wrong question"),
                 sample_thread.embedding_model,
-                execution_event_sink=AgentExecutionEventSink(),
+                execution_event_sink=AgentExecutionEventSink() if with_event_sink else None,
             )
             retained_run = await repo.get_run(captured_run_id)
             retained_turns = await repo.list_chat_turns_for_run(captured_run_id)
@@ -5755,7 +5756,8 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+                assert await cancellation_checker() is False
                 trace_recorder.record_runtime_event(
                     "graph.resumed",
                     attributes={
@@ -5857,7 +5859,8 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+                assert await cancellation_checker() is False
                 calls.append(interrupt["interrupt_id"])
                 trace_recorder.record_runtime_event(
                     "graph.resumed",

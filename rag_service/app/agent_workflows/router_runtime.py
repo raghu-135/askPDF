@@ -39,7 +39,8 @@ def _corrective_metrics_state(result: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     keys = (
         "workflow_id", "corrective_wave", "corrective_history", "corrective_budget_exhausted_reason",
-        "worker_result_packets", "retrieval_quality_report", "grounding_report",
+        "corrective_termination_reason",
+        "worker_result_packets", "retrieval_quality_report", "grounding_report", "corrective_policy_filtered_proposals",
     )
     return {key: result.get(key) for key in keys}
 
@@ -570,8 +571,10 @@ async def _handle_compiled_rag_chat(
         "corrective_wave": 0,
         "corrective_history": [],
         "corrective_wave_records": [],
+        "corrective_policy_filtered_proposals": [],
         "corrective_budget_usage": {},
         "corrective_budget_exhausted_reason": "",
+        "corrective_termination_reason": "",
         "retrieval_quality_report": {},
         "evidence_assessments": [],
         "source_assessments": [],
@@ -871,6 +874,7 @@ async def resume_compiled_rag_chat(
     checkpointer: Any,
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
+    cancellation_checker: Any = None,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and persist the final chat turn."""
 
@@ -899,6 +903,7 @@ async def resume_compiled_rag_chat(
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
+        cancellation_checker=cancellation_checker,
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {
@@ -919,7 +924,20 @@ async def resume_compiled_rag_chat(
                 "askpdf.checkpoint.thread_id": checkpoint_thread_id,
             },
         )
-    result = await _invoke_graph_with_partial_state(app, Command(resume=decision), config)
+    try:
+        result = await _invoke_graph_with_partial_state(app, Command(resume=decision), config)
+        await raise_if_chat_run_cancelled(cancellation_checker, result)
+    except ChatRunCancellationRequested as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial_result = _without_runtime_keys(exc.state or snapshot_values)
+        if partial_result.get("parallel_enabled") and partial_result.get("work_items"):
+            partial_result.update(cancelled_parallel_dispatch(partial_result, []))
+        return _cancelled_response(
+            question=str(partial_result.get("question") or snapshot_values.get("question") or ""),
+            result=partial_result,
+            agent_run_context=agent_run_context,
+            duration_ms=duration_ms,
+        )
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     pending_interrupt = _pending_interrupt_from_result(
         result,

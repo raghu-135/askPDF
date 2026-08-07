@@ -8,7 +8,11 @@ from langgraph.types import RetryPolicy
 
 from app.agent_workflows.enums import GraphSentinel, RouteFunctionId, WorkflowNodeType
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
-from app.agent_workflows.node_catalog import get_node_type_metadata
+from app.agent_workflows.node_catalog import (
+    get_node_type_metadata,
+    node_type_default_max_visits,
+    node_type_max_visits,
+)
 from app.agent_workflows.routes import route_function_for_edge
 from app.agent_workflows.state import RouterRagState
 from app.agent_workflows.parallel_runtime import normalized_parallel_policy, parallel_retryable_error
@@ -81,18 +85,73 @@ class WorkflowMaterializer:
     def _with_materialized_loop_policy(self, loop_policy: Any, *, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
         policy = dict(loop_policy) if isinstance(loop_policy, dict) else {}
         nodes = [node for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        node_types = {
+            str(node.get("id")): str(node.get("type"))
+            for node in nodes
+            if node.get("id") and node.get("type")
+        }
         node_count = len(nodes)
         try:
             max_total_visits = int(policy.get("max_total_visits", 0))
         except (TypeError, ValueError):
             max_total_visits = 0
         if node_count and max_total_visits < node_count:
-            policy["max_total_visits"] = node_count
+            max_total_visits = node_count
+            policy["max_total_visits"] = max_total_visits
         node_visit_limits = policy.get("node_visit_limits")
         if isinstance(node_visit_limits, dict):
             policy["node_visit_limits"] = dict(node_visit_limits)
         elif node_visit_limits is not None:
             policy["node_visit_limits"] = {}
+        else:
+            policy["node_visit_limits"] = {}
+
+        # HITL nodes are inserted after the source workflow's loop policy has
+        # been resolved. A gate that guards a loop must be visitable once for
+        # each distinct entry into that loop (for example, the initial plan
+        # plus every corrective replan), otherwise a valid final wave fails at
+        # the gate before dispatch. Derive that budget from the materialized
+        # gate's incoming sources while preserving explicitly authored limits.
+        limits = policy["node_visit_limits"]
+        default_limit = max(1, int(policy.get("default_max_node_visits", 1)))
+        added_gate_budget = 0
+        edges = [edge for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
+        for gate_id, node_type in node_types.items():
+            if node_type != WorkflowNodeType.HITL_GATE.value or gate_id in limits:
+                continue
+            incoming_sources = {
+                str(edge.get("from"))
+                for edge in edges
+                if edge.get("to") == gate_id
+                or gate_id in (
+                    edge.get("routes", {}).values()
+                    if isinstance(edge.get("routes"), dict)
+                    else ()
+                )
+            }
+            derived_limit = sum(
+                max(
+                    1,
+                    int(
+                        limits.get(
+                            source_id,
+                            min(
+                                default_limit,
+                                node_type_default_max_visits(node_types.get(source_id, "")),
+                            ),
+                        )
+                    ),
+                )
+                for source_id in incoming_sources
+            )
+            gate_limit = max(
+                node_type_default_max_visits(node_type),
+                min(derived_limit, node_type_max_visits(node_type)),
+            )
+            limits[gate_id] = gate_limit
+            added_gate_budget += gate_limit
+        if added_gate_budget:
+            policy["max_total_visits"] = max_total_visits + added_gate_budget
         return policy
 
     def _with_explicit_route_functions(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:

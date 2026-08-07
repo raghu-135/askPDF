@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping
 
-from app.agent_workflows.corrective_contracts import normalized_corrective_policy
-from app.agent_workflows.evidence import corrective_evidence_packets
+from app.agent.evidence_contract import normalized_canonical_source_id
+from app.agent_workflows.corrective_contracts import (
+    CORRECTIVE_USEFULNESS_VALUES,
+    normalized_corrective_policy,
+)
+from app.agent_workflows.evidence import (
+    corrective_evidence_packets,
+    instruction_injection_reason_codes,
+)
 from app.agent_workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
 
@@ -42,6 +49,9 @@ def retrieval_quality_contract_errors(value: Dict[str, Any]) -> list[str]:
         errors.append("missing_requirements must be an array")
     if not isinstance(value.get("material_contradictions"), list):
         errors.append("material_contradictions must be an array")
+    for item in value.get("material_contradictions") or []:
+        if isinstance(item, dict) and not isinstance(item.get("packet_ids"), list):
+            errors.append("each material contradiction must contain packet_ids")
     return errors
 
 
@@ -65,13 +75,19 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
             confidence = max(0.0, min(float(raw.get("confidence") or 0.0), 1.0))
         except (TypeError, ValueError):
             confidence = 0.0
+        deterministic_risks = instruction_injection_reason_codes(packet_by_id[packet_id].get("content"))
+        model_risk = raw.get("instruction_injection_risk") is True
         assessment = {
             "packet_id": packet_id,
             "source_ids": list(packet_by_id[packet_id].get("source_ids") or []),
             "relevant": raw.get("relevant") is True,
             "confidence": confidence,
             "provenance_complete": raw.get("provenance_complete") is True and bool(packet_by_id[packet_id].get("source_ids")),
-            "instruction_injection_risk": raw.get("instruction_injection_risk") is True,
+            "instruction_injection_risk": model_risk or bool(deterministic_risks),
+            "instruction_injection_reasons": [
+                *(["model_detected"] if model_risk else []),
+                *deterministic_risks,
+            ],
             "coverage": _strings(raw.get("coverage")),
             "contradiction_signals": _strings(raw.get("contradiction_signals")),
         }
@@ -79,17 +95,53 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
         assessed.add(packet_id)
     for packet_id, packet in packet_by_id.items():
         if packet_id not in assessed:
+            deterministic_risks = instruction_injection_reason_codes(packet.get("content"))
             assessments.append({
                 "packet_id": packet_id,
                 "source_ids": list(packet.get("source_ids") or []),
                 "relevant": False,
                 "confidence": 0.0,
                 "provenance_complete": False,
-                "instruction_injection_risk": False,
+                "instruction_injection_risk": bool(deterministic_risks),
+                "instruction_injection_reasons": deterministic_risks,
                 "coverage": [],
                 "contradiction_signals": ["grader did not return a valid assessment"],
             })
-    contradictions = _contradictions(parsed.get("material_contradictions"))
+    contradictions: list[Dict[str, Any]] = []
+    contradiction_violations: list[str] = []
+    raw_contradictions = parsed.get("material_contradictions") if isinstance(parsed.get("material_contradictions"), list) else []
+    for index, raw in enumerate(raw_contradictions):
+        if not isinstance(raw, dict):
+            continue
+        supplied_packet_ids = _strings(raw.get("packet_ids"), limit=12)
+        unknown_contradiction_ids = sorted(packet_id for packet_id in supplied_packet_ids if packet_id not in packet_by_id)
+        valid_packet_ids = sorted(packet_id for packet_id in supplied_packet_ids if packet_id in packet_by_id)
+        source_ids = sorted({
+            normalized
+            for packet_id in valid_packet_ids
+            for source_id in packet_by_id[packet_id].get("source_ids") or []
+            if (normalized := normalized_canonical_source_id(source_id))
+        })
+        malformed_bindings = [
+            packet_id for packet_id in valid_packet_ids
+            if len(packet_by_id[packet_id].get("source_ids") or []) != 1
+        ]
+        if unknown_contradiction_ids:
+            unknown_ids.extend(unknown_contradiction_ids)
+            contradiction_violations.append(
+                "Unknown contradiction packet ids: " + ", ".join(unknown_contradiction_ids)
+            )
+        if malformed_bindings:
+            contradiction_violations.append(
+                "Invalid contradiction packet bindings: " + ", ".join(malformed_bindings)
+            )
+        if not valid_packet_ids:
+            contradiction_violations.append(f"Contradiction {index + 1} has no valid packet ids")
+        contradictions.append({
+            "claim": " ".join(str(raw.get("claim") or raw.get("reason") or "conflicting evidence").split())[:1_000],
+            "packet_ids": valid_packet_ids,
+            "source_ids": source_ids,
+        })
     gaps = _strings(parsed.get("missing_requirements"))
     policy = normalized_corrective_policy(state.get("corrective_policy"))
     for item in assessments:
@@ -125,6 +177,7 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
         "source_assessments": [{"source_id": source_id, "packet_id": item["packet_id"], "eligible": item["eligible"], "rejection_reasons": item["rejection_reasons"]} for item in assessments for source_id in item["source_ids"]],
         "missing_requirements": gaps,
         "material_contradictions": contradictions,
+        "citation_violations": list(dict.fromkeys(contradiction_violations)),
         "unknown_packet_ids": sorted(set(unknown_ids)),
         "reason": str(parsed.get("reason") or "")[:800],
     }
@@ -151,8 +204,8 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
     for key in ("claims", "citation_violations", "contradictions", "unresolved_gaps"):
         if not isinstance(value.get(key), list):
             errors.append(f"{key} must be an array")
-    if not isinstance(value.get("usefulness_score"), int):
-        errors.append("usefulness_score must be an integer")
+    if value.get("usefulness") not in CORRECTIVE_USEFULNESS_VALUES:
+        errors.append("usefulness must be one of: yes, no, maybe")
     claims = value.get("claims") if isinstance(value.get("claims"), list) else []
     claim_ids = [str(item.get("claim_id") or "") for item in claims if isinstance(item, dict)]
     if any(not claim_id for claim_id in claim_ids) or len(set(claim_ids)) != len(claim_ids):
@@ -193,11 +246,14 @@ def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, An
             "source_ids": source_ids,
             "contradicted": raw.get("contradicted") is True,
         })
-    try:
-        usefulness = max(1, min(int(parsed.get("usefulness_score") or 1), 5))
-    except (TypeError, ValueError):
-        usefulness = 1
-    violations = _strings(parsed.get("citation_violations"))
+    usefulness = str(parsed.get("usefulness") or "no").strip().casefold()
+    if usefulness not in CORRECTIVE_USEFULNESS_VALUES:
+        usefulness = "no"
+    retrieval_report = state.get("retrieval_quality_report") if isinstance(state.get("retrieval_quality_report"), Mapping) else {}
+    violations = list(dict.fromkeys([
+        *_strings(parsed.get("citation_violations")),
+        *_strings(retrieval_report.get("citation_violations")),
+    ]))
     contradictions = _contradictions(parsed.get("contradictions"))
     claim_ids = {item["claim_id"] for item in claims}
     contradicted_claim_ids = {item["claim_id"] for item in claims if item["contradicted"]}
@@ -221,10 +277,6 @@ def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, An
     if invalid_claim_ids:
         violations.append("Invalid or duplicate claim ids: " + ", ".join(sorted(invalid_claim_ids)))
     prior_gaps = _strings(state.get("unresolved_gaps")) if state.get("corrective_retrieval_route") == "insufficient" else []
-    prior_contradictions = _contradictions(state.get("contradiction_report")) if state.get("corrective_retrieval_route") == "insufficient" else []
-    contradictions = [*contradictions, *(item for item in prior_contradictions if item not in contradictions)]
-    if any(not item.get("claim_ids") for item in prior_contradictions):
-        unmapped_contradiction = True
     full = [] if unmapped_contradiction else [
         item for item in claims
         if item["support"] == "full" and item["claim_id"] not in contradicted_claim_ids
@@ -237,23 +289,27 @@ def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, An
         "citation_violations": violations,
         "contradictions": contradictions,
         "unresolved_gaps": list(dict.fromkeys([*_strings(parsed.get("unresolved_gaps")), *prior_gaps])),
-        "usefulness_score": usefulness,
+        "usefulness": usefulness,
         "valid_source_ids": sorted(valid_source_ids),
     }
 
 
 def grounded_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any]) -> tuple[str, str]:
     policy = normalized_corrective_policy(state.get("corrective_policy"))
-    passed = (
+    grounded = (
         float(report.get("supported_claim_ratio") or 0.0) >= policy["minimum_supported_claim_ratio"]
-        and int(report.get("usefulness_score") or 0) >= policy["minimum_usefulness_score"]
         and not report.get("citation_violations")
         and not report.get("contradictions")
         and not report.get("unresolved_gaps")
     )
-    if passed:
-        return GroundedAnswerRoute.PASS.value, ""
     revision_count = max(0, int(state.get("answer_revision_count") or 0))
+    usefulness = str(report.get("usefulness") or "no")
+    if grounded:
+        if usefulness == "yes" or (usefulness == "maybe" and revision_count >= policy["max_answer_revisions"]):
+            return GroundedAnswerRoute.PASS.value, ""
+        if revision_count < policy["max_answer_revisions"]:
+            return GroundedAnswerRoute.REVISE.value, ""
+        return GroundedAnswerRoute.FINALIZE_CAUTIOUS.value, "low_usefulness"
     if report.get("verified_claims") and revision_count < policy["max_answer_revisions"]:
         return GroundedAnswerRoute.REVISE.value, ""
     correction_route, reason = corrective_route_for_report({"verdict": "ambiguous"}, state)

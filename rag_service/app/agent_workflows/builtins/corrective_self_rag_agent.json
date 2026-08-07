@@ -42,7 +42,6 @@
       "corrective_policy": {
         "minimum_relevance_confidence": 0.65,
         "minimum_supported_claim_ratio": 1.0,
-        "minimum_usefulness_score": 3,
         "max_corrective_waves": 2,
         "max_total_work_items": 8,
         "max_total_tool_attempts": 12,

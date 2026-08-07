@@ -61,6 +61,7 @@ from app.agent_workflows.corrective_nodes import (
     retrieval_quality_contract_errors,
 )
 from app.agent_workflows.corrective_contracts import (
+    CORRECTIVE_BUDGET_REASONS,
     CORRECTIVE_WORKFLOW_ID,
     CorrectiveEventName,
     stable_corrective_identity,
@@ -86,7 +87,9 @@ from app.agent_workflows.planning import (
 )
 from app.agent_workflows.parallel_runtime import (
     aggregate_parallel_results,
+    dispatch_started_epoch_ms as _dispatch_started_epoch_ms,
     normalize_work_items,
+    policy_filtered_memory_proposals,
     normalized_parallel_policy,
     parallel_retryable_error,
     parallel_runtime_authorized,
@@ -991,6 +994,8 @@ class NodeRegistry:
 
     async def parallel_dispatch(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
+        await raise_if_chat_run_cancelled(cancellation_checker, state)
         if not parallel_runtime_authorized(state):
             raise RuntimeError("agent_workflow_parallel_v1 is disabled")
         node_id = runtime_node_id(config, WorkflowNodeType.PARALLEL_DISPATCH.value)
@@ -1001,6 +1006,7 @@ class NodeRegistry:
             dispatch_node_id=node_id,
             dispatch_visit=visit,
         )
+        filtered_memory = policy_filtered_memory_proposals(state.get("work_item_proposals"), state)
         dispatch_id = work_items[0]["dispatch_id"] if work_items else normalize_work_items(
             [], state=state, dispatch_node_id=node_id, dispatch_visit=visit
         )
@@ -1031,6 +1037,7 @@ class NodeRegistry:
             }
             for item in work_items
         ]
+        await raise_if_chat_run_cancelled(cancellation_checker, state)
         if sink is not None:
             await sink.emit(ParallelEventName.DISPATCH_PLANNED, summary)
             await sink.emit(ParallelEventName.DISPATCH_STARTED, summary)
@@ -1066,6 +1073,7 @@ class NodeRegistry:
             "dispatch_summary": {**summary, "mode": "parallel"},
         }
         if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
+            update["corrective_policy_filtered_proposals"] = filtered_memory
             wave_id = max(0, int(state.get("corrective_wave") or 0))
             update["corrective_wave_records"] = [{
                 "record_id": stable_corrective_identity(
@@ -1119,7 +1127,7 @@ class NodeRegistry:
             summary["wave_id"] = max(0, int(state.get("corrective_wave") or 0))
             summary["event_name"] = CorrectiveEventName.WAVE_COMPLETED
             completed_at = datetime.now(timezone.utc)
-            started_ms = int(state.get("dispatch_started_epoch_ms") or int(completed_at.timestamp() * 1000))
+            started_ms = _dispatch_started_epoch_ms(state, summary.get("dispatch_id"))
             completed = int(summary.get("completed") or 0)
             failed = int(summary.get("failed") or 0)
             timed_out = int(summary.get("timed_out") or 0)
@@ -1138,9 +1146,16 @@ class NodeRegistry:
                 ),
                 "dispatch_id": summary.get("dispatch_id"),
                 "wave_id": summary["wave_id"],
-                "started_at": datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                "started_at": (
+                    datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                    if started_ms is not None else None
+                ),
                 "completed_at": completed_at.isoformat().replace("+00:00", "Z"),
-                "elapsed_ms": max(0, int(completed_at.timestamp() * 1000) - started_ms),
+                "elapsed_ms": (
+                    max(0, int(completed_at.timestamp() * 1000) - started_ms)
+                    if started_ms is not None else None
+                ),
+                "latency_unavailable": started_ms is None,
                 "status": "completed",
                 "outcome": outcome,
                 "partial": partial,
@@ -1422,6 +1437,7 @@ class NodeRegistry:
             "corrective_retrieval_route": route,
             "corrective_budget_usage": usage,
             "corrective_budget_exhausted_reason": exhausted_reason,
+            "corrective_termination_reason": exhausted_reason,
             "contradiction_report": report["material_contradictions"],
             "node_events": _append_event(state, WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value, data, started=started, config=config),
         }
@@ -1449,7 +1465,8 @@ class NodeRegistry:
             safe_json_object=_safe_json_object,
         )
         report = normalize_grounding_report(parsed, state)
-        route, exhausted_reason = grounded_route_for_report(report, state)
+        route, termination_reason = grounded_route_for_report(report, state)
+        exhausted_reason = termination_reason if termination_reason in CORRECTIVE_BUDGET_REASONS else ""
         issues = [*report["citation_violations"], *report["unresolved_gaps"]]
         issues.extend(str(item.get("claim") or "contradictory evidence") for item in report["contradictions"])
         data = build_decision_node_event_data(
@@ -1490,6 +1507,7 @@ class NodeRegistry:
             "grounded_answer_route": route,
             "answer_quality_report": {"passed": route == "pass", "reason": route, "issues": issues[:20], "revision_count": max(0, int(state.get("answer_revision_count") or 0))},
             "corrective_budget_exhausted_reason": exhausted_reason,
+            "corrective_termination_reason": termination_reason,
             "node_events": _append_event(state, WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value, data, started=started, config=config),
         }
 

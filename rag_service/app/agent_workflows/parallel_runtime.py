@@ -16,6 +16,7 @@ from app.agent_workflows.corrective_contracts import (
     CORRECTIVE_SOURCE_STRATEGIES,
     CORRECTIVE_SOURCE_STRATEGY_RANK,
     CORRECTIVE_WORKFLOW_ID,
+    corrective_memory_recall_allowed,
     corrective_source_strategy,
     normalized_corrective_policy,
     stable_corrective_identity,
@@ -99,12 +100,72 @@ def _normalized_query(value: Any, *, fallback: str) -> str:
     return text[:2_000]
 
 
+def dispatch_started_epoch_ms(state: Mapping[str, Any], dispatch_id: Any) -> int | None:
+    """Recover the persisted dispatch start without inventing a zero-latency start."""
+
+    candidates: List[int] = []
+    direct = state.get("dispatch_started_epoch_ms")
+    if isinstance(direct, (int, float)) and int(direct) > 0:
+        candidates.append(int(direct))
+    wanted = str(dispatch_id or "")
+    for record in state.get("corrective_wave_records") or []:
+        if not isinstance(record, Mapping) or wanted and str(record.get("dispatch_id") or "") != wanted:
+            continue
+        try:
+            value = datetime.fromisoformat(str(record.get("started_at") or "").replace("Z", "+00:00"))
+            candidates.append(int(value.timestamp() * 1000))
+        except (TypeError, ValueError):
+            pass
+    for collection in (state.get("work_items") or [], state.get("worker_result_packets") or []):
+        for item in collection:
+            if not isinstance(item, Mapping) or wanted and str(item.get("dispatch_id") or "") != wanted:
+                continue
+            raw = item.get("dispatch_started_epoch_ms")
+            if isinstance(raw, (int, float)) and int(raw) > 0:
+                candidates.append(int(raw))
+            try:
+                value = datetime.fromisoformat(str(item.get("started_at") or "").replace("Z", "+00:00"))
+                candidates.append(int(value.timestamp() * 1000))
+            except (TypeError, ValueError):
+                pass
+    return min(candidates) if candidates else None
+
+
 def _proposal_worker_id(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
         return str(value.get("worker_node_id") or value.get("node") or value.get("worker") or value.get("id") or "")
     return ""
+
+
+def policy_filtered_memory_proposals(proposals: Any, state: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID or corrective_memory_recall_allowed(state):
+        return []
+    available = state.get("available_worker_nodes") if isinstance(state.get("available_worker_nodes"), list) else []
+    memory_ids = {
+        str(item.get("id"))
+        for item in available
+        if isinstance(item, Mapping) and item.get("type") == WorkflowNodeType.DURABLE_MEMORY_WORKER.value
+    }
+    memory_ids.add(WorkflowNodeType.DURABLE_MEMORY_WORKER.value)
+    result: List[Dict[str, Any]] = []
+    for ordinal, raw in enumerate(proposals if isinstance(proposals, list) else []):
+        if not isinstance(raw, Mapping) or _proposal_worker_id(raw) not in memory_ids:
+            continue
+        result.append({
+            "proposal_id": stable_corrective_identity(
+                "memory-policy-filter",
+                run=state.get("agent_run_id"),
+                wave=state.get("corrective_wave", 0),
+                ordinal=ordinal,
+                query=_normalized_query(raw.get("query"), fallback=str(state.get("question") or "")).casefold(),
+            ),
+            "wave_id": max(0, int(state.get("corrective_wave") or 0)),
+            "worker_node_id": _proposal_worker_id(raw),
+            "reason": "no_policy_readable_memory_scope",
+        })
+    return result
 
 
 def normalize_work_items(
@@ -180,7 +241,11 @@ def normalize_work_items(
             continue
         if is_corrective and worker_type == WorkflowNodeType.WEB_WORKER.value and not corrective_policy["allow_web_fallback"]:
             continue
-        if is_corrective and worker_type == WorkflowNodeType.DURABLE_MEMORY_WORKER.value and corrective_policy["memory_evidence_mode"] == "disabled":
+        if (
+            is_corrective
+            and worker_type == WorkflowNodeType.DURABLE_MEMORY_WORKER.value
+            and not corrective_memory_recall_allowed(state)
+        ):
             continue
         source_strategy = corrective_source_strategy(worker_type, file_hash=file_hash)
         proposed_strategy = str(raw.get("strategy") or "") if isinstance(raw, dict) else ""
@@ -816,7 +881,7 @@ def cancelled_parallel_dispatch(
     result = {**combined, "parallel_summary": summary}
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
         now = datetime.now(timezone.utc)
-        started_ms = int(state.get("dispatch_started_epoch_ms") or int(now.timestamp() * 1000))
+        started_ms = dispatch_started_epoch_ms(state, summary.get("dispatch_id"))
         record_id = stable_corrective_identity(
             "wave", run=state.get("agent_run_id"), dispatch=summary.get("dispatch_id"), wave=state.get("corrective_wave", 0)
         )
@@ -824,9 +889,13 @@ def cancelled_parallel_dispatch(
             "record_id": record_id,
             "dispatch_id": summary.get("dispatch_id"),
             "wave_id": max(0, int(state.get("corrective_wave") or 0)),
-            "started_at": datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            "started_at": (
+                datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                if started_ms is not None else None
+            ),
             "completed_at": now.isoformat().replace("+00:00", "Z"),
-            "elapsed_ms": max(0, int(now.timestamp() * 1000) - started_ms),
+            "elapsed_ms": max(0, int(now.timestamp() * 1000) - started_ms) if started_ms is not None else None,
+            "latency_unavailable": started_ms is None,
             "outcome": "cancelled",
             "partial": False,
             **{key: summary.get(key, 0) for key in ("planned", "completed", "skipped", "failed", "timed_out", "cancelled")},

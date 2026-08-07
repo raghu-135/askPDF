@@ -75,6 +75,10 @@ function AgentRunDebugPanel({
   const corrective = correctiveInspection?.corrective;
   const retrievalQuality = correctiveInspection?.retrievalQuality;
   const grounding = correctiveInspection?.grounding;
+  const groundingUsefulness = grounding?.usefulness
+    || (typeof grounding?.usefulness_score === 'number'
+      ? (Number(grounding.usefulness_score) >= 3 ? 'yes (historical score)' : 'no (historical score)')
+      : undefined);
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -307,6 +311,9 @@ function AgentRunDebugPanel({
             {Number(corrective.timed_out_waves || 0) ? ` · ${corrective.timed_out_waves} timed out` : ''}
             {Number(corrective.cancelled_waves || 0) ? ` · ${corrective.cancelled_waves} cancelled` : ''}
             {Number(corrective.source_expansions || 0) ? ` · ${corrective.source_expansions} source expansions` : ''}
+            {Array.isArray(corrective.policy_filtered_memory_proposals) && corrective.policy_filtered_memory_proposals.length
+              ? ` · ${corrective.policy_filtered_memory_proposals.length} memory proposals policy-filtered`
+              : ''}
             {corrective.exhausted_budget_type ? ` · exhausted ${String(corrective.exhausted_budget_type).replaceAll('_', ' ')}` : ''}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
@@ -315,6 +322,8 @@ function AgentRunDebugPanel({
             {' · '}{Number(corrective.citation_violations || 0)} citation violations
             {' · '}{Number(corrective.contradictions || 0)} contradictions
             {' · '}{Number(corrective.unresolved_gaps || 0)} gaps
+            {groundingUsefulness ? ` · usefulness ${groundingUsefulness}` : ''}
+            {corrective.termination_reason ? ` · stopped: ${String(corrective.termination_reason).replaceAll('_', ' ')}` : ''}
           </Typography>
           {(Array.isArray(corrective.history) ? corrective.history : []).map((wave: Record<string, any>) => (
             <Box component="details" key={`wave:${wave.wave_id}`} sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
@@ -330,7 +339,7 @@ function AgentRunDebugPanel({
             <Box component="details" key={`outcome:${wave.wave_id}`} sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
               <Typography component="summary" variant="caption">
                 Wave {wave.wave_id} · {wave.outcome || wave.status || 'unknown'} · {Number(wave.completed || 0)}/{Number(wave.planned || 0)} workers completed
-                {wave.partial ? ' · partial' : ''}{wave.latency_ms != null ? ` · ${Math.round(Number(wave.latency_ms))} ms` : ''}
+                {wave.partial ? ' · partial' : ''}{wave.latency_ms != null ? ` · ${Math.round(Number(wave.latency_ms))} ms` : ' · latency unavailable'}
               </Typography>
               {(Array.isArray(wave.work_items) ? wave.work_items : []).map((item: Record<string, any>, index: number) => (
                 <Typography key={`${wave.wave_id}:outcome:${item.work_id || index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
@@ -349,6 +358,7 @@ function AgentRunDebugPanel({
                   {(item.source_ids || []).length ? ` · ${(item.source_ids || []).join(', ')}` : ''}
                   {(item.coverage || []).length ? ` · covers ${(item.coverage || []).join(', ')}` : ''}
                   {(item.rejection_reasons || []).length ? ` · ${(item.rejection_reasons || []).join(', ').replaceAll('_', ' ')}` : ''}
+                  {(item.instruction_injection_reasons || []).length ? ` · injection: ${(item.instruction_injection_reasons || []).join(', ').replaceAll('_', ' ')}` : ''}
                 </Typography>
               ))}
             </Box>

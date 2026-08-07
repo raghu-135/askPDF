@@ -19,6 +19,13 @@ CORRECTIVE_SOURCE_STRATEGY_RANK = {
     strategy: index for index, strategy in enumerate(CORRECTIVE_SOURCE_STRATEGIES)
 }
 
+CORRECTIVE_USEFULNESS_VALUES = ("yes", "no", "maybe")
+CORRECTIVE_BUDGET_REASONS = frozenset({
+    "max_corrective_waves",
+    "max_total_work_items",
+    "max_total_tool_attempts",
+})
+
 
 def stable_corrective_identity(kind: str, **fields: Any) -> str:
     payload = {"kind": kind, **fields}
@@ -51,10 +58,24 @@ def corrective_source_strategy(worker_type: str, *, file_hash: str = "") -> str:
         "web_worker": "web",
     }.get(worker_type, "")
 
+
+def corrective_memory_recall_allowed(state: Mapping[str, Any]) -> bool:
+    """Return whether this corrective run has at least one policy-readable scope."""
+
+    policy = normalized_corrective_policy(state.get("corrective_policy"))
+    if policy["memory_evidence_mode"] != "policy_scoped":
+        return False
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
+    scope_policy = (
+        bundle.get("durable_memory_scope_policy")
+        if isinstance(bundle.get("durable_memory_scope_policy"), Mapping)
+        else {}
+    )
+    return bool(scope_policy.get("searched_scopes"))
+
 CORRECTIVE_POLICY_FIELDS: Dict[str, Dict[str, Any]] = {
     "minimum_relevance_confidence": {"type": "number", "default": 0.65, "minimum": 0.0, "maximum": 1.0, "step": 0.05, "label": "Minimum relevance confidence"},
     "minimum_supported_claim_ratio": {"type": "number", "default": 1.0, "minimum": 0.8, "maximum": 1.0, "step": 0.05, "label": "Minimum supported claim ratio"},
-    "minimum_usefulness_score": {"type": "integer", "default": 3, "minimum": 1, "maximum": 5, "step": 1, "label": "Minimum usefulness score"},
     "max_corrective_waves": {"type": "integer", "default": 2, "minimum": 1, "maximum": 3, "step": 1, "label": "Maximum corrective waves"},
     "max_total_work_items": {"type": "integer", "default": 8, "minimum": 2, "maximum": 16, "step": 1, "label": "Maximum retrieval work items"},
     "max_total_tool_attempts": {"type": "integer", "default": 12, "minimum": 2, "maximum": 24, "step": 1, "label": "Maximum tool attempts"},

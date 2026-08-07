@@ -627,7 +627,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     },
     NODE_PARALLEL_DISPATCH: {
         "state_reads": ["work_items", "worker_result_packets", "parallel_policy", "corrective_wave_records"],
-        "state_writes": ["dispatch_id", "work_items", "parallel_summary", "corrective_wave_records"],
+        "state_writes": ["dispatch_id", "work_items", "parallel_summary", "corrective_wave_records", "corrective_policy_filtered_proposals"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_DECISION, "output_budget": BUDGET_DECISION},
         "observability": {
@@ -669,7 +669,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     },
     NODE_RETRIEVAL_QUALITY_GRADER: {
         "state_reads": ["question", "evidence_packets", "corrective_policy", "corrective_wave", "parallel_summary"],
-        "state_writes": ["retrieval_quality_report", "evidence_assessments", "source_assessments", "unresolved_gaps", "corrective_retrieval_route", "corrective_budget_usage", "corrective_budget_exhausted_reason"],
+        "state_writes": ["retrieval_quality_report", "evidence_assessments", "source_assessments", "unresolved_gaps", "corrective_retrieval_route", "corrective_budget_usage", "corrective_budget_exhausted_reason", "corrective_termination_reason"],
         "prompt_slots": [NODE_RETRIEVAL_QUALITY_GRADER],
         "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
         "observability": {"span_kind": SPAN_CONTROL, "event_prefix": NODE_RETRIEVAL_QUALITY_GRADER, "summary_fields": ["corrective_decision", "retrieval_quality_report", "budget_exhausted_reason"], "raw_payload": RAW_PAYLOAD_BOUNDED},
@@ -677,7 +677,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
     },
     NODE_GROUNDED_ANSWER_VERIFIER: {
         "state_reads": ["question", "final_answer", "evidence_packets", "corrective_policy", "corrective_wave", "answer_revision_count"],
-        "state_writes": ["grounding_report", "verified_claims", "contradiction_report", "unresolved_gaps", "grounded_answer_route", "answer_quality_report", "corrective_budget_exhausted_reason"],
+        "state_writes": ["grounding_report", "verified_claims", "contradiction_report", "unresolved_gaps", "grounded_answer_route", "answer_quality_report", "corrective_budget_exhausted_reason", "corrective_termination_reason"],
         "prompt_slots": [NODE_GROUNDED_ANSWER_VERIFIER],
         "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
         "observability": {"span_kind": SPAN_CONTROL, "event_prefix": NODE_GROUNDED_ANSWER_VERIFIER, "summary_fields": ["grounded_answer_route", "citation_violation_count", "contradiction_count", "budget_exhausted_reason"], "raw_payload": RAW_PAYLOAD_BOUNDED},
