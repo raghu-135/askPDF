@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import ToolWarningCode, normalize_tool_result
@@ -119,6 +120,49 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
     assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.search_web_chunks.call_args.kwargs["embedding_model"] == "embed-1"
+
+
+@pytest.mark.asyncio
+async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sources(monkeypatch):
+    class FakeEmbeddingModel:
+        async def aembed_query(self, query):
+            return [0.1, 0.2]
+
+    fake_db = SimpleNamespace(
+        search_knowledge_sources=AsyncMock(return_value=[{"file_hash": "owned", "chunk_id": 0, "text": "seed"}]),
+        get_knowledge_source_chunks_by_ids=AsyncMock(return_value=[{
+            "file_hash": "owned", "chunk_id": 0, "text": "Focused evidence",
+            "metadata": {"page_start": 1, "page_end": 1},
+        }]),
+    )
+    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
+    monkeypatch.setattr(agent_tools, "get_document_metadata_lookup", AsyncMock(return_value={
+        "owned": {"file_name": "paper.pdf", "source_type": "pdf"},
+    }))
+
+    raw = await agent_tools.search_document_by_id.ainvoke(
+        {"query": "focused", "file_hash": "owned", "max_results": 5},
+        config=_config(caller_node="retrieval_worker"),
+    )
+    payload = normalize_tool_result(raw, tool_name="search_document_by_id")
+    assert payload["ok"] is True
+    _assert_contract(payload, tool_name="search_document_by_id", caller_node="retrieval_worker", artifact_keys=("document_sources",))
+    assert fake_db.search_knowledge_sources.call_args.kwargs["file_hashes"] == ["owned"]
+    assert len(fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["chunk_ids"]) <= 21
+
+    unowned = await agent_tools.search_document_by_id.ainvoke(
+        {"query": "focused", "file_hash": "not-owned"},
+        config=_config(caller_node="retrieval_worker"),
+    )
+    unowned_payload = normalize_tool_result(unowned, tool_name="search_document_by_id")
+    assert ToolWarningCode.NO_THREAD_DOCUMENTS in unowned_payload["warnings"]
+
+
+def test_search_document_by_id_rejects_path_and_url_identifiers():
+    for value in ("../secret.pdf", "/tmp/file", "https://example.com/file"):
+        with pytest.raises(ValidationError):
+            agent_tools.FocusedDocumentSearchInput(query="q", file_hash=value)
 
 
 @pytest.mark.asyncio

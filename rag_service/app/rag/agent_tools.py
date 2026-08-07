@@ -60,7 +60,7 @@ class ThreadTimelineSearchInput(BaseModel):
 
 class FocusedDocumentSearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
-    file_hash: str = Field(min_length=1, max_length=256)
+    file_hash: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     max_results: int = Field(default=10, ge=1, le=30)
 
 

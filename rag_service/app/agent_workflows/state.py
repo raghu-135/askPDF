@@ -70,10 +70,14 @@ class WorkerWorkItem(TypedDict):
     dispatch_deadline_epoch_ms: int
     dispatch_proposal_signature: str
     work_id: str
+    query_id: str
     ordinal: int
     worker_node_id: str
     worker_type: str
     query: str
+    source_strategy: str
+    source_scope: str
+    source_expansion: bool
     evidence_kind: str
     dedupe_key: str
     attempt: int

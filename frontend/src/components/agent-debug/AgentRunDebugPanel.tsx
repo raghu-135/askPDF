@@ -7,7 +7,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import { buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
+import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
@@ -68,9 +68,13 @@ function AgentRunDebugPanel({
   const executionDetailsAvailable = Boolean(runDetails && !running);
   const parallelSummary = liveTraceView?.parallel?.summary || runDetails?.parallel_summary || runDetails?.metrics_json?.parallel_summary;
   const parallelTasks = liveTraceView?.parallel?.tasks || [];
-  const corrective = runDetails?.corrective || runDetails?.metrics_json?.corrective || traceView?.metrics?.corrective;
-  const retrievalQuality = runDetails?.retrieval_quality_report || runDetails?.metrics_json?.retrieval_quality_report || traceView?.metrics?.retrieval_quality_report;
-  const grounding = runDetails?.grounding_report || runDetails?.metrics_json?.grounding_report || traceView?.metrics?.grounding_report;
+  const correctiveInspection = useMemo(
+    () => runDetails ? buildCorrectiveInspection(runDetails, traceView?.metrics) : undefined,
+    [runDetails, traceView?.metrics],
+  );
+  const corrective = correctiveInspection?.corrective;
+  const retrievalQuality = correctiveInspection?.retrievalQuality;
+  const grounding = correctiveInspection?.grounding;
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -297,6 +301,8 @@ function AgentRunDebugPanel({
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
             {Number(corrective.waves || 0)} corrective waves · {Number(corrective.distinct_work_items || 0)} work items · {Number(corrective.tool_attempts || 0)} attempts
             {Number(corrective.tool_retries || 0) ? ` · ${corrective.tool_retries} retries` : ''}
+            {` · ${Number(corrective.partial_waves || 0)} partial waves`}
+            {Number(corrective.source_expansions || 0) ? ` · ${corrective.source_expansions} source expansions` : ''}
             {corrective.exhausted_budget_type ? ` · exhausted ${String(corrective.exhausted_budget_type).replaceAll('_', ' ')}` : ''}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
@@ -316,12 +322,28 @@ function AgentRunDebugPanel({
               ))}
             </Box>
           ))}
+          {(Array.isArray(corrective.wave_outcomes) ? corrective.wave_outcomes : []).map((wave: Record<string, any>) => (
+            <Box component="details" key={`outcome:${wave.wave_id}`} sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
+              <Typography component="summary" variant="caption">
+                Wave {wave.wave_id} outcomes · {Number(wave.completed || 0)}/{Number(wave.planned || 0)} completed{wave.partial ? ' · partial' : ''}
+              </Typography>
+              {(Array.isArray(wave.work_items) ? wave.work_items : []).map((item: Record<string, any>, index: number) => (
+                <Typography key={`${wave.wave_id}:outcome:${item.work_id || index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
+                  {item.source_strategy || item.worker_node_id || 'worker'} · {item.status || 'unknown'} · {item.query || 'query'}
+                  {item.query_id ? ` · query ${item.query_id}` : ''}{item.source_expansion ? ' · expanded source' : ''}
+                </Typography>
+              ))}
+            </Box>
+          ))}
           {retrievalQuality && (
             <Box component="details" sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
               <Typography component="summary" variant="caption">Retrieval grade · {retrievalQuality.verdict || 'unknown'} · {Math.round(Number(retrievalQuality.confidence || 0) * 100)}%</Typography>
               {(Array.isArray(retrievalQuality.packet_assessments) ? retrievalQuality.packet_assessments : []).map((item: Record<string, any>) => (
                 <Typography key={String(item.packet_id)} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
-                  {item.packet_id}: {item.relevant ? 'relevant' : 'rejected'} · {Math.round(Number(item.confidence || 0) * 100)}%{item.instruction_injection_risk ? ' · injection risk' : ''}
+                  {item.packet_id}: {item.eligible ? 'eligible' : 'rejected'} · {Math.round(Number(item.confidence || 0) * 100)}%
+                  {(item.source_ids || []).length ? ` · ${(item.source_ids || []).join(', ')}` : ''}
+                  {(item.coverage || []).length ? ` · covers ${(item.coverage || []).join(', ')}` : ''}
+                  {(item.rejection_reasons || []).length ? ` · ${(item.rejection_reasons || []).join(', ').replaceAll('_', ' ')}` : ''}
                 </Typography>
               ))}
             </Box>
@@ -331,10 +353,11 @@ function AgentRunDebugPanel({
               <Typography component="summary" variant="caption">Support and citations · {Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported</Typography>
               {(Array.isArray(grounding.claims) ? grounding.claims : []).map((claim: Record<string, any>, index: number) => (
                 <Typography key={`claim:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
-                  {claim.support}: {claim.claim}{claim.contradicted ? ' · contradicted' : ''}
+                  {claim.support}: {claim.claim}{(claim.source_ids || []).length ? ` · ${(claim.source_ids || []).join(', ')}` : ''}{claim.contradicted ? ' · contradicted' : ''}
                 </Typography>
               ))}
               {(grounding.citation_violations || []).map((item: string, index: number) => <Typography key={`citation:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
+              {(grounding.contradictions || []).map((item: Record<string, any>, index: number) => <Typography key={`contradiction:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item.claim || 'Conflicting evidence'}{(item.source_ids || []).length ? ` · ${(item.source_ids || []).join(', ')}` : ''}</Typography>)}
               {(grounding.unresolved_gaps || []).map((item: string, index: number) => <Typography key={`gap:${index}`} variant="caption" color="warning.main" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
             </Box>
           )}

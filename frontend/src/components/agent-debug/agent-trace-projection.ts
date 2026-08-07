@@ -190,6 +190,18 @@ export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
   return runDetails.metrics_json || {};
 };
 
+export const buildCorrectiveInspection = (
+  runDetails: AgentRunDetails,
+  traceMetrics: Record<string, any> = {},
+) => {
+  const metrics = asObject(runDetails.metrics_json);
+  const corrective = asObject(runDetails.corrective || metrics.corrective || traceMetrics.corrective);
+  const retrievalQuality = asObject(runDetails.retrieval_quality_report || metrics.retrieval_quality_report || traceMetrics.retrieval_quality_report);
+  const grounding = asObject(runDetails.grounding_report || metrics.grounding_report || traceMetrics.grounding_report);
+  if (!Object.keys(corrective).length && !Object.keys(retrievalQuality).length && !Object.keys(grounding).length) return undefined;
+  return { corrective, retrievalQuality, grounding };
+};
+
 const retainedNodeStatus = (row: Record<string, any>): string | undefined => {
   const status = typeof row.status === 'string' ? row.status : undefined;
   const span = asObject(row.span);

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping
 
 from app.agent_workflows.corrective_contracts import normalized_corrective_policy
+from app.agent_workflows.evidence import corrective_evidence_packets
 from app.agent_workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
 
@@ -90,10 +91,19 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
     contradictions = _contradictions(parsed.get("material_contradictions"))
     gaps = _strings(parsed.get("missing_requirements"))
     policy = normalized_corrective_policy(state.get("corrective_policy"))
-    eligible = [
-        item for item in assessments
-        if item["relevant"] and item["provenance_complete"] and not item["instruction_injection_risk"]
-    ]
+    for item in assessments:
+        reasons = []
+        if not item["relevant"]:
+            reasons.append("irrelevant")
+        if not item["provenance_complete"]:
+            reasons.append("incomplete_provenance")
+        if item["instruction_injection_risk"]:
+            reasons.append("instruction_injection_risk")
+        if item["confidence"] < policy["minimum_relevance_confidence"]:
+            reasons.append("below_relevance_threshold")
+        item["eligible"] = not reasons
+        item["rejection_reasons"] = reasons
+    eligible = [item for item in assessments if item["eligible"]]
     covered = {value.casefold() for item in eligible for value in item["coverage"]}
     required = _strings(state.get("evidence_gaps"))
     uncovered = [item for item in required if item.casefold() not in covered]
@@ -109,7 +119,7 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
         "verdict": verdict,
         "confidence": confidence,
         "packet_assessments": assessments,
-        "source_assessments": [{"source_id": source_id, "packet_id": item["packet_id"], "eligible": item in eligible} for item in assessments for source_id in item["source_ids"]],
+        "source_assessments": [{"source_id": source_id, "packet_id": item["packet_id"], "eligible": item["eligible"], "rejection_reasons": item["rejection_reasons"]} for item in assessments for source_id in item["source_ids"]],
         "missing_requirements": gaps,
         "material_contradictions": contradictions,
         "unknown_packet_ids": sorted(set(unknown_ids)),
@@ -145,7 +155,7 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
 
 def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, Any]) -> Dict[str, Any]:
     valid_source_ids = {
-        str(source_id) for packet in state.get("evidence_packets", [])
+        str(source_id) for packet in corrective_evidence_packets(dict(state))
         if isinstance(packet, dict) for source_id in packet.get("source_ids") or [] if source_id
     }
     claims: list[Dict[str, Any]] = []

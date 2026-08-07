@@ -9,6 +9,7 @@ from app.agent_workflows.parallel_contracts import (
     ParallelEventName,
 )
 from app.agent_workflows.parallel_observability import project_parallel_events
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 
 
 def _dict_events(events: Any) -> List[Dict[str, Any]]:
@@ -101,22 +102,54 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         metrics["parallel_worker_latency_ms_average"] = round(sum(worker_latencies) / len(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_worker_latency_ms_max"] = round(max(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_partial_evidence"] = bool(parallel.get("partial_evidence"))
-    if result.get("workflow_id") == "corrective_self_rag_agent" or result.get("retrieval_quality_report") or result.get("grounding_report"):
+    if result.get("workflow_id") == CORRECTIVE_WORKFLOW_ID or result.get("retrieval_quality_report") or result.get("grounding_report"):
         retrieval = result.get("retrieval_quality_report") if isinstance(result.get("retrieval_quality_report"), dict) else {}
         grounding = result.get("grounding_report") if isinstance(result.get("grounding_report"), dict) else {}
         assessments = retrieval.get("packet_assessments") if isinstance(retrieval.get("packet_assessments"), list) else []
         attempts = [item for item in result.get("parallel_attempt_records") or [] if isinstance(item, dict)]
-        work_ids = {
-            str(item.get("work_id")) for item in result.get("worker_result_packets") or []
-            if isinstance(item, dict) and item.get("work_id")
-        }
+        result_packets = [item for item in result.get("worker_result_packets") or [] if isinstance(item, dict)]
+        latest_by_work: Dict[str, Dict[str, Any]] = {}
+        packets_without_work: List[Dict[str, Any]] = []
+        for item in result_packets:
+            work_id = str(item.get("work_id") or "")
+            if not work_id:
+                packets_without_work.append(item)
+                continue
+            previous = latest_by_work.get(work_id)
+            if previous is None or int(item.get("attempt") or 0) >= int(previous.get("attempt") or 0):
+                latest_by_work[work_id] = item
+        result_packets = [*latest_by_work.values(), *packets_without_work]
+        work_ids = set(latest_by_work)
+        wave_ids = sorted({int(item.get("wave_id") or 0) for item in result_packets})
+        wave_outcomes = []
+        for wave_id in wave_ids:
+            wave_packets = [item for item in result_packets if int(item.get("wave_id") or 0) == wave_id]
+            statuses = [str(item.get("status") or "") for item in wave_packets]
+            wave_outcomes.append({
+                "wave_id": wave_id,
+                "planned": len({str(item.get("work_id")) for item in wave_packets if item.get("work_id")}),
+                "completed": statuses.count("completed"),
+                "failed": statuses.count("failed"),
+                "timed_out": statuses.count("timed_out"),
+                "cancelled": statuses.count("cancelled"),
+                "partial": "completed" in statuses and any(status in {"failed", "timed_out", "cancelled"} for status in statuses),
+                "latency_ms": round(max((float(item.get("elapsed_ms") or 0) for item in wave_packets), default=0.0), 2),
+                "work_items": [{
+                    key: item.get(key)
+                    for key in ("work_id", "query_id", "worker_node_id", "source_strategy", "source_scope", "query", "status", "attempt", "source_expansion")
+                } for item in wave_packets],
+            })
         metrics["corrective"] = {
             "waves": max(0, int(result.get("corrective_wave") or 0)),
+            "attempted_waves": len(wave_ids),
+            "completed_waves": sum(1 for item in wave_outcomes if item["planned"] and not item["cancelled"]),
+            "partial_waves": sum(1 for item in wave_outcomes if item["partial"]),
             "distinct_work_items": len(work_ids),
             "tool_attempts": len(attempts),
             "tool_retries": sum(1 for item in attempts if int(item.get("attempt") or 1) > 1),
-            "accepted_packets": sum(1 for item in assessments if isinstance(item, dict) and item.get("relevant") and item.get("provenance_complete") and not item.get("instruction_injection_risk")),
-            "rejected_packets": sum(1 for item in assessments if isinstance(item, dict) and (not item.get("relevant") or not item.get("provenance_complete") or item.get("instruction_injection_risk"))),
+            "accepted_packets": sum(1 for item in assessments if isinstance(item, dict) and item.get("eligible")),
+            "rejected_packets": sum(1 for item in assessments if isinstance(item, dict) and not item.get("eligible")),
+            "source_expansions": sum(1 for item in result_packets if item.get("source_expansion")),
             "support_ratio": float(grounding.get("supported_claim_ratio") or 0.0),
             "unsupported_claims": sum(1 for item in grounding.get("claims") or [] if isinstance(item, dict) and item.get("support") != "full"),
             "citation_violations": len(grounding.get("citation_violations") or []),
@@ -126,6 +159,7 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
             "corrective_latency_ms": round(sum(_elapsed_ms(event) for event in node_events if (event.get("node") or event.get("name")) in {"retrieval_quality_grader", "replanner", "grounded_answer_verifier"}), 2),
             "exhausted_budget_type": result.get("corrective_budget_exhausted_reason") or None,
             "history": [dict(item) for item in result.get("corrective_history") or [] if isinstance(item, dict)][-8:],
+            "wave_outcomes": wave_outcomes[-8:],
         }
         metrics["retrieval_quality_report"] = retrieval
         metrics["grounding_report"] = grounding

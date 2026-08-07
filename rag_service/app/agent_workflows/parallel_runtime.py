@@ -4,18 +4,28 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
-from urllib.parse import urlsplit, urlunsplit
 
 from langgraph.types import Send, TimeoutPolicy
 from langgraph.errors import NodeTimeoutError
 
 from app.agent_workflows.enums import WorkflowNodeType
-from app.agent_workflows.corrective_contracts import normalized_corrective_policy
-from app.agent_workflows.evidence import canonical_source_id, combine_evidence, packet_source_ids
+from app.agent_workflows.corrective_contracts import (
+    CORRECTIVE_SOURCE_STRATEGIES,
+    CORRECTIVE_SOURCE_STRATEGY_RANK,
+    CORRECTIVE_WORKFLOW_ID,
+    corrective_source_strategy,
+    normalized_corrective_policy,
+)
+from app.agent_workflows.evidence import (
+    canonical_source_id,
+    combine_evidence,
+    normalized_canonical_source_id,
+    normalized_source_url,
+    packet_source_ids,
+)
 from app.agent_workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,
     PARALLEL_EVENT_NAMES,
@@ -32,6 +42,10 @@ from app.models.retry import is_retryable_model_error
 
 WORKER_EVIDENCE_KIND = PARALLEL_WORKER_EVIDENCE_KINDS
 TERMINAL_WORKER_STATUSES = PARALLEL_TERMINAL_WORKER_STATUSES
+CORRECTIVE_PROVENANCE_FIELDS = (
+    "dispatch_id", "work_id", "query_id", "work_ordinal", "wave_id",
+    "retrieval_query", "source_strategy", "source_scope", "source_expansion",
+)
 
 
 def parallel_feature_enabled() -> bool:
@@ -101,7 +115,7 @@ def normalize_work_items(
 ) -> List[Dict[str, Any]]:
     policy = normalized_parallel_policy(state.get("parallel_policy"))
     corrective_policy = normalized_corrective_policy(state.get("corrective_policy"))
-    is_corrective = state.get("workflow_id") == "corrective_self_rag_agent"
+    is_corrective = state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
     prior_work_ids = {
         str(item.get("work_id")) for item in state.get("worker_result_packets", [])
         if isinstance(item, Mapping) and item.get("work_id")
@@ -137,8 +151,7 @@ def normalize_work_items(
         "visit": dispatch_visit,
         "wave": wave,
     })
-    normalized: List[Dict[str, Any]] = []
-    allocated_attempts = 0
+    candidates: List[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for raw in raw_items:
         worker_id = _proposal_worker_id(raw)
@@ -151,6 +164,8 @@ def normalize_work_items(
         worker_type = str(worker.get("type"))
         query = _normalized_query(raw.get("query") if isinstance(raw, dict) else None, fallback=str(state.get("question") or ""))
         file_hash = str(raw.get("file_hash") or "")[:256] if isinstance(raw, dict) else ""
+        if is_corrective and file_hash and any(token in file_hash for token in ("/", "\\", "://")):
+            continue
         if file_hash and (worker_type != WorkflowNodeType.RETRIEVAL_WORKER.value or file_hash not in allowed_file_hashes):
             continue
         key = (worker_type, f"{file_hash}|{query.casefold()}")
@@ -162,13 +177,65 @@ def normalize_work_items(
             continue
         if is_corrective and worker_type == WorkflowNodeType.DURABLE_MEMORY_WORKER.value and corrective_policy["memory_evidence_mode"] == "disabled":
             continue
+        source_strategy = corrective_source_strategy(worker_type, file_hash=file_hash)
+        proposed_strategy = str(raw.get("strategy") or "") if isinstance(raw, dict) else ""
+        if is_corrective and (
+            not source_strategy
+            or proposed_strategy and (
+                proposed_strategy not in CORRECTIVE_SOURCE_STRATEGIES
+                or proposed_strategy != source_strategy
+            )
+        ):
+            continue
         seen.add(key)
-        ordinal = len(normalized)
-        dedupe_key = _stable_hash({"worker_type": worker_type, "query": query.casefold()})
-        work_id = _stable_hash({
-            "dispatch_id": dispatch_id,
-            "ordinal": ordinal,
+        candidates.append({
             "worker_node_id": worker_id,
+            "worker_type": worker_type,
+            "query": query,
+            "file_hash": file_hash or None,
+            "source_strategy": source_strategy if is_corrective else proposed_strategy,
+            "source_scope": file_hash or source_strategy or worker_type,
+            "reason": str(raw.get("reason") or "")[:500] if isinstance(raw, dict) else "",
+        })
+    if is_corrective:
+        candidates.sort(key=lambda item: (
+            CORRECTIVE_SOURCE_STRATEGY_RANK[item["source_strategy"]],
+            str(item.get("source_scope") or ""),
+            str(item.get("worker_node_id") or ""),
+            str(item.get("query") or "").casefold(),
+        ))
+
+    prior_strategy_ranks = [
+        CORRECTIVE_SOURCE_STRATEGY_RANK[str(item.get("source_strategy"))]
+        for item in state.get("worker_result_packets", [])
+        if isinstance(item, Mapping) and str(item.get("source_strategy")) in CORRECTIVE_SOURCE_STRATEGY_RANK
+    ]
+    prior_max_rank = max(prior_strategy_ranks, default=-1)
+    normalized: List[Dict[str, Any]] = []
+    allocated_attempts = 0
+    for candidate in candidates:
+        ordinal = len(normalized)
+        query = str(candidate["query"])
+        worker_id = str(candidate["worker_node_id"])
+        worker_type = str(candidate["worker_type"])
+        source_scope = str(candidate["source_scope"])
+        query_id = _stable_hash({
+            "run": state.get("agent_run_id"),
+            "node": dispatch_node_id,
+            "wave": wave,
+            "ordinal": ordinal,
+            "worker": worker_id,
+            "source_scope": source_scope,
+            "query": query.casefold(),
+        })
+        dedupe_key = query_id
+        work_id = _stable_hash({
+            "run": state.get("agent_run_id"),
+            "node": dispatch_node_id,
+            "wave": wave,
+            "ordinal": ordinal,
+            "worker": worker_id,
+            "source_scope": source_scope,
             "query": query.casefold(),
         })
         timeout_ms = (
@@ -183,14 +250,22 @@ def normalize_work_items(
             "dispatch_id": dispatch_id,
             "dispatch_visit": dispatch_visit,
             "work_id": work_id,
+            "query_id": query_id,
             "ordinal": ordinal,
             "worker_node_id": worker_id,
             "worker_type": worker_type,
             "query": query,
-            "file_hash": file_hash or None,
+            "file_hash": candidate.get("file_hash"),
             "wave_id": wave,
             "corrective_provenance": is_corrective,
-            "reason": str(raw.get("reason") or "")[:500] if isinstance(raw, dict) else "",
+            "reason": candidate["reason"],
+            "source_strategy": candidate["source_strategy"],
+            "source_scope": source_scope,
+            "source_expansion": bool(
+                is_corrective
+                and wave > 0
+                and CORRECTIVE_SOURCE_STRATEGY_RANK[candidate["source_strategy"]] > prior_max_rank
+            ),
             "evidence_kind": WORKER_EVIDENCE_KIND[worker_type],
             "dedupe_key": dedupe_key,
             "attempt": 1,
@@ -314,33 +389,37 @@ def _sort_key(packet: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _normalized_url(value: Any) -> str:
-    try:
-        parts = urlsplit(str(value or "").strip())
-    except ValueError:
-        return ""
-    if not parts.netloc:
-        return ""
-    path = re.sub(r"/{2,}", "/", parts.path or "/")
-    return urlunsplit((parts.scheme.lower() or "https", parts.netloc.lower(), path.rstrip("/") or "/", parts.query, ""))
-
-
 def _content_hash(value: Any) -> str:
     normalized = " ".join(str(value or "").split()).casefold()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _sanitize_corrective_urls(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_sanitize_corrective_urls(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: _sanitize_corrective_urls(item) for key, item in value.items()}
+    for key in ("url", "source_url", "link", "display_url"):
+        if key in result:
+            safe_url = normalized_source_url(result[key])
+            result[key] = safe_url or ""
+            if safe_url:
+                result.setdefault("display_url", safe_url)
+    return result
+
+
 def _document_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
     identity = item.get("document_id") or item.get("file_id") or item.get("file_hash")
-    page = item.get("page_number") or item.get("page") or item.get("page_start")
-    locator = item.get("section_id") or item.get("chunk_id") or item.get("section")
+    page = next((item.get(key) for key in ("page_number", "page", "page_start") if item.get(key) not in (None, "")), None)
+    locator = next((item.get(key) for key in ("section_id", "chunk_id", "section") if item.get(key) not in (None, "")), None)
     if identity:
         return (str(identity), page, str(locator or ""))
     return (str(item.get("title") or item.get("file_name") or "").casefold(), page, _content_hash(item.get("content") or item.get("text")))
 
 
 def _web_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
-    url = _normalized_url(item.get("url") or item.get("source_url") or item.get("link"))
+    url = normalized_source_url(item.get("url") or item.get("source_url") or item.get("link"))
     if url:
         return (url,)
     return (str(item.get("title") or "").casefold(), _content_hash(item.get("content") or item.get("text") or item.get("snippet")))
@@ -358,12 +437,13 @@ def _merge_unique_dicts(items: Iterable[Any], key_fn, *, enrich_provenance: bool
                 merged[key] = dict(raw)
                 order.append(key)
                 continue
-            source_id = canonical_source_id(dict(raw))
+            safe_raw = _sanitize_corrective_urls(dict(raw))
+            source_id = canonical_source_id(safe_raw)
             merged[key] = {
-                **dict(raw),
+                **safe_raw,
                 **({"source_id": source_id} if source_id else {}),
                 "provenance": [{
-                    key: raw.get(key) for key in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+                    key: raw.get(key) for key in CORRECTIVE_PROVENANCE_FIELDS
                     if raw.get(key) not in (None, "")
                 }],
             }
@@ -375,7 +455,7 @@ def _merge_unique_dicts(items: Iterable[Any], key_fn, *, enrich_provenance: bool
         if not enrich_provenance:
             continue
         provenance = {
-            field: raw.get(field) for field in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+            field: raw.get(field) for field in CORRECTIVE_PROVENANCE_FIELDS
             if raw.get(field) not in (None, "")
         }
         if provenance and provenance not in merged[key]["provenance"]:
@@ -425,7 +505,11 @@ def _dedupe_evidence_first(items: Iterable[Any], *, enrich_provenance: bool = Fa
     ):
         if not isinstance(item, dict):
             continue
-        source_ids = sorted(set(item.get("source_ids") or packet_source_ids(item)))
+        source_ids = sorted({
+            normalized
+            for source_id in (item.get("source_ids") or packet_source_ids(item))
+            if (normalized := normalized_canonical_source_id(source_id))
+        })
         item["source_ids"] = source_ids
         refs = item.get("refs") if isinstance(item.get("refs"), dict) else {}
         primary_ref = (
@@ -447,7 +531,7 @@ def _dedupe_evidence_first(items: Iterable[Any], *, enrich_provenance: bool = Fa
             str(primary_ref),
         )
         provenance = {
-            field: item.get(field) for field in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+            field: item.get(field) for field in CORRECTIVE_PROVENANCE_FIELDS
             if item.get(field) not in (None, "")
         }
         if key in merged:
@@ -556,7 +640,7 @@ def worker_terminal_delta(
     enrich_provenance = bool(item.get("corrective_provenance"))
     chat_refs = (
         [
-            {"message_id": value, "dispatch_id": dispatch_id, "work_id": work_id, "work_ordinal": item.get("ordinal"), "wave_id": item.get("wave_id", 0)}
+            {"message_id": value, "dispatch_id": dispatch_id, "work_id": work_id, "query_id": item.get("query_id"), "work_ordinal": item.get("ordinal"), "wave_id": item.get("wave_id", 0), "source_strategy": item.get("source_strategy")}
             for value in local.get("used_chat_ids") or []
             if value
         ]
@@ -596,12 +680,16 @@ def worker_terminal_delta(
             return [dict(value) for value in values if isinstance(value, Mapping)]
         return [
             {
-                **dict(value),
+                **_sanitize_corrective_urls(dict(value)),
                 "dispatch_id": dispatch_id,
                 "work_id": work_id,
                 "work_ordinal": item.get("ordinal"),
                 "wave_id": item.get("wave_id", 0),
                 "retrieval_query": item.get("query"),
+                "query_id": item.get("query_id"),
+                "source_strategy": item.get("source_strategy"),
+                "source_scope": item.get("source_scope"),
+                "source_expansion": item.get("source_expansion", False),
             }
             for value in values
             if isinstance(value, Mapping)
@@ -771,7 +859,7 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
     worker_evidence_input = _current(state.get("parallel_evidence_deltas") or []) or [
         evidence for packet in successful for evidence in packet.get("evidence_packets", [])
     ]
-    enrich_provenance = state.get("workflow_id") == "corrective_self_rag_agent"
+    enrich_provenance = state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
     worker_evidence = _dedupe_evidence_first(worker_evidence_input, enrich_provenance=enrich_provenance)
     existing_evidence = [item for item in state.get("evidence_packets", []) if isinstance(item, dict)]
     all_evidence = _dedupe_evidence_first(

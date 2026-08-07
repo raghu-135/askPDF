@@ -5,6 +5,42 @@ from typing import Any, Dict, Mapping
 
 
 CORRECTIVE_WORKFLOW_ID = "corrective_self_rag_agent"
+CORRECTIVE_SOURCE_STRATEGIES = (
+    "focused_document",
+    "cross_document",
+    "conversation",
+    "timeline",
+    "memory",
+    "web",
+)
+CORRECTIVE_SOURCE_STRATEGY_RANK = {
+    strategy: index for index, strategy in enumerate(CORRECTIVE_SOURCE_STRATEGIES)
+}
+
+
+class CorrectiveEventName:
+    WAVE_STARTED = "corrective.wave_started"
+    WAVE_COMPLETED = "corrective.wave_completed"
+    RETRIEVAL_GRADED = "corrective.retrieval_graded"
+    DECISION = "corrective.decision"
+    QUERY_REWRITE = "corrective.query_rewrite"
+    SOURCE_EXPANSION = "corrective.source_expansion"
+    SUPPORT_VERIFIED = "corrective.support_verified"
+    CITATION_VIOLATION = "corrective.citation_violation"
+    CONTRADICTION = "corrective.contradiction"
+    UNRESOLVED_GAP = "corrective.unresolved_gap"
+    BUDGET_EXHAUSTED = "corrective.budget_exhausted"
+
+
+def corrective_source_strategy(worker_type: str, *, file_hash: str = "") -> str:
+    if worker_type == "retrieval_worker":
+        return "focused_document" if file_hash else "cross_document"
+    return {
+        "thread_conversation_history_worker": "conversation",
+        "thread_events_worker": "timeline",
+        "durable_memory_worker": "memory",
+        "web_worker": "web",
+    }.get(worker_type, "")
 
 CORRECTIVE_POLICY_FIELDS: Dict[str, Dict[str, Any]] = {
     "minimum_relevance_confidence": {"type": "number", "default": 0.65, "minimum": 0.0, "maximum": 1.0, "step": 0.05, "label": "Minimum relevance confidence"},

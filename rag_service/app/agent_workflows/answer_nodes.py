@@ -17,6 +17,7 @@ from app.agent_workflows.evidence import (
     state_evidence_refs,
 )
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 from app.agent_workflows.prompting import build_final_answer_messages
 from app.agent_workflows.runtime_invocation import (
     append_event,
@@ -145,7 +146,7 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
 
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
-    if state.get("workflow_id") == "corrective_self_rag_agent" and (
+    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):

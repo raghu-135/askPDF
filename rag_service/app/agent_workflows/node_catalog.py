@@ -665,7 +665,7 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "prompt_slots": ["final_answer", "answer_quality"],
         "context_policy": {"mode": POLICY_ASSEMBLE_ANSWER, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_ANSWER},
         "observability": {"span_kind": SPAN_ANSWER, "event_prefix": NODE_ANSWER_REVISER, "summary_fields": ["answer_chars", "answer_revision_count"], "raw_payload": RAW_PAYLOAD_BOUNDED},
-        "max_instances": 1,
+        "max_instances": 2,
     },
     NODE_RETRIEVAL_QUALITY_GRADER: {
         "state_reads": ["question", "evidence_packets", "corrective_policy", "corrective_wave", "parallel_summary"],

@@ -21,6 +21,7 @@ class AgentExecutionEventSink:
         self.closed = False
         self._emit_lock = asyncio.Lock()
         self._parallel_events: list[Dict[str, Any]] = []
+        self._runtime_event_ids: set[str] = set()
         self._trace_recorder: Any = None
 
     def bind_trace_recorder(self, recorder: Any) -> None:
@@ -50,6 +51,11 @@ class AgentExecutionEventSink:
             return
         envelope = self._event(event, data)
         async with self._emit_lock:
+            event_id = str((envelope.get("data") or {}).get("event_id") or "")
+            if event_id and event_id in self._runtime_event_ids:
+                return
+            if event_id:
+                self._runtime_event_ids.add(event_id)
             if event.startswith(PARALLEL_EVENT_PREFIXES):
                 self._parallel_events.append(envelope)
                 if len(self._parallel_events) > PARALLEL_EVENT_JOURNAL_LIMIT:
@@ -63,7 +69,13 @@ class AgentExecutionEventSink:
 
     def emit_nowait(self, event: str, data: Dict[str, Any] | None = None) -> None:
         if not self.closed:
-            self.queue.put_nowait(self._event(event, data))
+            envelope = self._event(event, data)
+            event_id = str((envelope.get("data") or {}).get("event_id") or "")
+            if event_id and event_id in self._runtime_event_ids:
+                return
+            if event_id:
+                self._runtime_event_ids.add(event_id)
+            self.queue.put_nowait(envelope)
 
 
 def retain_background_task(task: asyncio.Task[Any]) -> None:

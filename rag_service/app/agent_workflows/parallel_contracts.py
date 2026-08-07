@@ -4,12 +4,13 @@ from copy import deepcopy
 from typing import Any, Dict, Mapping
 
 from app.agent_workflows.enums import EvidenceKind, WorkflowNodeType
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 
 
 PARALLEL_REFERENCE_WORKFLOW_ID = "orchestrator_worker_rag_agent"
 PARALLEL_AUTHORIZED_WORKFLOW_IDS = frozenset({
     PARALLEL_REFERENCE_WORKFLOW_ID,
-    "corrective_self_rag_agent",
+    CORRECTIVE_WORKFLOW_ID,
 })
 PARALLEL_FEATURE_ENV = "ASKPDF_AGENT_WORKFLOW_PARALLEL_V1"
 PARALLEL_EVENT_JOURNAL_LIMIT = 256
@@ -100,7 +101,7 @@ class ParallelEventName:
 PARALLEL_EVENT_NAMES = frozenset(
     value for key, value in vars(ParallelEventName).items() if key.isupper() and isinstance(value, str)
 )
-PARALLEL_EVENT_PREFIXES = ("dispatch.", "worker.", "aggregation.")
+PARALLEL_EVENT_PREFIXES = ("dispatch.", "worker.", "aggregation.", "corrective.")
 PARALLEL_WORKER_STATUS_BY_EVENT = {
     ParallelEventName.WORKER_QUEUED: "queued",
     ParallelEventName.WORKER_STARTED: "active",

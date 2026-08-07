@@ -66,7 +66,7 @@
       "hitl_policy": {"enabled": false, "gates": {}},
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 44,
+        "max_total_visits": 45,
         "node_visit_limits": {
           "parallel_dispatch": 3,
           "retrieval_worker": 3,
@@ -80,7 +80,8 @@
           "synthesizer": 3,
           "grounded_answer_verifier": 4,
           "answer_evaluator": 2,
-          "answer_reviser": 1
+          "direct_answer_reviser": 1,
+          "grounded_answer_reviser": 1
         }
       },
       "graph": {
@@ -99,7 +100,8 @@
           {"id": "direct_answer", "type": "direct_answer"},
           {"id": "synthesizer", "type": "synthesizer"},
           {"id": "answer_evaluator", "type": "answer_evaluator"},
-          {"id": "answer_reviser", "type": "answer_reviser"},
+          {"id": "direct_answer_reviser", "type": "answer_reviser"},
+          {"id": "grounded_answer_reviser", "type": "answer_reviser"},
           {"id": "grounded_answer_verifier", "type": "grounded_answer_verifier"},
           {"id": "finalizer", "type": "finalizer"}
         ],
@@ -108,7 +110,8 @@
           {"from": "context_loader", "to": "planner"},
           {"conditional": true, "from": "planner", "route_fn": "planner_route", "routes": {"clarify": "finalizer", "direct": "direct_answer", "execute": "parallel_dispatch"}},
           {"from": "direct_answer", "to": "answer_evaluator"},
-          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "direct_answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "direct_answer_reviser", "to": "answer_evaluator"},
           {"conditional": true, "from": "parallel_dispatch", "route_fn": "parallel_dispatch_route", "routes": {"dispatch": "aggregator"}},
           {"dynamic": true, "from": "parallel_dispatch", "to": "retrieval_worker"},
           {"dynamic": true, "from": "parallel_dispatch", "to": "thread_conversation_history_worker"},
@@ -124,8 +127,8 @@
           {"conditional": true, "from": "retrieval_quality_grader", "route_fn": "corrective_retrieval_route", "routes": {"synthesize": "synthesizer", "correct": "replanner", "insufficient": "synthesizer"}},
           {"from": "replanner", "to": "parallel_dispatch"},
           {"from": "synthesizer", "to": "grounded_answer_verifier"},
-          {"conditional": true, "from": "grounded_answer_verifier", "route_fn": "grounded_answer_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "correct": "replanner", "finalize_cautious": "finalizer"}},
-          {"from": "answer_reviser", "to": "grounded_answer_verifier"},
+          {"conditional": true, "from": "grounded_answer_verifier", "route_fn": "grounded_answer_route", "routes": {"pass": "finalizer", "revise": "grounded_answer_reviser", "correct": "replanner", "finalize_cautious": "finalizer"}},
+          {"from": "grounded_answer_reviser", "to": "grounded_answer_verifier"},
           {"from": "finalizer", "to": "END"}
         ]
       }

@@ -3,10 +3,35 @@ import test from 'node:test';
 
 import {
   buildTraceExportJson,
+  buildCorrectiveInspection,
   buildLiveTraceView,
   buildRunTraceView,
   mergeLiveAndRetainedTraceViews,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
+
+test('corrective inspection preserves wave outcomes, packet grades, and exact claim sources', () => {
+  const inspection = buildCorrectiveInspection({
+    id: 'run-corrective',
+    metrics_json: {
+      corrective: {
+        partial_waves: 1,
+        source_expansions: 1,
+        wave_outcomes: [{ wave_id: 1, work_items: [{ query_id: 'query-1', source_strategy: 'web', status: 'completed' }] }],
+      },
+      retrieval_quality_report: {
+        packet_assessments: [{ packet_id: 'packet-1', eligible: false, rejection_reasons: ['instruction_injection_risk'] }],
+      },
+      grounding_report: {
+        claims: [{ claim: 'Supported', support: 'full', source_ids: ['doc:file:1'] }],
+        contradictions: [{ claim: 'Conflict', source_ids: ['doc:file:1', 'web:https://example.com/'] }],
+      },
+    },
+  });
+  assert.equal(inspection.corrective.wave_outcomes[0].work_items[0].query_id, 'query-1');
+  assert.deepEqual(inspection.retrievalQuality.packet_assessments[0].rejection_reasons, ['instruction_injection_risk']);
+  assert.deepEqual(inspection.grounding.claims[0].source_ids, ['doc:file:1']);
+  assert.equal(inspection.grounding.contradictions.length, 1);
+});
 
 const backendDebug = {
   version: 1,

@@ -34,6 +34,7 @@ from app.agent_workflows.tool_permission_validation import (
     tool_contracts_by_id,
 )
 from app.agent_workflows.workflow_config_validation import collect_config_errors
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 
 
 def get_node_catalog() -> Dict[str, Dict[str, Any]]:
@@ -246,22 +247,28 @@ class GenericGraphValidator:
         node_types_by_id: dict[str, str],
         adjacency: dict[str, set[str]],
     ) -> list[str]:
-        if spec.get("workflow_id") != "corrective_self_rag_agent":
+        if spec.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
             return []
         errors: list[str] = []
-        required = {
+        required_counts = {
+            WorkflowNodeType.CONTEXT_LOADER.value,
             WorkflowNodeType.PLANNER.value,
             WorkflowNodeType.REPLANNER.value,
             WorkflowNodeType.PARALLEL_DISPATCH.value,
             WorkflowNodeType.AGGREGATOR.value,
             WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value,
             WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value,
+            WorkflowNodeType.SYNTHESIZER.value,
+            WorkflowNodeType.DIRECT_ANSWER.value,
+            WorkflowNodeType.ANSWER_EVALUATOR.value,
             WorkflowNodeType.FINALIZER.value,
         }
-        counts = {node_type: list(node_types_by_id.values()).count(node_type) for node_type in required}
-        for node_type, count in sorted(counts.items()):
-            if count != 1:
-                errors.append(f"corrective workflow requires exactly one {node_type} node")
+        required_counts = {node_type: 1 for node_type in required_counts}
+        required_counts[WorkflowNodeType.ANSWER_REVISER.value] = 2
+        counts = {node_type: list(node_types_by_id.values()).count(node_type) for node_type in required_counts}
+        for node_type, expected_count in sorted(required_counts.items()):
+            if counts[node_type] != expected_count:
+                errors.append(f"corrective workflow requires exactly {expected_count} {node_type} node(s)")
         features = ((spec.get("runtime") or {}).get("features") or {})
         for feature in ("supports_corrective_retrieval", "supports_replans", "supports_parallel_dispatch", "supports_answer_quality"):
             if features.get(feature) is not True:
@@ -269,6 +276,120 @@ class GenericGraphValidator:
         policy = ((spec.get("config") or {}).get("corrective_policy") or {})
         if policy.get("max_corrective_waves") != 2 or policy.get("max_answer_revisions") != 1:
             errors.append("corrective workflow requires two corrective waves and one answer revision")
+        if any(counts[node_type] != expected for node_type, expected in required_counts.items()):
+            return errors
+
+        single_node_types = set(required_counts) - {WorkflowNodeType.ANSWER_REVISER.value}
+        node_id = {
+            node_type: next(identifier for identifier, current_type in node_types_by_id.items() if current_type == node_type)
+            for node_type in single_node_types
+        }
+
+        def direct_targets(source: str) -> set[str]:
+            return {
+                str(edge.get("to"))
+                for edge in edges
+                if isinstance(edge, dict)
+                and edge.get("from") == source
+                and not edge.get("conditional")
+                and not edge.get("dynamic")
+                and edge.get("to")
+            }
+
+        def route_targets(source: str, route_fn: str) -> dict[str, str]:
+            matches = [
+                edge for edge in edges
+                if isinstance(edge, dict)
+                and edge.get("from") == source
+                and edge.get("conditional") is True
+                and edge.get("route_fn") == route_fn
+            ]
+            return dict(matches[0].get("routes") or {}) if len(matches) == 1 else {}
+
+        aggregator_id = node_id[WorkflowNodeType.AGGREGATOR.value]
+        grader_id = node_id[WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value]
+        replanner_id = node_id[WorkflowNodeType.REPLANNER.value]
+        dispatch_id = node_id[WorkflowNodeType.PARALLEL_DISPATCH.value]
+        synthesizer_id = node_id[WorkflowNodeType.SYNTHESIZER.value]
+        verifier_id = node_id[WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value]
+        finalizer_id = node_id[WorkflowNodeType.FINALIZER.value]
+        answer_evaluator_id = node_id[WorkflowNodeType.ANSWER_EVALUATOR.value]
+        context_loader_id = node_id[WorkflowNodeType.CONTEXT_LOADER.value]
+        planner_id = node_id[WorkflowNodeType.PLANNER.value]
+        direct_answer_id = node_id[WorkflowNodeType.DIRECT_ANSWER.value]
+
+        if direct_targets(context_loader_id) != {planner_id}:
+            errors.append("corrective context loader must flow only to planner")
+        planner_routes = route_targets(planner_id, RouteFunctionId.PLANNER.value)
+        if planner_routes != {
+            "clarify": finalizer_id,
+            "direct": direct_answer_id,
+            "execute": dispatch_id,
+        }:
+            errors.append("corrective planner routes must match the fixed direct and retrieval paths")
+        if direct_targets(direct_answer_id) != {answer_evaluator_id}:
+            errors.append("corrective direct answer must flow only to answer quality review")
+
+        if direct_targets(aggregator_id) != {grader_id}:
+            errors.append("corrective aggregator must flow only to retrieval quality grader")
+        dispatch_routes = route_targets(dispatch_id, RouteFunctionId.PARALLEL_DISPATCH.value)
+        if dispatch_routes != {"dispatch": aggregator_id}:
+            errors.append("corrective parallel dispatch must route only to its aggregator")
+        retrieval_routes = route_targets(grader_id, RouteFunctionId.CORRECTIVE_RETRIEVAL.value)
+        if retrieval_routes != {"synthesize": synthesizer_id, "correct": replanner_id, "insufficient": synthesizer_id}:
+            errors.append("corrective retrieval grader must route synthesize/insufficient to synthesizer and correct to replanner")
+        if direct_targets(synthesizer_id) != {verifier_id}:
+            errors.append("corrective synthesizer must flow only to grounded answer verifier")
+        answer_routes = route_targets(answer_evaluator_id, RouteFunctionId.ANSWER_QUALITY.value)
+        direct_reviser_id = answer_routes.get("revise")
+        if (
+            set(answer_routes) != {"pass", "revise", "finalize_cautious"}
+            or answer_routes.get("pass") != finalizer_id
+            or answer_routes.get("finalize_cautious") != finalizer_id
+            or node_types_by_id.get(str(direct_reviser_id)) != WorkflowNodeType.ANSWER_REVISER.value
+            or direct_targets(str(direct_reviser_id)) != {answer_evaluator_id}
+        ):
+            errors.append("corrective direct-answer revision must return to answer quality review")
+        grounding_routes = route_targets(verifier_id, RouteFunctionId.GROUNDED_ANSWER.value)
+        grounded_reviser_id = grounding_routes.get("revise")
+        if (
+            set(grounding_routes) != {"pass", "revise", "correct", "finalize_cautious"}
+            or grounding_routes.get("pass") != finalizer_id
+            or grounding_routes.get("correct") != replanner_id
+            or grounding_routes.get("finalize_cautious") != finalizer_id
+            or node_types_by_id.get(str(grounded_reviser_id)) != WorkflowNodeType.ANSWER_REVISER.value
+        ):
+            errors.append("grounded answer verifier routes must match the fixed corrective contract")
+        if direct_reviser_id == grounded_reviser_id or direct_targets(str(grounded_reviser_id)) != {verifier_id}:
+            errors.append("corrective answer reviser must return only to grounded answer verifier")
+
+        replan_targets = direct_targets(replanner_id)
+        valid_replan_return = replan_targets == {dispatch_id}
+        if len(replan_targets) == 1:
+            gate_id = next(iter(replan_targets))
+            valid_replan_return = valid_replan_return or (
+                node_types_by_id.get(gate_id) == WorkflowNodeType.HITL_GATE.value
+                and direct_targets(gate_id) == {dispatch_id}
+            )
+        if not valid_replan_return:
+            errors.append("corrective replanner must return to parallel dispatch through at most one HITL gate")
+
+        loop_policy = ((spec.get("config") or {}).get("loop_policy") or {})
+        limits = loop_policy.get("node_visit_limits") if isinstance(loop_policy.get("node_visit_limits"), dict) else {}
+        expected_limits = {
+            grader_id: 3,
+            replanner_id: 2,
+            dispatch_id: 3,
+            aggregator_id: 3,
+            verifier_id: 4,
+            str(direct_reviser_id): 1,
+            str(grounded_reviser_id): 1,
+        }
+        if any(
+            self._positive_int(limits.get(identifier), 0) != expected
+            for identifier, expected in expected_limits.items()
+        ):
+            errors.append("corrective loop visit limits must match two corrective waves and one answer revision")
         return errors
 
     def _collect_parallel_graph_errors(
@@ -306,7 +427,7 @@ class GenericGraphValidator:
                 or dispatch_id in set((edge.get("routes") or {}).values())
             )
         ]
-        is_corrective = spec.get("workflow_id") == "corrective_self_rag_agent"
+        is_corrective = spec.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
         dispatch_parent = str(incoming_dispatch[0].get("from")) if len(incoming_dispatch) == 1 else ""
         parent_is_planner = node_types_by_id.get(dispatch_parent) == WorkflowNodeType.PLANNER.value
         parent_is_pre_dispatch_gate = (
