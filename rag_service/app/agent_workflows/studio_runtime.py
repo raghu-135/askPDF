@@ -14,6 +14,7 @@ from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_runtime import normalized_parallel_policy
+from app.agent_workflows.corrective_contracts import normalized_corrective_policy
 from app.agent_workflows.workflow_runtime import workflow_runtime_features
 from app.agent_workflows.enums import WorkflowNodeType
 from app.agent_workflows.router_runtime import (
@@ -162,6 +163,7 @@ def initial_studio_state(
     features = workflow_runtime_features(spec)
     parallel_enabled = bool(features.get("supports_parallel_dispatch"))
     parallel_policy = normalized_parallel_policy(config.get("parallel_policy"))
+    corrective_policy = normalized_corrective_policy(config.get("corrective_policy"))
     graph_nodes = ((config.get("graph") or {}).get("nodes") or []) if isinstance(config.get("graph"), dict) else []
     transient_messages = getattr(request, "transient_messages", None) or []
     transient_history = "\n".join(
@@ -189,6 +191,19 @@ def initial_studio_state(
         "prefetch_policy": dict(config.get("prefetch_policy") or {}),
         "parallel_enabled": parallel_enabled,
         "parallel_policy": parallel_policy,
+        "corrective_policy": corrective_policy,
+        "corrective_wave": 0,
+        "corrective_history": [],
+        "corrective_budget_usage": {},
+        "corrective_budget_exhausted_reason": "",
+        "retrieval_quality_report": {},
+        "evidence_assessments": [],
+        "source_assessments": [],
+        "unresolved_gaps": [],
+        "grounding_report": {},
+        "verified_claims": [],
+        "contradiction_report": [],
+        "answer_revision_count": 0,
         "parallel_aggregator_id": next((str(node.get("id")) for node in graph_nodes if isinstance(node, dict) and node.get("type") == WorkflowNodeType.AGGREGATOR.value), ""),
         "dispatch_aggregator_id": next((str(node.get("id")) for node in graph_nodes if isinstance(node, dict) and node.get("type") == WorkflowNodeType.AGGREGATOR.value), ""),
         "worker_result_packets": [],
@@ -219,6 +234,7 @@ def initial_studio_state(
         "document_sources": [],
         "web_sources": [],
         "used_chat_ids": [],
+        "used_memory_ids": [],
         "node_events": [],
         "tool_events": [],
         "errors": [],

@@ -1,0 +1,135 @@
+{
+  "builtin_key": "corrective_self_rag_agent",
+  "description": "A bounded Corrective/Self-RAG workflow that grades retrieval, runs targeted corrective waves, and verifies claim-level citation support before finalization.",
+  "is_builtin": true,
+  "name": "Corrective/Self-RAG Agent",
+  "spec_json": {
+    "schema_version": 2,
+    "version": 1,
+    "workflow_id": "corrective_self_rag_agent",
+    "runtime": {
+      "kind": "compiled_rag",
+      "label": "Corrective/Self-RAG Agent",
+      "failure_code": "corrective_self_rag_execution_failed",
+      "failure_reason_prefix": "Exception during Corrective/Self-RAG Agent execution",
+      "success_context": "Context retrieved and verified by the Corrective/Self-RAG Agent workflow.",
+      "failure_context": "Corrective/Self-RAG Agent execution failed gracefully.",
+      "prompt_preview": "corrective_self_rag",
+      "features": {
+        "supports_replans": true,
+        "supports_parallel_dispatch": true,
+        "supports_answer_quality": true,
+        "supports_corrective_retrieval": true
+      }
+    },
+    "config": {
+      "allowed_tool_ids": ["document_evidence", "focused_document_evidence", "thread_conversation_history", "durable_memory", "thread_events", "live_web_recon", "clarify_intent"],
+      "use_web_search": false,
+      "use_reranker": true,
+      "system_role": "",
+      "tool_instructions": {},
+      "custom_instructions": "",
+      "replans": 2,
+      "prefetch_policy": {"enabled": true, "mode": "routing"},
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "corrective_policy": {
+        "minimum_relevance_confidence": 0.65,
+        "minimum_supported_claim_ratio": 1.0,
+        "minimum_usefulness_score": 3,
+        "max_corrective_waves": 2,
+        "max_total_work_items": 8,
+        "max_total_tool_attempts": 12,
+        "max_answer_revisions": 1,
+        "allow_web_fallback": true,
+        "memory_evidence_mode": "policy_scoped",
+        "insufficient_evidence_mode": "verified_only"
+      },
+      "parallel_policy": {
+        "enabled": true,
+        "max_concurrency": 4,
+        "max_work_items": 4,
+        "dispatch_timeout_ms": 60000,
+        "default_worker_timeout_ms": 30000,
+        "web_worker_timeout_ms": 45000,
+        "max_attempts": 2,
+        "minimum_successes": 1,
+        "continue_on_partial_failure": true,
+        "continue_on_insufficient_successes": true
+      },
+      "hitl_policy": {"enabled": false, "gates": {}},
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 44,
+        "node_visit_limits": {
+          "parallel_dispatch": 3,
+          "retrieval_worker": 3,
+          "thread_conversation_history_worker": 3,
+          "durable_memory_worker": 3,
+          "thread_events_worker": 3,
+          "web_worker": 3,
+          "aggregator": 3,
+          "retrieval_quality_grader": 3,
+          "replanner": 2,
+          "synthesizer": 3,
+          "grounded_answer_verifier": 4,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
+        }
+      },
+      "graph": {
+        "nodes": [
+          {"id": "context_loader", "type": "context_loader"},
+          {"id": "planner", "type": "planner"},
+          {"id": "parallel_dispatch", "type": "parallel_dispatch"},
+          {"id": "retrieval_worker", "type": "retrieval_worker"},
+          {"id": "thread_conversation_history_worker", "type": "thread_conversation_history_worker"},
+          {"id": "durable_memory_worker", "type": "durable_memory_worker"},
+          {"id": "thread_events_worker", "type": "thread_events_worker"},
+          {"id": "web_worker", "type": "web_worker"},
+          {"id": "aggregator", "type": "aggregator"},
+          {"id": "retrieval_quality_grader", "type": "retrieval_quality_grader"},
+          {"id": "replanner", "type": "replanner"},
+          {"id": "direct_answer", "type": "direct_answer"},
+          {"id": "synthesizer", "type": "synthesizer"},
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
+          {"id": "grounded_answer_verifier", "type": "grounded_answer_verifier"},
+          {"id": "finalizer", "type": "finalizer"}
+        ],
+        "edges": [
+          {"from": "START", "to": "context_loader"},
+          {"from": "context_loader", "to": "planner"},
+          {"conditional": true, "from": "planner", "route_fn": "planner_route", "routes": {"clarify": "finalizer", "direct": "direct_answer", "execute": "parallel_dispatch"}},
+          {"from": "direct_answer", "to": "answer_evaluator"},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"conditional": true, "from": "parallel_dispatch", "route_fn": "parallel_dispatch_route", "routes": {"dispatch": "aggregator"}},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "aggregator"},
+          {"from": "thread_conversation_history_worker", "to": "aggregator"},
+          {"from": "durable_memory_worker", "to": "aggregator"},
+          {"from": "thread_events_worker", "to": "aggregator"},
+          {"from": "web_worker", "to": "aggregator"},
+          {"from": "aggregator", "to": "retrieval_quality_grader"},
+          {"conditional": true, "from": "retrieval_quality_grader", "route_fn": "corrective_retrieval_route", "routes": {"synthesize": "synthesizer", "correct": "replanner", "insufficient": "synthesizer"}},
+          {"from": "replanner", "to": "parallel_dispatch"},
+          {"from": "synthesizer", "to": "grounded_answer_verifier"},
+          {"conditional": true, "from": "grounded_answer_verifier", "route_fn": "grounded_answer_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "correct": "replanner", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "grounded_answer_verifier"},
+          {"from": "finalizer", "to": "END"}
+        ]
+      }
+    }
+  },
+  "visibility": "builtin"
+}

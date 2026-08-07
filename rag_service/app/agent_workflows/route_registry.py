@@ -5,7 +5,9 @@ from typing import Any, Dict, Optional
 
 from app.agent_workflows.enums import (
     AnswerQualityRoute,
+    CorrectiveRetrievalRoute,
     EvaluatorRoute,
+    GroundedAnswerRoute,
     PlannerRoute,
     RouteFunctionId,
     RouterRoute,
@@ -81,6 +83,25 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
             AnswerQualityRoute.FINALIZE_CAUTIOUS.value: [WorkflowNodeType.FINALIZER.value],
         },
     },
+    RouteFunctionId.CORRECTIVE_RETRIEVAL.value: {
+        "allowed_source_types": [WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value],
+        "route_labels": [route.value for route in CorrectiveRetrievalRoute],
+        "target_types_by_label": {
+            CorrectiveRetrievalRoute.SYNTHESIZE.value: [WorkflowNodeType.SYNTHESIZER.value],
+            CorrectiveRetrievalRoute.CORRECT.value: [WorkflowNodeType.REPLANNER.value],
+            CorrectiveRetrievalRoute.INSUFFICIENT.value: [WorkflowNodeType.SYNTHESIZER.value, WorkflowNodeType.FINALIZER.value],
+        },
+    },
+    RouteFunctionId.GROUNDED_ANSWER.value: {
+        "allowed_source_types": [WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value],
+        "route_labels": [route.value for route in GroundedAnswerRoute],
+        "target_types_by_label": {
+            GroundedAnswerRoute.PASS.value: [WorkflowNodeType.FINALIZER.value],
+            GroundedAnswerRoute.REVISE.value: [WorkflowNodeType.ANSWER_REVISER.value],
+            GroundedAnswerRoute.CORRECT.value: [WorkflowNodeType.REPLANNER.value],
+            GroundedAnswerRoute.FINALIZE_CAUTIOUS.value: [WorkflowNodeType.FINALIZER.value],
+        },
+    },
 }
 
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -108,6 +129,17 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         AnswerQualityRoute.PASS.value: {"display_name": "Quality passed", "description": "Finalize the reviewed answer.", "order": 0},
         AnswerQualityRoute.REVISE.value: {"display_name": "Revise once", "description": "Apply the bounded quality critique.", "order": 1},
         AnswerQualityRoute.FINALIZE_CAUTIOUS.value: {"display_name": "Finalize cautiously", "description": "Return the best available answer with limitations.", "order": 2},
+    },
+    RouteFunctionId.CORRECTIVE_RETRIEVAL.value: {
+        CorrectiveRetrievalRoute.SYNTHESIZE.value: {"display_name": "Evidence is correct", "description": "Synthesize from eligible evidence.", "order": 0},
+        CorrectiveRetrievalRoute.CORRECT.value: {"display_name": "Correct retrieval", "description": "Run another bounded retrieval wave.", "order": 1},
+        CorrectiveRetrievalRoute.INSUFFICIENT.value: {"display_name": "Evidence insufficient", "description": "Finalize from verified evidence only.", "order": 2},
+    },
+    RouteFunctionId.GROUNDED_ANSWER.value: {
+        GroundedAnswerRoute.PASS.value: {"display_name": "Grounding passed", "description": "Finalize the supported answer.", "order": 0},
+        GroundedAnswerRoute.REVISE.value: {"display_name": "Revise answer", "description": "Apply one bounded answer revision.", "order": 1},
+        GroundedAnswerRoute.CORRECT.value: {"display_name": "Retrieve missing support", "description": "Run another corrective retrieval wave.", "order": 2},
+        GroundedAnswerRoute.FINALIZE_CAUTIOUS.value: {"display_name": "Finalize cautiously", "description": "Keep only verified claims and explicit gaps.", "order": 3},
     },
 }
 

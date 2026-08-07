@@ -114,7 +114,7 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "allowed_node_types": [NODE_RETRIEVAL_WORKER],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
         "artifact_keys": ["document_sources"],
-        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_THREAD_DOCUMENTS, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT],
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
         "id": TOOL_THREAD_CONVERSATION_HISTORY,

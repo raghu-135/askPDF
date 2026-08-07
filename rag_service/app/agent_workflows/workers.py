@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_thread_conversation_history, search_documents, search_durable_memory, search_thread_events
+from app.rag.agent_tools import search_thread_conversation_history, search_document_by_id, search_documents, search_durable_memory, search_thread_events
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.state import runtime_node_id
@@ -142,29 +142,41 @@ async def run_tool_worker(
     if should_skip_worker(state, node_id):
         return skipped_worker_update(state, config, node_id, started, "not_selected_by_plan")
 
-    tool_input = spec.tool_input(state)
+    tool = spec.tool
+    tool_name = spec.tool_name
+    work_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else {}
+    if spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
+        tool = search_document_by_id
+        tool_name = ToolName.SEARCH_DOCUMENT_BY_ID.value
+        tool_input = {
+            "query": str(state.get("question") or "")[:2_000],
+            "file_hash": str(work_item["file_hash"])[:256],
+            "max_results": 10,
+        }
+    else:
+        tool_input = spec.tool_input(state)
     tool_config = tool_config_for_node(
         state,
         config,
         caller_node=spec.node_name,
-        tool_name=spec.tool_name,
+        tool_name=tool_name,
         started=started,
     )
     studio_queue = ((tool_config.get("configurable") or {}).get("studio_event_queue"))
     if studio_queue is not None:
         await studio_queue.put({
             "event": "tool.started",
-            "data": {"tool_name": spec.tool_name, "node_id": node_id},
+            "data": {"tool_name": tool_name, "node_id": node_id},
         })
     raw = await invoke_tool_for_node(
-        spec.tool,
+        tool,
         tool_input,
         state=state,
         config=tool_config,
         node=node_id,
         started=started,
     )
-    payload = normalize_tool_result(raw, tool_name=spec.tool_name, config=tool_config)
+    payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
     artifacts = payload.get("artifacts") or {}
     evidence = combine_evidence(
         state.get("evidence"),

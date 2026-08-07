@@ -38,6 +38,8 @@ NODE_SERIAL_DISPATCH = WorkflowNodeType.SERIAL_DISPATCH.value
 NODE_AGGREGATOR = WorkflowNodeType.AGGREGATOR.value
 NODE_ANSWER_EVALUATOR = WorkflowNodeType.ANSWER_EVALUATOR.value
 NODE_ANSWER_REVISER = WorkflowNodeType.ANSWER_REVISER.value
+NODE_RETRIEVAL_QUALITY_GRADER = WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value
+NODE_GROUNDED_ANSWER_VERIFIER = WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value
 START_NODE = GraphSentinel.START.value
 END_NODE = GraphSentinel.END.value
 
@@ -68,6 +70,8 @@ CAP_PARALLEL_AGGREGATE = NodeCapability.PARALLEL_AGGREGATE.value
 CAP_SERIAL_DISPATCH = NodeCapability.SERIAL_DISPATCH.value
 CAP_EVALUATE_ANSWER = NodeCapability.EVALUATE_ANSWER.value
 CAP_REVISE_ANSWER = NodeCapability.REVISE_ANSWER.value
+CAP_GRADE_RETRIEVAL = NodeCapability.GRADE_RETRIEVAL.value
+CAP_VERIFY_GROUNDED_ANSWER = NodeCapability.VERIFY_GROUNDED_ANSWER.value
 
 ROUTE_ROUTER = RouteFunctionId.ROUTER.value
 ROUTE_PLANNER = RouteFunctionId.PLANNER.value
@@ -76,6 +80,8 @@ ROUTE_HITL_GATE = RouteFunctionId.HITL_GATE.value
 ROUTE_PARALLEL_DISPATCH = RouteFunctionId.PARALLEL_DISPATCH.value
 ROUTE_SERIAL_DISPATCH = RouteFunctionId.SERIAL_DISPATCH.value
 ROUTE_ANSWER_QUALITY = RouteFunctionId.ANSWER_QUALITY.value
+ROUTE_CORRECTIVE_RETRIEVAL = RouteFunctionId.CORRECTIVE_RETRIEVAL.value
+ROUTE_GROUNDED_ANSWER = RouteFunctionId.GROUNDED_ANSWER.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
@@ -267,8 +273,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_PLAN_REPLAN, CAP_CLARIFY],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
-        "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_SERIAL_DISPATCH, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_RETRIEVAL_QUALITY_GRADER, NODE_GROUNDED_ANSWER_VERIFIER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
     },
     NODE_DIRECT_ANSWER: {
@@ -296,9 +302,10 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_EVIDENCE_EVALUATOR,
             NODE_HITL_GATE,
             NODE_AGGREGATOR,
+            NODE_RETRIEVAL_QUALITY_GRADER,
         ],
-        "allowed_child_types": [NODE_ANSWER_EVALUATOR, NODE_FINALIZER, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 1},
+        "allowed_child_types": [NODE_ANSWER_EVALUATOR, NODE_GROUNDED_ANSWER_VERIFIER, NODE_FINALIZER, NODE_HITL_GATE],
+        "limits": {"default_max_visits": 1, "max_visits": 3},
     },
     NODE_FINALIZER: {
         "display_name": "Finalizer",
@@ -318,6 +325,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_SYNTHESIZER,
             NODE_ANSWER_EVALUATOR,
             NODE_ANSWER_REVISER,
+            NODE_GROUNDED_ANSWER_VERIFIER,
             NODE_HITL_GATE,
         ],
         "allowed_child_types": [NODE_HITL_GATE, END_NODE],
@@ -339,7 +347,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_PARALLEL_DISPATCH],
         "allowed_route_functions": [ROUTE_PARALLEL_DISPATCH],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": [NODE_PLANNER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
             NODE_RETRIEVAL_WORKER,
             NODE_THREAD_CONVERSATION_HISTORY_WORKER,
@@ -348,7 +356,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_WEB_WORKER,
             NODE_AGGREGATOR,
         ],
-        "limits": {"default_max_visits": 1},
+        "limits": {"default_max_visits": 1, "max_visits": 3},
     },
     NODE_SERIAL_DISPATCH: {
         "display_name": "Serial Dispatch",
@@ -375,7 +383,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
         ],
-        "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_RETRIEVAL_QUALITY_GRADER, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT + 1},
     },
     NODE_ANSWER_EVALUATOR: {
@@ -394,9 +402,29 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_REVISE_ANSWER],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": [NODE_ANSWER_EVALUATOR],
-        "allowed_child_types": [NODE_ANSWER_EVALUATOR],
+        "allowed_parent_types": [NODE_ANSWER_EVALUATOR, NODE_GROUNDED_ANSWER_VERIFIER],
+        "allowed_child_types": [NODE_ANSWER_EVALUATOR, NODE_GROUNDED_ANSWER_VERIFIER],
         "limits": {"default_max_visits": 1, "max_visits": 1},
+    },
+    NODE_RETRIEVAL_QUALITY_GRADER: {
+        "display_name": "Retrieval Quality Grader",
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_GRADE_RETRIEVAL],
+        "allowed_route_functions": [ROUTE_CORRECTIVE_RETRIEVAL],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_AGGREGATOR, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_SYNTHESIZER, NODE_REPLANNER, NODE_FINALIZER, NODE_HITL_GATE],
+        "limits": {"default_max_visits": 3, "max_visits": 3},
+    },
+    NODE_GROUNDED_ANSWER_VERIFIER: {
+        "display_name": "Grounded Answer Verifier",
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_VERIFY_GROUNDED_ANSWER],
+        "allowed_route_functions": [ROUTE_GROUNDED_ANSWER],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_SYNTHESIZER, NODE_ANSWER_REVISER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_FINALIZER, NODE_ANSWER_REVISER, NODE_REPLANNER, NODE_HITL_GATE],
+        "limits": {"default_max_visits": 4, "max_visits": 4},
     },
 }
 
@@ -639,6 +667,22 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "observability": {"span_kind": SPAN_ANSWER, "event_prefix": NODE_ANSWER_REVISER, "summary_fields": ["answer_chars", "answer_revision_count"], "raw_payload": RAW_PAYLOAD_BOUNDED},
         "max_instances": 1,
     },
+    NODE_RETRIEVAL_QUALITY_GRADER: {
+        "state_reads": ["question", "evidence_packets", "corrective_policy", "corrective_wave", "parallel_summary"],
+        "state_writes": ["retrieval_quality_report", "evidence_assessments", "source_assessments", "unresolved_gaps", "corrective_retrieval_route", "corrective_budget_usage", "corrective_budget_exhausted_reason"],
+        "prompt_slots": [NODE_RETRIEVAL_QUALITY_GRADER],
+        "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
+        "observability": {"span_kind": SPAN_CONTROL, "event_prefix": NODE_RETRIEVAL_QUALITY_GRADER, "summary_fields": ["corrective_decision", "retrieval_quality_report", "budget_exhausted_reason"], "raw_payload": RAW_PAYLOAD_BOUNDED},
+        "max_instances": 1,
+    },
+    NODE_GROUNDED_ANSWER_VERIFIER: {
+        "state_reads": ["question", "final_answer", "evidence_packets", "corrective_policy", "corrective_wave", "answer_revision_count"],
+        "state_writes": ["grounding_report", "verified_claims", "contradiction_report", "unresolved_gaps", "grounded_answer_route", "answer_quality_report", "corrective_budget_exhausted_reason"],
+        "prompt_slots": [NODE_GROUNDED_ANSWER_VERIFIER],
+        "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
+        "observability": {"span_kind": SPAN_CONTROL, "event_prefix": NODE_GROUNDED_ANSWER_VERIFIER, "summary_fields": ["grounded_answer_route", "citation_violation_count", "contradiction_count", "budget_exhausted_reason"], "raw_payload": RAW_PAYLOAD_BOUNDED},
+        "max_instances": 1,
+    },
 }
 
 for _node_type, _metadata in _NODE_CATALOG_METADATA.items():
@@ -870,6 +914,28 @@ NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
         "keywords": ["revise", "correct", "answer", "quality"],
         "input_label": "Draft and critique",
         "output_label": "Revised answer",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_RETRIEVAL_QUALITY_GRADER: {
+        "summary": "Grades retrieval relevance, provenance, safety, coverage, and contradiction signals.",
+        "use_when": "Use after the corrective workflow's retrieval barrier.",
+        "category_label": "Corrective RAG",
+        "icon": "evaluate",
+        "keywords": ["corrective", "retrieval", "grade", "relevance"],
+        "input_label": "Evidence packets",
+        "output_label": "Corrective decision",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_GROUNDED_ANSWER_VERIFIER: {
+        "summary": "Checks material claims, exact citations, support, contradictions, and usefulness.",
+        "use_when": "Use after synthesis in the corrective workflow.",
+        "category_label": "Corrective RAG",
+        "icon": "evaluate",
+        "keywords": ["grounding", "citations", "support", "contradictions"],
+        "input_label": "Draft and provenance",
+        "output_label": "Grounding decision",
         "uses_llm": True,
         "uses_tools": False,
     },

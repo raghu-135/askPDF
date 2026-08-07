@@ -74,6 +74,19 @@ class AnswerQualityRoute(str, Enum):
     FINALIZE_CAUTIOUS = "finalize_cautious"
 
 
+class CorrectiveRetrievalRoute(str, Enum):
+    SYNTHESIZE = "synthesize"
+    CORRECT = "correct"
+    INSUFFICIENT = "insufficient"
+
+
+class GroundedAnswerRoute(str, Enum):
+    PASS = "pass"
+    REVISE = "revise"
+    CORRECT = "correct"
+    FINALIZE_CAUTIOUS = "finalize_cautious"
+
+
 class RouteFunctionId(str, Enum):
     ROUTER = "router_route"
     PLANNER = "planner_route"
@@ -82,6 +95,8 @@ class RouteFunctionId(str, Enum):
     PARALLEL_DISPATCH = "parallel_dispatch_route"
     SERIAL_DISPATCH = "serial_dispatch_route"
     ANSWER_QUALITY = "answer_quality_route"
+    CORRECTIVE_RETRIEVAL = "corrective_retrieval_route"
+    GROUNDED_ANSWER = "grounded_answer_route"
 
 
 class WorkflowNodeType(str, Enum):
@@ -104,6 +119,8 @@ class WorkflowNodeType(str, Enum):
     AGGREGATOR = "aggregator"
     ANSWER_EVALUATOR = "answer_evaluator"
     ANSWER_REVISER = "answer_reviser"
+    RETRIEVAL_QUALITY_GRADER = "retrieval_quality_grader"
+    GROUNDED_ANSWER_VERIFIER = "grounded_answer_verifier"
 
 
 class ToolName(str, Enum):
@@ -174,6 +191,8 @@ class NodeCapability(str, Enum):
     SERIAL_DISPATCH = "serial.dispatch"
     EVALUATE_ANSWER = "evaluate.answer"
     REVISE_ANSWER = "answer.revise"
+    GRADE_RETRIEVAL = "evaluate.retrieval_quality"
+    VERIFY_GROUNDED_ANSWER = "evaluate.answer_grounding"
 
 
 class ContextPolicyMode(str, Enum):
@@ -233,6 +252,7 @@ class PromptProfile(str, Enum):
     ROUTER = "router"
     PLANNER = "planner"
     EVALUATOR_REPLANNER = "evaluator_replanner"
+    CORRECTIVE_SELF_RAG = "corrective_self_rag"
 
 
 class AgentCheckpointerMode(str, Enum):
@@ -277,6 +297,8 @@ ROUTER_ROUTES = {route.value for route in RouterRoute}
 PLANNER_ROUTES = {route.value for route in PlannerRoute}
 EVALUATOR_ROUTES = {route.value for route in EvaluatorRoute}
 ANSWER_QUALITY_ROUTES = {route.value for route in AnswerQualityRoute}
+CORRECTIVE_RETRIEVAL_ROUTES = {route.value for route in CorrectiveRetrievalRoute}
+GROUNDED_ANSWER_ROUTES = {route.value for route in GroundedAnswerRoute}
 HITL_ACTIONS = {action.value for action in AgentRunResumeAction}
 RESUME_ACTIONS = {
     AgentRunResumeAction.APPROVE.value,

@@ -60,6 +60,7 @@ export interface AgentWorkflowBuilderState {
   loop_policy?: Record<string, any>;
   hitl_policy?: Record<string, any>;
   parallel_policy?: Record<string, boolean | number>;
+  corrective_policy?: Record<string, boolean | number | string>;
   runtime?: Record<string, any>;
   extraConfig?: Record<string, any>;
   builder_ui?: {
@@ -90,6 +91,8 @@ const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
   [BuiltinAgentNodeType.ParallelDispatch]: RouteFunctionId.ParallelDispatch,
   [BuiltinAgentNodeType.SerialDispatch]: RouteFunctionId.SerialDispatch,
   [BuiltinAgentNodeType.AnswerEvaluator]: RouteFunctionId.AnswerQuality,
+  [BuiltinAgentNodeType.RetrievalQualityGrader]: RouteFunctionId.CorrectiveRetrieval,
+  [BuiltinAgentNodeType.GroundedAnswerVerifier]: RouteFunctionId.GroundedAnswer,
 };
 
 const REPEATABLE_NODE_TYPES = new Set([
@@ -99,6 +102,7 @@ const REPEATABLE_NODE_TYPES = new Set([
   'thread_events_worker',
   'web_worker',
   'evidence_evaluator',
+  'retrieval_quality_grader',
 ]);
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -154,6 +158,25 @@ export const normalizeParallelPolicy = (
     normalized.minimum_successes = Math.min(normalized.minimum_successes, normalized.max_work_items);
   }
   normalized.enabled = true;
+  return normalized;
+};
+
+export const normalizeCorrectivePolicy = (
+  catalog: AgentWorkflowCatalogResponse,
+  value?: Record<string, any>,
+): Record<string, boolean | number | string> => {
+  const contract = catalog.defaults?.corrective_policy;
+  const normalized: Record<string, boolean | number | string> = { ...(contract?.defaults || {}) };
+  Object.entries(contract?.fields || {}).forEach(([key, field]) => {
+    const candidate = value?.[key];
+    if (field.type === 'boolean') normalized[key] = typeof candidate === 'boolean' ? candidate : Boolean(field.default);
+    else if (field.type === 'enum') normalized[key] = field.values?.includes(String(candidate)) ? String(candidate) : String(field.default);
+    else {
+      const parsed = Number(candidate ?? field.default);
+      const bounded = Math.max(Number(field.minimum), Math.min(Number(field.maximum), Number.isFinite(parsed) ? parsed : Number(field.default)));
+      normalized[key] = field.type === 'integer' ? Math.round(bounded) : bounded;
+    }
+  });
   return normalized;
 };
 
@@ -572,6 +595,7 @@ export function assembleAgentWorkflowSpec(
 ): AgentWorkflowBuilderSpec {
   const hitlPolicy = materializeHitlPolicy(state);
   const hasParallel = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
+  const hasCorrective = state.nodes.some((node) => node.type === BuiltinAgentNodeType.RetrievalQualityGrader || node.type === BuiltinAgentNodeType.GroundedAnswerVerifier);
   const runtime = clone(state.runtime || defaultRuntime(false));
   if (hasParallel) {
     runtime.features = { ...(runtime.features || {}), supports_parallel_dispatch: true };
@@ -582,6 +606,7 @@ export function assembleAgentWorkflowSpec(
     ...(state.loop_policy ? { loop_policy: clone(state.loop_policy) } : {}),
     ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
     ...(hasParallel && state.parallel_policy ? { parallel_policy: clone(state.parallel_policy) } : {}),
+    ...(hasCorrective && state.corrective_policy ? { corrective_policy: clone(state.corrective_policy) } : {}),
     allowed_tool_ids: [...(state.allowed_tool_ids?.length ? state.allowed_tool_ids : collectAllowedToolIds(state.nodes))],
     builder_ui: {
       ...(state.builder_ui || {}),
@@ -610,7 +635,7 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
   const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentWorkflowGraphSpec : {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes.map((node) => clone(node) as BuilderNodeState) : [];
   const edges = Array.isArray(graph.edges) ? graph.edges.map((edge) => clone(edge) as BuilderEdgeState) : [];
-  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'parallel_policy', 'builder_ui']);
+  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'parallel_policy', 'corrective_policy', 'builder_ui']);
   const extraConfig = Object.fromEntries(
     Object.entries(config).filter(([key]) => !knownConfigKeys.has(key)),
   );
@@ -628,6 +653,7 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
     loop_policy: config.loop_policy ? clone(config.loop_policy) : undefined,
     hitl_policy: config.hitl_policy ? clone(config.hitl_policy) : undefined,
     parallel_policy: config.parallel_policy ? clone(config.parallel_policy) : undefined,
+    corrective_policy: config.corrective_policy ? clone(config.corrective_policy) : undefined,
     runtime: spec.runtime && typeof spec.runtime === 'object' ? clone(spec.runtime) : defaultRuntime(false),
     extraConfig,
     builder_ui: {
@@ -680,6 +706,15 @@ export function normalizeBuilderState(
       delete runtime.features.supports_parallel_dispatch;
     }
     normalized.runtime = runtime;
+  }
+  const hasCorrective = nodes.some((node) => node.type === BuiltinAgentNodeType.RetrievalQualityGrader || node.type === BuiltinAgentNodeType.GroundedAnswerVerifier);
+  if (hasCorrective) {
+    normalized.corrective_policy = normalizeCorrectivePolicy(catalog, state.corrective_policy);
+    const runtime = clone(normalized.runtime || defaultRuntime(true, 'corrective_self_rag'));
+    runtime.features = { ...(runtime.features || {}), supports_replans: true, supports_parallel_dispatch: true, supports_answer_quality: true, supports_corrective_retrieval: true };
+    normalized.runtime = runtime;
+  } else {
+    delete normalized.corrective_policy;
   }
   const selectedToolIds = collectAllowedToolIds(normalized.nodes);
   const selectedToolSet = new Set(selectedToolIds);

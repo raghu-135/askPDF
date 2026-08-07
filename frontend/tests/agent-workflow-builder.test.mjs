@@ -23,6 +23,7 @@ import {
   isIsolatedBuilderNode,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
+  normalizeCorrectivePolicy,
   normalizeParallelPolicy,
   setHitlContinueWithoutTarget,
   wouldCreateBuilderCycle,
@@ -386,6 +387,21 @@ const catalog = {
         max_attempts: { type: 'integer', default: 2, minimum: 1, maximum: 5, step: 1, label: 'Maximum attempts' },
         minimum_successes: { type: 'integer', default: 1, minimum: 1, maximum: 32, step: 1, label: 'Minimum successes' },
         continue_on_partial_failure: { type: 'boolean', default: true, label: 'Continue with partial evidence' },
+      },
+    },
+    corrective_policy: {
+      defaults: {
+        minimum_relevance_confidence: 0.65, max_corrective_waves: 2,
+        max_total_work_items: 8, max_total_tool_attempts: 12,
+        allow_web_fallback: true, memory_evidence_mode: 'policy_scoped',
+      },
+      fields: {
+        minimum_relevance_confidence: { type: 'number', default: 0.65, minimum: 0, maximum: 1, label: 'Relevance' },
+        max_corrective_waves: { type: 'integer', default: 2, minimum: 1, maximum: 3, label: 'Waves' },
+        max_total_work_items: { type: 'integer', default: 8, minimum: 2, maximum: 16, label: 'Work' },
+        max_total_tool_attempts: { type: 'integer', default: 12, minimum: 2, maximum: 24, label: 'Attempts' },
+        allow_web_fallback: { type: 'boolean', default: true, label: 'Web' },
+        memory_evidence_mode: { type: 'enum', default: 'policy_scoped', values: ['disabled', 'policy_scoped'], label: 'Memory' },
       },
     },
   },
@@ -800,4 +816,27 @@ test('normalizes catalog-driven parallel policy and removes it with the region',
   });
   assert.equal(withoutRegion.parallel_policy, undefined);
   assert.equal(withoutRegion.runtime.features.supports_parallel_dispatch, undefined);
+});
+
+test('round-trips only validated corrective policy controls', () => {
+  const policy = normalizeCorrectivePolicy(catalog, {
+    minimum_relevance_confidence: 9,
+    max_corrective_waves: 99,
+    max_total_work_items: 6,
+    max_total_tool_attempts: 10,
+    allow_web_fallback: false,
+    memory_evidence_mode: 'invalid',
+  });
+  assert.equal(policy.minimum_relevance_confidence, 1);
+  assert.equal(policy.max_corrective_waves, 3);
+  assert.equal(policy.allow_web_fallback, false);
+  assert.equal(policy.memory_evidence_mode, 'policy_scoped');
+
+  const spec = assembleAgentWorkflowSpec({
+    workflowId: 'corrective_self_rag_agent', workflowType: 'custom_rag_agent',
+    nodes: [{ id: 'grader', type: 'retrieval_quality_grader' }, { id: 'verifier', type: 'grounded_answer_verifier' }],
+    edges: [], allowed_tool_ids: [], corrective_policy: policy,
+    runtime: { kind: 'compiled_rag', features: {} },
+  });
+  assert.deepEqual(spec.config.corrective_policy, policy);
 });

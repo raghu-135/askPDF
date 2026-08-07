@@ -174,7 +174,7 @@ class RouterRagState(TypedDict, total=False):
     parallel_evidence_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_document_source_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_web_source_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
-    parallel_chat_id_deltas: Annotated[List[str], merge_parallel_deltas]
+    parallel_chat_id_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_memory_ref_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_timeline_ref_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
     parallel_node_event_deltas: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
@@ -188,6 +188,20 @@ class RouterRagState(TypedDict, total=False):
     answer_quality_route: str
     answer_quality_report: Dict[str, Any]
     answer_revision_count: int
+    corrective_policy: Dict[str, Any]
+    corrective_wave: int
+    corrective_history: List[Dict[str, Any]]
+    corrective_budget_usage: Dict[str, int]
+    corrective_budget_exhausted_reason: str
+    retrieval_quality_report: Dict[str, Any]
+    evidence_assessments: List[Dict[str, Any]]
+    source_assessments: List[Dict[str, Any]]
+    unresolved_gaps: List[str]
+    corrective_retrieval_route: str
+    grounding_report: Dict[str, Any]
+    verified_claims: List[Dict[str, Any]]
+    contradiction_report: List[Dict[str, Any]]
+    grounded_answer_route: str
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:

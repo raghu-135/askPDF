@@ -15,12 +15,14 @@ from app.models.llm_server_client import (
     REPLANS_LIMIT,
 )
 from app.agent_workflows.execution_contracts import PREFETCH_MODES
+from app.agent_workflows.corrective_contracts import collect_corrective_policy_errors
 
 
 CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
 CONTEXT_EVIDENCE_COMPRESSION_MODES = {mode.value for mode in EvidenceCompressionMode}
 def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]:
     errors: list[str] = []
+    errors.extend(collect_corrective_policy_errors(config.get("corrective_policy")))
     unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
     if unknown_keys:
         errors.append(f"unknown config keys: {', '.join(unknown_keys)}")

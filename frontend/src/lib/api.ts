@@ -743,6 +743,18 @@ export interface AgentWorkflowCatalogResponse {
         label: string;
       }>;
     };
+    corrective_policy?: {
+      defaults: Record<string, boolean | number | string>;
+      fields: Record<string, {
+        type: 'boolean' | 'integer' | 'number' | 'enum';
+        default: boolean | number | string;
+        minimum?: number;
+        maximum?: number;
+        step?: number;
+        values?: string[];
+        label: string;
+      }>;
+    };
     [key: string]: any;
   };
   [key: string]: any;

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from langchain_core.runnables import RunnableConfig
 
@@ -136,6 +138,46 @@ def short_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()[:16]
 
 
+def normalized_source_url(value: Any) -> str:
+    try:
+        parts = urlsplit(str(value or "").strip())
+    except ValueError:
+        return ""
+    if not parts.netloc:
+        return ""
+    path = re.sub(r"/{2,}", "/", parts.path or "/")
+    return urlunsplit((parts.scheme.lower() or "https", parts.netloc.lower(), path.rstrip("/") or "/", parts.query, ""))
+
+
+def canonical_source_id(value: Dict[str, Any]) -> str:
+    file_hash = value.get("file_hash") or value.get("document_id") or value.get("file_id")
+    if file_hash:
+        locator = value.get("chunk_id") or value.get("page_number") or value.get("page") or value.get("page_start") or "document"
+        return f"doc:{file_hash}:{locator}"
+    url = normalized_source_url(value.get("url") or value.get("source_url") or value.get("link"))
+    if url:
+        return f"web:{url}"
+    message_id = value.get("message_id") or value.get("chat_id")
+    if message_id:
+        return f"conversation:{message_id}"
+    memory_id = value.get("memory_id")
+    if memory_id:
+        return f"memory:{memory_id}"
+    return ""
+
+
+def packet_source_ids(packet: Dict[str, Any]) -> List[str]:
+    refs = packet.get("refs") if isinstance(packet.get("refs"), dict) else {}
+    candidates = [packet]
+    for value in refs.values():
+        if isinstance(value, dict):
+            candidates.append(value)
+        elif isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+    values = {canonical_source_id(item) for item in candidates}
+    return sorted(item for item in values if item)
+
+
 def packet_fingerprint(*, kind: str, content: str, refs: Dict[str, Any]) -> str:
     return short_hash({"kind": kind, "content": normalized_evidence_text(content), "refs": refs or {}})
 
@@ -255,6 +297,7 @@ def append_evidence_packet(
         "content_hash": short_hash(normalized_evidence_text(text)),
         "fingerprint": fingerprint,
         "refs": refs,
+        "source_ids": packet_source_ids({"refs": refs}),
         "created_at": iso_utc_z(utc_now()),
     }
     return [*existing_packets, packet][-evidence_packet_limit(state):]

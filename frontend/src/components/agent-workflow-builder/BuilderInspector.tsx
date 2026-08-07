@@ -612,6 +612,56 @@ function ParallelPolicyEditor({
   );
 }
 
+function CorrectivePolicyEditor({
+  catalog,
+  policy,
+  disabled,
+  onChange,
+}: {
+  catalog: AgentWorkflowCatalogResponse;
+  policy: Record<string, boolean | number | string>;
+  disabled?: boolean;
+  onChange: (patch: Record<string, boolean | number | string>) => void;
+}) {
+  const contract = catalog.defaults.corrective_policy;
+  if (!contract) return null;
+  const numericKeys = ['minimum_relevance_confidence', 'max_corrective_waves', 'max_total_work_items', 'max_total_tool_attempts'];
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 1, mt: 1, borderTop: 1, borderColor: 'divider' }}>
+      <Typography variant="caption" sx={sectionLabelSx}>Corrective RAG policy</Typography>
+      {numericKeys.map((key) => {
+        const field = contract.fields[key];
+        if (!field) return null;
+        return (
+          <TextField
+            key={key}
+            size="small"
+            type="number"
+            label={field.label}
+            value={policy[key] ?? field.default}
+            disabled={disabled}
+            slotProps={{ htmlInput: { min: field.minimum, max: field.maximum, step: field.step || 1 } }}
+            helperText={`${field.minimum}–${field.maximum}`}
+            onChange={(event) => {
+              const parsed = Number(event.target.value);
+              const bounded = Math.max(Number(field.minimum), Math.min(Number(field.maximum), Number.isFinite(parsed) ? parsed : Number(field.default)));
+              onChange({ [key]: field.type === 'integer' ? Math.round(bounded) : bounded });
+            }}
+          />
+        );
+      })}
+      <FormControlLabel
+        control={<Switch size="small" checked={Boolean(policy.allow_web_fallback)} disabled={disabled} onChange={(_, checked) => onChange({ allow_web_fallback: checked })} />}
+        label={<Typography variant="caption">Allow policy-approved web fallback</Typography>}
+      />
+      <FormControlLabel
+        control={<Switch size="small" checked={policy.memory_evidence_mode === 'policy_scoped'} disabled={disabled} onChange={(_, checked) => onChange({ memory_evidence_mode: checked ? 'policy_scoped' : 'disabled' })} />}
+        label={<Typography variant="caption">Use policy-scoped memory evidence</Typography>}
+      />
+    </Box>
+  );
+}
+
 export default function BuilderInspector({
   catalog,
   state,
@@ -625,6 +675,7 @@ export default function BuilderInspector({
   onAddHitlGate,
   onUpdateSettings,
   onUpdateParallelPolicy,
+  onUpdateCorrectivePolicy,
 }: {
   catalog: AgentWorkflowCatalogResponse;
   state: AgentWorkflowBuilderState;
@@ -638,6 +689,7 @@ export default function BuilderInspector({
   onAddHitlGate: (targetNodeId: string) => void;
   onUpdateSettings: (patch: Record<string, any>) => void;
   onUpdateParallelPolicy: (patch: Record<string, boolean | number>) => void;
+  onUpdateCorrectivePolicy: (patch: Record<string, boolean | number | string>) => void;
 }) {
   const selectedNode = selection?.kind === 'node'
     ? state.nodes.find((node) => node.id === selection.nodeId)
@@ -701,11 +753,15 @@ export default function BuilderInspector({
     </Box>;
   }
   const hasParallelRegion = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch || node.type === BuiltinAgentNodeType.Aggregator);
+  const hasCorrective = state.nodes.some((node) => node.type === BuiltinAgentNodeType.RetrievalQualityGrader || node.type === BuiltinAgentNodeType.GroundedAnswerVerifier);
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {inspector}
       {hasParallelRegion && state.parallel_policy ? (
         <ParallelPolicyEditor catalog={catalog} policy={state.parallel_policy} disabled={disabled} onChange={onUpdateParallelPolicy} />
+      ) : null}
+      {hasCorrective && state.corrective_policy ? (
+        <CorrectivePolicyEditor catalog={catalog} policy={state.corrective_policy} disabled={disabled} onChange={onUpdateCorrectivePolicy} />
       ) : null}
     </Box>
   );

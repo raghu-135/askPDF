@@ -142,6 +142,8 @@ export const RouteFunctionId = {
   ParallelDispatch: 'parallel_dispatch_route',
   SerialDispatch: 'serial_dispatch_route',
   AnswerQuality: 'answer_quality_route',
+  CorrectiveRetrieval: 'corrective_retrieval_route',
+  GroundedAnswer: 'grounded_answer_route',
 } as const;
 export type RouteFunctionId = typeof RouteFunctionId[keyof typeof RouteFunctionId];
 
@@ -156,5 +158,7 @@ export const BuiltinAgentNodeType = {
   Aggregator: 'aggregator',
   AnswerEvaluator: 'answer_evaluator',
   AnswerReviser: 'answer_reviser',
+  RetrievalQualityGrader: 'retrieval_quality_grader',
+  GroundedAnswerVerifier: 'grounded_answer_verifier',
 } as const;
 export type BuiltinAgentNodeType = typeof BuiltinAgentNodeType[keyof typeof BuiltinAgentNodeType];

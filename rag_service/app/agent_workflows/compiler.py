@@ -12,6 +12,7 @@ from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.routes import route_function_for_edge
 from app.agent_workflows.state import RouterRagState
 from app.agent_workflows.parallel_runtime import normalized_parallel_policy, parallel_retryable_error
+from app.agent_workflows.corrective_contracts import normalized_corrective_policy
 from app.agent_workflows.parallel_contracts import (
     PARALLEL_RETRIEVAL_WORKER_TYPES,
     PARALLEL_RETRY_BACKOFF_FACTOR,
@@ -37,11 +38,13 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.WEB_WORKER.value: 6,
     WorkflowNodeType.AGGREGATOR.value: 7,
     WorkflowNodeType.EVIDENCE_EVALUATOR.value: 8,
+    WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value: 8,
     WorkflowNodeType.REPLANNER.value: 8,
     WorkflowNodeType.DIRECT_ANSWER.value: 9,
     WorkflowNodeType.SYNTHESIZER.value: 10,
     WorkflowNodeType.ANSWER_EVALUATOR.value: 11,
     WorkflowNodeType.ANSWER_REVISER.value: 12,
+    WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value: 12,
     WorkflowNodeType.FINALIZER.value: 13,
     WorkflowNodeType.HITL_GATE.value: 14,
 }
@@ -70,6 +73,8 @@ class WorkflowMaterializer:
         )
         if "parallel_policy" in config:
             config["parallel_policy"] = normalized_parallel_policy(config.get("parallel_policy"))
+        if "corrective_policy" in config:
+            config["corrective_policy"] = normalized_corrective_policy(config.get("corrective_policy"))
         materialized["config"] = config
         return materialized
 
@@ -105,6 +110,8 @@ class WorkflowMaterializer:
             WorkflowNodeType.PARALLEL_DISPATCH.value: RouteFunctionId.PARALLEL_DISPATCH.value,
             WorkflowNodeType.SERIAL_DISPATCH.value: RouteFunctionId.SERIAL_DISPATCH.value,
             WorkflowNodeType.ANSWER_EVALUATOR.value: RouteFunctionId.ANSWER_QUALITY.value,
+            WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value: RouteFunctionId.CORRECTIVE_RETRIEVAL.value,
+            WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value: RouteFunctionId.GROUNDED_ANSWER.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):

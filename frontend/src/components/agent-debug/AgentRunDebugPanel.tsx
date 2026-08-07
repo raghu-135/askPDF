@@ -68,6 +68,9 @@ function AgentRunDebugPanel({
   const executionDetailsAvailable = Boolean(runDetails && !running);
   const parallelSummary = liveTraceView?.parallel?.summary || runDetails?.parallel_summary || runDetails?.metrics_json?.parallel_summary;
   const parallelTasks = liveTraceView?.parallel?.tasks || [];
+  const corrective = runDetails?.corrective || runDetails?.metrics_json?.corrective || traceView?.metrics?.corrective;
+  const retrievalQuality = runDetails?.retrieval_quality_report || runDetails?.metrics_json?.retrieval_quality_report || traceView?.metrics?.retrieval_quality_report;
+  const grounding = runDetails?.grounding_report || runDetails?.metrics_json?.grounding_report || traceView?.metrics?.grounding_report;
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -284,6 +287,55 @@ function AgentRunDebugPanel({
                   ))}
                 </Box>
               ))}
+            </Box>
+          )}
+        </Box>
+      )}
+      {corrective && (
+        <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: corrective.exhausted_budget_type ? 'warning.main' : 'divider' }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>Corrective RAG</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            {Number(corrective.waves || 0)} corrective waves · {Number(corrective.distinct_work_items || 0)} work items · {Number(corrective.tool_attempts || 0)} attempts
+            {Number(corrective.tool_retries || 0) ? ` · ${corrective.tool_retries} retries` : ''}
+            {corrective.exhausted_budget_type ? ` · exhausted ${String(corrective.exhausted_budget_type).replaceAll('_', ' ')}` : ''}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Packets {Number(corrective.accepted_packets || 0)} accepted / {Number(corrective.rejected_packets || 0)} rejected
+            {' · '}support {Math.round(Number(corrective.support_ratio || 0) * 100)}%
+            {' · '}{Number(corrective.citation_violations || 0)} citation violations
+            {' · '}{Number(corrective.contradictions || 0)} contradictions
+            {' · '}{Number(corrective.unresolved_gaps || 0)} gaps
+          </Typography>
+          {(Array.isArray(corrective.history) ? corrective.history : []).map((wave: Record<string, any>) => (
+            <Box component="details" key={`wave:${wave.wave_id}`} sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
+              <Typography component="summary" variant="caption">Wave {wave.wave_id} · {wave.reason || 'corrective retrieval'}</Typography>
+              {(Array.isArray(wave.work_items) ? wave.work_items : []).map((item: Record<string, any>, index: number) => (
+                <Typography key={`${wave.wave_id}:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
+                  {item.worker_node_id || 'worker'}: {item.query || 'query'}{item.file_hash ? ` · document ${item.file_hash}` : ''}
+                </Typography>
+              ))}
+            </Box>
+          ))}
+          {retrievalQuality && (
+            <Box component="details" sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
+              <Typography component="summary" variant="caption">Retrieval grade · {retrievalQuality.verdict || 'unknown'} · {Math.round(Number(retrievalQuality.confidence || 0) * 100)}%</Typography>
+              {(Array.isArray(retrievalQuality.packet_assessments) ? retrievalQuality.packet_assessments : []).map((item: Record<string, any>) => (
+                <Typography key={String(item.packet_id)} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
+                  {item.packet_id}: {item.relevant ? 'relevant' : 'rejected'} · {Math.round(Number(item.confidence || 0) * 100)}%{item.instruction_injection_risk ? ' · injection risk' : ''}
+                </Typography>
+              ))}
+            </Box>
+          )}
+          {grounding && (
+            <Box component="details" sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
+              <Typography component="summary" variant="caption">Support and citations · {Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported</Typography>
+              {(Array.isArray(grounding.claims) ? grounding.claims : []).map((claim: Record<string, any>, index: number) => (
+                <Typography key={`claim:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
+                  {claim.support}: {claim.claim}{claim.contradicted ? ' · contradicted' : ''}
+                </Typography>
+              ))}
+              {(grounding.citation_violations || []).map((item: string, index: number) => <Typography key={`citation:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
+              {(grounding.unresolved_gaps || []).map((item: string, index: number) => <Typography key={`gap:${index}`} variant="caption" color="warning.main" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
             </Box>
           )}
         </Box>

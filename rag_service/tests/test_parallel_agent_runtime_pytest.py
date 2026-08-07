@@ -307,7 +307,7 @@ def test_orchestrator_builtin_validates_and_compiles_without_changing_other_buil
 def test_parallel_contracts_are_canonical_and_builtin_policy_does_not_drift():
     spec = json.loads(BUILTIN.read_text(encoding="utf-8"))["spec_json"]
     assert spec["workflow_id"] == PARALLEL_REFERENCE_WORKFLOW_ID
-    assert spec["config"]["parallel_policy"] == DEFAULT_PARALLEL_POLICY
+    assert normalized_parallel_policy(spec["config"]["parallel_policy"]) == DEFAULT_PARALLEL_POLICY
     catalog = get_node_catalog()
     for worker_type in PARALLEL_RETRIEVAL_WORKER_TYPES:
         assert catalog[worker_type]["parallel_state_writes"] == list(PARALLEL_REDUCER_CHANNELS)

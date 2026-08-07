@@ -16,6 +16,7 @@ import {
   ProcessStatus,
   ReasoningFormat,
   RouteFunctionId,
+  BuiltinAgentNodeType,
   ThreadFileSourceType,
 } from '../src/lib/enums.ts';
 
@@ -38,4 +39,7 @@ test('frontend enum constants preserve API wire values', () => {
   assert.equal(ChatComposerStatus.LlmToolsUnsupported, 'llm_tools_unsupported');
   assert.equal(AgentGraphNodeStatus.Planned, 'planned');
   assert.equal(RouteFunctionId.HitlGate, 'hitl_gate_route');
+  assert.equal(RouteFunctionId.CorrectiveRetrieval, 'corrective_retrieval_route');
+  assert.equal(RouteFunctionId.GroundedAnswer, 'grounded_answer_route');
+  assert.equal(BuiltinAgentNodeType.RetrievalQualityGrader, 'retrieval_quality_grader');
 });

@@ -55,7 +55,8 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["d5f1a2b3c4e6"]
+    assert scripts.get_heads() == ["e7c4a1b9d2f6"]
+    assert scripts.get_revision("e7c4a1b9d2f6").down_revision == "d5f1a2b3c4e6"
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None

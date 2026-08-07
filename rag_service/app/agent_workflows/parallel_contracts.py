@@ -7,6 +7,10 @@ from app.agent_workflows.enums import EvidenceKind, WorkflowNodeType
 
 
 PARALLEL_REFERENCE_WORKFLOW_ID = "orchestrator_worker_rag_agent"
+PARALLEL_AUTHORIZED_WORKFLOW_IDS = frozenset({
+    PARALLEL_REFERENCE_WORKFLOW_ID,
+    "corrective_self_rag_agent",
+})
 PARALLEL_FEATURE_ENV = "ASKPDF_AGENT_WORKFLOW_PARALLEL_V1"
 PARALLEL_EVENT_JOURNAL_LIMIT = 256
 # The configured timeout is enforced inside the worker so it can become a
@@ -27,6 +31,7 @@ PARALLEL_POLICY_FIELDS: Dict[str, Dict[str, Any]] = {
     "max_attempts": {"type": "integer", "default": 2, "minimum": 1, "maximum": 5, "step": 1, "label": "Maximum attempts"},
     "minimum_successes": {"type": "integer", "default": 1, "minimum": 1, "maximum": 32, "step": 1, "label": "Minimum successes"},
     "continue_on_partial_failure": {"type": "boolean", "default": True, "label": "Continue with partial evidence"},
+    "continue_on_insufficient_successes": {"type": "boolean", "default": False, "label": "Continue when no worker succeeds"},
 }
 
 DEFAULT_PARALLEL_POLICY: Dict[str, Any] = {

@@ -15,6 +15,7 @@ from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.planning import worker_nodes_from_spec
 from app.agent_workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from app.agent_workflows.parallel_contracts import ParallelEventName
+from app.agent_workflows.corrective_contracts import normalized_corrective_policy
 from app.agent_workflows.state import merge_parallel_deltas
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from app.db import (
@@ -492,6 +493,7 @@ async def _handle_compiled_rag_chat(
     runtime_features = workflow_runtime_features(resolved_spec)
     parallel_enabled = bool(runtime_features.get("supports_parallel_dispatch"))
     parallel_policy = normalized_parallel_policy(workflow_config.get("parallel_policy"))
+    corrective_policy = normalized_corrective_policy(workflow_config.get("corrective_policy"))
     graph_nodes = ((workflow_config.get("graph") or {}).get("nodes") or []) if isinstance(workflow_config.get("graph"), dict) else []
     parallel_aggregator_id = next(
         (
@@ -548,6 +550,19 @@ async def _handle_compiled_rag_chat(
         "prefetch_policy": prefetch_policy,
         "parallel_enabled": parallel_enabled,
         "parallel_policy": parallel_policy,
+        "corrective_policy": corrective_policy,
+        "corrective_wave": 0,
+        "corrective_history": [],
+        "corrective_budget_usage": {},
+        "corrective_budget_exhausted_reason": "",
+        "retrieval_quality_report": {},
+        "evidence_assessments": [],
+        "source_assessments": [],
+        "unresolved_gaps": [],
+        "grounding_report": {},
+        "verified_claims": [],
+        "contradiction_report": [],
+        "answer_revision_count": 0,
         "parallel_aggregator_id": parallel_aggregator_id,
         "dispatch_aggregator_id": parallel_aggregator_id,
         "worker_result_packets": [],
@@ -576,6 +591,7 @@ async def _handle_compiled_rag_chat(
         "document_sources": [],
         "web_sources": [],
         "used_chat_ids": [],
+        "used_memory_ids": [],
         "node_events": [],
         "tool_events": [],
         "errors": [],

@@ -18,6 +18,7 @@ from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.parallel_contracts import parallel_policy_catalog
+from app.agent_workflows.corrective_contracts import corrective_policy_catalog
 from app.agent_workflows.validator import (
     WorkflowResolver,
     WorkflowValidationError,
@@ -243,6 +244,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
         "parallel_summary": (run.metrics_json or {}).get("parallel_summary") if isinstance(run.metrics_json, dict) else None,
+        "corrective": (run.metrics_json or {}).get("corrective") if isinstance(run.metrics_json, dict) else None,
+        "retrieval_quality_report": (run.metrics_json or {}).get("retrieval_quality_report") if isinstance(run.metrics_json, dict) else None,
+        "grounding_report": (run.metrics_json or {}).get("grounding_report") if isinstance(run.metrics_json, dict) else None,
         "debug": _debug_payload_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
@@ -269,6 +273,9 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "parallel_summary": metrics.get("parallel_summary") if isinstance(metrics.get("parallel_summary"), dict) else None,
+        "corrective": metrics.get("corrective") if isinstance(metrics.get("corrective"), dict) else None,
+        "retrieval_quality_report": metrics.get("retrieval_quality_report") if isinstance(metrics.get("retrieval_quality_report"), dict) else None,
+        "grounding_report": metrics.get("grounding_report") if isinstance(metrics.get("grounding_report"), dict) else None,
         "metrics": {
             "duration_ms": metrics.get("duration_ms"),
             "route": metrics.get("route"),
@@ -279,6 +286,7 @@ def _run_summary_payload(run) -> Dict[str, Any]:
             "error_count": metrics.get("error_count", 0),
             "replan_count": metrics.get("replan_count", 0),
             "evaluation_confidence": metrics.get("evaluation_confidence"),
+            "corrective": metrics.get("corrective") if isinstance(metrics.get("corrective"), dict) else None,
         },
         "error": {
             "code": error.get("code"),
@@ -296,7 +304,9 @@ def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
         "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
         "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
         "supports_parallel_dispatch": bool(features.get("supports_parallel_dispatch")),
+        "supports_corrective_retrieval": bool(features.get("supports_corrective_retrieval")),
         "parallel_policy": config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else None,
+        "corrective_policy": config.get("corrective_policy") if isinstance(config.get("corrective_policy"), dict) else None,
     }
 
 
@@ -630,6 +640,7 @@ async def get_internal_agent_workflow_catalog():
                 "default_max_node_visits": 1,
             },
             "parallel_policy": parallel_policy_catalog(),
+            "corrective_policy": corrective_policy_catalog(),
         },
     }
 

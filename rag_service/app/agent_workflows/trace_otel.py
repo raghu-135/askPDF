@@ -269,7 +269,12 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         "askpdf.evaluator_route": event.get("evaluator_route"),
                         "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
                         "askpdf.replan_count": event.get("replan_count"),
-                        "askpdf.replans": event.get("replans"),
+                "askpdf.replans": event.get("replans"),
+                "askpdf.corrective.decision": event.get("corrective_decision"),
+                "askpdf.corrective.grounding_route": event.get("grounded_answer_route"),
+                "askpdf.corrective.budget_exhausted_reason": event.get("budget_exhausted_reason"),
+                "askpdf.corrective.citation_violation_count": event.get("citation_violation_count"),
+                "askpdf.corrective.contradiction_count": event.get("contradiction_count"),
                     }
                 ),
                 "output": _clean_dict(
@@ -280,12 +285,43 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 ),
             }
         )
+    retrieval_report = _as_dict(event.get("retrieval_quality_report"))
+    if retrieval_report:
+        result.append({
+            "name": "corrective.decision",
+            "attributes": _clean_dict({"askpdf.corrective.decision": event.get("corrective_decision"), "askpdf.corrective.confidence": retrieval_report.get("confidence")}),
+            "output": _bounded_value(retrieval_report),
+        })
+        for contradiction in _as_list(retrieval_report.get("material_contradictions")):
+            result.append({"name": "corrective.contradiction", "output": _bounded_value(contradiction)})
+        for gap in _as_list(retrieval_report.get("missing_requirements")):
+            result.append({"name": "corrective.unresolved_gap", "attributes": {"askpdf.corrective.gap": str(gap)}})
+    grounding_report = _as_dict(event.get("grounding_report"))
+    if grounding_report:
+        result.append({"name": "corrective.support_verification", "attributes": _clean_dict({"askpdf.corrective.grounding_route": event.get("grounded_answer_route"), "askpdf.corrective.support_ratio": grounding_report.get("supported_claim_ratio")}), "output": _bounded_value(grounding_report)})
+        for violation in _as_list(grounding_report.get("citation_violations")):
+            result.append({"name": "corrective.citation_violation", "attributes": {"askpdf.corrective.violation": str(violation)}})
+        for contradiction in _as_list(grounding_report.get("contradictions")):
+            result.append({"name": "corrective.contradiction", "output": _bounded_value(contradiction)})
+        for gap in _as_list(grounding_report.get("unresolved_gaps")):
+            result.append({"name": "corrective.unresolved_gap", "attributes": {"askpdf.corrective.gap": str(gap)}})
+    for proposal in _as_list(event.get("work_item_proposals")):
+        result.append({
+            "name": "corrective.query_rewrite",
+            "attributes": _clean_dict({"askpdf.corrective.worker": proposal.get("worker_node_id"), "askpdf.corrective.file_hash": proposal.get("file_hash")}),
+            "output": _bounded_value({"query": proposal.get("query"), "reason": proposal.get("reason")}),
+        })
+    if event.get("budget_exhausted_reason"):
+        result.append({"name": "corrective.budget_exhausted", "attributes": {"askpdf.corrective.budget": str(event.get("budget_exhausted_reason"))}})
     event_name = event.get("event_name")
     if isinstance(event_name, str) and event_name in {
         "evaluation.completed",
         "replan.requested",
         "replan.skipped",
         "replan.budget_exhausted",
+        "retrieval.grading_completed",
+        "answer.support_verified",
+        "corrective.finalized_cautiously",
     } and not (event_name == "evaluation.completed" and event.get("evaluator_report")):
         result.append(
             {
@@ -297,6 +333,9 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         "askpdf.replan_count": event.get("replan_count"),
                         "askpdf.replans": event.get("replans"),
                         "askpdf.replan_reason": event.get("replan_reason"),
+                        "askpdf.corrective.decision": event.get("corrective_decision"),
+                        "askpdf.corrective.grounding_route": event.get("grounded_answer_route"),
+                        "askpdf.corrective.budget_exhausted_reason": event.get("budget_exhausted_reason"),
                     }
                 ),
                 "output": _clean_dict(
@@ -304,6 +343,8 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         "evaluator_report": _bounded_value(event.get("evaluator_report")),
                         "evidence_gaps": _bounded_value(event.get("evidence_gaps")),
                         "execution_plan": _bounded_value(event.get("execution_plan")),
+                        "retrieval_quality_report": _bounded_value(event.get("retrieval_quality_report")),
+                        "grounding_report": _bounded_value(event.get("grounding_report")),
                     }
                 ),
             }

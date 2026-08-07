@@ -61,6 +61,7 @@ ROUTER_RAG_AGENT_ID = "router_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
+CORRECTIVE_SELF_RAG_AGENT_ID = "corrective_self_rag_agent"
 ROUTER_RAG_AGENT_VERSION = 4
 PLAN_EXECUTE_RAG_AGENT_VERSION = 5
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
@@ -3001,6 +3002,7 @@ class TestAgentWorkflowRepository:
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
+            CORRECTIVE_SELF_RAG_AGENT_ID,
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
@@ -7128,6 +7130,7 @@ class TestAgentWorkflowApi:
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
+            CORRECTIVE_SELF_RAG_AGENT_ID,
         }
         listed_by_id = {item["id"]: item for item in listed.json()["agent_workflows"]}
         assert listed_by_id[ROUTER_RAG_AGENT_ID]["name"] == "Router Agent"

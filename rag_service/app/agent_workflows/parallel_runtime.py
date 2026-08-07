@@ -14,12 +14,13 @@ from langgraph.types import Send, TimeoutPolicy
 from langgraph.errors import NodeTimeoutError
 
 from app.agent_workflows.enums import WorkflowNodeType
-from app.agent_workflows.evidence import combine_evidence
+from app.agent_workflows.corrective_contracts import normalized_corrective_policy
+from app.agent_workflows.evidence import canonical_source_id, combine_evidence, packet_source_ids
 from app.agent_workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,
     PARALLEL_EVENT_NAMES,
     PARALLEL_FEATURE_ENV,
-    PARALLEL_REFERENCE_WORKFLOW_ID,
+    PARALLEL_AUTHORIZED_WORKFLOW_IDS,
     PARALLEL_TERMINAL_WORKER_STATUSES,
     PARALLEL_WORKER_EVIDENCE_KINDS,
     ParallelEventName,
@@ -69,7 +70,7 @@ def parallel_runtime_authorized(state: Mapping[str, Any]) -> bool:
         return True
     return bool(
         parallel_feature_enabled()
-        and state.get("workflow_id") == PARALLEL_REFERENCE_WORKFLOW_ID
+        and state.get("workflow_id") in PARALLEL_AUTHORIZED_WORKFLOW_IDS
     )
 
 
@@ -99,6 +100,18 @@ def normalize_work_items(
     dispatch_visit: int,
 ) -> List[Dict[str, Any]]:
     policy = normalized_parallel_policy(state.get("parallel_policy"))
+    corrective_policy = normalized_corrective_policy(state.get("corrective_policy"))
+    is_corrective = state.get("workflow_id") == "corrective_self_rag_agent"
+    prior_work_ids = {
+        str(item.get("work_id")) for item in state.get("worker_result_packets", [])
+        if isinstance(item, Mapping) and item.get("work_id")
+    }
+    remaining_work = max(0, corrective_policy["max_total_work_items"] - len(prior_work_ids)) if is_corrective else policy["max_work_items"]
+    prior_attempts = sum(
+        1 for item in state.get("parallel_attempt_records", [])
+        if isinstance(item, Mapping)
+    )
+    remaining_attempts = max(0, corrective_policy["max_total_tool_attempts"] - prior_attempts) if is_corrective else policy["max_work_items"] * policy["max_attempts"]
     available = state.get("available_worker_nodes") if isinstance(state.get("available_worker_nodes"), list) else []
     by_id = {
         str(item.get("id")): item
@@ -112,12 +125,20 @@ def normalize_work_items(
         by_type.setdefault(str(item.get("type")), []).append(item)
 
     raw_items = proposals if isinstance(proposals, list) else []
+    allowed_file_hashes = {
+        str(item.get("file_hash"))
+        for item in ((state.get("pre_fetch_bundle") or {}).get("documents") or [])
+        if isinstance(item, Mapping) and item.get("file_hash")
+    }
+    wave = max(0, int(state.get("corrective_wave") or 0))
     dispatch_id = _stable_hash({
         "run": state.get("agent_run_id"),
         "node": dispatch_node_id,
         "visit": dispatch_visit,
+        "wave": wave,
     })
     normalized: List[Dict[str, Any]] = []
+    allocated_attempts = 0
     seen: set[tuple[str, str]] = set()
     for raw in raw_items:
         worker_id = _proposal_worker_id(raw)
@@ -129,10 +150,17 @@ def normalize_work_items(
             continue
         worker_type = str(worker.get("type"))
         query = _normalized_query(raw.get("query") if isinstance(raw, dict) else None, fallback=str(state.get("question") or ""))
-        key = (worker_type, query.casefold())
+        file_hash = str(raw.get("file_hash") or "")[:256] if isinstance(raw, dict) else ""
+        if file_hash and (worker_type != WorkflowNodeType.RETRIEVAL_WORKER.value or file_hash not in allowed_file_hashes):
+            continue
+        key = (worker_type, f"{file_hash}|{query.casefold()}")
         if not query or key in seen:
             continue
         if worker_type == WorkflowNodeType.WEB_WORKER.value and not state.get("use_web_search", False):
+            continue
+        if is_corrective and worker_type == WorkflowNodeType.WEB_WORKER.value and not corrective_policy["allow_web_fallback"]:
+            continue
+        if is_corrective and worker_type == WorkflowNodeType.DURABLE_MEMORY_WORKER.value and corrective_policy["memory_evidence_mode"] == "disabled":
             continue
         seen.add(key)
         ordinal = len(normalized)
@@ -148,6 +176,9 @@ def normalize_work_items(
             if worker_type == WorkflowNodeType.WEB_WORKER.value
             else policy["default_worker_timeout_ms"]
         )
+        item_max_attempts = min(policy["max_attempts"], max(0, remaining_attempts - allocated_attempts))
+        if item_max_attempts < 1:
+            break
         normalized.append({
             "dispatch_id": dispatch_id,
             "dispatch_visit": dispatch_visit,
@@ -156,13 +187,18 @@ def normalize_work_items(
             "worker_node_id": worker_id,
             "worker_type": worker_type,
             "query": query,
+            "file_hash": file_hash or None,
+            "wave_id": wave,
+            "corrective_provenance": is_corrective,
             "reason": str(raw.get("reason") or "")[:500] if isinstance(raw, dict) else "",
             "evidence_kind": WORKER_EVIDENCE_KIND[worker_type],
             "dedupe_key": dedupe_key,
             "attempt": 1,
+            "max_attempts": item_max_attempts,
             "timeout_ms": timeout_ms,
         })
-        if len(normalized) >= policy["max_work_items"]:
+        allocated_attempts += item_max_attempts
+        if len(normalized) >= min(policy["max_work_items"], remaining_work, remaining_attempts):
             break
     return normalized
 
@@ -175,6 +211,8 @@ def work_item_proposals(parsed: Mapping[str, Any], execution_plan: Sequence[str]
                 "worker_node_id": item.get("worker_node_id"),
                 "query": item.get("query") or question,
                 "reason": item.get("reason") or "planner worker decision",
+                "file_hash": item.get("file_hash"),
+                "strategy": item.get("strategy"),
             }
             for item in decisions
             if isinstance(item, dict) and item.get("selected") is True
@@ -308,7 +346,7 @@ def _web_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
     return (str(item.get("title") or "").casefold(), _content_hash(item.get("content") or item.get("text") or item.get("snippet")))
 
 
-def _merge_unique_dicts(items: Iterable[Any], key_fn) -> List[Dict[str, Any]]:
+def _merge_unique_dicts(items: Iterable[Any], key_fn, *, enrich_provenance: bool = False) -> List[Dict[str, Any]]:
     merged: Dict[Any, Dict[str, Any]] = {}
     order: List[Any] = []
     for raw in items:
@@ -316,21 +354,79 @@ def _merge_unique_dicts(items: Iterable[Any], key_fn) -> List[Dict[str, Any]]:
             continue
         key = key_fn(raw)
         if key not in merged:
-            merged[key] = dict(raw)
+            if not enrich_provenance:
+                merged[key] = dict(raw)
+                order.append(key)
+                continue
+            source_id = canonical_source_id(dict(raw))
+            merged[key] = {
+                **dict(raw),
+                **({"source_id": source_id} if source_id else {}),
+                "provenance": [{
+                    key: raw.get(key) for key in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+                    if raw.get(key) not in (None, "")
+                }],
+            }
             order.append(key)
             continue
         for field, value in raw.items():
             if field not in merged[key] or merged[key][field] in (None, "", [], {}):
                 merged[key][field] = value
-    return [merged[key] for key in order]
+        if not enrich_provenance:
+            continue
+        provenance = {
+            field: raw.get(field) for field in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+            if raw.get(field) not in (None, "")
+        }
+        if provenance and provenance not in merged[key]["provenance"]:
+            merged[key]["provenance"].append(provenance)
+    if not enrich_provenance:
+        return [merged[key] for key in order]
+    return sorted(
+        [merged[key] for key in order],
+        key=lambda item: (int(item.get("wave_id") or 0), int(item.get("work_ordinal") or 0), str(item.get("source_id") or "")),
+    )
 
 
-def _dedupe_evidence_first(items: Iterable[Any]) -> List[Dict[str, Any]]:
-    result: List[Dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for item in items:
+def _dedupe_evidence_first(items: Iterable[Any], *, enrich_provenance: bool = False) -> List[Dict[str, Any]]:
+    if not enrich_provenance:
+        result: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            refs = item.get("refs") if isinstance(item.get("refs"), dict) else {}
+            primary_ref = (
+                item.get("primary_reference_key")
+                or item.get("document_id")
+                or item.get("memory_id")
+                or item.get("message_id")
+                or item.get("url")
+                or refs.get("document_id")
+                or refs.get("memory_id")
+                or refs.get("message_id")
+                or refs.get("url")
+                or ""
+            )
+            key = (
+                str(item.get("kind") or ""),
+                str(item.get("content_hash") or _content_hash(item.get("content"))),
+                str(primary_ref),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(dict(item))
+        return result
+    merged: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    for item in sorted(
+        [dict(value) for value in items if isinstance(value, dict)],
+        key=lambda value: (int(value.get("wave_id") or 0), int(value.get("work_ordinal") or 0), str((value.get("source_ids") or [""])[0]), str(value.get("id") or "")),
+    ):
         if not isinstance(item, dict):
             continue
+        source_ids = sorted(set(item.get("source_ids") or packet_source_ids(item)))
+        item["source_ids"] = source_ids
         refs = item.get("refs") if isinstance(item.get("refs"), dict) else {}
         primary_ref = (
             item.get("primary_reference_key")
@@ -350,11 +446,17 @@ def _dedupe_evidence_first(items: Iterable[Any]) -> List[Dict[str, Any]]:
             str(item.get("content_hash") or _content_hash(item.get("content"))),
             str(primary_ref),
         )
-        if key in seen:
+        provenance = {
+            field: item.get(field) for field in ("dispatch_id", "work_id", "work_ordinal", "wave_id", "retrieval_query")
+            if item.get(field) not in (None, "")
+        }
+        if key in merged:
+            merged[key]["source_ids"] = sorted(set(merged[key].get("source_ids") or []) | set(source_ids))
+            if provenance and provenance not in merged[key]["provenance"]:
+                merged[key]["provenance"].append(provenance)
             continue
-        seen.add(key)
-        result.append(dict(item))
-    return result
+        merged[key] = {**item, "provenance": [provenance] if provenance else []}
+    return list(merged.values())
 
 
 def _dedupe_dicts(items: Iterable[Any], key_fn) -> List[Dict[str, Any]]:
@@ -451,6 +553,16 @@ def worker_terminal_delta(
         for value in local.get("used_memory_ids") or []
         if value
     ]
+    enrich_provenance = bool(item.get("corrective_provenance"))
+    chat_refs = (
+        [
+            {"message_id": value, "dispatch_id": dispatch_id, "work_id": work_id, "work_ordinal": item.get("ordinal"), "wave_id": item.get("wave_id", 0)}
+            for value in local.get("used_chat_ids") or []
+            if value
+        ]
+        if enrich_provenance
+        else list(local.get("used_chat_ids") or [])
+    )
     visits = [
         {
             "node_id": worker_node_id,
@@ -479,13 +591,29 @@ def worker_terminal_delta(
         }
         for visit_attempt in range(1, max(1, attempt) + 1)
     ]
+    def _provenance(values: Iterable[Any]) -> List[Dict[str, Any]]:
+        if not enrich_provenance:
+            return [dict(value) for value in values if isinstance(value, Mapping)]
+        return [
+            {
+                **dict(value),
+                "dispatch_id": dispatch_id,
+                "work_id": work_id,
+                "work_ordinal": item.get("ordinal"),
+                "wave_id": item.get("wave_id", 0),
+                "retrieval_query": item.get("query"),
+            }
+            for value in values
+            if isinstance(value, Mapping)
+        ]
+
     packet = {
         **dict(item),
         "attempt": attempt,
         "status": status,
-        "evidence_packets": list(local.get("evidence_packets") or []),
-        "document_sources": list(local.get("document_sources") or []),
-        "web_sources": list(local.get("web_sources") or []),
+        "evidence_packets": _provenance(local.get("evidence_packets") or []),
+        "document_sources": _provenance(local.get("document_sources") or []),
+        "web_sources": _provenance(local.get("web_sources") or []),
         "chat_ids": list(local.get("used_chat_ids") or []),
         "memory_refs": memory_refs,
         "node_events": node_events,
@@ -500,7 +628,7 @@ def worker_terminal_delta(
         "parallel_evidence_deltas": packet["evidence_packets"],
         "parallel_document_source_deltas": packet["document_sources"],
         "parallel_web_source_deltas": packet["web_sources"],
-        "parallel_chat_id_deltas": packet["chat_ids"],
+        "parallel_chat_id_deltas": chat_refs,
         "parallel_memory_ref_deltas": memory_refs,
         "parallel_timeline_ref_deltas": timeline_refs,
         "parallel_node_event_deltas": node_events,
@@ -632,12 +760,24 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
     timed_out = [item for item in terminal if item.get("status") == "timed_out"]
     cancelled = [item for item in terminal if item.get("status") == "cancelled"]
 
-    worker_evidence_input = state.get("parallel_evidence_deltas") or [
+    def _current(values: Iterable[Any]) -> List[Any]:
+        return [
+            value for value in values
+            if not isinstance(value, Mapping)
+            or not current_dispatch_id
+            or str(value.get("dispatch_id") or "") == current_dispatch_id
+        ]
+
+    worker_evidence_input = _current(state.get("parallel_evidence_deltas") or []) or [
         evidence for packet in successful for evidence in packet.get("evidence_packets", [])
     ]
-    worker_evidence = _dedupe_evidence_first(worker_evidence_input)
+    enrich_provenance = state.get("workflow_id") == "corrective_self_rag_agent"
+    worker_evidence = _dedupe_evidence_first(worker_evidence_input, enrich_provenance=enrich_provenance)
     existing_evidence = [item for item in state.get("evidence_packets", []) if isinstance(item, dict)]
-    all_evidence = _dedupe_evidence_first([*existing_evidence, *worker_evidence])
+    all_evidence = _dedupe_evidence_first(
+        [*existing_evidence, *worker_evidence],
+        enrich_provenance=enrich_provenance,
+    )
     evidence_text = str(state.get("evidence") or "")
     for packet in worker_evidence:
         evidence_text = combine_evidence(
@@ -647,20 +787,25 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
         )
 
     document_sources = _merge_unique_dicts(
-        [*state.get("document_sources", []), *(state.get("parallel_document_source_deltas") or (item for packet in successful for item in packet.get("document_sources", [])))],
+        [*state.get("document_sources", []), *(_current(state.get("parallel_document_source_deltas") or []) or (item for packet in successful for item in packet.get("document_sources", [])))],
         _document_key,
+        enrich_provenance=enrich_provenance,
     )
     web_sources = _merge_unique_dicts(
-        [*state.get("web_sources", []), *(state.get("parallel_web_source_deltas") or (item for packet in successful for item in packet.get("web_sources", [])))],
+        [*state.get("web_sources", []), *(_current(state.get("parallel_web_source_deltas") or []) or (item for packet in successful for item in packet.get("web_sources", [])))],
         _web_key,
+        enrich_provenance=enrich_provenance,
     )
+    current_chat_deltas = _current(state.get("parallel_chat_id_deltas") or [])
     chat_ids = _unique_strings([
         *state.get("used_chat_ids", []),
-        *(state.get("parallel_chat_id_deltas") or (item for packet in successful for item in packet.get("chat_ids", []))),
+        *((item.get("message_id") if isinstance(item, Mapping) else item) for item in current_chat_deltas),
+        *((item for packet in successful for item in packet.get("chat_ids", [])) if not current_chat_deltas else []),
     ])
     memory_refs = _merge_unique_dicts(
-        state.get("parallel_memory_ref_deltas") or [item for packet in successful for item in packet.get("memory_refs", [])],
+        _current(state.get("parallel_memory_ref_deltas") or []) or [item for packet in successful for item in packet.get("memory_refs", [])],
         lambda item: str(item.get("memory_id") or item.get("id") or _stable_hash(item)),
+        enrich_provenance=enrich_provenance,
     )
     memory_ids = _unique_strings([
         *state.get("used_memory_ids", []),
@@ -766,7 +911,7 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
     all_skipped = planned > 0 and len(skipped) == planned
     if successful and (failed or timed_out or cancelled) and not policy["continue_on_partial_failure"]:
         raise RuntimeError("parallel_dispatch_partial_failure")
-    if planned and len(successful) < policy["minimum_successes"] and not all_skipped:
+    if planned and len(successful) < policy["minimum_successes"] and not all_skipped and not policy["continue_on_insufficient_successes"]:
         raise RuntimeError("parallel_dispatch_no_usable_results")
     return {
         "evidence": evidence_text,

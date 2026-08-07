@@ -41,6 +41,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "loop_policy",
     "builder_ui",
     "parallel_policy",
+    "corrective_policy",
 }
 
 
@@ -86,6 +87,7 @@ def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
             WorkflowNodeType.THREAD_EVENTS_WORKER.value,
             WorkflowNodeType.WEB_WORKER.value,
             WorkflowNodeType.EVIDENCE_EVALUATOR.value,
+            WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value,
         }
     }
 
@@ -124,6 +126,10 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
             node_visit_limits[node_id] = (worker_count + 1) * (replans + 1)
         elif node_type == WorkflowNodeType.AGGREGATOR.value:
             node_visit_limits[node_id] = replans + 1
+        elif node_type == WorkflowNodeType.PARALLEL_DISPATCH.value:
+            node_visit_limits[node_id] = replans + 1
+        elif node_type == WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value:
+            node_visit_limits[node_id] = replans + 2
         elif node_type == WorkflowNodeType.ANSWER_EVALUATOR.value:
             node_visit_limits[node_id] = 2
         elif node_type == WorkflowNodeType.ANSWER_REVISER.value:

@@ -145,6 +145,50 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
 
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
+    if state.get("workflow_id") == "corrective_self_rag_agent" and (
+        state.get("grounded_answer_route") == "finalize_cautious"
+        or state.get("corrective_retrieval_route") == "insufficient"
+    ):
+        verified = [item for item in state.get("verified_claims") or [] if isinstance(item, dict) and item.get("claim")]
+        gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
+        contradictions = [item for item in state.get("contradiction_report") or [] if isinstance(item, dict)]
+        if verified:
+            lines = [
+                f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
+                for item in verified
+            ]
+            answer = "Verified findings:\n" + "\n".join(lines)
+        else:
+            answer = "I could not verify a substantive answer from the available evidence."
+        if contradictions:
+            answer += "\n\nUnresolved source disagreements:\n" + "\n".join(
+                f"- {item.get('claim') or item.get('reason') or 'Conflicting evidence'} ({', '.join(item.get('source_ids') or [])})"
+                for item in contradictions
+            )
+        if gaps:
+            answer += "\n\nUnresolved evidence gaps:\n" + "\n".join(f"- {gap}" for gap in gaps)
+        reason = str(state.get("corrective_budget_exhausted_reason") or "")
+        if reason:
+            answer += f"\n\nCorrection stopped because the {reason.replace('_', ' ')} budget was exhausted."
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "event_name": "corrective.finalized_cautiously",
+            "answer_chars": len(answer),
+            "verified_claim_count": len(verified),
+            "unresolved_gap_count": len(gaps),
+            "contradiction_count": len(contradictions),
+            "budget_exhausted_reason": reason,
+            "output_refs": state_evidence_refs(state),
+            "output_preview": {"answer": compact_preview(answer)},
+        }
+        log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+        return {
+            "final_answer": answer,
+            "reasoning": "",
+            "reasoning_available": False,
+            "reasoning_format": ReasoningFormat.NONE.value,
+            "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+        }
     if state.get("clarification_options") and not state.get("final_answer"):
         answer = "I need a bit more clarification. Did you mean:\n" + "\n".join(
             f"- {option}" for option in state["clarification_options"]

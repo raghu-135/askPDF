@@ -235,6 +235,40 @@ class GenericGraphValidator:
             )
         )
         errors.extend(self._collect_parallel_graph_errors(spec, nodes, edges, node_types_by_id))
+        errors.extend(self._collect_corrective_graph_errors(spec, nodes, edges, node_types_by_id, adjacency))
+        return errors
+
+    def _collect_corrective_graph_errors(
+        self,
+        spec: Dict[str, Any],
+        nodes: list[Any],
+        edges: list[Any],
+        node_types_by_id: dict[str, str],
+        adjacency: dict[str, set[str]],
+    ) -> list[str]:
+        if spec.get("workflow_id") != "corrective_self_rag_agent":
+            return []
+        errors: list[str] = []
+        required = {
+            WorkflowNodeType.PLANNER.value,
+            WorkflowNodeType.REPLANNER.value,
+            WorkflowNodeType.PARALLEL_DISPATCH.value,
+            WorkflowNodeType.AGGREGATOR.value,
+            WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value,
+            WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value,
+            WorkflowNodeType.FINALIZER.value,
+        }
+        counts = {node_type: list(node_types_by_id.values()).count(node_type) for node_type in required}
+        for node_type, count in sorted(counts.items()):
+            if count != 1:
+                errors.append(f"corrective workflow requires exactly one {node_type} node")
+        features = ((spec.get("runtime") or {}).get("features") or {})
+        for feature in ("supports_corrective_retrieval", "supports_replans", "supports_parallel_dispatch", "supports_answer_quality"):
+            if features.get(feature) is not True:
+                errors.append(f"corrective workflow requires runtime.features.{feature}=true")
+        policy = ((spec.get("config") or {}).get("corrective_policy") or {})
+        if policy.get("max_corrective_waves") != 2 or policy.get("max_answer_revisions") != 1:
+            errors.append("corrective workflow requires two corrective waves and one answer revision")
         return errors
 
     def _collect_parallel_graph_errors(
@@ -272,6 +306,7 @@ class GenericGraphValidator:
                 or dispatch_id in set((edge.get("routes") or {}).values())
             )
         ]
+        is_corrective = spec.get("workflow_id") == "corrective_self_rag_agent"
         dispatch_parent = str(incoming_dispatch[0].get("from")) if len(incoming_dispatch) == 1 else ""
         parent_is_planner = node_types_by_id.get(dispatch_parent) == WorkflowNodeType.PLANNER.value
         parent_is_pre_dispatch_gate = (
@@ -286,7 +321,11 @@ class GenericGraphValidator:
                 for edge in edges
             )
         )
-        if len(incoming_dispatch) != 1 or not (parent_is_planner or parent_is_pre_dispatch_gate):
+        if is_corrective:
+            allowed_parent_types = {WorkflowNodeType.PLANNER.value, WorkflowNodeType.REPLANNER.value, WorkflowNodeType.HITL_GATE.value}
+            if not incoming_dispatch or any(node_types_by_id.get(str(edge.get("from"))) not in allowed_parent_types for edge in incoming_dispatch):
+                errors.append("corrective parallel_dispatch parents must be Planner, Replanner, or the web approval gate")
+        elif len(incoming_dispatch) != 1 or not (parent_is_planner or parent_is_pre_dispatch_gate):
             errors.append("parallel_dispatch must have exactly one Planner parent")
         dispatch_edge = next(
             (
@@ -727,13 +766,13 @@ class GenericGraphValidator:
                 )
                 reaches_evaluator = self._can_reach_type(
                     node_id,
-                    {"evidence_evaluator"},
+                    {"evidence_evaluator", "retrieval_quality_grader"},
                     adjacency,
                     node_types_by_id,
                 )
                 if not reaches_worker or not reaches_evaluator:
                     errors.append(
-                        f"replanner {node_id} must return through an evidence worker to an evidence evaluator"
+                        f"replanner {node_id} must return through an evidence worker to an evidence evaluator or retrieval quality grader"
                     )
 
         errors.extend(
@@ -884,7 +923,7 @@ class GenericGraphValidator:
                 node_id for node_id in component if node_types_by_id.get(node_id) == "replanner"
             ]
             evaluators = [
-                node_id for node_id in component if node_types_by_id.get(node_id) == "evidence_evaluator"
+                node_id for node_id in component if node_types_by_id.get(node_id) in {"evidence_evaluator", "retrieval_quality_grader"}
             ]
             for replanner_id in replanners:
                 for evaluator_id in evaluators:

@@ -101,4 +101,32 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         metrics["parallel_worker_latency_ms_average"] = round(sum(worker_latencies) / len(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_worker_latency_ms_max"] = round(max(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_partial_evidence"] = bool(parallel.get("partial_evidence"))
+    if result.get("workflow_id") == "corrective_self_rag_agent" or result.get("retrieval_quality_report") or result.get("grounding_report"):
+        retrieval = result.get("retrieval_quality_report") if isinstance(result.get("retrieval_quality_report"), dict) else {}
+        grounding = result.get("grounding_report") if isinstance(result.get("grounding_report"), dict) else {}
+        assessments = retrieval.get("packet_assessments") if isinstance(retrieval.get("packet_assessments"), list) else []
+        attempts = [item for item in result.get("parallel_attempt_records") or [] if isinstance(item, dict)]
+        work_ids = {
+            str(item.get("work_id")) for item in result.get("worker_result_packets") or []
+            if isinstance(item, dict) and item.get("work_id")
+        }
+        metrics["corrective"] = {
+            "waves": max(0, int(result.get("corrective_wave") or 0)),
+            "distinct_work_items": len(work_ids),
+            "tool_attempts": len(attempts),
+            "tool_retries": sum(1 for item in attempts if int(item.get("attempt") or 1) > 1),
+            "accepted_packets": sum(1 for item in assessments if isinstance(item, dict) and item.get("relevant") and item.get("provenance_complete") and not item.get("instruction_injection_risk")),
+            "rejected_packets": sum(1 for item in assessments if isinstance(item, dict) and (not item.get("relevant") or not item.get("provenance_complete") or item.get("instruction_injection_risk"))),
+            "support_ratio": float(grounding.get("supported_claim_ratio") or 0.0),
+            "unsupported_claims": sum(1 for item in grounding.get("claims") or [] if isinstance(item, dict) and item.get("support") != "full"),
+            "citation_violations": len(grounding.get("citation_violations") or []),
+            "contradictions": len(grounding.get("contradictions") or retrieval.get("material_contradictions") or []),
+            "unresolved_gaps": len(grounding.get("unresolved_gaps") or retrieval.get("missing_requirements") or []),
+            "partial_wave": bool((result.get("parallel_summary") or {}).get("partial_evidence")),
+            "corrective_latency_ms": round(sum(_elapsed_ms(event) for event in node_events if (event.get("node") or event.get("name")) in {"retrieval_quality_grader", "replanner", "grounded_answer_verifier"}), 2),
+            "exhausted_budget_type": result.get("corrective_budget_exhausted_reason") or None,
+            "history": [dict(item) for item in result.get("corrective_history") or [] if isinstance(item, dict)][-8:],
+        }
+        metrics["retrieval_quality_report"] = retrieval
+        metrics["grounding_report"] = grounding
     return metrics

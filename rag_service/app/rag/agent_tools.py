@@ -58,6 +58,12 @@ class ThreadTimelineSearchInput(BaseModel):
     )
 
 
+class FocusedDocumentSearchInput(BaseModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    file_hash: str = Field(min_length=1, max_length=256)
+    max_results: int = Field(default=10, ge=1, le=30)
+
+
 def _short_excerpt(text: str, limit: int = 260) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
@@ -423,6 +429,107 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             config=config,
             started=started,
             user_message=f"Error retrieving knowledge: {e}",
+        ).to_json()
+
+
+@tool(args_schema=FocusedDocumentSearchInput)
+async def search_document_by_id(
+    query: str,
+    file_hash: str,
+    max_results: int = 10,
+    config: RunnableConfig = None,
+) -> str:
+    """Semantic search inside one document that is already linked to the current thread."""
+
+    started = tool_started()
+    tool_name = "search_document_by_id"
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
+        embedding_model = conf.get("embedding_model")
+        context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+        use_reranker = conf.get("use_reranker", True)
+        if not thread_id or not embedding_model:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
+            ).to_json()
+
+        document_lookup = await get_document_metadata_lookup(thread_id)
+        if file_hash not in document_lookup:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="The requested document is not linked to this thread.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.NO_THREAD_DOCUMENTS],
+            ).to_json()
+
+        embedding_client = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+        db = get_vector_db()
+        raw_chunks = await db.search_knowledge_sources(
+            thread_id=thread_id,
+            query_vector=query_vector,
+            embedding_model=embedding_model,
+            limit=max_results,
+            file_hashes=[file_hash],
+            query_text=query,
+        )
+        if not raw_chunks:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No relevant content was found in the requested document.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.NO_RELEVANT_CONTENT],
+            ).to_json()
+        if use_reranker:
+            raw_chunks = await rerank_document_chunks(query, raw_chunks)
+
+        expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
+        chunk_ids: set[int] = set()
+        for hit in raw_chunks:
+            chunk_id = hit.get("chunk_id")
+            if chunk_id is None:
+                continue
+            for neighbor_id in range(int(chunk_id) - expansion_radius, int(chunk_id) + expansion_radius + 1):
+                if neighbor_id >= 0:
+                    chunk_ids.add(neighbor_id)
+        expanded = await db.get_knowledge_source_chunks_by_ids(
+            thread_id=thread_id,
+            embedding_model=embedding_model,
+            file_hash=file_hash,
+            chunk_ids=sorted(chunk_ids),
+        )
+        expanded.sort(key=lambda item: int(item.get("chunk_id") or 0))
+        content, sources = group_document_chunks(expanded, document_lookup)
+        if not content:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No relevant content was found in the requested document.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.NO_RELEVANT_CONTENT],
+            ).to_json()
+        return make_tool_result(
+            tool_name=tool_name,
+            content=content,
+            config=config,
+            started=started,
+            sources=sources,
+            artifacts={"document_sources": sources},
+        ).to_json(legacy_fields={"__document_sources__": sources})
+    except Exception as exc:
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=exc,
+            config=config,
+            started=started,
+            user_message=f"Error retrieving the requested document: {exc}",
         ).to_json()
 
 

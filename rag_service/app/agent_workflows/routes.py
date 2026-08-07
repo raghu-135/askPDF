@@ -5,7 +5,9 @@ from typing import Any, Callable, Dict
 from app.agent_workflows.enums import (
     AgentRunResumeAction,
     AnswerQualityRoute,
+    CorrectiveRetrievalRoute,
     EvaluatorRoute,
+    GroundedAnswerRoute,
     PlannerRoute,
     RouteFunctionId,
     RouterRoute,
@@ -13,6 +15,8 @@ from app.agent_workflows.enums import (
     PLANNER_ROUTES,
     ROUTER_ROUTES,
     ANSWER_QUALITY_ROUTES,
+    CORRECTIVE_RETRIEVAL_ROUTES,
+    GROUNDED_ANSWER_ROUTES,
 )
 from app.agent_workflows.route_registry import route_function_allowed_for_node_type
 from app.agent_workflows.parallel_runtime import dispatch_sends, serial_dispatch_next
@@ -36,6 +40,16 @@ def evaluator_route(state: Dict[str, Any]) -> str:
 def answer_quality_route(state: Dict[str, Any]) -> str:
     route = state.get("answer_quality_route")
     return route if route in ANSWER_QUALITY_ROUTES else AnswerQualityRoute.PASS.value
+
+
+def corrective_retrieval_route(state: Dict[str, Any]) -> str:
+    route = state.get("corrective_retrieval_route")
+    return route if route in CORRECTIVE_RETRIEVAL_ROUTES else CorrectiveRetrievalRoute.INSUFFICIENT.value
+
+
+def grounded_answer_route(state: Dict[str, Any]) -> str:
+    route = state.get("grounded_answer_route")
+    return route if route in GROUNDED_ANSWER_ROUTES else GroundedAnswerRoute.FINALIZE_CAUTIOUS.value
 
 
 def hitl_gate_route(state: Dict[str, Any]) -> str:
@@ -77,6 +91,10 @@ def route_function_for_edge(
             return serial_dispatch_next
         if route_fn_id == RouteFunctionId.ANSWER_QUALITY.value:
             return answer_quality_route
+        if route_fn_id == RouteFunctionId.CORRECTIVE_RETRIEVAL.value:
+            return corrective_retrieval_route
+        if route_fn_id == RouteFunctionId.GROUNDED_ANSWER.value:
+            return grounded_answer_route
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
     raise ValueError(f"Conditional edge from {source} must declare route_fn")
