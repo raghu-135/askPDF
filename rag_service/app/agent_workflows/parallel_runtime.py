@@ -18,6 +18,7 @@ from app.agent_workflows.corrective_contracts import (
     CORRECTIVE_WORKFLOW_ID,
     corrective_source_strategy,
     normalized_corrective_policy,
+    stable_corrective_identity,
 )
 from app.agent_workflows.evidence import (
     canonical_source_id,
@@ -145,12 +146,16 @@ def normalize_work_items(
         if isinstance(item, Mapping) and item.get("file_hash")
     }
     wave = max(0, int(state.get("corrective_wave") or 0))
-    dispatch_id = _stable_hash({
+    dispatch_fields = {
         "run": state.get("agent_run_id"),
         "node": dispatch_node_id,
         "visit": dispatch_visit,
         "wave": wave,
-    })
+    }
+    dispatch_id = (
+        stable_corrective_identity("dispatch", **dispatch_fields)
+        if is_corrective else _stable_hash(dispatch_fields)
+    )
     candidates: List[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for raw in raw_items:
@@ -219,7 +224,7 @@ def normalize_work_items(
         worker_id = str(candidate["worker_node_id"])
         worker_type = str(candidate["worker_type"])
         source_scope = str(candidate["source_scope"])
-        query_id = _stable_hash({
+        identity_fields = {
             "run": state.get("agent_run_id"),
             "node": dispatch_node_id,
             "wave": wave,
@@ -227,17 +232,10 @@ def normalize_work_items(
             "worker": worker_id,
             "source_scope": source_scope,
             "query": query.casefold(),
-        })
+        }
+        query_id = stable_corrective_identity("query", **identity_fields) if is_corrective else _stable_hash(identity_fields)
         dedupe_key = query_id
-        work_id = _stable_hash({
-            "run": state.get("agent_run_id"),
-            "node": dispatch_node_id,
-            "wave": wave,
-            "ordinal": ordinal,
-            "worker": worker_id,
-            "source_scope": source_scope,
-            "query": query.casefold(),
-        })
+        work_id = stable_corrective_identity("work", **identity_fields) if is_corrective else _stable_hash(identity_fields)
         timeout_ms = (
             policy["web_worker_timeout_ms"]
             if worker_type == WorkflowNodeType.WEB_WORKER.value
@@ -695,13 +693,22 @@ def worker_terminal_delta(
             if isinstance(value, Mapping)
         ]
 
+    evidence_packet_values = list(local.get("evidence_packets") or [])
+    document_source_values = list(local.get("document_sources") or [])
+    web_source_values = list(local.get("web_sources") or [])
+    if enrich_provenance:
+        evidence_packet_values = [
+            value for value in evidence_packet_values
+            if isinstance(value, Mapping)
+            and len(value.get("source_ids") or []) == 1
+        ]
     packet = {
         **dict(item),
         "attempt": attempt,
         "status": status,
-        "evidence_packets": _provenance(local.get("evidence_packets") or []),
-        "document_sources": _provenance(local.get("document_sources") or []),
-        "web_sources": _provenance(local.get("web_sources") or []),
+        "evidence_packets": _provenance(evidence_packet_values),
+        "document_sources": _provenance(document_source_values),
+        "web_sources": _provenance(web_source_values),
         "chat_ids": list(local.get("used_chat_ids") or []),
         "memory_refs": memory_refs,
         "node_events": node_events,
@@ -806,7 +813,25 @@ def cancelled_parallel_dispatch(
         "barrier_state": "cancelled",
         "aggregation_state": "cancelled",
     }
-    return {**combined, "parallel_summary": summary}
+    result = {**combined, "parallel_summary": summary}
+    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
+        now = datetime.now(timezone.utc)
+        started_ms = int(state.get("dispatch_started_epoch_ms") or int(now.timestamp() * 1000))
+        record_id = stable_corrective_identity(
+            "wave", run=state.get("agent_run_id"), dispatch=summary.get("dispatch_id"), wave=state.get("corrective_wave", 0)
+        )
+        result["corrective_wave_records"] = [{
+            "record_id": record_id,
+            "dispatch_id": summary.get("dispatch_id"),
+            "wave_id": max(0, int(state.get("corrective_wave") or 0)),
+            "started_at": datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            "completed_at": now.isoformat().replace("+00:00", "Z"),
+            "elapsed_ms": max(0, int(now.timestamp() * 1000) - started_ms),
+            "outcome": "cancelled",
+            "partial": False,
+            **{key: summary.get(key, 0) for key in ("planned", "completed", "skipped", "failed", "timed_out", "cancelled")},
+        }]
+    return result
 
 
 def _peak_concurrency(packets: Sequence[Mapping[str, Any]], *, maximum: int) -> int:

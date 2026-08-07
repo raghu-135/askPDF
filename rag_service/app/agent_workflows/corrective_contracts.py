@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 from typing import Any, Dict, Mapping
 
 
@@ -16,6 +18,13 @@ CORRECTIVE_SOURCE_STRATEGIES = (
 CORRECTIVE_SOURCE_STRATEGY_RANK = {
     strategy: index for index, strategy in enumerate(CORRECTIVE_SOURCE_STRATEGIES)
 }
+
+
+def stable_corrective_identity(kind: str, **fields: Any) -> str:
+    payload = {"kind": kind, **fields}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:24]
 
 
 class CorrectiveEventName:

@@ -62,6 +62,22 @@ def merge_parallel_deltas(left: List[Any], right: List[Any]) -> List[Any]:
     return result
 
 
+def merge_corrective_wave_records(left: List[Any], right: List[Any]) -> List[Any]:
+    result = [dict(item) for item in left or [] if isinstance(item, dict)]
+    positions = {str(item.get("record_id")): index for index, item in enumerate(result) if item.get("record_id")}
+    for raw in right or []:
+        if not isinstance(raw, dict) or not raw.get("record_id"):
+            continue
+        item = dict(raw)
+        record_id = str(item["record_id"])
+        if record_id in positions:
+            result[positions[record_id]] = {**result[positions[record_id]], **item}
+        else:
+            positions[record_id] = len(result)
+            result.append(item)
+    return result
+
+
 class WorkerWorkItem(TypedDict):
     dispatch_id: str
     dispatch_node_id: str
@@ -195,6 +211,7 @@ class RouterRagState(TypedDict, total=False):
     corrective_policy: Dict[str, Any]
     corrective_wave: int
     corrective_history: List[Dict[str, Any]]
+    corrective_wave_records: Annotated[List[Dict[str, Any]], merge_corrective_wave_records]
     corrective_budget_usage: Dict[str, int]
     corrective_budget_exhausted_reason: str
     retrieval_quality_report: Dict[str, Any]

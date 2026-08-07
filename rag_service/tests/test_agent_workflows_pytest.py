@@ -866,6 +866,17 @@ class TestRouterRagWorkflowValidator:
         assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["serial_dispatch"] == 24
         assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 63
 
+        corrective_resolved = WorkflowResolver().resolve(
+            _builtin_spec(CORRECTIVE_SELF_RAG_AGENT_ID),
+            thread_settings={"replans": 3},
+            request_overrides={"replans": 4},
+        )
+        assert corrective_resolved["config"]["replans"] == 2
+        assert corrective_resolved["config"]["corrective_policy"]["max_corrective_waves"] == 2
+        assert corrective_resolved["config"]["loop_policy"]["node_visit_limits"]["parallel_dispatch"] == 3
+        assert corrective_resolved["config"]["loop_policy"]["node_visit_limits"]["retrieval_quality_grader"] == 3
+        assert corrective_resolved["config"]["loop_policy"]["node_visit_limits"]["grounded_answer_verifier"] == 4
+
     def test_rejects_zero_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = 0
@@ -3942,7 +3953,7 @@ class TestAgentRunService:
         }
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_falls_back_to_router_for_unsupported_simple_setting(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_rejects_unsupported_simple_setting(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3984,20 +3995,16 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(repository=repo).run_thread_chat(
-                sample_thread.id,
-                req,
-                sample_thread.embedding_model,
-            )
+            with pytest.raises(RuntimeError, match="Selected agent workflow is unavailable: simple_rag_agent"):
+                await AgentRunService(repository=repo).run_thread_chat(
+                    sample_thread.id,
+                    req,
+                    sample_thread.embedding_model,
+                )
+            runs = await repo.list_runs_for_thread(sample_thread.id)
 
-            run = await repo.get_run(result["agent_run_id"])
-
-        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert result["agent_workflow_version"] == ROUTER_RAG_AGENT_VERSION
-        assert captured_context["agent_run_id"] == result["agent_run_id"]
-        assert run.status == "completed"
-        assert run.metrics_json["document_source_count"] == 1
-        assert run.resolved_spec_json["workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert captured_context == {}
+        assert runs == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("run_delete_fails", [False, True])
@@ -4511,8 +4518,9 @@ class TestAgentRunService:
         assert result["agent_workflow_id"] == "internal_custom_rag_agent"
         assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
         assert run.workflow_id == "internal_custom_rag_agent"
-        assert run.run_metadata_json["requested_workflow_id"] == "internal_custom_rag_agent"
-        assert run.run_metadata_json["fallback_reason"] is None
+        assert run.run_metadata_json["executed_workflow_id"] == "internal_custom_rag_agent"
+        assert "fallback_workflow_id" not in run.run_metadata_json
+        assert "fallback_reason" not in run.run_metadata_json
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_records_initial_custom_db_workflow_version(self, engine, sample_thread, monkeypatch):
@@ -4578,7 +4586,9 @@ class TestAgentRunService:
         assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_falls_back_when_selected_workflow_is_unavailable(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_fails_when_selected_workflow_is_unavailable(
+        self, engine, sample_thread, monkeypatch, caplog
+    ):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -4620,19 +4630,68 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(repository=repo).run_thread_chat(
-                sample_thread.id,
-                req,
-                sample_thread.embedding_model,
-            )
-            run = await repo.get_run(result["agent_run_id"])
+            with pytest.raises(RuntimeError, match="Selected agent workflow is unavailable: missing_custom_rag_agent"):
+                await AgentRunService(repository=repo).run_thread_chat(
+                    sample_thread.id,
+                    req,
+                    sample_thread.embedding_model,
+                )
+            runs = await repo.list_runs_for_thread(sample_thread.id)
 
-        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert run.workflow_id == ROUTER_RAG_AGENT_ID
-        assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert run.run_metadata_json["requested_workflow_id"] == "missing_custom_rag_agent"
-        assert run.run_metadata_json["fallback_workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert run.run_metadata_json["fallback_reason"] == "selected_workflow_unavailable"
+        assert captured_spec == {}
+        assert runs == []
+        selection_errors = [
+            record for record in caplog.records
+            if "Selected agent workflow unavailable; aborting run" in record.getMessage()
+        ]
+        assert len(selection_errors) == 1
+        assert selection_errors[0].levelno == logging.ERROR
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_fails_when_selected_workflow_is_invalid(
+        self, engine, sample_thread, monkeypatch, caplog
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_workflow": {"workflow_id": CORRECTIVE_SELF_RAG_AGENT_ID}}
+
+            class RejectingResolver:
+                def resolve(self, *_args, **_kwargs):
+                    raise WorkflowValidationError("invalid corrective topology")
+
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                replans=2,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            service = AgentRunService(repository=repo, resolver=RejectingResolver())
+            with pytest.raises(RuntimeError, match="Selected agent workflow is incompatible"):
+                await service.run_thread_chat(sample_thread.id, req, sample_thread.embedding_model)
+            runs = await repo.list_runs_for_thread(sample_thread.id)
+
+        assert runs == []
+        validation_errors = [
+            record for record in caplog.records
+            if "Selected agent workflow failed validation; aborting run" in record.getMessage()
+        ]
+        assert len(validation_errors) == 1
+        assert validation_errors[0].levelno == logging.ERROR
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_current_custom_db_workflow_version(self, engine, sample_thread, monkeypatch):

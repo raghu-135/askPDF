@@ -75,8 +75,6 @@ class AgentRunService:
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         default_workflow_key = default_agent_workflow_key()
         workflow_id = agent_settings.get("workflow_id") or default_workflow_key
-        requested_workflow_id = workflow_id
-        fallback_reason: Optional[str] = None
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -85,17 +83,12 @@ class AgentRunService:
             await self.repository.seed_builtin_workflows()
             workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
         if workflow is None:
-            if workflow_id != default_workflow_key:
-                logger.warning(
-                    "Selected agent workflow unavailable; falling back to default | thread_id=%s requested_workflow=%s",
-                    thread_id,
-                    workflow_id,
-                )
-                fallback_reason = "selected_workflow_unavailable"
-                workflow_id = default_workflow_key
-                workflow = await self.repository.get_workflow(default_workflow_key)
-        if workflow is None:
-            raise RuntimeError("Default agent workflow is unavailable")
+            logger.error(
+                "Selected agent workflow unavailable; aborting run | thread_id=%s requested_workflow=%s",
+                thread_id,
+                workflow_id,
+            )
+            raise RuntimeError(f"Selected agent workflow is unavailable: {workflow_id}")
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
@@ -117,41 +110,15 @@ class AgentRunService:
                 request_overrides=request_overrides,
             )
         except WorkflowValidationError as exc:
-            if workflow_id == default_workflow_key:
-                logger.exception(
-                    "Default agent workflow failed validation | thread_id=%s workflow_id=%s",
-                    thread_id,
-                    workflow.id,
-                )
-                raise RuntimeError("Default agent workflow is incompatible with this service version") from exc
-            logger.warning(
-                "Selected agent workflow failed validation; falling back to default | thread_id=%s requested_workflow=%s error=%s",
+            logger.exception(
+                "Selected agent workflow failed validation; aborting run | thread_id=%s requested_workflow=%s error=%s",
                 thread_id,
                 workflow.id,
                 exc,
             )
-            fallback_workflow = await self.repository.get_workflow(default_workflow_key)
-            if fallback_workflow is None:
-                await self.repository.seed_builtin_workflows()
-                fallback_workflow = await self.repository.get_workflow(default_workflow_key)
-            if fallback_workflow is None:
-                raise RuntimeError("Default agent workflow is unavailable") from exc
-            fallback_reason = "selected_workflow_validation_failed"
-            workflow = fallback_workflow
-            workflow_id = workflow.id
-            try:
-                resolved_spec = self.resolver.resolve(
-                    workflow.spec_json,
-                    thread_settings=thread_settings,
-                    request_overrides=request_overrides,
-                )
-            except WorkflowValidationError as fallback_exc:
-                logger.exception(
-                    "Default agent workflow failed validation | thread_id=%s workflow_id=%s",
-                    thread_id,
-                    workflow.id,
-                )
-                raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
+            raise RuntimeError(
+                f"Selected agent workflow is incompatible with this service version: {workflow.id}"
+            ) from exc
         workflow_version = _workflow_version_info(workflow)
         from app.agent_workflows.compiler import WorkflowCompiler
         from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
@@ -173,10 +140,7 @@ class AgentRunService:
             workflow_version=workflow_version.version if workflow_version is not None else None,
             resolved_spec_json=stored_resolved_spec,
             run_metadata_json={
-                "requested_workflow_id": requested_workflow_id,
                 "executed_workflow_id": workflow.id,
-                "fallback_workflow_id": workflow.id if fallback_reason else None,
-                "fallback_reason": fallback_reason,
             },
         )
 
@@ -229,6 +193,8 @@ class AgentRunService:
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
             result.pop("_parallel_attempt_records", None)
+            result.pop("_corrective_wave_records", None)
+            result.pop("_corrective_metrics_state", None)
             if status == AgentRunStatus.CANCELLED.value:
                 try:
                     await self.repository.complete_run(
@@ -461,6 +427,8 @@ class AgentRunService:
                 **build_run_metrics(result, duration_ms=float(result.get("duration_ms") or 0)),
             }
             result.pop("_parallel_attempt_records", None)
+            result.pop("_corrective_wave_records", None)
+            result.pop("_corrective_metrics_state", None)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
             if status == AgentRunStatus.AWAITING_HUMAN.value:

@@ -150,9 +150,19 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):
-        verified = [item for item in state.get("verified_claims") or [] if isinstance(item, dict) and item.get("claim")]
-        gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
         contradictions = [item for item in state.get("contradiction_report") or [] if isinstance(item, dict)]
+        contradicted_claim_ids = {
+            str(claim_id) for item in contradictions for claim_id in item.get("claim_ids") or [] if claim_id
+        }
+        verified = [
+            item for item in state.get("verified_claims") or []
+            if isinstance(item, dict)
+            and item.get("claim")
+            and item.get("claim_id") not in contradicted_claim_ids
+        ]
+        if contradictions and any(not item.get("claim_ids") for item in contradictions):
+            verified = []
+        gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
         if verified:
             lines = [
                 f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"

@@ -32,6 +32,11 @@ def _sum_elapsed(events: Iterable[Mapping[str, Any]]) -> float:
 def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[str, Any]:
     """Build persisted run-level observability metrics from graph output."""
 
+    corrective_private = result.get("_corrective_metrics_state")
+    corrective_result: Mapping[str, Any] = (
+        {**result, **corrective_private}
+        if isinstance(corrective_private, dict) else result
+    )
     node_events = _dict_events(result.get("node_events"))
     tool_events = _dict_events(result.get("tool_events"))
     errors = _dict_events(result.get("errors"))
@@ -102,12 +107,12 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         metrics["parallel_worker_latency_ms_average"] = round(sum(worker_latencies) / len(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_worker_latency_ms_max"] = round(max(worker_latencies), 2) if worker_latencies else 0.0
         metrics["parallel_partial_evidence"] = bool(parallel.get("partial_evidence"))
-    if result.get("workflow_id") == CORRECTIVE_WORKFLOW_ID or result.get("retrieval_quality_report") or result.get("grounding_report"):
-        retrieval = result.get("retrieval_quality_report") if isinstance(result.get("retrieval_quality_report"), dict) else {}
-        grounding = result.get("grounding_report") if isinstance(result.get("grounding_report"), dict) else {}
+    if corrective_result.get("workflow_id") == CORRECTIVE_WORKFLOW_ID or corrective_result.get("retrieval_quality_report") or corrective_result.get("grounding_report"):
+        retrieval = corrective_result.get("retrieval_quality_report") if isinstance(corrective_result.get("retrieval_quality_report"), dict) else {}
+        grounding = corrective_result.get("grounding_report") if isinstance(corrective_result.get("grounding_report"), dict) else {}
         assessments = retrieval.get("packet_assessments") if isinstance(retrieval.get("packet_assessments"), list) else []
-        attempts = [item for item in result.get("parallel_attempt_records") or [] if isinstance(item, dict)]
-        result_packets = [item for item in result.get("worker_result_packets") or [] if isinstance(item, dict)]
+        attempts = [item for item in (result.get("_parallel_attempt_records") or corrective_result.get("parallel_attempt_records") or []) if isinstance(item, dict)]
+        result_packets = [item for item in corrective_result.get("worker_result_packets") or [] if isinstance(item, dict)]
         latest_by_work: Dict[str, Dict[str, Any]] = {}
         packets_without_work: List[Dict[str, Any]] = []
         for item in result_packets:
@@ -120,30 +125,47 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
                 latest_by_work[work_id] = item
         result_packets = [*latest_by_work.values(), *packets_without_work]
         work_ids = set(latest_by_work)
-        wave_ids = sorted({int(item.get("wave_id") or 0) for item in result_packets})
+        wave_records = [
+            dict(item) for item in (result.get("_corrective_wave_records") or result.get("corrective_wave_records") or [])
+            if isinstance(item, dict) and item.get("record_id")
+        ]
+        wave_ids = sorted({int(item.get("wave_id") or 0) for item in result_packets} | {int(item.get("wave_id") or 0) for item in wave_records})
         wave_outcomes = []
+        records_by_wave = {int(item.get("wave_id") or 0): item for item in wave_records}
         for wave_id in wave_ids:
             wave_packets = [item for item in result_packets if int(item.get("wave_id") or 0) == wave_id]
             statuses = [str(item.get("status") or "") for item in wave_packets]
+            record = records_by_wave.get(wave_id, {})
             wave_outcomes.append({
                 "wave_id": wave_id,
-                "planned": len({str(item.get("work_id")) for item in wave_packets if item.get("work_id")}),
-                "completed": statuses.count("completed"),
-                "failed": statuses.count("failed"),
-                "timed_out": statuses.count("timed_out"),
-                "cancelled": statuses.count("cancelled"),
-                "partial": "completed" in statuses and any(status in {"failed", "timed_out", "cancelled"} for status in statuses),
-                "latency_ms": round(max((float(item.get("elapsed_ms") or 0) for item in wave_packets), default=0.0), 2),
+                "record_id": record.get("record_id"),
+                "dispatch_id": record.get("dispatch_id"),
+                "status": record.get("status") or "unknown",
+                "outcome": record.get("outcome") or "unknown",
+                "planned": int(record.get("planned") or len({str(item.get("work_id")) for item in wave_packets if item.get("work_id")})),
+                "completed": int(record.get("completed") or statuses.count("completed")),
+                "failed": int(record.get("failed") or statuses.count("failed")),
+                "timed_out": int(record.get("timed_out") or statuses.count("timed_out")),
+                "cancelled": int(record.get("cancelled") or statuses.count("cancelled")),
+                "partial": bool(record.get("partial")),
+                "started_at": record.get("started_at"),
+                "completed_at": record.get("completed_at"),
+                "latency_ms": round(float(record.get("elapsed_ms") or 0.0), 2),
+                "source_expansion": bool(record.get("source_expansion")),
                 "work_items": [{
                     key: item.get(key)
                     for key in ("work_id", "query_id", "worker_node_id", "source_strategy", "source_scope", "query", "status", "attempt", "source_expansion")
                 } for item in wave_packets],
             })
         metrics["corrective"] = {
-            "waves": max(0, int(result.get("corrective_wave") or 0)),
+            "waves": max(0, int(corrective_result.get("corrective_wave") or 0)),
             "attempted_waves": len(wave_ids),
-            "completed_waves": sum(1 for item in wave_outcomes if item["planned"] and not item["cancelled"]),
+            "completed_waves": sum(1 for item in wave_outcomes if item["status"] == "completed"),
+            "successful_waves": sum(1 for item in wave_outcomes if item["outcome"] == "successful"),
             "partial_waves": sum(1 for item in wave_outcomes if item["partial"]),
+            "failed_waves": sum(1 for item in wave_outcomes if item["outcome"] == "failed"),
+            "timed_out_waves": sum(1 for item in wave_outcomes if item["outcome"] == "timed_out"),
+            "cancelled_waves": sum(1 for item in wave_outcomes if item["outcome"] == "cancelled"),
             "distinct_work_items": len(work_ids),
             "tool_attempts": len(attempts),
             "tool_retries": sum(1 for item in attempts if int(item.get("attempt") or 1) > 1),
@@ -157,8 +179,8 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
             "unresolved_gaps": len(grounding.get("unresolved_gaps") or retrieval.get("missing_requirements") or []),
             "partial_wave": bool((result.get("parallel_summary") or {}).get("partial_evidence")),
             "corrective_latency_ms": round(sum(_elapsed_ms(event) for event in node_events if (event.get("node") or event.get("name")) in {"retrieval_quality_grader", "replanner", "grounded_answer_verifier"}), 2),
-            "exhausted_budget_type": result.get("corrective_budget_exhausted_reason") or None,
-            "history": [dict(item) for item in result.get("corrective_history") or [] if isinstance(item, dict)][-8:],
+            "exhausted_budget_type": corrective_result.get("corrective_budget_exhausted_reason") or None,
+            "history": [dict(item) for item in corrective_result.get("corrective_history") or [] if isinstance(item, dict)][-8:],
             "wave_outcomes": wave_outcomes[-8:],
         }
         metrics["retrieval_quality_report"] = retrieval

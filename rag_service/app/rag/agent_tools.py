@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
+from app.agent.evidence_contract import evidence_segment
 from app.db import FileSourceType, ProcessStatus
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
@@ -56,8 +57,6 @@ class ThreadTimelineSearchInput(BaseModel):
         le=30,
         description="Maximum number of timeline events to return.",
     )
-
-
 class FocusedDocumentSearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
     file_hash: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -407,6 +406,25 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         artifacts = {
             "document_sources": document_sources,
             "web_sources": web_sources,
+            "evidence_segments": [
+                segment
+                for chunk in expanded_doc_chunks
+                if (segment := evidence_segment(
+                    kind="document",
+                    content=chunk.get("text"),
+                    source=chunk,
+                    raw_score=chunk.get("rerank_score", chunk.get("score")),
+                ))
+            ] + [
+                segment
+                for chunk in web_chunks
+                if (segment := evidence_segment(
+                    kind="web",
+                    content=chunk.get("text"),
+                    source=chunk,
+                    raw_score=chunk.get("rerank_score", chunk.get("score")),
+                ))
+            ],
         }
         legacy_fields: Dict[str, Any] = {}
         if document_sources:
@@ -521,7 +539,19 @@ async def search_document_by_id(
             config=config,
             started=started,
             sources=sources,
-            artifacts={"document_sources": sources},
+            artifacts={
+                "document_sources": sources,
+                "evidence_segments": [
+                    segment
+                    for chunk in expanded
+                    if (segment := evidence_segment(
+                        kind="document",
+                        content=chunk.get("text"),
+                        source=chunk,
+                        raw_score=chunk.get("rerank_score", chunk.get("score")),
+                    ))
+                ],
+            },
         ).to_json(legacy_fields={"__document_sources__": sources})
     except Exception as exc:
         return make_tool_error_result(
@@ -558,14 +588,17 @@ async def search_thread_conversation_history(query: str, max_results: int = 10, 
 
         embedding_client = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
-        history, used_ids = await fetch_semantic_history(
+        history_result = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
             query_text=query,
             limit=max_results,
             use_reranker=use_reranker,
             embedding_model=embedding_model,
+            include_refs=True,
         )
+        history, used_ids = history_result[:2]
+        history_refs = history_result[2] if len(history_result) > 2 else []
 
         if not history:
             return make_tool_result(
@@ -581,7 +614,19 @@ async def search_thread_conversation_history(query: str, max_results: int = 10, 
             content=history,
             config=config,
             started=started,
-            artifacts={"used_chat_ids": used_ids},
+            artifacts={
+                "used_chat_ids": used_ids,
+                "evidence_segments": [
+                    segment
+                    for item in history_refs
+                    if (segment := evidence_segment(
+                        kind="conversation",
+                        content=item.get("content"),
+                        source=item,
+                        raw_score=item.get("rerank_score", item.get("score")),
+                    ))
+                ],
+            },
         ).to_json(legacy_fields={"__used_chat_ids__": used_ids})
     except Exception as e:
         logger.error("Error in search_thread_conversation_history: %s", e, exc_info=True)
@@ -688,6 +733,7 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
             "Otherwise Thread overrides Project, and Project overrides Personal memory.",
         ]
         memory_refs = []
+        memory_segments = []
         scopes = []
         for index, item in enumerate(memories, start=1):
             memory = item if isinstance(item, dict) else {}
@@ -707,6 +753,14 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
                 "scope_rank": memory.get("scope_rank"),
                 "attributes": attributes,
             })
+            segment = evidence_segment(
+                kind="memory",
+                content=content,
+                source={"memory_id": memory.get("id"), "title": f"{scope_type}:{scope_id}"},
+                raw_score=memory.get("raw_score", memory.get("score")),
+            )
+            if segment:
+                memory_segments.append(segment)
             scope_key = {"scope_type": scope_type, "scope_id": scope_id}
             if scope_key not in scopes:
                 scopes.append(scope_key)
@@ -725,6 +779,7 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
                 "memory_precedence": result.get("precedence", ["thread", "project", "user"]),
                 "memory_representation_issues": result.get("representation_issues", []),
                 "memory_retrieval_debug": retrieval_debug,
+                "evidence_segments": memory_segments,
             },
         ).to_json()
     except Exception as e:
@@ -834,7 +889,19 @@ async def search_thread_events(
             config=config,
             started=started,
             sources=events,
-            artifacts={"timeline_events": events},
+            artifacts={
+                "timeline_events": events,
+                "evidence_segments": [
+                    segment
+                    for event in events
+                    if (segment := evidence_segment(
+                        kind="timeline",
+                        content=event.get("excerpt"),
+                        source=event,
+                        raw_score=event.get("score"),
+                    ))
+                ],
+            },
             warnings=[] if events else [ToolWarningCode.NO_TIMELINE_EVENTS],
         ).to_json(legacy_fields={"__timeline_events__": events})
     except Exception as e:

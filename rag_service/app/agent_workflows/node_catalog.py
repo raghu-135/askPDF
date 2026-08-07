@@ -626,8 +626,8 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "max_instances": 8,
     },
     NODE_PARALLEL_DISPATCH: {
-        "state_reads": ["work_items", "worker_result_packets", "parallel_policy"],
-        "state_writes": ["dispatch_id", "work_items", "parallel_summary"],
+        "state_reads": ["work_items", "worker_result_packets", "parallel_policy", "corrective_wave_records"],
+        "state_writes": ["dispatch_id", "work_items", "parallel_summary", "corrective_wave_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_DECISION, "output_budget": BUDGET_DECISION},
         "observability": {
@@ -639,8 +639,8 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "max_instances": 1,
     },
     NODE_AGGREGATOR: {
-        "state_reads": ["worker_result_packets", "work_items", "parallel_policy"],
-        "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids", "used_memory_ids", "node_events", "tool_events", "errors", "skipped_nodes", "node_visit_counts", "node_visit_sequence", "parallel_summary"],
+        "state_reads": ["worker_result_packets", "work_items", "parallel_policy", "corrective_wave_records"],
+        "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids", "used_memory_ids", "node_events", "tool_events", "errors", "skipped_nodes", "node_visit_counts", "node_visit_sequence", "parallel_summary", "corrective_wave_records"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_BOUNDED_EVIDENCE},
         "observability": {

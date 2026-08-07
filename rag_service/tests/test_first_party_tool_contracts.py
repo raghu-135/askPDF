@@ -92,7 +92,13 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
                 }
             ]
         ),
-        search_web_chunks=AsyncMock(return_value=[]),
+        search_web_chunks=AsyncMock(return_value=[{
+            "url": "https://example.com/cached",
+            "title": "Cached result",
+            "text": "Previously fetched web evidence",
+            "score": 0.8,
+            "web_search_performed_at": "2026-08-01T12:00:00Z",
+        }]),
     )
     monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
     monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
@@ -113,13 +119,22 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
         payload,
         tool_name="search_documents",
         caller_node="retrieval_worker",
-        artifact_keys=("document_sources", "web_sources"),
+        artifact_keys=("document_sources", "web_sources", "evidence_segments"),
     )
-    assert payload["sources"] == payload["artifacts"]["document_sources"]
+    assert payload["sources"] == [
+        *payload["artifacts"]["document_sources"],
+        *payload["artifacts"]["web_sources"],
+    ]
     assert payload["__document_sources__"] == payload["artifacts"]["document_sources"]
     assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.search_web_chunks.call_args.kwargs["embedding_model"] == "embed-1"
+    assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "doc:file-1:1"
+    assert payload["artifacts"]["evidence_segments"][0]["content"] == "Document evidence"
+    cached = payload["artifacts"]["evidence_segments"][1]
+    assert cached["source_id"] == "web:https://example.com/cached"
+    assert cached["content"] == "Previously fetched web evidence"
+    assert payload["artifacts"]["web_sources"][0]["web_search_performed_at"] == "2026-08-01T12:00:00Z"
 
 
 @pytest.mark.asyncio
@@ -235,9 +250,10 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
         payload,
         tool_name="search_thread_events",
         caller_node="thread_events_worker",
-        artifact_keys=("timeline_events",),
+        artifact_keys=("timeline_events", "evidence_segments"),
     )
     assert payload["artifacts"]["timeline_events"][0]["message_id"] == "turn-1:assistant"
+    assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "conversation:turn-1:assistant"
     assert payload["__timeline_events__"] == payload["artifacts"]["timeline_events"]
     assert fake_db.search_chat_memory.call_args.kwargs["embedding_model"] == "embed-1"
 
@@ -267,10 +283,11 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
         payload,
         tool_name="search_web",
         caller_node="web_worker",
-        artifact_keys=("web_sources",),
+        artifact_keys=("web_sources", "evidence_segments"),
     )
     assert payload["sources"] == payload["artifacts"]["web_sources"]
     assert payload["__web_sources__"] == payload["artifacts"]["web_sources"]
+    assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "web:https://example.com/"
 
 
 @pytest.mark.asyncio

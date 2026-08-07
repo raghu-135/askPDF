@@ -9,6 +9,8 @@ from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_thread_conversation_history, search_document_by_id, search_documents, search_durable_memory, search_thread_events
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from app.agent_workflows.evidence import append_corrective_evidence_packets
 from app.agent_workflows.state import runtime_node_id
 from app.agent_workflows.trace import refs_from_timeline
 
@@ -184,12 +186,20 @@ async def run_tool_worker(
         label=spec.evidence_label,
         limit=evidence_text_limit(state),
     )
-    evidence_packets = append_evidence_packet(
-        state,
-        config,
-        kind=spec.evidence_kind,
-        content=payload.get("content", ""),
-        refs=refs_from_artifacts(artifacts),
+    evidence_packets = (
+        append_corrective_evidence_packets(
+            state,
+            config,
+            segments=artifacts.get("evidence_segments"),
+        )
+        if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
+        else append_evidence_packet(
+            state,
+            config,
+            kind=spec.evidence_kind,
+            content=payload.get("content", ""),
+            refs=refs_from_artifacts(artifacts),
+        )
     )
 
     update = spec.state_update(state, payload, artifacts, evidence, evidence_packets) if spec.state_update else {}

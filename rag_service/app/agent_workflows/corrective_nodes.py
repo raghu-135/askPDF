@@ -27,6 +27,7 @@ def _contradictions(values: Any) -> list[Dict[str, Any]]:
         {
             "claim": " ".join(str(item.get("claim") or item.get("reason") or "conflicting evidence").split())[:1_000],
             "source_ids": _strings(item.get("source_ids"), limit=12),
+            "claim_ids": _strings(item.get("claim_ids"), limit=20),
         }
         for item in values[:20]
         if isinstance(item, dict)
@@ -101,6 +102,8 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
             reasons.append("instruction_injection_risk")
         if item["confidence"] < policy["minimum_relevance_confidence"]:
             reasons.append("below_relevance_threshold")
+        if len(item["source_ids"]) != 1:
+            reasons.append("invalid_source_binding")
         item["eligible"] = not reasons
         item["rejection_reasons"] = reasons
     eligible = [item for item in assessments if item["eligible"]]
@@ -150,6 +153,13 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
             errors.append(f"{key} must be an array")
     if not isinstance(value.get("usefulness_score"), int):
         errors.append("usefulness_score must be an integer")
+    claims = value.get("claims") if isinstance(value.get("claims"), list) else []
+    claim_ids = [str(item.get("claim_id") or "") for item in claims if isinstance(item, dict)]
+    if any(not claim_id for claim_id in claim_ids) or len(set(claim_ids)) != len(claim_ids):
+        errors.append("claims must have unique non-empty claim_id values")
+    for item in value.get("contradictions") or []:
+        if isinstance(item, dict) and not isinstance(item.get("claim_ids"), list):
+            errors.append("each contradiction must contain claim_ids")
     return errors
 
 
@@ -160,9 +170,16 @@ def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, An
     }
     claims: list[Dict[str, Any]] = []
     unknown_ids: set[str] = set()
-    for raw in (parsed.get("claims", [])[:20] if isinstance(parsed.get("claims"), list) else []):
+    invalid_claim_ids: set[str] = set()
+    seen_claim_ids: set[str] = set()
+    for index, raw in enumerate(parsed.get("claims", [])[:20] if isinstance(parsed.get("claims"), list) else []):
         if not isinstance(raw, dict) or not str(raw.get("claim") or "").strip():
             continue
+        claim_id = " ".join(str(raw.get("claim_id") or "").split())[:100]
+        if not claim_id or claim_id in seen_claim_ids:
+            invalid_claim_ids.add(claim_id or f"missing:{index}")
+            claim_id = f"invalid:{index}"
+        seen_claim_ids.add(claim_id)
         supplied = _strings(raw.get("source_ids"))
         unknown_ids.update(source_id for source_id in supplied if source_id not in valid_source_ids)
         source_ids = sorted(source_id for source_id in supplied if source_id in valid_source_ids)
@@ -170,28 +187,49 @@ def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, An
         if support not in {"full", "partial", "none"} or (support == "full" and not source_ids):
             support = "none"
         claims.append({
+            "claim_id": claim_id,
             "claim": " ".join(str(raw.get("claim") or "").split())[:1_000],
             "support": support,
             "source_ids": source_ids,
             "contradicted": raw.get("contradicted") is True,
         })
-    full = [item for item in claims if item["support"] == "full" and not item["contradicted"]]
-    ratio = len(full) / len(claims) if claims else 0.0
     try:
         usefulness = max(1, min(int(parsed.get("usefulness_score") or 1), 5))
     except (TypeError, ValueError):
         usefulness = 1
     violations = _strings(parsed.get("citation_violations"))
     contradictions = _contradictions(parsed.get("contradictions"))
+    claim_ids = {item["claim_id"] for item in claims}
+    contradicted_claim_ids = {item["claim_id"] for item in claims if item["contradicted"]}
+    unmapped_contradiction = False
     for contradiction in contradictions:
         supplied = list(contradiction.get("source_ids") or [])
         unknown_ids.update(source_id for source_id in supplied if source_id not in valid_source_ids)
         contradiction["source_ids"] = sorted(source_id for source_id in supplied if source_id in valid_source_ids)
+        supplied_claim_ids = list(contradiction.get("claim_ids") or [])
+        unknown_claim_ids = sorted(claim_id for claim_id in supplied_claim_ids if claim_id not in claim_ids)
+        mapped_claim_ids = sorted(claim_id for claim_id in supplied_claim_ids if claim_id in claim_ids)
+        contradiction["claim_ids"] = mapped_claim_ids
+        if unknown_claim_ids or not mapped_claim_ids:
+            unmapped_contradiction = True
+            violations.append(
+                "Unmapped contradiction claim ids: " + ", ".join(unknown_claim_ids or ["missing"])
+            )
+        contradicted_claim_ids.update(mapped_claim_ids)
     if unknown_ids:
         violations.append("Unknown citation ids: " + ", ".join(sorted(unknown_ids)))
+    if invalid_claim_ids:
+        violations.append("Invalid or duplicate claim ids: " + ", ".join(sorted(invalid_claim_ids)))
     prior_gaps = _strings(state.get("unresolved_gaps")) if state.get("corrective_retrieval_route") == "insufficient" else []
     prior_contradictions = _contradictions(state.get("contradiction_report")) if state.get("corrective_retrieval_route") == "insufficient" else []
     contradictions = [*contradictions, *(item for item in prior_contradictions if item not in contradictions)]
+    if any(not item.get("claim_ids") for item in prior_contradictions):
+        unmapped_contradiction = True
+    full = [] if unmapped_contradiction else [
+        item for item in claims
+        if item["support"] == "full" and item["claim_id"] not in contradicted_claim_ids
+    ]
+    ratio = len(full) / len(claims) if claims else 0.0
     return {
         "claims": claims,
         "verified_claims": full,

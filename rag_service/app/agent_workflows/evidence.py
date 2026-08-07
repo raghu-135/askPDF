@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from langchain_core.runnables import RunnableConfig
 
 from app.agent_workflows.enums import EvidenceCompressionMode
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
+from app.agent.evidence_contract import canonical_source_id, normalized_canonical_source_id, normalized_source_url
 from app.agent_workflows.trace import (
     available_document_refs,
     compact_preview,
@@ -26,24 +25,6 @@ EVIDENCE_PACKET_LIMIT = 12
 EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
 EVIDENCE_TEXT_LIMIT = EVIDENCE_PACKET_LIMIT * (EVIDENCE_PACKET_CONTENT_LIMIT + 128)
 FINAL_CONTEXT_CHAR_LIMIT = EVIDENCE_TEXT_LIMIT
-SENSITIVE_URL_QUERY_KEYS = {
-    "access_token", "api_key", "apikey", "auth", "authorization", "code",
-    "credential", "key", "password", "secret", "signature", "sig", "token",
-}
-SOURCE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
-
-
-def _is_sensitive_url_query_key(value: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
-    if normalized in SENSITIVE_URL_QUERY_KEYS:
-        return True
-    return any(
-        marker in normalized
-        for marker in (
-            "access_token", "api_key", "apikey", "authorization", "credential",
-            "password", "secret", "security_token", "signature",
-        )
-    )
 
 
 def _runtime_node_id(config: Optional[RunnableConfig], fallback: str) -> str:
@@ -157,78 +138,6 @@ def short_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()[:16]
 
 
-def normalized_source_url(value: Any) -> str:
-    try:
-        parts = urlsplit(str(value or "").strip())
-    except ValueError:
-        return ""
-    scheme = parts.scheme.lower()
-    if scheme not in {"http", "https"} or not parts.hostname:
-        return ""
-    hostname = parts.hostname.lower()
-    if ":" in hostname and not hostname.startswith("["):
-        hostname = f"[{hostname}]"
-    try:
-        port = parts.port
-    except ValueError:
-        return ""
-    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
-    netloc = hostname if not port or default_port else f"{hostname}:{port}"
-    path = re.sub(r"/{2,}", "/", parts.path or "/")
-    query = urlencode(sorted(
-        (key, item)
-        for key, item in parse_qsl(parts.query, keep_blank_values=True)
-        if not _is_sensitive_url_query_key(key)
-    ), doseq=True)
-    return urlunsplit((scheme, netloc, path.rstrip("/") or "/", query, ""))
-
-
-def _first_locator(value: Dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in value and value[key] is not None and value[key] != "":
-            return value[key]
-    return "document"
-
-
-def canonical_source_id(value: Dict[str, Any]) -> str:
-    file_hash = value.get("file_hash") or value.get("document_id") or value.get("file_id")
-    if file_hash and SOURCE_IDENTIFIER_PATTERN.fullmatch(str(file_hash)):
-        locator = str(_first_locator(value, "chunk_id", "page_number", "page", "page_start"))
-        if SOURCE_IDENTIFIER_PATTERN.fullmatch(locator):
-            return f"doc:{file_hash}:{locator}"
-    url = normalized_source_url(value.get("url") or value.get("source_url") or value.get("link"))
-    if url:
-        return f"web:{url}"
-    message_id = value.get("message_id") or value.get("chat_id")
-    if message_id and SOURCE_IDENTIFIER_PATTERN.fullmatch(str(message_id)):
-        return f"conversation:{message_id}"
-    memory_id = value.get("memory_id")
-    if memory_id and SOURCE_IDENTIFIER_PATTERN.fullmatch(str(memory_id)):
-        return f"memory:{memory_id}"
-    return ""
-
-
-def normalized_canonical_source_id(value: Any) -> str:
-    source_id = str(value or "").strip()
-    if source_id.startswith("web:"):
-        url = normalized_source_url(source_id[4:])
-        return f"web:{url}" if url else ""
-    if source_id.startswith("doc:"):
-        parts = source_id.split(":", 2)
-        if (
-            len(parts) == 3
-            and SOURCE_IDENTIFIER_PATTERN.fullmatch(parts[1])
-            and SOURCE_IDENTIFIER_PATTERN.fullmatch(parts[2])
-        ):
-            return source_id
-        return ""
-    for prefix in ("conversation:", "memory:"):
-        if source_id.startswith(prefix):
-            identifier = source_id[len(prefix):]
-            return source_id if SOURCE_IDENTIFIER_PATTERN.fullmatch(identifier) else ""
-    return ""
-
-
 def packet_source_ids(packet: Dict[str, Any]) -> List[str]:
     refs = packet.get("refs") if isinstance(packet.get("refs"), dict) else {}
     candidates = [packet]
@@ -327,7 +236,7 @@ def corrective_evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             and assessment.get("provenance_complete") is True
             and assessment.get("instruction_injection_risk") is not True
             and confidence >= policy["minimum_relevance_confidence"]
-            and source_ids
+            and len(source_ids) == 1
         ):
             continue
         selected.append({
@@ -396,7 +305,7 @@ def evidence_context_from_packets(state: Dict[str, Any]) -> str:
 
 def final_context_from_state(state: Dict[str, Any]) -> tuple[str, str]:
     policy = context_policy(state)
-    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and state.get("evidence_assessments"):
+    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and state.get("retrieval_quality_report"):
         return corrective_evidence_context(state), "corrective_eligible_evidence"
     if policy.get("final_prompt_assembly") == "evidence_packets":
         packet_context = evidence_context_from_packets(state)
@@ -448,6 +357,46 @@ def append_evidence_packet(
         "created_at": iso_utc_z(utc_now()),
     }
     return [*existing_packets, packet][-evidence_packet_limit(state):]
+
+
+def append_corrective_evidence_packets(
+    state: Dict[str, Any],
+    config: RunnableConfig,
+    *,
+    segments: Any,
+) -> List[Dict[str, Any]]:
+    """Append source-bound packets; malformed or multi-source input is ignored."""
+
+    existing_packets = evidence_packets(state)
+    node_id = _runtime_node_id(config, "evidence")
+    node_type = _runtime_node_type(config, "evidence")
+    visit_index = _runtime_visit_index(config) or 1
+    appended: List[Dict[str, Any]] = []
+    for raw in segments if isinstance(segments, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        source_id = normalized_canonical_source_id(raw.get("source_id"))
+        content = compact_preview(raw.get("content"), limit=evidence_packet_content_limit(state))
+        if not source_id or not content:
+            continue
+        kind = str(raw.get("kind") or "evidence")
+        fingerprint = packet_fingerprint(kind=kind, content=content, refs={"source_id": source_id})
+        packet_id = f"{node_id}:visit:{visit_index}:{kind}:{short_hash({'source_id': source_id, 'content': content})}"
+        appended.append({
+            "id": packet_id,
+            "producer_node_id": node_id,
+            "producer_node_type": node_type,
+            "visit_index": visit_index,
+            "kind": kind,
+            "content": content,
+            "content_hash": short_hash(normalized_evidence_text(content)),
+            "fingerprint": fingerprint,
+            "refs": {"source": {"source_id": source_id, **(raw.get("display") or {}), **(raw.get("locator") or {})}},
+            "source_ids": [source_id],
+            "raw_retriever_score": raw.get("raw_score"),
+            "created_at": iso_utc_z(utc_now()),
+        })
+    return dedupe_evidence_packets([*existing_packets, *appended])[-evidence_packet_limit(state):]
 
 
 def prefetch_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:

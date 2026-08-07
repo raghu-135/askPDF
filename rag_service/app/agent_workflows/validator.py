@@ -19,6 +19,7 @@ from app.agent_workflows.workflow_runtime import (
     SUPPORTED_RUNTIME_KINDS,
     normalize_runtime_for_validation,
     replan_loop_policy,
+    workflow_allows_replans_override,
     workflow_supports_replans,
 )
 
@@ -202,7 +203,7 @@ class WorkflowResolver:
 
         for source in (thread_settings or {}, request_overrides or {}):
             for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
-                if key == "replans" and not workflow_supports_replans(resolved):
+                if key == "replans" and not workflow_allows_replans_override(resolved):
                     continue
                 if key in source and source[key] is not None:
                     config[key] = source[key]

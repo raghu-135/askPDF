@@ -302,6 +302,10 @@ function AgentRunDebugPanel({
             {Number(corrective.waves || 0)} corrective waves · {Number(corrective.distinct_work_items || 0)} work items · {Number(corrective.tool_attempts || 0)} attempts
             {Number(corrective.tool_retries || 0) ? ` · ${corrective.tool_retries} retries` : ''}
             {` · ${Number(corrective.partial_waves || 0)} partial waves`}
+            {` · ${Number(corrective.successful_waves || 0)} successful`}
+            {Number(corrective.failed_waves || 0) ? ` · ${corrective.failed_waves} failed` : ''}
+            {Number(corrective.timed_out_waves || 0) ? ` · ${corrective.timed_out_waves} timed out` : ''}
+            {Number(corrective.cancelled_waves || 0) ? ` · ${corrective.cancelled_waves} cancelled` : ''}
             {Number(corrective.source_expansions || 0) ? ` · ${corrective.source_expansions} source expansions` : ''}
             {corrective.exhausted_budget_type ? ` · exhausted ${String(corrective.exhausted_budget_type).replaceAll('_', ' ')}` : ''}
           </Typography>
@@ -325,7 +329,8 @@ function AgentRunDebugPanel({
           {(Array.isArray(corrective.wave_outcomes) ? corrective.wave_outcomes : []).map((wave: Record<string, any>) => (
             <Box component="details" key={`outcome:${wave.wave_id}`} sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
               <Typography component="summary" variant="caption">
-                Wave {wave.wave_id} outcomes · {Number(wave.completed || 0)}/{Number(wave.planned || 0)} completed{wave.partial ? ' · partial' : ''}
+                Wave {wave.wave_id} · {wave.outcome || wave.status || 'unknown'} · {Number(wave.completed || 0)}/{Number(wave.planned || 0)} workers completed
+                {wave.partial ? ' · partial' : ''}{wave.latency_ms != null ? ` · ${Math.round(Number(wave.latency_ms))} ms` : ''}
               </Typography>
               {(Array.isArray(wave.work_items) ? wave.work_items : []).map((item: Record<string, any>, index: number) => (
                 <Typography key={`${wave.wave_id}:outcome:${item.work_id || index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
@@ -353,11 +358,11 @@ function AgentRunDebugPanel({
               <Typography component="summary" variant="caption">Support and citations · {Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported</Typography>
               {(Array.isArray(grounding.claims) ? grounding.claims : []).map((claim: Record<string, any>, index: number) => (
                 <Typography key={`claim:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
-                  {claim.support}: {claim.claim}{(claim.source_ids || []).length ? ` · ${(claim.source_ids || []).join(', ')}` : ''}{claim.contradicted ? ' · contradicted' : ''}
+                  {claim.claim_id ? `${claim.claim_id} · ` : ''}{claim.support}: {claim.claim}{(claim.source_ids || []).length ? ` · ${(claim.source_ids || []).join(', ')}` : ''}{claim.contradicted ? ' · contradicted' : ''}
                 </Typography>
               ))}
               {(grounding.citation_violations || []).map((item: string, index: number) => <Typography key={`citation:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
-              {(grounding.contradictions || []).map((item: Record<string, any>, index: number) => <Typography key={`contradiction:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item.claim || 'Conflicting evidence'}{(item.source_ids || []).length ? ` · ${(item.source_ids || []).join(', ')}` : ''}</Typography>)}
+              {(grounding.contradictions || []).map((item: Record<string, any>, index: number) => <Typography key={`contradiction:${index}`} variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>{item.claim || 'Conflicting evidence'}{(item.claim_ids || []).length ? ` · claims ${(item.claim_ids || []).join(', ')}` : ''}{(item.source_ids || []).length ? ` · ${(item.source_ids || []).join(', ')}` : ''}</Typography>)}
               {(grounding.unresolved_gaps || []).map((item: string, index: number) => <Typography key={`gap:${index}`} variant="caption" color="warning.main" sx={{ display: 'block', pl: 1.5 }}>{item}</Typography>)}
             </Box>
           )}

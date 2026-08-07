@@ -285,6 +285,7 @@ async def fetch_semantic_history(
         }
         if text:
             ref["preview"] = text if len(text) <= 260 else text[:260].rstrip() + "..."
+            ref["content"] = text
         if ref:
             refs.append(ref)
 

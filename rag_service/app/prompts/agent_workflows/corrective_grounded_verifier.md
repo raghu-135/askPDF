@@ -16,11 +16,11 @@ Evidence:
 
 Decompose the draft into material factual claims. Return only JSON:
 {{
-  "claims": [{{"claim":"...","support":"full|partial|none","source_ids":["..."],"contradicted":false}}],
+  "claims": [{{"claim_id":"c1","claim":"...","support":"full|partial|none","source_ids":["..."],"contradicted":false}}],
   "citation_violations": ["..."],
-  "contradictions": [{{"claim":"...","source_ids":["..."]}}],
+  "contradictions": [{{"claim":"...","claim_ids":["c1"],"source_ids":["..."]}}],
   "unresolved_gaps": ["..."],
   "usefulness_score": 1
 }}
 
-Only exact ids from the valid list count. Unknown ids fail citation validation.
+Only exact ids from the valid list count. Claim ids must be unique, and every contradiction must reference affected claim ids. Unknown ids fail citation validation.

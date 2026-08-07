@@ -16,6 +16,7 @@ from langchain_core.tools import BaseTool, StructuredTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
+from app.agent.evidence_contract import evidence_segment
 from app.rag.enums import TimelineEventType
 from app.rag.retrieval import rerank_document_chunks
 from app.services.web_search_service import DEFAULT_WEB_SEARCH_RESULTS, search_internet
@@ -178,7 +179,23 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             config=config,
             started=started,
             sources=web_sources,
-            artifacts={"web_sources": web_sources},
+            artifacts={
+                "web_sources": web_sources,
+                "evidence_segments": [
+                    segment
+                    for index, text in enumerate(texts)
+                    if (segment := evidence_segment(
+                        kind="web",
+                        content=text,
+                        source={
+                            "url": urls[index],
+                            "title": titles[index],
+                            "web_search_performed_at": web_search_performed_at,
+                        },
+                        raw_score=scores[index] if scores and index < len(scores) else None,
+                    ))
+                ],
+            },
         ).to_json(legacy_fields={"__web_sources__": web_sources})
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)

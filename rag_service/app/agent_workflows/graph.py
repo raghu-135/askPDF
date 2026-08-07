@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
 from langchain_core.runnables import RunnableConfig
@@ -62,6 +63,7 @@ from app.agent_workflows.corrective_nodes import (
 from app.agent_workflows.corrective_contracts import (
     CORRECTIVE_WORKFLOW_ID,
     CorrectiveEventName,
+    stable_corrective_identity,
 )
 from app.agent_workflows.hitl_runtime import (
     WEB_APPROVAL_GATE_ID,
@@ -1033,24 +1035,24 @@ class NodeRegistry:
             await sink.emit(ParallelEventName.DISPATCH_PLANNED, summary)
             await sink.emit(ParallelEventName.DISPATCH_STARTED, summary)
             if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await sink.emit(CorrectiveEventName.WAVE_STARTED, {**summary, "event_id": f"{dispatch_id}:wave_started"})
+                await sink.emit(CorrectiveEventName.WAVE_STARTED, {**summary, "event_id": stable_corrective_identity("event", dispatch=dispatch_id, name=CorrectiveEventName.WAVE_STARTED)})
             for item in work_items:
                 await sink.emit(ParallelEventName.WORKER_QUEUED, dict(item))
                 if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and int(item.get("wave_id") or 0) > 0:
-                    await sink.emit(CorrectiveEventName.QUERY_REWRITE, {**dict(item), "event_id": f"{dispatch_id}:{item['query_id']}:query_rewrite"})
+                    await sink.emit(CorrectiveEventName.QUERY_REWRITE, {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.QUERY_REWRITE)})
                     if item.get("source_expansion"):
-                        await sink.emit(CorrectiveEventName.SOURCE_EXPANSION, {**dict(item), "event_id": f"{dispatch_id}:{item['query_id']}:source_expansion"})
+                        await sink.emit(CorrectiveEventName.SOURCE_EXPANSION, {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.SOURCE_EXPANSION)})
         elif studio_queue is not None:
             await studio_queue.put({"event": ParallelEventName.DISPATCH_PLANNED, "data": summary})
             await studio_queue.put({"event": ParallelEventName.DISPATCH_STARTED, "data": summary})
             if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await studio_queue.put({"event": CorrectiveEventName.WAVE_STARTED, "data": {**summary, "event_id": f"{dispatch_id}:wave_started"}})
+                await studio_queue.put({"event": CorrectiveEventName.WAVE_STARTED, "data": {**summary, "event_id": stable_corrective_identity("event", dispatch=dispatch_id, name=CorrectiveEventName.WAVE_STARTED)}})
             for item in work_items:
                 await studio_queue.put({"event": ParallelEventName.WORKER_QUEUED, "data": dict(item)})
                 if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and int(item.get("wave_id") or 0) > 0:
-                    await studio_queue.put({"event": CorrectiveEventName.QUERY_REWRITE, "data": {**dict(item), "event_id": f"{dispatch_id}:{item['query_id']}:query_rewrite"}})
+                    await studio_queue.put({"event": CorrectiveEventName.QUERY_REWRITE, "data": {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.QUERY_REWRITE)}})
                     if item.get("source_expansion"):
-                        await studio_queue.put({"event": CorrectiveEventName.SOURCE_EXPANSION, "data": {**dict(item), "event_id": f"{dispatch_id}:{item['query_id']}:source_expansion"}})
+                        await studio_queue.put({"event": CorrectiveEventName.SOURCE_EXPANSION, "data": {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.SOURCE_EXPANSION)}})
         update = {
             "dispatch_id": dispatch_id,
             "dispatch_node_id": node_id,
@@ -1063,6 +1065,21 @@ class NodeRegistry:
             "dispatch_mode": "parallel",
             "dispatch_summary": {**summary, "mode": "parallel"},
         }
+        if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
+            wave_id = max(0, int(state.get("corrective_wave") or 0))
+            update["corrective_wave_records"] = [{
+                "record_id": stable_corrective_identity(
+                    "wave", run=state.get("agent_run_id"), dispatch=dispatch_id, wave=wave_id
+                ),
+                "dispatch_id": dispatch_id,
+                "wave_id": wave_id,
+                "started_at": datetime.fromtimestamp(
+                    dispatch_started_epoch_ms / 1000, tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+                "planned": len(work_items),
+                "status": "running",
+                "source_expansion": any(bool(item.get("source_expansion")) for item in work_items),
+            }]
         update["node_events"] = _append_event(
             state,
             WorkflowNodeType.PARALLEL_DISPATCH.value,
@@ -1101,6 +1118,35 @@ class NodeRegistry:
         if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
             summary["wave_id"] = max(0, int(state.get("corrective_wave") or 0))
             summary["event_name"] = CorrectiveEventName.WAVE_COMPLETED
+            completed_at = datetime.now(timezone.utc)
+            started_ms = int(state.get("dispatch_started_epoch_ms") or int(completed_at.timestamp() * 1000))
+            completed = int(summary.get("completed") or 0)
+            failed = int(summary.get("failed") or 0)
+            timed_out = int(summary.get("timed_out") or 0)
+            cancelled = int(summary.get("cancelled") or 0)
+            partial = completed > 0 and any((failed, timed_out, cancelled))
+            outcome = (
+                "partial" if partial else
+                "successful" if completed > 0 else
+                "cancelled" if cancelled > 0 else
+                "timed_out" if timed_out > 0 else
+                "failed"
+            )
+            update["corrective_wave_records"] = [{
+                "record_id": stable_corrective_identity(
+                    "wave", run=state.get("agent_run_id"), dispatch=summary.get("dispatch_id"), wave=summary["wave_id"]
+                ),
+                "dispatch_id": summary.get("dispatch_id"),
+                "wave_id": summary["wave_id"],
+                "started_at": datetime.fromtimestamp(started_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                "completed_at": completed_at.isoformat().replace("+00:00", "Z"),
+                "elapsed_ms": max(0, int(completed_at.timestamp() * 1000) - started_ms),
+                "status": "completed",
+                "outcome": outcome,
+                "partial": partial,
+                "source_expansion": any(bool(item.get("source_expansion")) for item in state.get("work_items") or []),
+                **{key: int(summary.get(key) or 0) for key in ("planned", "completed", "skipped", "failed", "timed_out", "cancelled")},
+            }]
         update["parallel_summary"] = summary
         update["dispatch_summary"] = {**summary, "mode": str(state.get("dispatch_mode") or "parallel")}
         if not is_parallel:
@@ -1125,14 +1171,14 @@ class NodeRegistry:
                 summary,
             )
             if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await sink.emit(CorrectiveEventName.WAVE_COMPLETED, {**summary, "event_id": f"{summary.get('dispatch_id')}:wave_completed"})
+                await sink.emit(CorrectiveEventName.WAVE_COMPLETED, {**summary, "event_id": stable_corrective_identity("event", dispatch=summary.get("dispatch_id"), name=CorrectiveEventName.WAVE_COMPLETED)})
         elif is_parallel and studio_queue is not None:
             await studio_queue.put({
                 "event": ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 "data": summary,
             })
             if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await studio_queue.put({"event": CorrectiveEventName.WAVE_COMPLETED, "data": {**summary, "event_id": f"{summary.get('dispatch_id')}:wave_completed"}})
+                await studio_queue.put({"event": CorrectiveEventName.WAVE_COMPLETED, "data": {**summary, "event_id": stable_corrective_identity("event", dispatch=summary.get("dispatch_id"), name=CorrectiveEventName.WAVE_COMPLETED)}})
         return update
 
     async def answer_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -1353,7 +1399,9 @@ class NodeRegistry:
             output_refs=_state_evidence_refs(state),
             output_preview={"verdict": report["verdict"], "route": route, "unresolved_gaps": gaps},
         )
-        event_key = f"{state.get('agent_run_id')}:{state.get('corrective_wave', 0)}:retrieval_grade"
+        event_key = stable_corrective_identity(
+            "retrieval_grade", run=state.get("agent_run_id"), wave=state.get("corrective_wave", 0)
+        )
         await _emit_corrective_event(config, CorrectiveEventName.RETRIEVAL_GRADED, {**data, "event_id": event_key})
         await _emit_corrective_event(config, CorrectiveEventName.DECISION, {**data, "event_id": f"{event_key}:decision"})
         for index, contradiction in enumerate(report["material_contradictions"]):
@@ -1420,7 +1468,9 @@ class NodeRegistry:
             output_refs=_state_evidence_refs(state),
             output_preview={"route": route, "support_ratio": report["supported_claim_ratio"], "issues": issues[:10]},
         )
-        event_key = f"{state.get('agent_run_id')}:{state.get('corrective_wave', 0)}:grounding:{state.get('answer_revision_count', 0)}"
+        event_key = stable_corrective_identity(
+            "grounding", run=state.get("agent_run_id"), wave=state.get("corrective_wave", 0), revision=state.get("answer_revision_count", 0)
+        )
         await _emit_corrective_event(config, CorrectiveEventName.SUPPORT_VERIFIED, {**data, "event_id": event_key})
         for index, violation in enumerate(report["citation_violations"]):
             await _emit_corrective_event(config, CorrectiveEventName.CITATION_VIOLATION, {"event_id": f"{event_key}:citation:{index}", "wave_id": state.get("corrective_wave", 0), "violation": violation})

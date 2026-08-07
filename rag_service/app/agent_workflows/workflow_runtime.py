@@ -70,6 +70,13 @@ def workflow_supports_replans(spec: Dict[str, Any]) -> bool:
     return bool(workflow_runtime_features(spec).get("supports_replans"))
 
 
+def workflow_allows_replans_override(spec: Dict[str, Any]) -> bool:
+    """Return whether generic thread/request replan settings apply to this workflow."""
+
+    features = workflow_runtime_features(spec)
+    return bool(features.get("supports_replans")) and not bool(features.get("supports_corrective_retrieval"))
+
+
 def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
     graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}

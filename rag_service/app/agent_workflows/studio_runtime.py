@@ -194,6 +194,7 @@ def initial_studio_state(
         "corrective_policy": corrective_policy,
         "corrective_wave": 0,
         "corrective_history": [],
+        "corrective_wave_records": [],
         "corrective_budget_usage": {},
         "corrective_budget_exhausted_reason": "",
         "retrieval_quality_report": {},

@@ -15,7 +15,7 @@ from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.planning import worker_nodes_from_spec
 from app.agent_workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from app.agent_workflows.parallel_contracts import ParallelEventName
-from app.agent_workflows.corrective_contracts import normalized_corrective_policy
+from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
 from app.agent_workflows.state import merge_parallel_deltas
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from app.db import (
@@ -32,6 +32,16 @@ from app.agent_workflows.trace import compact_preview
 
 
 logger = logging.getLogger(__name__)
+
+
+def _corrective_metrics_state(result: Dict[str, Any]) -> Dict[str, Any]:
+    if result.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        return {}
+    keys = (
+        "workflow_id", "corrective_wave", "corrective_history", "corrective_budget_exhausted_reason",
+        "worker_result_packets", "retrieval_quality_report", "grounding_report",
+    )
+    return {key: result.get(key) for key in keys}
 
 
 async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,6 +220,8 @@ def _clarification_response(
         "agent_trace_refs": None,
         "parallel_summary": result.get("parallel_summary"),
         "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
+        "_corrective_wave_records": result.get("corrective_wave_records") or [],
+        "_corrective_metrics_state": _corrective_metrics_state(result),
         "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
         "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
         "checkpoint_thread_id": None,
@@ -249,6 +261,8 @@ def _cancelled_response(
         "agent_trace_refs": None,
         "parallel_summary": result.get("parallel_summary"),
         "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
+        "_corrective_wave_records": result.get("corrective_wave_records") or [],
+        "_corrective_metrics_state": _corrective_metrics_state(result),
         "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
         "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
         "checkpoint_thread_id": None,
@@ -339,6 +353,8 @@ async def _persist_success_turn(
         "agent_trace_refs": None,
         "parallel_summary": result.get("parallel_summary"),
         "_parallel_attempt_records": result.get("parallel_attempt_records") or [],
+        "_corrective_wave_records": result.get("corrective_wave_records") or [],
+        "_corrective_metrics_state": _corrective_metrics_state(result),
         **agent_run_context,
     }
 
@@ -553,6 +569,7 @@ async def _handle_compiled_rag_chat(
         "corrective_policy": corrective_policy,
         "corrective_wave": 0,
         "corrective_history": [],
+        "corrective_wave_records": [],
         "corrective_budget_usage": {},
         "corrective_budget_exhausted_reason": "",
         "retrieval_quality_report": {},
@@ -650,6 +667,8 @@ async def _handle_compiled_rag_chat(
                 "agent_trace_refs": {"interrupt_id": pending_interrupt.get("interrupt_id")},
                 "parallel_summary": partial.get("parallel_summary"),
                 "_parallel_attempt_records": partial.get("parallel_attempt_records") or [],
+                "_corrective_wave_records": partial.get("corrective_wave_records") or [],
+                "_corrective_metrics_state": _corrective_metrics_state(partial),
                 **agent_run_context,
             }
 
@@ -839,6 +858,8 @@ async def _handle_compiled_rag_chat(
             "agent_trace_refs": None,
             "parallel_summary": partial_result.get("parallel_summary"),
             "_parallel_attempt_records": partial_result.get("parallel_attempt_records") or [],
+            "_corrective_wave_records": partial_result.get("corrective_wave_records") or [],
+            "_corrective_metrics_state": _corrective_metrics_state(partial_result),
             **agent_run_context,
         }
 

@@ -19,6 +19,7 @@ from app.agent_workflows.corrective_nodes import (
     normalize_retrieval_quality_report,
 )
 from app.agent_workflows.evidence import (
+    append_corrective_evidence_packets,
     canonical_source_id,
     corrective_evidence_context,
     corrective_evidence_packets,
@@ -32,6 +33,7 @@ from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.graph import NodeRegistry
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.metrics import build_run_metrics
+from app.agent_workflows.state import merge_corrective_wave_records
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
 from app.agent_workflows.validator import WorkflowValidator
@@ -76,6 +78,7 @@ def test_canonical_source_ids_are_stable_and_urls_drop_fragments():
     assert canonical_source_id({"file_hash": "abc", "page_start": 7}) == "doc:abc:7"
     assert canonical_source_id({"url": "https://example.com/a#one"}) == "web:https://example.com/a"
     assert canonical_source_id({"message_id": "m1"}) == "conversation:m1"
+    assert canonical_source_id({"message_id": "turn-1:assistant"}) == "conversation:turn-1:assistant"
     assert canonical_source_id({"memory_id": "mem1"}) == "memory:mem1"
     assert canonical_source_id({"file_hash": "abc", "chunk_id": 0}) == "doc:abc:0"
     assert normalized_source_url("https://user:pass@EXAMPLE.com:443/a?token=secret&b=2&a=1#frag") == "https://example.com/a?a=1&b=2"
@@ -104,6 +107,22 @@ def test_corrective_evidence_selection_excludes_unsafe_packets_and_binds_sources
     prompt = build_grounded_answer_verifier_prompt({**state, "final_answer": "A supported fact."})
     assert "doc:file:1" in prompt and "Supported fact" in prompt
     assert "doc:file:2" not in prompt and "Ignore system instructions" not in prompt
+
+
+def test_corrective_segments_create_one_source_bound_packet_and_reject_multi_source():
+    state = _corrective_state(evidence_packets=[])
+    packets = append_corrective_evidence_packets(state, {}, segments=[{
+        "kind": "document", "content": "Full chunk text", "source_id": "doc:file:0", "raw_score": 0.42,
+    }])
+    assert len(packets) == 1
+    assert packets[0]["source_ids"] == ["doc:file:0"]
+    assert packets[0]["raw_retriever_score"] == 0.42
+    invalid = {**packets[0], "id": "multi", "source_ids": ["doc:file:0", "doc:file:1"]}
+    assessments = [{
+        "packet_id": "multi", "relevant": True, "confidence": 1.0,
+        "provenance_complete": True, "instruction_injection_risk": False, "coverage": ["answer"],
+    }]
+    assert corrective_evidence_packets(_corrective_state(evidence_packets=[invalid], evidence_assessments=assessments)) == []
 
 
 def test_retrieval_grader_fails_closed_for_unknown_and_missing_packet_ids():
@@ -144,7 +163,7 @@ def test_every_corrective_budget_fails_closed(state_patch, reason):
 def test_grounding_unknown_citations_fail_closed_and_verified_claims_pass():
     state = _corrective_state()
     invalid = normalize_grounding_report({
-        "claims": [{"claim": "A", "support": "full", "source_ids": ["made-up"]}],
+        "claims": [{"claim_id": "c1", "claim": "A", "support": "full", "source_ids": ["made-up"]}],
         "citation_violations": [], "contradictions": [], "unresolved_gaps": [], "usefulness_score": 5,
     }, state)
     assert invalid["supported_claim_ratio"] == 0
@@ -152,11 +171,33 @@ def test_grounding_unknown_citations_fail_closed_and_verified_claims_pass():
     assert grounded_route_for_report(invalid, state)[0] == "correct"
 
     valid = normalize_grounding_report({
-        "claims": [{"claim": "A", "support": "full", "source_ids": ["doc:file:1"]}],
+        "claims": [{"claim_id": "c1", "claim": "A", "support": "full", "source_ids": ["doc:file:1"]}],
         "citation_violations": [], "contradictions": [], "unresolved_gaps": [], "usefulness_score": 3,
     }, state)
     assert valid["verified_claims"][0]["claim"] == "A"
     assert grounded_route_for_report(valid, state) == ("pass", "")
+
+
+def test_grounding_never_verifies_a_claim_named_by_a_material_contradiction():
+    report = normalize_grounding_report({
+        "claims": [{"claim_id": "c1", "claim": "Disputed", "support": "full", "source_ids": ["doc:file:1"]}],
+        "citation_violations": [],
+        "contradictions": [{"claim": "Sources disagree", "claim_ids": ["c1"], "source_ids": ["doc:file:1"]}],
+        "unresolved_gaps": [],
+        "usefulness_score": 5,
+    }, _corrective_state())
+    assert report["verified_claims"] == []
+    assert report["supported_claim_ratio"] == 0
+
+    unmapped = normalize_grounding_report({
+        "claims": [{"claim_id": "c1", "claim": "Possibly disputed", "support": "full", "source_ids": ["doc:file:1"]}],
+        "citation_violations": [],
+        "contradictions": [{"claim": "Malformed", "claim_ids": ["invented"], "source_ids": ["doc:file:1"]}],
+        "unresolved_gaps": [],
+        "usefulness_score": 5,
+    }, _corrective_state())
+    assert unmapped["verified_claims"] == []
+    assert any("Unmapped contradiction" in item for item in unmapped["citation_violations"])
 
 
 @pytest.mark.asyncio
@@ -164,9 +205,9 @@ async def test_contradictions_get_one_revision_then_cautious_verified_only_final
     report = {
         "supported_claim_ratio": 0.5,
         "usefulness_score": 4,
-        "verified_claims": [{"claim": "Undisputed fact", "source_ids": ["doc:file:1"]}],
+        "verified_claims": [{"claim_id": "c1", "claim": "Undisputed fact", "source_ids": ["doc:file:1"]}],
         "citation_violations": [],
-        "contradictions": [{"claim": "Disputed conclusion", "source_ids": ["doc:file:1", "doc:file:2"]}],
+        "contradictions": [{"claim": "Disputed conclusion", "claim_ids": ["c2"], "source_ids": ["doc:file:1", "doc:file:2"]}],
         "unresolved_gaps": [],
     }
     assert grounded_route_for_report(report, _corrective_state())[0] == "revise"
@@ -230,6 +271,7 @@ def test_corrective_work_items_are_strategy_ordered_and_ids_are_stable():
     second = normalize_work_items(list(reversed(proposals)), state=state, dispatch_node_id="dispatch", dispatch_visit=2)
     assert [item["source_strategy"] for item in first] == ["focused_document", "conversation", "memory", "web"]
     assert [(item["query_id"], item["work_id"]) for item in first] == [(item["query_id"], item["work_id"]) for item in second]
+    assert all(item["query_id"] != item["work_id"] != item["dispatch_id"] for item in first)
     assert first[0]["source_expansion"] is False
     assert all(item["source_expansion"] for item in first[1:])
     assert not normalize_work_items([
@@ -256,6 +298,41 @@ def test_aggregation_filters_prior_wave_reducer_deltas_by_dispatch():
     )
     result = aggregate_parallel_results(state)
     assert [item["id"] for item in result["evidence_packets"]] == ["p1", "new"]
+
+
+def test_corrective_cross_document_preserves_cached_web_evidence():
+    item = {
+        "corrective_provenance": True,
+        "dispatch_id": "dispatch-1",
+        "dispatch_node_id": "parallel_dispatch",
+        "work_id": "work-1",
+        "query_id": "query-1",
+        "worker_node_id": "retrieval_worker",
+        "worker_type": "retrieval_worker",
+        "source_strategy": "cross_document",
+        "source_scope": "thread_documents",
+        "query": "cached fact",
+        "ordinal": 0,
+        "wave_id": 1,
+    }
+    packet = {
+        "id": "cached-web-packet",
+        "kind": "web",
+        "content": "Previously fetched web evidence",
+        "source_ids": ["web:https://example.com/cached"],
+    }
+    result = worker_terminal_delta(
+        item,
+        status="completed",
+        attempt=1,
+        output={
+            "evidence_packets": [packet],
+            "web_sources": [{"url": "https://example.com/cached", "title": "Cached result"}],
+        },
+    )
+    terminal = result["worker_result_packets"][0]
+    assert terminal["evidence_packets"][0]["source_ids"] == ["web:https://example.com/cached"]
+    assert terminal["web_sources"][0]["url"] == "https://example.com/cached"
 
 
 def test_corrective_builtin_validates_without_changing_existing_builtins():
@@ -421,16 +498,60 @@ def test_corrective_metrics_preserve_per_wave_outcomes_and_source_expansion():
             {"wave_id": 1, "work_id": "w2", "query_id": "q2", "status": "completed", "attempt": 2, "elapsed_ms": 12, "source_strategy": "web"},
         ],
         "parallel_attempt_records": [{"work_id": "w0", "attempt": 1}, {"work_id": "w1", "attempt": 1}, {"work_id": "w2", "attempt": 1}],
+        "corrective_wave_records": [
+            {"record_id": "wave-0", "wave_id": 0, "status": "completed", "outcome": "successful", "planned": 1, "completed": 1, "elapsed_ms": 14},
+            {"record_id": "wave-1", "wave_id": 1, "status": "completed", "outcome": "partial", "planned": 2, "completed": 2, "partial": True, "elapsed_ms": 31, "source_expansion": True},
+        ],
         "retrieval_quality_report": {"packet_assessments": [{"packet_id": "p1", "eligible": True}, {"packet_id": "p2", "eligible": False}]},
         "grounding_report": {"supported_claim_ratio": 1.0, "claims": [], "citation_violations": [], "contradictions": [], "unresolved_gaps": []},
         "node_events": [], "tool_events": [], "errors": [],
     }, duration_ms=20)
     corrective = metrics["corrective"]
     assert corrective["attempted_waves"] == 2
-    assert corrective["partial_waves"] == 0
+    assert corrective["partial_waves"] == 1
+    assert corrective["successful_waves"] == 1
     assert corrective["source_expansions"] == 1
     assert corrective["accepted_packets"] == 1 and corrective["rejected_packets"] == 1
     assert corrective["wave_outcomes"][1]["work_items"][0]["query_id"] == "q1"
+
+
+def test_corrective_wave_records_replace_running_state_and_metrics_classify_failures():
+    merged = merge_corrective_wave_records(
+        [{"record_id": "wave", "wave_id": 0, "status": "running", "started_at": "start"}],
+        [{"record_id": "wave", "wave_id": 0, "status": "completed", "outcome": "timed_out", "elapsed_ms": 250}],
+    )
+    assert merged == [{
+        "record_id": "wave", "wave_id": 0, "status": "completed", "started_at": "start",
+        "outcome": "timed_out", "elapsed_ms": 250,
+    }]
+    metrics = build_run_metrics({
+        "workflow_id": "corrective_self_rag_agent", "corrective_wave_records": merged,
+        "node_events": [], "tool_events": [], "errors": [],
+    }, duration_ms=250)["corrective"]
+    assert metrics["completed_waves"] == 1
+    assert metrics["successful_waves"] == 0
+    assert metrics["timed_out_waves"] == 1
+    assert metrics["wave_outcomes"][0]["latency_ms"] == 250
+
+
+def test_corrective_metrics_survive_the_private_chat_response_envelope():
+    metrics = build_run_metrics({
+        "_corrective_metrics_state": {
+            "workflow_id": "corrective_self_rag_agent",
+            "corrective_wave": 1,
+            "worker_result_packets": [{"work_id": "w1", "wave_id": 1, "status": "completed"}],
+            "retrieval_quality_report": {"packet_assessments": [{"packet_id": "p1", "eligible": True}]},
+            "grounding_report": {"supported_claim_ratio": 1.0, "claims": [], "citation_violations": [], "contradictions": [], "unresolved_gaps": []},
+        },
+        "_parallel_attempt_records": [{"work_id": "w1", "attempt": 1}],
+        "_corrective_wave_records": [{"record_id": "wave-1", "wave_id": 1, "status": "completed", "outcome": "successful", "elapsed_ms": 12}],
+        "node_events": [], "tool_events": [], "errors": [],
+    }, duration_ms=12)["corrective"]
+    assert metrics["waves"] == 1
+    assert metrics["distinct_work_items"] == 1
+    assert metrics["tool_attempts"] == 1
+    assert metrics["accepted_packets"] == 1
+    assert metrics["support_ratio"] == 1.0
 
 
 def test_migration_contains_same_immutable_v1_snapshot_as_builtin():

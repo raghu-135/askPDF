@@ -103,11 +103,13 @@ def _interrupt_event_key(event: Mapping[str, Any]) -> tuple[Any, Any, Any]:
     )
 
 
-def _root_event_key(event: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
+def _root_event_key(event: Mapping[str, Any]) -> tuple[Any, ...]:
     if _is_interrupt_event(event):
         return (*_interrupt_event_key(event), None)
     attrs = _as_dict(event.get("attributes"))
     output = _as_dict(event.get("output"))
+    if attrs.get("event_id"):
+        return (event.get("name"), "event_id", attrs.get("event_id"))
     return (
         event.get("name"),
         attrs.get("askpdf.interrupt.id") or output.get("interrupt_id"),
