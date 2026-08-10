@@ -11,6 +11,7 @@ import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, mer
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
+import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
 
 function AgentRunDebugPanel({
   runId,
@@ -45,6 +46,7 @@ function AgentRunDebugPanel({
   const resumeSubmissionKeyRef = useRef<string | null>(null);
   const debug = runDetails?.debug;
   const pendingInterrupt = runDetails?.pending_interrupt;
+  const isTaskOwnedRun = isTaskOwnedAgentRun(runDetails);
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
@@ -401,7 +403,11 @@ function AgentRunDebugPanel({
           )}
           {interruptStatus === InterruptStatus.Pending && (
             <>
-              {interruptOptions.length > 0 && (
+              {isTaskOwnedRun ? (
+                <Typography variant="caption" color="text.secondary">
+                  Respond to this request in the Deep Research panel. Debug Trace is inspection-only for task runs.
+                </Typography>
+              ) : interruptOptions.length > 0 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
                   {interruptOptions.map((option) => (
                     <FormControlLabel
@@ -424,12 +430,13 @@ function AgentRunDebugPanel({
                   ))}
                 </Box>
               )}
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              {!isTaskOwnedRun && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
                 {renderInterruptAction(AgentRunResumeActionValue.Approve, 'Approve', <CheckIcon fontSize="inherit" />)}
+                {renderInterruptAction(AgentRunResumeActionValue.ApproveForScope, 'Approve for this run', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ApproveSelected, 'Approve selected', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ContinueWithout, 'Continue', <PlayArrowIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.Reject, 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
-              </Box>
+              </Box>}
             </>
           )}
           {resumeMessage && (

@@ -75,7 +75,9 @@ def _bounded_value(value: Any, *, key: Any = None) -> Any:
             for item_key, item in value.items()
             if item not in (None, "", [], {})
         }
-    return value
+    # Framework-owned objects (for example LangGraph GraphInterrupt values)
+    # must never cross the persisted JSON boundary as live Python instances.
+    return _jsonable(value)
 
 
 def _jsonable(value: Any) -> Any:
@@ -100,4 +102,3 @@ def _set_attributes(span: Any, attributes: Mapping[str, Any]) -> None:
         otel_value = _otel_attr_value(value)
         if otel_value is not None:
             span.set_attribute(key, otel_value)
-

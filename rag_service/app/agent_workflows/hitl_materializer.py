@@ -38,12 +38,17 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
             "prompt",
             "This answer needs live web research. Approve web search or continue without it.",
         )
-        gate.setdefault("allowed_actions", [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value])
+        gate.setdefault("allowed_actions", [
+            AgentRunResumeAction.APPROVE.value,
+            AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
+            AgentRunResumeAction.CONTINUE_WITHOUT.value,
+        ])
         gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
         gate.setdefault(
             "routes",
             {
                 AgentRunResumeAction.APPROVE.value: WorkflowNodeType.WEB_WORKER.value,
+                AgentRunResumeAction.APPROVE_FOR_SCOPE.value: WorkflowNodeType.WEB_WORKER.value,
                 AgentRunResumeAction.CONTINUE_WITHOUT.value: WorkflowNodeType.SYNTHESIZER.value,
             },
         )

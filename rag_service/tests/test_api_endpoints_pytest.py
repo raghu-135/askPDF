@@ -47,7 +47,38 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "ok"
         assert data["service"] == "rag-service"
+        assert data["agent_task_worker"] == "running"
         assert "version" in data
+
+    def test_health_check_reports_failed_integrated_worker(self, client):
+        from main import app
+
+        app.state.agent_task_worker_status = "failed"
+        try:
+            response = client.get("/health")
+        finally:
+            app.state.agent_task_worker_status = "running"
+
+        assert response.status_code == 503
+        assert response.json()["status"] == "degraded"
+        assert response.json()["agent_task_worker"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_integrated_worker_completion_marks_unexpected_failure(self):
+        from main import app, _record_agent_task_worker_completion
+
+        async def fail_worker():
+            raise RuntimeError("worker failed")
+
+        task = asyncio.create_task(fail_worker())
+        with pytest.raises(RuntimeError, match="worker failed"):
+            await task
+        app.state.agent_task_worker_status = "running"
+
+        _record_agent_task_worker_completion(app, task)
+
+        assert app.state.agent_task_worker_status == "failed"
+        app.state.agent_task_worker_status = "running"
 
 
 class TestThreadEndpoints:

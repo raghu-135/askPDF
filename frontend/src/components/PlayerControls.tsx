@@ -23,6 +23,7 @@ type Sentence = {
 
 type Props = {
   sentences: Sentence[] | null;
+  sourceKey: string;
   currentId: number | null;                // highlight only
   onCurrentChange: (id: number | null) => void;
   playRequestId: number | null;            // explicit command to play now
@@ -32,7 +33,7 @@ type Props = {
   onHighlightEnabledChange: (value: boolean) => void;
 };
 
-const PlayerControls = React.memo(function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId, autoScroll, onAutoScrollChange, highlightEnabled, onHighlightEnabledChange }: Props) {
+const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey, currentId, onCurrentChange, playRequestId, autoScroll, onAutoScrollChange, highlightEnabled, onHighlightEnabledChange }: Props) {
   // Ref to the audio element for playback control
   const audioRef = useRef<HTMLAudioElement>(null);
   const playRequestTokenRef = useRef(0);
@@ -107,7 +108,24 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
     };
   }, [clearCache]);
 
-  // Play a sentence when an external play request is received, such as the PDF selection menu.
+  // Stop playback only when the user switches transcript/document. Appending a
+  // streaming chat message or task timeline item must not interrupt Kokoro.
+  useEffect(() => {
+    playRequestTokenRef.current += 1;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.onended = null;
+    }
+    setIsPlaying(false);
+    setIsPreparingAudio(false);
+    setPausedAt(null);
+    clearCache();
+    onCurrentChange(null);
+  }, [sourceKey]);
+
+  // This follows source reset intentionally: a click that changes source and
+  // requests playback must reset the old source before starting the new one.
   useEffect(() => {
     if (playRequestId == null) return;
     void playSentence(playRequestId);
@@ -119,23 +137,6 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
       void playSentence(currentId);
     }
   }, [selectedVoice]);
-
-  // Stop playback and reset state when sentences change (e.g., new PDF uploaded)
-  useEffect(() => {
-    // If we're jumping to a new source, the playRequestId effect will handle it.
-    // Only auto-stop for passive changes
-    if (playRequestId !== null) return;
-
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.onended = null;
-    }
-    setIsPlaying(false);
-    setIsPreparingAudio(false);
-    setPausedAt(null);
-    clearCache();
-  }, [sentences]);
 
   // Voice/speed changes alter synthesis output, so old cache entries are invalid.
   useEffect(() => {

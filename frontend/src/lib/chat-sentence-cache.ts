@@ -1,9 +1,10 @@
 import { splitIntoSentences, stripMarkdown } from './sentence-utils.ts';
 
-export type ChatSentence = {
+export type ConversationSentence = {
   id: number;
   text: string;
-  messageIndex: number;
+  itemIndex: number;
+  itemId: string;
 };
 
 type MessageLike = {
@@ -11,39 +12,40 @@ type MessageLike = {
   content: unknown;
 };
 
-export type ChatSentenceCache = Map<string, {
+export type ConversationSentenceCache = Map<string, {
   content: string;
   sentences: string[];
 }>;
 
-export function deriveChatSentences(
-  messages: readonly MessageLike[],
-  cache: ChatSentenceCache,
-): ChatSentence[] {
+export function deriveConversationSentences(
+  items: readonly MessageLike[],
+  cache: ConversationSentenceCache,
+): ConversationSentence[] {
   let globalId = 0;
-  const result: ChatSentence[] = [];
+  const result: ConversationSentence[] = [];
   const activeKeys = new Set<string>();
 
-  messages.forEach((message, messageIndex) => {
-    const content = typeof message.content === 'string'
-      ? message.content
-      : String(message.content ?? '');
-    activeKeys.add(message.id);
+  items.forEach((item, itemIndex) => {
+    const content = typeof item.content === 'string'
+      ? item.content
+      : String(item.content ?? '');
+    activeKeys.add(item.id);
 
-    let cached = cache.get(message.id);
+    let cached = cache.get(item.id);
     if (!cached || cached.content !== content) {
       cached = {
         content,
         sentences: splitIntoSentences(stripMarkdown(content)),
       };
-      cache.set(message.id, cached);
+      cache.set(item.id, cached);
     }
 
     cached.sentences.forEach((text) => {
       result.push({
         id: globalId++,
         text,
-        messageIndex,
+        itemIndex,
+        itemId: item.id,
       });
     });
   });

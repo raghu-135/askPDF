@@ -54,6 +54,7 @@ interface ChatSettingsDialogProps {
     onProjectMemoryChange: (checked: boolean) => void;
     onGlobalMemoryChange: (checked: boolean) => void;
     onAgentWorkflowChange: (value: string) => void;
+    onLongRunningWorkflowSelect?: (workflow: AgentWorkflow) => void;
     onAgentWorkflowMenuOpen?: () => void | Promise<void>;
     onSystemRoleChange: (value: string) => void;
     onToolInstructionChange: (toolId: string, value: string) => void;
@@ -97,6 +98,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onProjectMemoryChange,
     onGlobalMemoryChange,
     onAgentWorkflowChange,
+    onLongRunningWorkflowSelect,
     onAgentWorkflowMenuOpen,
     onSystemRoleChange,
     onToolInstructionChange,
@@ -141,8 +143,15 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     select
                     label="Agent workflow"
                     value={agentWorkflowId}
-                    onChange={(e) => onAgentWorkflowChange(e.target.value)}
-                    helperText="Router Agent remains the default; advanced workflows are opt-in."
+                    onChange={(e) => {
+                        const workflow = agentWorkflows.find((pattern) => pattern.id === e.target.value);
+                        if (workflow?.supports_long_running_tasks) {
+                            onLongRunningWorkflowSelect?.(workflow);
+                            return;
+                        }
+                        onAgentWorkflowChange(e.target.value);
+                    }}
+                    helperText="Chat workflows become the thread default. Selecting a task workflow opens its dedicated workspace."
                     SelectProps={{ onOpen: onAgentWorkflowMenuOpen }}
                 >
                     {agentWorkflows.map((pattern) => (
@@ -155,7 +164,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                                     size="small"
                                     variant={pattern.is_builtin ? 'outlined' : 'filled'}
                                     color={pattern.is_builtin ? 'default' : 'primary'}
-                                    label={pattern.is_builtin ? 'Built-in' : 'Custom'}
+                                    label={pattern.supports_long_running_tasks ? 'Task' : pattern.is_builtin ? 'Built-in' : 'Custom'}
                                     sx={{ flex: '0 0 auto' }}
                                 />
                             </Box>

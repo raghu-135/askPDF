@@ -341,14 +341,38 @@ def merge_debug_payloads(
     if base_root is not None and incoming_root is not None:
         _merge_root_span(base_root, incoming_root)
 
+    def semantic_key(span: Mapping[str, Any]) -> tuple[Any, ...] | None:
+        attrs = _as_dict(span.get("attributes"))
+        kind = str(span.get("kind") or "")
+        node_id = attrs.get("askpdf.node.id")
+        visit = attrs.get("askpdf.node.visit_index")
+        if node_id and visit is not None:
+            return ("node", kind, str(node_id), int(visit), str(span.get("status") or ""))
+        tool_name = attrs.get("tool.name") or attrs.get("askpdf.tool.name")
+        if tool_name:
+            return (
+                "tool", str(tool_name), str(attrs.get("askpdf.caller_node") or ""),
+                int(attrs.get("askpdf.caller_visit_index") or 1),
+                str(attrs.get("askpdf.parallel.work_id") or ""),
+                str(attrs.get("askpdf.tool.argument_hash") or ""),
+                str(span.get("status") or ""),
+            )
+        return None
+
     existing_ids = {str(span.get("span_id")) for span in base_spans if isinstance(span, dict)}
+    existing_semantics = {key for span in base_spans if isinstance(span, dict) if (key := semantic_key(span)) is not None}
     id_map: Dict[str, str] = {}
+    skipped_ids: set[str] = set()
     appended: List[Dict[str, Any]] = []
     for span in incoming_spans:
         if not isinstance(span, dict):
             continue
         span_id = str(span.get("span_id") or "")
         if not span_id or span is incoming_root:
+            continue
+        key = semantic_key(span)
+        if key is not None and key in existing_semantics:
+            skipped_ids.add(span_id)
             continue
         new_id = span_id
         if new_id in existing_ids:
@@ -364,6 +388,8 @@ def merge_debug_payloads(
             continue
         span_id = str(span.get("span_id") or "")
         if not span_id or span is incoming_root:
+            continue
+        if span_id in skipped_ids or str(span.get("parent_span_id") or "") in skipped_ids:
             continue
         merged_span = dict(span)
         merged_span["span_id"] = id_map.get(span_id, span_id)

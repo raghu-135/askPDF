@@ -57,6 +57,7 @@ services:
       - ./rag_service:/app
       - .:/workspace:ro
       - test_data:/data
+      - content_test_data:/static
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -95,3 +96,4 @@ volumes:
   postgres_test_data:
   test_data:
   weaviate_test_data:
+  content_test_data:

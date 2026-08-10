@@ -12,7 +12,7 @@ from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, mak
 from app.agent.evidence_contract import evidence_segment
 from app.db import FileSourceType, ProcessStatus
 from app.db.vector import get_vector_db
-from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
+from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, embed_query
 from app.models.retry import invoke_with_retry
 from app.rag.retrieval import (
     fetch_semantic_history,
@@ -281,8 +281,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embedding_client = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+        query_vector = await invoke_with_retry(embed_query, embedding_model, query)
 
         db = get_vector_db()
         document_lookup = await get_document_metadata_lookup(thread_id)
@@ -486,8 +485,7 @@ async def search_document_by_id(
                 warnings=[ToolWarningCode.NO_THREAD_DOCUMENTS],
             ).to_json()
 
-        embedding_client = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+        query_vector = await invoke_with_retry(embed_query, embedding_model, query)
         db = get_vector_db()
         raw_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
@@ -586,8 +584,7 @@ async def search_thread_conversation_history(query: str, max_results: int = 10, 
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embedding_client = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+        query_vector = await invoke_with_retry(embed_query, embedding_model, query)
         history_result = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
@@ -839,8 +836,7 @@ async def search_thread_events(
         }
         query_vector: Optional[List[float]] = None
         if needs_vector:
-            embedding_client = get_embedding_model(embedding_model)
-            query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+            query_vector = await invoke_with_retry(embed_query, embedding_model, query)
 
         if requested_sources in {ThreadTimelineSource.ALL.value, ThreadTimelineSource.CONVERSATION.value} and query_vector is not None:
             recalled = await db.search_chat_memory(

@@ -21,8 +21,10 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from app.db.enums import (
@@ -375,6 +377,15 @@ class AgentRun(SQLModel, table=True):
     )
     status: str = Field(default=AgentRunStatus.RUNNING.value, index=True)
     checkpoint_thread_id: Optional[str] = None
+    task_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True),
+    )
+    parent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="RESTRICT"), index=True),
+    )
+    task_attempt: int = Field(default=1)
     pending_interrupt_json: Optional[Dict[str, Any]] = Field(
         default=None,
         sa_column=Column(JSONB)
@@ -402,6 +413,7 @@ class AgentRun(SQLModel, table=True):
 
     __table_args__ = (
         Index("idx_agent_run_thread_started", "thread_id", "started_at"),
+        CheckConstraint("task_attempt >= 1", name="ck_agent_runs_task_attempt"),
     )
 
     @property
@@ -438,6 +450,243 @@ class AgentRun(SQLModel, table=True):
         else:
             metadata["workflow_version"] = int(value)
         self.run_metadata_json = metadata
+
+
+class AgentTask(SQLModel, table=True):
+    """Durable user-facing task that owns one or more agent run attempts."""
+    __tablename__ = "agent_tasks"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    thread_id: str = Field(sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True))
+    project_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("projects.id", ondelete="SET NULL"), index=True))
+    user_id: Optional[str] = Field(default=None, index=True)
+    workflow_id: str = Field(sa_column=Column(String, ForeignKey("agent_workflows.id", ondelete="RESTRICT"), index=True))
+    objective: str = Field(sa_column=Column(Text, nullable=False))
+    objective_hash: str = Field(index=True)
+    create_idempotency_key: str
+    config_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    status: str = Field(default="created", index=True)
+    primary_run_id: Optional[str] = Field(default=None, index=True)
+    active_run_id: Optional[str] = Field(default=None, index=True)
+    latest_run_attempt: int = 0
+    version: int = 1
+    lease_owner: Optional[str] = Field(default=None, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    heartbeat_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_todos: int = 0
+    total_todos: int = 0
+    progress: int = 0
+    current_phase: str = "created"
+    terminal_reason: Optional[str] = None
+    budgets_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    queued_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    paused_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    deletion_requested_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    deletion_completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    updated_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(objective)) > 0", name="ck_agent_tasks_objective_nonempty"),
+        CheckConstraint("length(btrim(objective_hash)) > 0", name="ck_agent_tasks_objective_hash_nonempty"),
+        CheckConstraint("length(btrim(create_idempotency_key)) > 0", name="ck_agent_tasks_idempotency_nonempty"),
+        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
+        CheckConstraint("version >= 1 and latest_run_attempt >= 0", name="ck_agent_tasks_versions"),
+        CheckConstraint("progress between 0 and 100 and completed_todos >= 0 and total_todos >= 0", name="ck_agent_tasks_progress"),
+        Index(
+            "uq_agent_tasks_owner_idempotency_nullsafe",
+            "thread_id",
+            text("coalesce(user_id, '')"),
+            "create_idempotency_key",
+            unique=True,
+        ),
+        Index("idx_agent_tasks_claim", "status", "lease_expires_at", "queued_at"),
+        Index("idx_agent_tasks_thread_created", "thread_id", "created_at"),
+    )
+
+
+class AgentTaskPlanRevision(SQLModel, table=True):
+    __tablename__ = "agent_task_plan_revisions"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    revision: int
+    planner_visit: int = 1
+    reason: str
+    objective: str = Field(sa_column=Column(Text, nullable=False))
+    completion_criteria_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    ordered_todo_ids_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    plan_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    provenance_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    content_hash: str
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("revision >= 1 and planner_visit >= 1", name="ck_agent_task_plan_revision_values"),
+        UniqueConstraint("task_id", "revision", name="uq_agent_task_plan_revision"),
+    )
+
+
+class AgentTaskTodo(SQLModel, table=True):
+    __tablename__ = "agent_task_todos"
+
+    id: str = Field(primary_key=True)
+    task_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("agent_tasks.id", ondelete="CASCADE"),
+            primary_key=True,
+        )
+    )
+    title: str
+    description: str = Field(sa_column=Column(Text, nullable=False))
+    completion_criteria: str = Field(sa_column=Column(Text, nullable=False))
+    status: str = Field(default="pending", index=True)
+    priority: int = 50
+    required: bool = True
+    dependency_ids_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    profile_id: str
+    attempt: int = 0
+    max_attempts: int = 2
+    progress: int = 0
+    version: int = 1
+    result_summary: Optional[str] = Field(default=None, sa_column=Column(Text))
+    terminal_reason: Optional[str] = None
+    current_subagent_run_id: Optional[str] = Field(default=None, index=True)
+    evidence_ids_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    artifact_ids_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    created_revision: int = 1
+    updated_revision: int = 1
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    updated_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("status in ('pending','ready','running','blocked','completed','failed','skipped','cancelled')", name="ck_agent_task_todos_status"),
+        CheckConstraint("priority between 0 and 100 and progress between 0 and 100", name="ck_agent_task_todos_ranges"),
+        CheckConstraint("attempt >= 0 and max_attempts between 1 and 10", name="ck_agent_task_todos_attempts"),
+        CheckConstraint("version >= 1 and created_revision >= 1 and updated_revision >= created_revision", name="ck_agent_task_todos_versions"),
+        Index("idx_agent_task_todos_schedule", "task_id", "status", "priority"),
+    )
+
+
+class AgentTaskSubagentRun(SQLModel, table=True):
+    __tablename__ = "agent_task_subagent_runs"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    todo_id: str = Field(index=True)
+    execution_key: str = Field(unique=True, index=True)
+    profile_id: str
+    plan_revision: int
+    attempt: int
+    status: str = Field(default="queued", index=True)
+    usage_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    tool_policy_hash: str
+    timeout_ms: int
+    output_artifact_ids_json: List[Any] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    error_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("status in ('queued','running','completed','failed','timed_out','cancelled')", name="ck_agent_task_subagent_status"),
+        CheckConstraint("attempt >= 1 and plan_revision >= 1 and timeout_ms > 0", name="ck_agent_task_subagent_values"),
+        ForeignKeyConstraint(["task_id", "todo_id"], ["agent_task_todos.task_id", "agent_task_todos.id"], ondelete="CASCADE"),
+    )
+
+
+class AgentTaskArtifact(SQLModel, table=True):
+    __tablename__ = "agent_task_artifacts"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    todo_id: Optional[str] = Field(default=None, index=True)
+    subagent_run_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("agent_task_subagent_runs.id", ondelete="SET NULL"), index=True))
+    ownership_key: str = Field(index=True)
+    kind: str = Field(index=True)
+    object_key: str = Field(unique=True)
+    media_type: str
+    byte_size: int
+    sha256: str
+    version: int = 1
+    provenance_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    source_refs_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    summary_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    supersedes_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("agent_task_artifacts.id", ondelete="SET NULL")))
+    validity: str = Field(default="valid", index=True)
+    sensitivity: str = Field(default="private")
+    retention_until: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    deleted_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("kind in ('tool_output','intermediate_report','context_summary','final_report')", name="ck_agent_task_artifacts_kind"),
+        CheckConstraint("validity in ('valid','invalid','deleted') and sensitivity in ('private','sensitive')", name="ck_agent_task_artifacts_state"),
+        CheckConstraint("byte_size >= 0 and version >= 1", name="ck_agent_task_artifacts_values"),
+        CheckConstraint("length(btrim(ownership_key)) > 0", name="ck_agent_task_artifacts_ownership_key"),
+        UniqueConstraint("agent_run_id", "ownership_key", "sha256", "kind", name="uq_agent_task_artifact_content"),
+        Index(
+            "uq_agent_task_artifacts_final_report",
+            "agent_run_id",
+            unique=True,
+            postgresql_where=text("kind = 'final_report' and validity = 'valid' and deleted_at is null"),
+        ),
+    )
+
+
+class AgentTaskEvent(SQLModel, table=True):
+    __tablename__ = "agent_task_events"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    sequence: int
+    event_type: str = Field(index=True)
+    actor_type: str
+    actor_id: Optional[str] = None
+    agent_run_id: Optional[str] = Field(default=None, index=True)
+    todo_id: Optional[str] = Field(default=None, index=True)
+    subagent_run_id: Optional[str] = Field(default=None, index=True)
+    artifact_id: Optional[str] = Field(default=None, index=True)
+    payload_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    policy_hash: Optional[str] = None
+    config_hash: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint("sequence >= 1", name="ck_agent_task_events_sequence"),
+        UniqueConstraint("task_id", "sequence", name="uq_agent_task_event_sequence"),
+        Index("idx_agent_task_events_stream", "task_id", "sequence"),
+        Index("idx_agent_task_events_run_stream", "task_id", "agent_run_id", "sequence"),
+    )
+
+
+class AgentTaskCommand(SQLModel, table=True):
+    __tablename__ = "agent_task_commands"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    action: str
+    idempotency_key: str
+    expected_version: int
+    actor_id: Optional[str] = None
+    status: str = Field(default="accepted")
+    result_version: Optional[int] = None
+    result_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete')", name="ck_agent_task_commands_action"),
+        CheckConstraint("status in ('accepted','completed','rejected') and expected_version >= 1", name="ck_agent_task_commands_state"),
+        UniqueConstraint("task_id", "action", "idempotency_key", name="uq_agent_task_command_idempotency"),
+    )
 
 
 class Memory(SQLModel, table=True):

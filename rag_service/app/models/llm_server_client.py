@@ -317,18 +317,25 @@ def is_llm_model_by_keyword(model_id: str) -> bool:
     keywords = ["chat", "instruct", "completion", "base", "llama", "mistral", "qwen", "deepseek", "vicuna", "falcon", "gpt", "codellama", "phi", "mixtral", "yi", "zephyr", "dbrx", "command", "orca", "hermes", "openchat", "wizard", "llava", "starling", "solar"]
     return any(k in name for k in keywords)
 
-def get_llm(model_name: str, temperature: float = 0.0):
+def get_llm(
+    model_name: str,
+    temperature: float = 0.0,
+    *,
+    own_async_transport: bool = False,
+):
     """
     Return a configured ChatOpenAI client for the given model.
     """
+    async_client = httpx.AsyncClient() if own_async_transport else None
     return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required"
+        api_key="sk-no-key-required",
+        http_async_client=async_client,
     )
 
-def get_embedding_model(model_name: str):
+def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
     """
     Return a configured OpenAIEmbeddings client for the given model.
     """
@@ -339,8 +346,32 @@ def get_embedding_model(model_name: str):
         model=model_name,
         base_url=_get_base_url(),
         api_key="sk-no-key-required",
-        check_embedding_ctx_length=False
+        check_embedding_ctx_length=False,
+        http_async_client=httpx.AsyncClient() if own_async_transport else None,
     )
+
+
+async def close_model_client(model: object) -> None:
+    """Close only an async transport explicitly assigned to this wrapper.
+
+    LangChain may share its implicit OpenAI transport across otherwise distinct
+    wrappers. Closing that implicit client can break a later or concurrent model
+    call, so execution-scoped callers must request ``own_async_transport=True``.
+    """
+    client = getattr(model, "http_async_client", None)
+    close = getattr(client, "aclose", None) or getattr(client, "close", None)
+    if close is not None:
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
+async def embed_query(model_name: str, text: str) -> List[float]:
+    model = get_embedding_model(model_name, own_async_transport=True)
+    try:
+        return await model.aembed_query(text)
+    finally:
+        await close_model_client(model)
 
 
 class LocalEmbeddingWrapper:

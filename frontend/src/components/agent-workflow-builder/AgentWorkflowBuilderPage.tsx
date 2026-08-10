@@ -201,7 +201,8 @@ export default function AgentWorkflowBuilderPage() {
   const [busyAction, setBusyAction] = useState<'save' | 'delete' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
-  const authoringDisabled = false;
+  const selectedStarterWorkflow = workflows.find((workflow) => workflow.id === starter);
+  const authoringDisabled = Boolean(selectedStarterWorkflow?.supports_long_running_tasks);
   const undoStack = useRef<AgentWorkflowBuilderState[]>([]);
   const redoStack = useRef<AgentWorkflowBuilderState[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -334,7 +335,7 @@ export default function AgentWorkflowBuilderPage() {
   }, [isDirty]);
 
   const resetToStarter = useCallback(async (workflowId?: string) => {
-    if (!catalog || authoringDisabled) return;
+    if (!catalog) return;
     const workflow = workflows.find((option) => option.id === workflowId)
       || workflows.find((option) => option.is_builtin && option.is_default)
       || workflows.find((option) => option.is_builtin);
@@ -346,6 +347,11 @@ export default function AgentWorkflowBuilderPage() {
       setSelection(null);
       setValidation(null);
       setPersistedWorkflow(null);
+      setPersistenceForm({
+        workflowId: '',
+        name: workflow.name || workflow.id,
+        description: workflow.description || '',
+      });
       setPersistenceStatus(null);
       setPersistenceError(null);
       undoStack.current = [];
@@ -355,10 +361,10 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [authoringDisabled, catalog, workflows]);
+  }, [catalog, workflows]);
 
   const loadCustomWorkflow = useCallback(async (workflowId: string) => {
-    if (!catalog || authoringDisabled) return;
+    if (!catalog) return;
     try {
       setError(null);
       const response = await getInternalAgentWorkflow(workflowId);
@@ -385,10 +391,9 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [authoringDisabled, catalog]);
+  }, [catalog]);
 
   const handleStarterChange = (workflowId: string) => {
-    if (authoringDisabled) return;
     const workflow = workflows.find((option) => option.id === workflowId);
     if (!workflow) return;
     if (!workflow.is_builtin) {
@@ -742,7 +747,7 @@ export default function AgentWorkflowBuilderPage() {
   const handleSaveInternalWorkflow = async () => {
     if (!builderState || !spec) return;
     if (authoringDisabled) {
-      setPersistenceError('Internal workflow authoring is disabled by backend feature flags.');
+      setPersistenceError('Built-in task workflows are read-only. Launch this workflow from the Deep research task workspace.');
       return;
     }
     try {
@@ -824,6 +829,7 @@ export default function AgentWorkflowBuilderPage() {
               starter={starter}
               workflows={workflows}
               disabled={authoringDisabled}
+              workflowSelectionDisabled={false}
               onStarterChange={handleStarterChange}
               onReset={() => handleStarterChange(starter)}
               onValidate={handleValidate}
@@ -839,8 +845,8 @@ export default function AgentWorkflowBuilderPage() {
               workflowName={persistenceForm.name}
               testMode={workspace === 'test'}
               onToggleTest={() => setWorkspace((current) => current === 'build' && !workflowIsValid ? current : current === 'build' ? 'test' : 'build')}
-              testDisabled={!workflowIsValid}
-              testDisabledReason={testDisabledReason}
+              testDisabled={!workflowIsValid || authoringDisabled}
+              testDisabledReason={authoringDisabled ? 'Long-running workflows are launched from the Deep research task workspace.' : testDisabledReason}
               hasTestSession={testSession.messages.length > 0}
               onClearTestSession={() => {
                 setTestSession(emptyBuilderTestSession(testThread?.id || null));
@@ -978,6 +984,7 @@ export default function AgentWorkflowBuilderPage() {
                     activeThread={thread}
                     chatSentences={[]}
                     setChatSentences={() => undefined}
+                    setChatPlaybackSourceKey={() => undefined}
                     currentChatId={null}
                     activeSource="chat"
                     onJump={() => undefined}

@@ -28,6 +28,7 @@ export const ConversationMessageBubble = React.memo(function ConversationMessage
   actions,
   beforeContent,
   afterContent,
+  rootRef,
 }: {
   role: ConversationMessageRole;
   content: string;
@@ -39,12 +40,14 @@ export const ConversationMessageBubble = React.memo(function ConversationMessage
   actions?: React.ReactNode;
   beforeContent?: React.ReactNode;
   afterContent?: React.ReactNode;
+  rootRef?: React.Ref<HTMLLIElement>;
 }) {
   const theme = useTheme();
   const isUser = role === 'user';
 
   return (
     <ListItem
+      ref={rootRef}
       alignItems="flex-start"
       sx={{
         flexDirection: 'column',

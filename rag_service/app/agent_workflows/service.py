@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
-from app.agent_workflows.enums import InterruptStatus
+from app.agent_workflows.enums import AgentRunResumeAction, InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
@@ -19,6 +19,15 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
+
+
+def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
+    proposed_tool = interrupt.get("proposed_tool")
+    return (
+        interrupt.get("type") in {"external_research_approval", "tool_approval"}
+        and isinstance(proposed_tool, dict)
+        and proposed_tool.get("name") == "search_web"
+    )
 
 
 def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
@@ -89,6 +98,9 @@ class AgentRunService:
                 workflow_id,
             )
             raise RuntimeError(f"Selected agent workflow is unavailable: {workflow_id}")
+        runtime_features = ((workflow.spec_json.get("runtime") or {}).get("features") or {})
+        if runtime_features.get("supports_long_running_tasks"):
+            raise RuntimeError("This workflow must be started through the Deep research task workspace")
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
@@ -404,6 +416,44 @@ class AgentRunService:
             or not isinstance(resolution.interrupt, dict)
             or resolution.interrupt.get("checkpoint_resume") is not True
         ):
+            return resolution
+
+        # Long-running tasks are resumed by the leased task runner. The
+        # canonical interrupt resolver above still owns validation, audit,
+        # duplicate decisions, and resume guards; only execution is deferred.
+        if resolution.run.task_id:
+            from app.services.agent_task_repository import (
+                WEB_ACCESS_ALLOWED,
+                WEB_ACCESS_DENIED,
+                queue_task_after_interrupt,
+                set_task_web_access,
+            )
+
+            if _is_web_approval_interrupt(resolution.interrupt):
+                if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
+                    await set_task_web_access(
+                        resolution.run.task_id,
+                        WEB_ACCESS_ALLOWED,
+                        agent_run_id=resolution.run.id,
+                        interrupt_id=interrupt_id,
+                    )
+                elif action in {
+                    AgentRunResumeAction.CONTINUE_WITHOUT.value,
+                    AgentRunResumeAction.REJECT.value,
+                }:
+                    await set_task_web_access(
+                        resolution.run.task_id,
+                        WEB_ACCESS_DENIED,
+                        agent_run_id=resolution.run.id,
+                        interrupt_id=interrupt_id,
+                    )
+
+            await queue_task_after_interrupt(
+                resolution.run.task_id,
+                reason=f"interrupt:{interrupt_id}:{action}",
+                interrupt_id=interrupt_id,
+                action=action,
+            )
             return resolution
 
         try:

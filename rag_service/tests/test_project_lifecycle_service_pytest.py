@@ -394,6 +394,10 @@ async def test_delete_cleanup_failure_preserves_project(
         delete_document_vectors_by_file_hash_and_model=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(project_lifecycle_service, "get_vector_db", lambda: vector_db)
+    monkeypatch.setattr(
+        "app.services.task_artifact_service.delete_task_resources_for_threads",
+        AsyncMock(return_value=None),
+    )
 
     async with lifecycle_sessionmaker() as session:
         async with session.begin():

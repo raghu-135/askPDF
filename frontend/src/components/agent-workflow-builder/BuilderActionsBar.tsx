@@ -30,6 +30,7 @@ export default function BuilderActionsBar({
   starter,
   workflows,
   disabled,
+  workflowSelectionDisabled = disabled,
   onStarterChange,
   onReset,
   onValidate,
@@ -57,6 +58,7 @@ export default function BuilderActionsBar({
   starter: string;
   workflows?: AgentWorkflow[];
   disabled?: boolean;
+  workflowSelectionDisabled?: boolean;
   onStarterChange: (workflowId: string) => void;
   onReset: () => void;
   onValidate: () => void;
@@ -108,7 +110,7 @@ export default function BuilderActionsBar({
             <HomeIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        <FormControl size="small" disabled={disabled} sx={{ minWidth: 180 }}>
+        <FormControl size="small" disabled={workflowSelectionDisabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
             labelId="builder-starter-label"

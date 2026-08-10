@@ -12,6 +12,7 @@ class InterruptStatus(str, Enum):
 
 class AgentRunResumeAction(str, Enum):
     APPROVE = "approve"
+    APPROVE_FOR_SCOPE = "approve_for_scope"
     APPROVE_SELECTED = "approve_selected"
     REJECT = "reject"
     EDIT = "edit"
@@ -97,6 +98,8 @@ class RouteFunctionId(str, Enum):
     ANSWER_QUALITY = "answer_quality_route"
     CORRECTIVE_RETRIEVAL = "corrective_retrieval_route"
     GROUNDED_ANSWER = "grounded_answer_route"
+    DEEP_TASK_DISPATCH = "deep_task_dispatch_route"
+    DEEP_TASK = "deep_task_route"
 
 
 class WorkflowNodeType(str, Enum):
@@ -121,6 +124,12 @@ class WorkflowNodeType(str, Enum):
     ANSWER_REVISER = "answer_reviser"
     RETRIEVAL_QUALITY_GRADER = "retrieval_quality_grader"
     GROUNDED_ANSWER_VERIFIER = "grounded_answer_verifier"
+    DEEP_TASK_PLANNER = "deep_task_planner"
+    DEEP_TASK_SCHEDULER = "deep_task_scheduler"
+    DEEP_RESEARCH_SUBAGENT = "deep_research_subagent"
+    DEEP_COORDINATOR = "deep_coordinator"
+    DEEP_TASK_SYNTHESIZER = "deep_task_synthesizer"
+    EVIDENCE_CRITIC = "evidence_critic"
 
 
 class ToolName(str, Enum):
@@ -159,6 +168,7 @@ class NodeCategory(str, Enum):
     ANSWER = "answer"
     HUMAN_REVIEW = "human_review"
     EXTERNAL_RESEARCH = "external_research"
+    LONG_RUNNING_TASK = "long_running_task"
 
 
 class EvidenceKind(str, Enum):
@@ -193,6 +203,14 @@ class NodeCapability(str, Enum):
     REVISE_ANSWER = "answer.revise"
     GRADE_RETRIEVAL = "evaluate.retrieval_quality"
     VERIFY_GROUNDED_ANSWER = "evaluate.answer_grounding"
+    TASK_PLAN = "task.plan"
+    TASK_SCHEDULE = "task.schedule"
+    TASK_DELEGATE = "task.delegate"
+    TASK_AGGREGATE = "task.aggregate"
+    CONTEXT_COMPACT = "context.compact"
+    TASK_CONTROL = "task.control"
+    TASK_SYNTHESIZE = "task.synthesize"
+    EVIDENCE_CRITIQUE = "evidence.critique"
 
 
 class ContextPolicyMode(str, Enum):
@@ -302,6 +320,7 @@ GROUNDED_ANSWER_ROUTES = {route.value for route in GroundedAnswerRoute}
 HITL_ACTIONS = {action.value for action in AgentRunResumeAction}
 RESUME_ACTIONS = {
     AgentRunResumeAction.APPROVE.value,
+    AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
     AgentRunResumeAction.APPROVE_SELECTED.value,
     AgentRunResumeAction.EDIT.value,
     AgentRunResumeAction.CONTINUE_WITHOUT.value,

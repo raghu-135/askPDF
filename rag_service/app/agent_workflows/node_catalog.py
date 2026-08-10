@@ -40,6 +40,12 @@ NODE_ANSWER_EVALUATOR = WorkflowNodeType.ANSWER_EVALUATOR.value
 NODE_ANSWER_REVISER = WorkflowNodeType.ANSWER_REVISER.value
 NODE_RETRIEVAL_QUALITY_GRADER = WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value
 NODE_GROUNDED_ANSWER_VERIFIER = WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value
+NODE_DEEP_TASK_PLANNER = WorkflowNodeType.DEEP_TASK_PLANNER.value
+NODE_DEEP_TASK_SCHEDULER = WorkflowNodeType.DEEP_TASK_SCHEDULER.value
+NODE_DEEP_RESEARCH_SUBAGENT = WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value
+NODE_DEEP_COORDINATOR = WorkflowNodeType.DEEP_COORDINATOR.value
+NODE_DEEP_TASK_SYNTHESIZER = WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value
+NODE_EVIDENCE_CRITIC = WorkflowNodeType.EVIDENCE_CRITIC.value
 START_NODE = GraphSentinel.START.value
 END_NODE = GraphSentinel.END.value
 
@@ -82,6 +88,8 @@ ROUTE_SERIAL_DISPATCH = RouteFunctionId.SERIAL_DISPATCH.value
 ROUTE_ANSWER_QUALITY = RouteFunctionId.ANSWER_QUALITY.value
 ROUTE_CORRECTIVE_RETRIEVAL = RouteFunctionId.CORRECTIVE_RETRIEVAL.value
 ROUTE_GROUNDED_ANSWER = RouteFunctionId.GROUNDED_ANSWER.value
+ROUTE_DEEP_TASK_DISPATCH = RouteFunctionId.DEEP_TASK_DISPATCH.value
+ROUTE_DEEP_TASK = RouteFunctionId.DEEP_TASK.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
@@ -134,7 +142,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_THREAD_SHAPE],
         "allowed_parent_types": [START_NODE],
-        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_DEEP_TASK_PLANNER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
     NODE_ROUTER: {
@@ -326,6 +334,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_ANSWER_EVALUATOR,
             NODE_ANSWER_REVISER,
             NODE_GROUNDED_ANSWER_VERIFIER,
+            NODE_DEEP_COORDINATOR,
+            NODE_EVIDENCE_CRITIC,
             NODE_HITL_GATE,
         ],
         "allowed_child_types": [NODE_HITL_GATE, END_NODE],
@@ -337,8 +347,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_HITL_INTERRUPT],
         "allowed_route_functions": [ROUTE_HITL_GATE],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_AGGREGATOR, NODE_ANSWER_EVALUATOR, NODE_FINALIZER],
-        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_ANSWER_EVALUATOR, NODE_FINALIZER, END_NODE],
+        "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_AGGREGATOR, NODE_ANSWER_EVALUATOR, NODE_FINALIZER, NODE_DEEP_COORDINATOR],
+        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_ANSWER_EVALUATOR, NODE_FINALIZER, NODE_DEEP_TASK_SCHEDULER, END_NODE],
         "limits": {"default_max_visits": 2, "max_visits": 16},
     },
     NODE_PARALLEL_DISPATCH: {
@@ -425,6 +435,64 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_parent_types": [NODE_SYNTHESIZER, NODE_ANSWER_REVISER, NODE_HITL_GATE],
         "allowed_child_types": [NODE_FINALIZER, NODE_ANSWER_REVISER, NODE_REPLANNER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 4, "max_visits": 4},
+    },
+    NODE_DEEP_TASK_PLANNER: {
+        "display_name": "Deep Task Planner", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [NodeCapability.TASK_PLAN.value], "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_DEEP_COORDINATOR, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_DEEP_TASK_SCHEDULER],
+        "limits": {"default_max_visits": 6, "max_visits": 8},
+    },
+    NODE_DEEP_TASK_SCHEDULER: {
+        "display_name": "Deep Task Scheduler", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [NodeCapability.TASK_SCHEDULE.value], "allowed_route_functions": [ROUTE_DEEP_TASK_DISPATCH],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_DEEP_TASK_PLANNER, NODE_DEEP_COORDINATOR, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_DEEP_RESEARCH_SUBAGENT, NODE_DEEP_COORDINATOR],
+        "limits": {"default_max_visits": 20, "max_visits": 60},
+    },
+    NODE_DEEP_RESEARCH_SUBAGENT: {
+        "display_name": "Deep Research Subagent", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [
+            NodeCapability.TASK_DELEGATE.value, CAP_RETRIEVAL_DOCUMENT,
+            CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY, CAP_RETRIEVAL_DURABLE_MEMORY,
+            CAP_RETRIEVAL_THREAD_EVENTS, CAP_RETRIEVAL_WEB,
+        ],
+        "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [
+            TOOL_DOCUMENT_EVIDENCE, TOOL_FOCUSED_DOCUMENT_EVIDENCE,
+            TOOL_THREAD_CONVERSATION_HISTORY, TOOL_DURABLE_MEMORY, TOOL_THREAD_EVENTS,
+            TOOL_LIVE_WEB_RECON, TOOL_WIKIPEDIA_REFERENCE, TOOL_WIKIDATA_REFERENCE,
+            TOOL_ARXIV_RESEARCH, TOOL_PUBMED_RESEARCH, TOOL_SEMANTIC_SCHOLAR_RESEARCH,
+            TOOL_STACKEXCHANGE_REFERENCE, TOOL_YAHOO_FINANCE_NEWS,
+        ],
+        "allowed_parent_types": [NODE_DEEP_TASK_SCHEDULER],
+        "allowed_child_types": [NODE_DEEP_COORDINATOR],
+        "limits": {"default_max_visits": 50, "max_visits": 100},
+    },
+    NODE_DEEP_COORDINATOR: {
+        "display_name": "Deep Coordinator", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [NodeCapability.TASK_AGGREGATE.value, NodeCapability.CONTEXT_COMPACT.value, NodeCapability.TASK_CONTROL.value],
+        "allowed_route_functions": [ROUTE_DEEP_TASK],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_DEEP_RESEARCH_SUBAGENT, NODE_DEEP_TASK_SCHEDULER],
+        "allowed_child_types": [NODE_DEEP_TASK_SCHEDULER, NODE_DEEP_TASK_PLANNER, NODE_DEEP_TASK_SYNTHESIZER, NODE_HITL_GATE, NODE_FINALIZER],
+        "limits": {"default_max_visits": 20, "max_visits": 60},
+    },
+    NODE_DEEP_TASK_SYNTHESIZER: {
+        "display_name": "Deep Task Synthesizer", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [NodeCapability.TASK_SYNTHESIZE.value], "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [], "allowed_parent_types": [NODE_DEEP_COORDINATOR],
+        "allowed_child_types": [NODE_EVIDENCE_CRITIC],
+        "limits": {"default_max_visits": 1, "max_visits": 1},
+    },
+    NODE_EVIDENCE_CRITIC: {
+        "display_name": "Evidence Critic", "category": NodeCategory.LONG_RUNNING_TASK.value,
+        "capabilities": [NodeCapability.EVIDENCE_CRITIQUE.value], "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [], "allowed_parent_types": [NODE_DEEP_TASK_SYNTHESIZER],
+        "allowed_child_types": [NODE_FINALIZER],
+        "limits": {"default_max_visits": 1, "max_visits": 1},
     },
 }
 
@@ -613,8 +681,8 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "max_instances": 1,
     },
     NODE_HITL_GATE: {
-        "state_reads": ["hitl_policy", "hitl_gate_routes", "hitl_interrupt_counts", "route", "route_reason", "final_answer"],
-        "state_writes": ["hitl_gate_route", "hitl_gate_routes", "hitl_decisions", "hitl_interrupt_counts", "human_review_decision"],
+        "state_reads": ["hitl_policy", "hitl_gate_routes", "hitl_interrupt_counts", "hitl_approval_grants", "route", "route_reason", "final_answer"],
+        "state_writes": ["hitl_gate_route", "hitl_gate_routes", "hitl_decisions", "hitl_interrupt_counts", "hitl_approval_grants", "human_review_decision"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_INTERRUPT, "input_budget": BUDGET_BOUNDED_SUMMARY, "output_budget": BUDGET_DECISION},
         "observability": {
@@ -684,6 +752,55 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "max_instances": 1,
     },
 }
+
+_DEEP_NODE_FLOW_METADATA = {
+    NODE_DEEP_TASK_PLANNER: (
+        ["agent_task_id", "question", "pre_fetch_bundle", "task_todos", "task_limits", "task_enabled_profiles"],
+        ["task_plan_revision", "task_plan", "task_todos", "task_memory_snapshot"],
+        SPAN_CONTROL,
+    ),
+    NODE_DEEP_TASK_SCHEDULER: (
+        ["agent_task_id", "task_todos", "task_limits", "task_plan_revision", "web_search_mode", "task_web_access"],
+        ["task_todos", "task_work_items", "task_controller_route", "task_web_access", "task_web_access_decision"],
+        SPAN_CONTROL,
+    ),
+    NODE_DEEP_RESEARCH_SUBAGENT: (
+        ["agent_task_id", "task_work_item", "thread_id", "embedding_model", "use_web_search", "task_memory_snapshot", "task_artifact_manifest"],
+        ["task_result_packets"],
+        SPAN_TOOL_WORKER,
+    ),
+    NODE_DEEP_COORDINATOR: (
+        ["agent_task_id", "task_result_packets", "task_todos", "task_plan_revision", "task_limits", "task_pause_requested", "task_cancel_requested", "context_window", "task_web_access_decision"],
+        ["task_todos", "task_work_items", "task_result_packets", "task_artifact_manifest", "task_context_summary", "task_controller_route", "task_controller_reason", "task_web_access_decision"],
+        SPAN_CONTROL,
+    ),
+    NODE_DEEP_TASK_SYNTHESIZER: (
+        ["agent_task_id", "question", "task_todos", "task_artifact_manifest"],
+        ["final_answer", "task_draft_metadata", "task_incomplete_reasons"],
+        SPAN_ANSWER,
+    ),
+    NODE_EVIDENCE_CRITIC: (
+        ["final_answer", "task_artifact_manifest"],
+        ["final_answer", "task_critic_report"],
+        SPAN_CONTROL,
+    ),
+}
+for _deep_node_type, (_reads, _writes, _span) in _DEEP_NODE_FLOW_METADATA.items():
+    _NODE_CATALOG_METADATA[_deep_node_type] = {
+        "state_reads": _reads,
+        "state_writes": _writes,
+        "prompt_slots": [],
+        "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_BOUNDED_SUMMARY, "output_budget": BUDGET_BOUNDED_SUMMARY},
+        "observability": {
+            "span_kind": _span,
+            "event_prefix": _deep_node_type,
+            "summary_fields": ["agent_task_id", "task_plan_revision", "task_controller_route"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
+        "max_instances": 1,
+        "builtin_only": True,
+    }
+_NODE_CATALOG_METADATA[NODE_DEEP_RESEARCH_SUBAGENT]["parallel_state_writes"] = ["task_result_packets"]
 
 for _node_type, _metadata in _NODE_CATALOG_METADATA.items():
     NODE_CATALOG[_node_type].update(deepcopy(_metadata))

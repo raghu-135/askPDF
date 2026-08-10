@@ -51,6 +51,12 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value: 12,
     WorkflowNodeType.FINALIZER.value: 13,
     WorkflowNodeType.HITL_GATE.value: 14,
+    WorkflowNodeType.DEEP_TASK_PLANNER.value: 1,
+    WorkflowNodeType.DEEP_TASK_SCHEDULER.value: 2,
+    WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value: 3,
+    WorkflowNodeType.DEEP_COORDINATOR.value: 4,
+    WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value: 10,
+    WorkflowNodeType.EVIDENCE_CRITIC.value: 11,
 }
 
 
@@ -171,6 +177,8 @@ class WorkflowMaterializer:
             WorkflowNodeType.ANSWER_EVALUATOR.value: RouteFunctionId.ANSWER_QUALITY.value,
             WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value: RouteFunctionId.CORRECTIVE_RETRIEVAL.value,
             WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value: RouteFunctionId.GROUNDED_ANSWER.value,
+            WorkflowNodeType.DEEP_TASK_SCHEDULER.value: RouteFunctionId.DEEP_TASK_DISPATCH.value,
+            WorkflowNodeType.DEEP_COORDINATOR.value: RouteFunctionId.DEEP_TASK.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):
@@ -327,7 +335,11 @@ class WorkflowCompiler(WorkflowMaterializer):
                     source=str(source),
                     node_types=node_types,
                 )
-                if node_types.get(str(source)) in {WorkflowNodeType.PARALLEL_DISPATCH.value, WorkflowNodeType.SERIAL_DISPATCH.value}:
+                if node_types.get(str(source)) in {
+                    WorkflowNodeType.PARALLEL_DISPATCH.value,
+                    WorkflowNodeType.SERIAL_DISPATCH.value,
+                    WorkflowNodeType.DEEP_TASK_SCHEDULER.value,
+                }:
                     workflow.add_conditional_edges(source, route_fn)
                     continue
                 routes = {

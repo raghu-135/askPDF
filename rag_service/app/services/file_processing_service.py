@@ -10,7 +10,6 @@ This module contains business logic for:
 import hashlib
 import json
 import logging
-import os
 import traceback
 from typing import Any, Dict, Optional
 
@@ -33,6 +32,7 @@ from app.db import (
 )
 from app.rag.indexer import index_document_for_thread
 from app.services.parsing_service import extract_text_with_coordinates
+from app.services.content_store import get_content_store, pdf_content_key
 from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
@@ -205,13 +205,11 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
         if not claimed:
             return
 
-        # Read PDF from local disk
-        pdf_path = f"/static/{file_hash}.pdf"
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF not found at {pdf_path}")
-
-        with open(pdf_path, "rb") as f:
-            pdf_data = f.read()
+        store = get_content_store()
+        key = pdf_content_key(file_hash)
+        if not await store.exists(key):
+            raise FileNotFoundError(f"PDF content not found for {file_hash}")
+        pdf_data = await store.read(key)
 
         sentences = extract_text_with_coordinates(pdf_data, filename=filename)
         parsed_data = {

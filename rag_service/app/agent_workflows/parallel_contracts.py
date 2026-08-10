@@ -8,11 +8,12 @@ from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 
 
 PARALLEL_REFERENCE_WORKFLOW_ID = "orchestrator_worker_rag_agent"
+DEEP_RESEARCH_WORKFLOW_ID = "deep_research_agent"
 PARALLEL_AUTHORIZED_WORKFLOW_IDS = frozenset({
     PARALLEL_REFERENCE_WORKFLOW_ID,
     CORRECTIVE_WORKFLOW_ID,
+    DEEP_RESEARCH_WORKFLOW_ID,
 })
-PARALLEL_FEATURE_ENV = "ASKPDF_AGENT_WORKFLOW_PARALLEL_V1"
 PARALLEL_EVENT_JOURNAL_LIMIT = 256
 # The configured timeout is enforced inside the worker so it can become a
 # reducer delta. LangGraph retains this slightly later outer watchdog.

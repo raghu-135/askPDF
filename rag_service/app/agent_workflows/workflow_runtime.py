@@ -42,6 +42,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "builder_ui",
     "parallel_policy",
     "corrective_policy",
+    "task_policy",
 }
 
 
@@ -74,7 +75,11 @@ def workflow_allows_replans_override(spec: Dict[str, Any]) -> bool:
     """Return whether generic thread/request replan settings apply to this workflow."""
 
     features = workflow_runtime_features(spec)
-    return bool(features.get("supports_replans")) and not bool(features.get("supports_corrective_retrieval"))
+    return (
+        bool(features.get("supports_replans"))
+        and not bool(features.get("supports_corrective_retrieval"))
+        and features.get("allows_replans_override", True) is not False
+    )
 
 
 def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
@@ -116,6 +121,15 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
         for node_id, node_type in node_types.items()
         if node_type in repeatable_node_types
     }
+    task_policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
+    task_limits = task_policy.get("limits") if isinstance(task_policy.get("limits"), dict) else {}
+    try:
+        max_todos = max(1, min(50, int(task_limits.get("max_todos", 50))))
+        max_attempts = max(1, min(2, int(task_limits.get("max_attempts_per_todo", 2))))
+        max_interrupts = max(1, min(16, int(((config.get("hitl_policy") or {}).get("max_interrupts_per_run", 16)))))
+    except (TypeError, ValueError):
+        max_todos, max_attempts, max_interrupts = 50, 2, 16
+    deep_control_visits = max_todos + replans + 1
     for node_id, node_type in node_types.items():
         if node_type == WorkflowNodeType.REPLANNER.value:
             node_visit_limits[node_id] = replans
@@ -141,6 +155,17 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
             node_visit_limits[node_id] = 2
         elif node_type == WorkflowNodeType.ANSWER_REVISER.value:
             node_visit_limits[node_id] = 1
+        elif node_type == WorkflowNodeType.DEEP_TASK_PLANNER.value:
+            node_visit_limits[node_id] = replans + 1
+        elif node_type in {
+            WorkflowNodeType.DEEP_TASK_SCHEDULER.value,
+            WorkflowNodeType.DEEP_COORDINATOR.value,
+        }:
+            node_visit_limits[node_id] = deep_control_visits
+        elif node_type == WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value:
+            node_visit_limits[node_id] = max_todos * max_attempts
+        elif node_type == WorkflowNodeType.HITL_GATE.value and workflow_runtime_features(spec).get("supports_long_running_tasks"):
+            node_visit_limits[node_id] = max_interrupts
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
     return {
         "max_total_visits": max_total_visits,

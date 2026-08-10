@@ -74,7 +74,7 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
     note: '#f9a825',
   };
   const categoryColor = categoryColors[data.category || ''] || '#607d8b';
-  const outputPorts = data.authoring ? (data.outputPorts || [{ id: 'default', label: data.outputLabel || 'Next' }]) : [];
+  const outputPorts = data.outputPorts || [{ id: 'default', label: data.outputLabel || 'Next' }];
   const canAddBefore = data.authoring && data.id !== 'START' && Boolean(data.onAddPrevious);
   const canAddAfter = data.authoring && data.id !== 'END' && Boolean(data.onAddNext);
   const handleColor = data.compatible === false ? '#9e9e9e' : categoryColor;
@@ -228,7 +228,19 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
               </Box>
             ))}
           </Box>
-        ) : <Handle type="source" position={sourcePosition} style={{ opacity: 0 }} />}
+        ) : (
+          <>
+            {outputPorts.map((port) => (
+              <Handle
+                key={port.id}
+                id={port.id}
+                type="source"
+                position={sourcePosition}
+                style={{ opacity: 0, pointerEvents: 'none' }}
+              />
+            ))}
+          </>
+        )}
       </Box>
     </Tooltip>
   );

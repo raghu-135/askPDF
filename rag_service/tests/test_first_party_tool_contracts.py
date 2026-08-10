@@ -73,10 +73,6 @@ async def test_get_thread_shape_returns_tool_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_documents_returns_sources_and_artifacts_contract(monkeypatch):
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
-            return [0.1, 0.2, 0.3]
-
     fake_db = SimpleNamespace(
         search_knowledge_sources=AsyncMock(
             return_value=[{"file_hash": "file-1", "chunk_id": 1, "score": 0.9, "text": "seed"}]
@@ -100,7 +96,7 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
             "web_search_performed_at": "2026-08-01T12:00:00Z",
         }]),
     )
-    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2, 0.3]))
     monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
     monkeypatch.setattr(
         agent_tools,
@@ -139,10 +135,6 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
 
 @pytest.mark.asyncio
 async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sources(monkeypatch):
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
-            return [0.1, 0.2]
-
     fake_db = SimpleNamespace(
         search_knowledge_sources=AsyncMock(return_value=[{"file_hash": "owned", "chunk_id": 0, "text": "seed"}]),
         get_knowledge_source_chunks_by_ids=AsyncMock(return_value=[{
@@ -150,7 +142,7 @@ async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sour
             "metadata": {"page_start": 1, "page_end": 1},
         }]),
     )
-    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
     monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
     monkeypatch.setattr(agent_tools, "get_document_metadata_lookup", AsyncMock(return_value={
         "owned": {"file_name": "paper.pdf", "source_type": "pdf"},
@@ -182,11 +174,7 @@ def test_search_document_by_id_rejects_path_and_url_identifiers():
 
 @pytest.mark.asyncio
 async def test_search_thread_conversation_history_returns_used_chat_ids_contract(monkeypatch):
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
-            return [0.4, 0.5]
-
-    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.4, 0.5]))
     monkeypatch.setattr(
         agent_tools,
         "fetch_semantic_history",
@@ -227,12 +215,8 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
         search_web_chunks=AsyncMock(return_value=[]),
     )
 
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
-            return [0.1, 0.2]
-
     monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
     monkeypatch.setattr(
         agent_tools,
         "get_document_metadata_lookup",

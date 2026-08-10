@@ -16,6 +16,7 @@ export interface MemoryManagerIntent {
   projectId?: string | null;
   memory?: MemoryRecord | null;
   embeddingModel?: string | null;
+  draftContent?: string | null;
 }
 
 export const buildCuratorContext = (intent: MemoryManagerIntent): MemoryCuratorContext => ({

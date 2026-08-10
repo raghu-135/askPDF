@@ -26,6 +26,23 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
     unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
     if unknown_keys:
         errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
+    task_policy = config.get("task_policy")
+    if task_policy is not None:
+        if not isinstance(task_policy, dict):
+            errors.append("task_policy must be an object")
+        else:
+            allowed_task_keys = {"builtin_only", "profiles", "limits", "compaction"}
+            unknown_task_keys = sorted(set(task_policy) - allowed_task_keys)
+            if unknown_task_keys:
+                errors.append(f"task_policy has unknown keys: {', '.join(unknown_task_keys)}")
+            if task_policy.get("builtin_only") is not True:
+                errors.append("task_policy.builtin_only must be true")
+            profiles = task_policy.get("profiles")
+            if not isinstance(profiles, list) or not profiles or not all(isinstance(value, str) and value for value in profiles):
+                errors.append("task_policy.profiles must be a non-empty list of strings")
+            limits = task_policy.get("limits")
+            if not isinstance(limits, dict):
+                errors.append("task_policy.limits must be an object")
 
     for key in ("use_web_search", "use_reranker"):
         if key in config and not isinstance(config[key], bool):

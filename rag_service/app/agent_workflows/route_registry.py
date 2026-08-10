@@ -102,6 +102,22 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
             GroundedAnswerRoute.FINALIZE_CAUTIOUS.value: [WorkflowNodeType.FINALIZER.value],
         },
     },
+    RouteFunctionId.DEEP_TASK_DISPATCH.value: {
+        "allowed_source_types": [WorkflowNodeType.DEEP_TASK_SCHEDULER.value],
+        "route_labels": None,
+        "target_types_by_label": None,
+    },
+    RouteFunctionId.DEEP_TASK.value: {
+        "allowed_source_types": [WorkflowNodeType.DEEP_COORDINATOR.value],
+        "route_labels": ["dispatch_more", "replan", "synthesize", "pause", "fail"],
+        "target_types_by_label": {
+            "dispatch_more": [WorkflowNodeType.DEEP_TASK_SCHEDULER.value],
+            "replan": [WorkflowNodeType.DEEP_TASK_PLANNER.value],
+            "synthesize": [WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value],
+            "pause": [WorkflowNodeType.DEEP_TASK_SCHEDULER.value, WorkflowNodeType.FINALIZER.value],
+            "fail": [WorkflowNodeType.FINALIZER.value],
+        },
+    },
 }
 
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -140,6 +156,13 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         GroundedAnswerRoute.REVISE.value: {"display_name": "Revise answer", "description": "Apply one bounded answer revision.", "order": 1},
         GroundedAnswerRoute.CORRECT.value: {"display_name": "Retrieve missing support", "description": "Run another corrective retrieval wave.", "order": 2},
         GroundedAnswerRoute.FINALIZE_CAUTIOUS.value: {"display_name": "Finalize cautiously", "description": "Keep only verified claims and explicit gaps.", "order": 3},
+    },
+    RouteFunctionId.DEEP_TASK.value: {
+        "dispatch_more": {"display_name": "Dispatch more", "description": "Run the next ready todo batch.", "order": 0},
+        "replan": {"display_name": "Replan", "description": "Revise the bounded task plan.", "order": 1},
+        "synthesize": {"display_name": "Synthesize", "description": "Build the final report.", "order": 2},
+        "pause": {"display_name": "Pause", "description": "Checkpoint for human continuation.", "order": 3},
+        "fail": {"display_name": "Fail", "description": "Finalize a terminal failure.", "order": 4},
     },
 }
 

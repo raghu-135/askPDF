@@ -30,6 +30,7 @@ test('frontend enum constants preserve API wire values', () => {
   assert.equal(ReasoningFormat.None, 'none');
   assert.equal(EmbeddingReadinessStatus.Blocked, 'blocked');
   assert.equal(AgentRunResumeAction.ContinueWithout, 'continue_without');
+  assert.equal(AgentRunResumeAction.ApproveForScope, 'approve_for_scope');
   assert.equal(AgentRunStatus.AwaitingHuman, 'awaiting_human');
   assert.equal(InterruptStatus.Pending, 'pending');
   assert.equal(HitlMode.Choice, 'choice');

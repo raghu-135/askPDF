@@ -770,6 +770,7 @@ export interface AgentWorkflow {
   is_builtin?: boolean;
   is_default?: boolean;
   supports_replans?: boolean;
+  supports_long_running_tasks?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -1111,6 +1112,9 @@ export interface AgentRunDetails {
   thread_id: string;
   status: string;
   workflow_id: string;
+  task_id?: string | null;
+  parent_run_id?: string | null;
+  task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
   metrics_json?: Record<string, any>;
   parallel_summary?: {
@@ -1156,6 +1160,9 @@ export interface AgentRunSummary {
   id: string;
   thread_id: string;
   workflow_id: string;
+  task_id?: string | null;
+  parent_run_id?: string | null;
+  task_attempt?: number;
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
@@ -1949,6 +1956,216 @@ export async function streamResumeAgentRun(
     signal,
   });
   await consumeAgentExecutionStream(res, onEvent);
+}
+
+// ============ Durable Deep Research Tasks ============
+
+export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'expired';
+
+export interface AgentTaskSummary {
+  id: string;
+  thread_id: string;
+  objective: string;
+  status: AgentTaskStatus;
+  version: number;
+  active_run_id?: string | null;
+  run_attempt?: number;
+  progress: number;
+  web_access?: 'undecided' | 'allowed_for_task' | 'denied_for_task';
+  completed_todos: number;
+  total_todos: number;
+  current_phase: string;
+  terminal_reason?: string | null;
+  budgets: Record<string, number>;
+  configuration: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+  active_run?: { id: string; status: string; checkpoint_thread_id?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
+  plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
+}
+
+export interface AgentTaskTodo {
+  id: string;
+  title: string;
+  description: string;
+  completion_criteria: string;
+  status: string;
+  priority: number;
+  required: boolean;
+  dependency_ids: string[];
+  profile_id: string;
+  attempt: number;
+  max_attempts: number;
+  progress: number;
+  result_summary?: string | null;
+  terminal_reason?: string | null;
+  artifact_ids: string[];
+}
+
+export interface AgentTaskArtifact {
+  id: string;
+  run_id: string;
+  kind: string;
+  media_type: string;
+  byte_size: number;
+  sha256: string;
+  todo_id?: string | null;
+  validity: string;
+  sensitivity: string;
+  created_at: string;
+}
+
+export interface AgentTaskRun {
+  id: string;
+  task_id: string;
+  attempt: number;
+  parent_run_id?: string | null;
+  status: string;
+  checkpoint_thread_id?: string | null;
+  pending_interrupt?: AgentRunPendingInterrupt | null;
+  metrics: Record<string, any>;
+  error?: Record<string, any> | null;
+  started_at: string;
+  completed_at?: string | null;
+}
+
+export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'approval' | 'replan' | 'final_report';
+
+export interface AgentTaskTimelineSource {
+  id: string;
+  kind: 'web' | 'document' | 'memory' | 'thread';
+  title?: string;
+  url?: string;
+  snippet?: string;
+  file_hash?: string;
+  page?: number;
+  memory_id?: string;
+  artifact_id?: string;
+  origin_run_id: string;
+  origin_attempt: number;
+  plan_revision: number;
+  inherited?: boolean;
+  origins: Array<{
+    run_id: string;
+    attempt: number;
+    artifact_id: string;
+    plan_revision: number;
+    inherited: boolean;
+  }>;
+}
+
+export interface AgentTaskTimelineItem {
+  id: string;
+  type: AgentTaskTimelineType;
+  status: string;
+  primary_content: string;
+  timestamp?: string | null;
+  folds?: Record<string, any>;
+  artifact_ids?: string[];
+  artifacts?: AgentTaskArtifact[];
+  sources?: AgentTaskTimelineSource[];
+  evidence_manifest?: Array<Record<string, any>>;
+  trace_anchor?: Record<string, any> | null;
+}
+
+export interface AgentTaskSubagentRun {
+  id: string;
+  todo_id: string;
+  profile_id: string;
+  attempt: number;
+  status: string;
+  timeout_ms: number;
+  usage: Record<string, number>;
+  error?: Record<string, any> | null;
+  output_artifact_ids: string[];
+}
+
+const taskQuery = (threadId: string) => new URLSearchParams({ thread_id: threadId }).toString();
+
+export async function getDeepResearchCapabilities(): Promise<{ enabled: boolean; web_enabled: boolean; limits: Record<string, number> }> {
+  const response = await fetch(`${API_BASE}/api/deep-research/capabilities`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function createAgentTask(threadId: string, payload: {
+  objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
+}): Promise<AgentTaskSummary> {
+  const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).task;
+}
+
+export async function listAgentTasks(threadId: string): Promise<AgentTaskSummary[]> {
+  const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).tasks;
+}
+
+export async function getAgentTask(taskId: string, threadId: string): Promise<AgentTaskSummary> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}?${taskQuery(threadId)}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).task;
+}
+
+export async function commandAgentTask(taskId: string, threadId: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry', version: number): Promise<AgentTaskSummary> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/${action}?${taskQuery(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify({ expected_version: version }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).task;
+}
+
+export async function getAgentTaskTodos(taskId: string, threadId: string): Promise<AgentTaskTodo[]> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/todos?${taskQuery(threadId)}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).todos;
+}
+
+export async function getAgentTaskRuns(taskId: string, threadId: string): Promise<AgentTaskRun[]> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/runs?${taskQuery(threadId)}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).runs;
+}
+
+export async function getAgentTaskTimeline(taskId: string, runId: string, threadId: string): Promise<{ task: AgentTaskSummary; run: AgentTaskRun; items: AgentTaskTimelineItem[] }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/timeline?${taskQuery(threadId)}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function getAgentTaskArtifacts(taskId: string, threadId: string, runId?: string): Promise<AgentTaskArtifact[]> {
+  const query = new URLSearchParams({ thread_id: threadId });
+  if (runId) query.set('run_id', runId);
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/artifacts?${query}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).artifacts;
+}
+
+export async function deleteAgentTask(taskId: string, threadId: string, version: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}?${taskQuery(threadId)}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify({ expected_version: version }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+}
+
+export async function getAgentTaskSubagents(taskId: string, threadId: string): Promise<AgentTaskSubagentRun[]> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/subagents?${taskQuery(threadId)}`);
+  if (!response.ok) throw new Error(await readApiError(response));
+  return (await response.json()).subagents;
+}
+
+export async function downloadAgentTaskArtifact(taskId: string, artifactId: string, threadId: string): Promise<void> {
+  const url = `${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactId)}/download?${taskQuery(threadId)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 export interface BuilderTestRuntimeInput {

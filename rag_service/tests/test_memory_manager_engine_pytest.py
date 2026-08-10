@@ -42,6 +42,7 @@ def curator_sessionmaker(engine, monkeypatch):
     import app.services.memory_review_service as memory_review_service
 
     monkeypatch.setattr(memory_manager_engine, "async_session_maker", maker)
+    monkeypatch.setattr(memory_manager_service, "async_session_maker", maker)
     monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
     monkeypatch.setattr(memory_tool_service, "async_session_maker", maker)
     monkeypatch.setattr(memory_review_service, "async_session_maker", maker)

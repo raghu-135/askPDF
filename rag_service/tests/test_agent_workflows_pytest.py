@@ -46,6 +46,7 @@ from app.agent_workflows.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
+from app.agent_workflows import hitl_runtime
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
@@ -62,6 +63,7 @@ PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 CORRECTIVE_SELF_RAG_AGENT_ID = "corrective_self_rag_agent"
+DEEP_RESEARCH_AGENT_ID = "deep_research_agent"
 ROUTER_RAG_AGENT_VERSION = 4
 PLAN_EXECUTE_RAG_AGENT_VERSION = 5
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
@@ -227,6 +229,38 @@ def make_trace_recorder(run_id: str, thread_id: str, spec: dict, workflow_id: st
             completed_at=None,
         )
     )
+
+
+def test_trace_recorder_synthesizes_missing_node_spans_and_deduplicates_replay():
+    recorder = make_trace_recorder(
+        "run-deep-lifecycle",
+        "thread-deep-lifecycle",
+        _builtin_spec(DEEP_RESEARCH_AGENT_ID),
+        DEEP_RESEARCH_AGENT_ID,
+    )
+    state = {"question": "Research", "task_todos": []}
+    for visit_index in (1, 2):
+        recorder.record_node_started(
+            node_id="deep_task_planner",
+            node_type="deep_task_planner",
+            visit_index=visit_index,
+            state=state,
+        )
+        recorder.record_node_completed(
+            node_id="deep_task_planner",
+            node_type="deep_task_planner",
+            visit_index=visit_index,
+            state=state,
+            update={"task_plan_revision": visit_index},
+            status="completed",
+        )
+    payload = recorder.finalize(run=recorder.run, chat_turn_id=None, metrics={})
+    visits = [
+        node["visitIndex"] for node in payload["summary"]["nodes"]
+        if node["id"] == "deep_task_planner"
+    ]
+    assert visits == [1, 2]
+    assert payload["summary"]["usedNodeCount"] == 2
 
 
 def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_answer():
@@ -3014,6 +3048,7 @@ class TestAgentWorkflowRepository:
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
+            DEEP_RESEARCH_AGENT_ID,
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
@@ -3695,6 +3730,27 @@ class TestAgentWorkflowRepository:
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
+@pytest.mark.asyncio
+async def test_web_hitl_run_scope_grant_skips_subsequent_interrupt(monkeypatch):
+    monkeypatch.setattr(hitl_runtime, "_interrupt", lambda _payload: pytest.fail("run grant must skip later interrupts"))
+    state = {
+        "question": "Current evidence",
+        "hitl_policy": {"enabled": True, "gates": {"web_approval_gate": {}}},
+        "hitl_gate_routes": {},
+        "hitl_interrupt_counts": {},
+        "hitl_approval_grants": {"web_approval_gate": {"status": "allowed", "scope": "run"}},
+        "available_worker_nodes": [{"id": "web_worker", "type": "web_worker"}],
+        "work_item_proposals": [{"worker_node_id": "web_worker", "worker_type": "web_worker"}],
+        "execution_plan": ["web_worker"],
+        "node_events": [],
+    }
+
+    update = await hitl_runtime.hitl_gate_node(state, {}, node_id="web_approval_gate")
+
+    assert update["hitl_gate_route"] == "approve"
+    assert update["hitl_gate_routes"]["web_approval_gate"] == "approve"
+
+
 class TestAgentRunService:
     @pytest.mark.asyncio
     async def test_request_hitl_web_approval_override_controls_effective_thread_settings(self, monkeypatch):
@@ -5349,7 +5405,9 @@ class TestAgentRunService:
         }
         assert "web_approval_gate" in node_span_ids
         assert "web_worker" in node_span_ids
-        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == len(node_span_ids)
+        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == len(
+            resumed.run.debug_trace_json["summary"]["nodes"]
+        )
         assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] >= 9
         assert any(node["id"] == "web_approval_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
         assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
@@ -5372,7 +5430,7 @@ class TestAgentRunService:
         assert result["paused_turns"] == []
         assert result["pending"]["type"] == "tool_approval"
         assert result["pending"]["gate_id"] == "web_approval_gate"
-        assert result["pending"]["allowed_actions"] == ["approve", "continue_without"]
+        assert result["pending"]["allowed_actions"] == ["approve", "approve_for_scope", "continue_without"]
         assert result["pending"]["proposed_tool"]["name"] == "search_web"
         assert any(
             event.get("node") == "web_approval_gate" and event.get("status") == "interrupted"
@@ -5419,6 +5477,26 @@ class TestAgentRunService:
             "interrupt.resumed",
         ]
         assert "graph.resumed" in [event["name"] for event in root_events]
+
+    @pytest.mark.asyncio
+    async def test_hitl_web_gate_approve_for_run_uses_shared_scope_action(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        result = await self._run_hitl_web_gate_flow(
+            session_factory,
+            sample_thread,
+            monkeypatch,
+            action="approve_for_scope",
+        )
+
+        assert result["resumed"].run.status == "completed"
+        assert result["resumed"].run.pending_interrupt_json["decision"]["action"] == "approve_for_scope"
+        assert result["fake_web"].calls == 1
 
     @pytest.mark.asyncio
     async def test_hitl_web_gate_continue_without_skips_web_and_completes(self, engine, sample_thread, monkeypatch):
@@ -7193,6 +7271,7 @@ class TestAgentWorkflowApi:
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
+            DEEP_RESEARCH_AGENT_ID,
         }
         listed_by_id = {item["id"]: item for item in listed.json()["agent_workflows"]}
         assert listed_by_id[ROUTER_RAG_AGENT_ID]["name"] == "Router Agent"
@@ -7413,6 +7492,10 @@ class TestAgentWorkflowApi:
         assert node_catalog["retrieval_worker"]["ui"]["summary"]
         assert node_catalog["retrieval_worker"]["ui"]["use_when"]
         assert node_catalog["retrieval_worker"]["ui"]["field_guidance"]["tools"]
+        assert node_catalog["retrieval_worker"]["authorable"] is True
+        assert node_catalog["deep_task_planner"]["authorable"] is False
+        assert node_catalog["deep_research_subagent"]["builtin_only"] is True
+        assert "deep_task_scheduler" in node_catalog["deep_task_planner"]["allowed_child_types"]
 
         route_functions = payload["route_functions"]
         assert route_functions["router_route"]["allowed_source_types"] == ["router"]
@@ -7421,11 +7504,13 @@ class TestAgentWorkflowApi:
         assert route_functions["planner_route"]["route_labels"] == ["execute", "direct", "clarify"]
         assert route_functions["evaluator_route"]["allowed_source_types"] == ["evidence_evaluator"]
         assert route_functions["hitl_gate_route"]["route_labels"] is None
+        assert route_functions["deep_task_route"]["allowed_source_types"] == ["deep_coordinator"]
+        assert route_functions["deep_task_dispatch_route"]["allowed_source_types"] == ["deep_task_scheduler"]
 
         tool_contracts = payload["tool_contracts"]
         document_contract = tool_contracts["document_evidence"]
         assert "search_documents" in document_contract["canonical_tools"]
-        assert document_contract["allowed_node_types"] == ["retrieval_worker"]
+        assert document_contract["allowed_node_types"] == ["deep_research_subagent", "retrieval_worker"]
         assert document_contract["required_node_capabilities"] == ["retrieval.document"]
         assert "document_sources" in document_contract["artifact_keys"]
         assert "allowed_caller_nodes" not in document_contract

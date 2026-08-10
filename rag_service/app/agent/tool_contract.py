@@ -313,6 +313,12 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
         "source_count": metrics.get("source_count"),
         "warnings": list(payload.get("warnings") or []),
         "error": payload.get("error"),
+        "dispatch_id": payload.get("dispatch_id"),
+        "work_id": payload.get("work_id"),
+        "ordinal": payload.get("ordinal"),
+        "attempt": payload.get("attempt"),
+        "approval_ref": payload.get("approval_ref"),
+        "argument_hash": payload.get("argument_hash"),
     }
     if trace.get("start_time"):
         event["start_time"] = trace.get("start_time")

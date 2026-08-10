@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
@@ -31,7 +30,6 @@ from app.agent_workflows.evidence import (
 from app.agent_workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,
     PARALLEL_EVENT_NAMES,
-    PARALLEL_FEATURE_ENV,
     PARALLEL_AUTHORIZED_WORKFLOW_IDS,
     PARALLEL_TERMINAL_WORKER_STATUSES,
     PARALLEL_WORKER_EVIDENCE_KINDS,
@@ -48,10 +46,6 @@ CORRECTIVE_PROVENANCE_FIELDS = (
     "dispatch_id", "work_id", "query_id", "work_ordinal", "wave_id",
     "retrieval_query", "source_strategy", "source_scope", "source_expansion",
 )
-
-
-def parallel_feature_enabled() -> bool:
-    return os.getenv(PARALLEL_FEATURE_ENV, "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class ParallelDispatchDeadlineExceeded(TimeoutError):
@@ -84,10 +78,7 @@ def parallel_retryable_error(exc: BaseException) -> bool:
 def parallel_runtime_authorized(state: Mapping[str, Any]) -> bool:
     if state.get("parallel_runtime_override") is True:
         return True
-    return bool(
-        parallel_feature_enabled()
-        and state.get("workflow_id") in PARALLEL_AUTHORIZED_WORKFLOW_IDS
-    )
+    return state.get("workflow_id") in PARALLEL_AUTHORIZED_WORKFLOW_IDS
 
 
 def _stable_hash(value: Any) -> str:

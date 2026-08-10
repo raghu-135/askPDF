@@ -146,6 +146,14 @@ from app.agent_workflows.state import (
 )
 from app.time_utils import iso_utc_z, utc_now
 from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, MAX_ANSWER_QUALITY_ISSUES, MAX_ANSWER_REVISIONS, WORKER_TERMINAL_STATUSES
+from app.agent_workflows.deep_research_nodes import (
+    deep_coordinator,
+    deep_research_subagent,
+    deep_task_planner,
+    deep_task_scheduler,
+    deep_task_synthesizer,
+    evidence_critic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +193,12 @@ class NodeRegistry:
             WorkflowNodeType.ANSWER_REVISER.value: self.answer_reviser,
             WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value: self.retrieval_quality_grader,
             WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value: self.grounded_answer_verifier,
+            WorkflowNodeType.DEEP_TASK_PLANNER.value: deep_task_planner,
+            WorkflowNodeType.DEEP_TASK_SCHEDULER.value: deep_task_scheduler,
+            WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value: deep_research_subagent,
+            WorkflowNodeType.DEEP_COORDINATOR.value: deep_coordinator,
+            WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value: deep_task_synthesizer,
+            WorkflowNodeType.EVIDENCE_CRITIC.value: evidence_critic,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -203,7 +217,14 @@ class NodeRegistry:
             cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
             await raise_if_chat_run_cancelled(cancellation_checker, state)
             parallel_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else None
-            visit_index = int(parallel_item.get("ordinal", 0)) + 1 if parallel_item else _node_visit_counts(state).get(node_id, 0) + 1
+            task_item = state.get("task_work_item") if isinstance(state.get("task_work_item"), dict) else None
+            branch_item = parallel_item or task_item
+            if task_item is not None:
+                visit_index = max(1, int(task_item.get("trace_visit_index") or 1))
+            elif parallel_item is not None:
+                visit_index = int(parallel_item.get("ordinal") or 0) + 1
+            else:
+                visit_index = _node_visit_counts(state).get(node_id, 0) + 1
             if parallel_item is None:
                 _check_visit_budget(state, node_id=node_id, node_type=node_type, visit_index=visit_index)
             runtime_config = _with_node_runtime_config(
@@ -266,7 +287,7 @@ class NodeRegistry:
             )
             accounted_update = (
                 update
-                if isinstance(state.get("work_item"), dict)
+                if isinstance(state.get("work_item"), dict) or isinstance(state.get("task_work_item"), dict)
                 else _with_visit_accounting(
                     update,
                     accounting_state,
@@ -997,7 +1018,7 @@ class NodeRegistry:
         cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
         await raise_if_chat_run_cancelled(cancellation_checker, state)
         if not parallel_runtime_authorized(state):
-            raise RuntimeError("agent_workflow_parallel_v1 is disabled")
+            raise RuntimeError("parallel runtime is not authorized for this workflow")
         node_id = runtime_node_id(config, WorkflowNodeType.PARALLEL_DISPATCH.value)
         visit = _node_visit_counts(state).get(node_id, 0) + 1
         work_items = normalize_work_items(

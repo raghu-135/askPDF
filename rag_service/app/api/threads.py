@@ -164,6 +164,8 @@ async def _delete_thread_resources(thread_id: str) -> bool:
         return False
 
     files = await get_thread_files(thread_id)
+    from app.services.task_artifact_service import delete_task_resources_for_threads
+    await delete_task_resources_for_threads([thread_id])
 
     db = get_vector_db()
     await db.delete_thread_data(thread_id)

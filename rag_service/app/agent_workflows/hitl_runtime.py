@@ -106,7 +106,11 @@ def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]
             "prompt",
             "This answer needs live web research. Approve web search or continue without it.",
         )
-        gate.setdefault("allowed_actions", [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value])
+        gate.setdefault("allowed_actions", [
+            AgentRunResumeAction.APPROVE.value,
+            AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
+            AgentRunResumeAction.CONTINUE_WITHOUT.value,
+        ])
         gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
         gate.setdefault(
             "routes",
@@ -258,6 +262,36 @@ async def hitl_gate_node(
                 "hitl_gate_route": AgentRunResumeAction.APPROVE.value,
                 "hitl_gate_routes": routes,
             }
+        grant = (state.get("hitl_approval_grants") or {}).get(node_id)
+        grant_status = str(grant.get("status") or "") if isinstance(grant, dict) else ""
+        if grant_status in {"allowed", "denied"}:
+            route = (
+                AgentRunResumeAction.APPROVE.value
+                if grant_status == "allowed"
+                else AgentRunResumeAction.CONTINUE_WITHOUT.value
+            )
+            routes = dict(state.get("hitl_gate_routes") or {})
+            routes[node_id] = route
+            update = {
+                "hitl_gate_route": route,
+                "hitl_gate_routes": routes,
+            }
+            if grant_status == "denied":
+                update["work_item_proposals"] = [
+                    item for item in proposals
+                    if item.get("worker_node_id") not in web_worker_ids
+                ]
+                update["execution_plan"] = [
+                    item for item in state.get("execution_plan") or []
+                    if item not in web_worker_ids
+                ]
+            return skipped_worker_update(
+                state,
+                config,
+                node_id,
+                started,
+                f"web_{grant_status}_for_run",
+            ) | update
 
     mode = str(gate_policy.get("mode") or HitlMode.APPROVAL.value)
     phase = str(gate_policy.get("phase") or HitlPhase.BEFORE.value)
@@ -357,7 +391,7 @@ async def hitl_gate_node(
 
     if mode == HitlMode.CHOICE.value and action == AgentRunResumeAction.APPROVE_SELECTED.value:
         route: Any = selected_option_ids[0] if selected_option_ids else AgentRunResumeAction.CONTINUE_WITHOUT.value
-    elif action == AgentRunResumeAction.APPROVE.value:
+    elif action in {AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.APPROVE_FOR_SCOPE.value}:
         route = AgentRunResumeAction.APPROVE.value
     elif action in routes_by_action:
         route = action
@@ -407,6 +441,16 @@ async def hitl_gate_node(
             },
         ],
     }
+    approval_grants = dict(state.get("hitl_approval_grants") or {})
+    if node_id == WEB_APPROVAL_GATE_ID and action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
+        approval_grants[node_id] = {"status": "allowed", "scope": "run"}
+        update["hitl_approval_grants"] = approval_grants
+    elif node_id == WEB_APPROVAL_GATE_ID and action in {
+        AgentRunResumeAction.CONTINUE_WITHOUT.value,
+        AgentRunResumeAction.REJECT.value,
+    }:
+        approval_grants[node_id] = {"status": "denied", "scope": "run"}
+        update["hitl_approval_grants"] = approval_grants
     if execution_plan_update is not None:
         update["execution_plan"] = execution_plan_update
     elif isinstance(execution_plan, list):

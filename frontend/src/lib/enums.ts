@@ -41,6 +41,7 @@ export type EmbeddingReadinessStatus = typeof EmbeddingReadinessStatus[keyof typ
 
 export const AgentRunResumeAction = {
   Approve: 'approve',
+  ApproveForScope: 'approve_for_scope',
   ApproveSelected: 'approve_selected',
   Reject: 'reject',
   Edit: 'edit',

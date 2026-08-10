@@ -28,6 +28,7 @@ NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
 NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
 NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
+NODE_DEEP_RESEARCH_SUBAGENT = WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value
 
 CAT_CONTEXT = NodeCategory.CONTEXT.value
 CAT_CONTROL = NodeCategory.CONTROL.value
@@ -243,6 +244,36 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "warning_codes": [],
     },
 }
+
+# Deep research uses the existing contracts through one profile-gated node.
+# Profile grants are intersected at runtime; adding this caller does not grant a
+# tool unless the frozen workflow and selected profile both allow it.
+for _deep_tool_name in (
+    TOOL_NAME_SEARCH_DOCUMENTS,
+    TOOL_NAME_SEARCH_DOCUMENT_BY_ID,
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
+    TOOL_NAME_SEARCH_DURABLE_MEMORY,
+    TOOL_NAME_SEARCH_THREAD_EVENTS,
+    TOOL_NAME_SEARCH_WEB,
+    TOOL_NAME_WIKIPEDIA,
+    TOOL_NAME_WIKIDATA,
+    TOOL_NAME_ARXIV,
+    TOOL_NAME_PUB_MED,
+    TOOL_NAME_PUBMED,
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY,
+    TOOL_NAME_SEMANTIC_SCHOLAR,
+    TOOL_NAME_STACK_EXCHANGE,
+    TOOL_NAME_YAHOO_FINANCE_NEWS,
+):
+    _deep_contract = TOOL_CONTRACT_METADATA[_deep_tool_name]
+    _deep_contract["allowed_caller_nodes"] = list(dict.fromkeys([
+        *(_deep_contract.get("allowed_caller_nodes") or []),
+        NODE_DEEP_RESEARCH_SUBAGENT,
+    ]))
+    _deep_contract["allowed_node_types"] = list(dict.fromkeys([
+        *(_deep_contract.get("allowed_node_types") or []),
+        NODE_DEEP_RESEARCH_SUBAGENT,
+    ]))
 
 
 def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:

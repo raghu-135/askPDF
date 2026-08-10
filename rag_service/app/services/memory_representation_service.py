@@ -15,7 +15,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
 from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, Project
 from app.db.vector import get_vector_db
-from app.models.llm_server_client import get_embedding_model
+from app.models.llm_server_client import embed_query
 from app.models.retry import invoke_with_retry
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
@@ -147,7 +147,7 @@ async def index_global_representation(memory_id: str, embedding_model: str) -> i
             updated_at = memory.updated_at
     try:
         await require_embedding_model_ready(model)
-        vector = await invoke_with_retry(get_embedding_model(model).aembed_query, content)
+        vector = await invoke_with_retry(embed_query, model, content)
         inserted = await get_vector_db().index_memory(
             memory_id=memory_id,
             scope_type=MemoryScopeType.USER.value,

@@ -314,9 +314,21 @@ export const buildRunTraceView = (
     if (!debug) return undefined;
     const summary = asObject(debug.summary);
     const metrics = getRunDebugMetrics(runDetails);
-    const nodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
+    const summaryNodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
+    const manifest = Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [];
+    const existingVisits = new Set(summaryNodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
+    const manifestNodes = manifest
+      .filter((detail) => !existingVisits.has(`${detail.node_id}:${detail.visit_index || 1}`))
+      .map((detail) => nodeViewFromSummary({
+        id: detail.node_id,
+        type: detail.node_type,
+        visitIndex: detail.visit_index,
+        status: detail.status,
+        raw: { detail_manifest: detail },
+      }, options.nodeCatalog));
+    const nodes = [...summaryNodes, ...manifestNodes];
     const tools = asArray(summary.tools).map(toolViewFromSummary);
-    const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
+    const usedNodeCount = Math.max(asNumber(summary.usedNodeCount) ?? 0, nodes.filter((node) => !node.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
     const retainedParallel = projectParallelEvents(asArray(metrics.parallel_attempts));
@@ -343,7 +355,7 @@ export const buildRunTraceView = (
         recalledCount: asNumber(memory.recalledCount) ?? 0,
       } : undefined,
       finalOutput: runDetails.final_output || debug.final_output,
-      detailManifest: Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [],
+      detailManifest: manifest,
       parallel: Object.keys(retainedParallelSummary).length > 0 || retainedParallel.tasks.length > 0
         ? {
           ...retainedParallel,

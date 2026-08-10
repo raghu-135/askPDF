@@ -40,11 +40,10 @@ from app.models.llm_server_client import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
+from app.services.content_store import get_content_store, pdf_content_key
 
 logger = logging.getLogger(__name__)
 
-TEMP_PDF_DIR = "/tmp/pdfs"
-os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 _document_index_locks: Dict[str, asyncio.Lock] = {}
 
 
@@ -416,20 +415,13 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optio
     Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
     Returns a list of chunked strings, or None if reading/parsing fails.
     """
-    pdf_path = f"/static/{file_hash}.pdf"
-    local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
     try:
-        # Read PDF from local filesystem
-        if not os.path.exists(pdf_path):
-            logger.error(f"PDF not found at {pdf_path}")
+        store = get_content_store()
+        key = pdf_content_key(file_hash)
+        if not await store.exists(key):
+            logger.error("PDF content not found for %s", file_hash)
             return None
-
-        with open(pdf_path, "rb") as f:
-            pdf_data = f.read()
-
-        # Write to temp location for unstructured processing
-        with open(local_path, "wb") as f:
-            f.write(pdf_data)
+        local_path = str(store.internal_path(key))
 
         # Run partitioning in a thread pool as it is CPU-bound
         elements = await asyncio.to_thread(partition_pdf, filename=local_path)
@@ -446,10 +438,6 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optio
             overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
         )
         chunks = [str(c) for c in chunked_elements]
-        try:
-            os.remove(local_path)
-        except Exception:
-            pass
         return chunks
     except Exception as e:
         logger.error(f"Error reading/parsing PDF: {e}")
@@ -463,18 +451,13 @@ async def download_and_parse_pdf_chunks_with_summary(
     """
     Read a PDF and parse it into text chunks plus document-level parser metadata.
     """
-    pdf_path = f"/static/{file_hash}.pdf"
-    local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
     try:
-        if not os.path.exists(pdf_path):
-            logger.error(f"PDF not found at {pdf_path}")
+        store = get_content_store()
+        key = pdf_content_key(file_hash)
+        if not await store.exists(key):
+            logger.error("PDF content not found for %s", file_hash)
             return None
-
-        with open(pdf_path, "rb") as f:
-            pdf_data = f.read()
-
-        with open(local_path, "wb") as f:
-            f.write(pdf_data)
+        local_path = str(store.internal_path(key))
 
         elements = await asyncio.to_thread(partition_pdf, filename=local_path)
         document_metadata = _document_metadata_from_unstructured_elements(elements)
@@ -494,10 +477,6 @@ async def download_and_parse_pdf_chunks_with_summary(
             page_count = _page_count_from_chunks(chunks)
             if page_count is not None:
                 document_metadata["page_count"] = page_count
-        try:
-            os.remove(local_path)
-        except Exception:
-            pass
         return chunks, document_metadata
     except Exception as e:
         logger.error(f"Error reading/parsing PDF: {e}")

@@ -325,6 +325,23 @@ test('trace projection uses backend counts without inferring from spans', () => 
   assert.equal(view.metrics.llm_retry_count, 1);
 });
 
+test('trace projection creates expandable rows for retained detail visits missing spans', () => {
+  const view = buildRunTraceView({
+    ...traceBackedRun,
+    debug: {
+      ...traceBackedRun.debug,
+      detail_manifest: [
+        { node_id: 'planner', node_type: 'deep_task_planner', visit_index: 1, status: 'completed', available: true },
+        { node_id: 'planner', node_type: 'deep_task_planner', visit_index: 2, status: 'completed', available: true },
+      ],
+      summary: { ...traceBackedRun.debug.summary, nodes: [] },
+    },
+  });
+
+  assert.deepEqual(view.nodes.map((node) => [node.id, node.visitIndex]), [['planner', 1], ['planner', 2]]);
+  assert.equal(view.usedNodeCount, 2);
+});
+
 test('trace projection reads visit metadata from raw fallback fields', () => {
   const rawVisitDebug = {
     ...backendDebug,

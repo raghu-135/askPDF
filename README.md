@@ -147,11 +147,17 @@ docker compose up --build
 | Service | Port | Description |
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
-| **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
+| **RAG Service** | 8000 | FastAPI server for PDF processing, indexing, chat, and the integrated durable agent-task worker |
 | **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
+
+The current deployment runs `rag-service` as one Uvicorn process. Its integrated
+agent-task worker shares the service's PostgreSQL pool and uses database leases
+and checkpoints for restart recovery. Do not enable multiple Uvicorn/Gunicorn
+worker processes until agent execution is extracted into its planned dedicated
+service; each server process would otherwise start another task worker.
 
 </details>
 
@@ -330,12 +336,12 @@ Environment variables are now managed using a `.env` file for better security an
 | `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
 | `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
 | `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
-| `ASKPDF_AGENT_WORKFLOW_PARALLEL_V1` | `false` in the runtime; `true` in the local `.env.example` | Enables execution of the opt-in `orchestrator_worker_rag_agent`; stored specs remain loadable while disabled |
+| `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
 
 **Agent Runtime Operations**
 - Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
 - Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
-- The Orchestrator/Worker RAG starter requires `ASKPDF_AGENT_WORKFLOW_PARALLEL_V1=true`. Recreate `rag-service` after changing the flag so Docker applies the new environment.
+- Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
 - The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.

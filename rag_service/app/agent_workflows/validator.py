@@ -62,7 +62,15 @@ class WorkflowValidator:
         if not isinstance(features, dict):
             errors.append("runtime.features must be an object")
         else:
-            for feature in ("supports_replans", "supports_parallel_dispatch", "supports_answer_quality", "supports_corrective_retrieval"):
+            for feature in (
+                "supports_replans",
+                "supports_parallel_dispatch",
+                "supports_answer_quality",
+                "supports_corrective_retrieval",
+                "supports_long_running_tasks",
+                "supports_artifacts",
+                "allows_replans_override",
+            ):
                 if feature in features and not isinstance(features.get(feature), bool):
                     errors.append(f"runtime.features.{feature} must be a boolean")
         prompt_preview = runtime.get("prompt_preview")

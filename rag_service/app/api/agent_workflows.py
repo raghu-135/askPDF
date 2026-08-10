@@ -156,6 +156,9 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "is_builtin": workflow.is_builtin,
         "is_default": builtin_key == default_agent_workflow_key(),
         "supports_replans": workflow_supports_replans(spec),
+        "supports_long_running_tasks": bool(
+            ((spec.get("runtime") or {}).get("features") or {}).get("supports_long_running_tasks")
+        ),
         "created_at": iso_utc_z(workflow.created_at) if workflow.created_at else None,
         "updated_at": iso_utc_z(workflow.updated_at) if workflow.updated_at else None,
     }
@@ -234,6 +237,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,
+        "task_id": run.task_id,
+        "parent_run_id": run.parent_run_id,
+        "task_attempt": run.task_attempt,
         "turns": [_turn_summary_payload(turn) for turn in turns],
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
@@ -268,6 +274,9 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "id": run.id,
         "thread_id": run.thread_id,
         "workflow_id": run.workflow_id,
+        "task_id": run.task_id,
+        "parent_run_id": run.parent_run_id,
+        "task_attempt": run.task_attempt,
         "status": run.status,
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
@@ -310,7 +319,8 @@ def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _agent_workflow_tool_contract_catalog() -> Dict[str, Any]:
+def _agent_workflow_tool_contract_catalog(*, excluded_node_types: set[str] | None = None) -> Dict[str, Any]:
+    excluded_node_types = excluded_node_types or set()
     contracts: Dict[str, Any] = {}
     for contract_id, records in sorted(tool_contracts_by_id().items()):
         canonical_tools = sorted(
@@ -330,7 +340,7 @@ def _agent_workflow_tool_contract_catalog() -> Dict[str, Any]:
                     str(node_type)
                     for record in records
                     for node_type in record.get("allowed_node_types", [])
-                    if node_type
+                    if node_type and str(node_type) not in excluded_node_types
                 }
             ),
             "required_node_capabilities": sorted(
@@ -617,6 +627,20 @@ async def delete_internal_agent_workflow(workflow_id: str):
 
 @router.get("/internal/agent-workflows/catalog")
 async def get_internal_agent_workflow_catalog():
+    complete_nodes = get_node_catalog()
+    builtin_only_nodes = {
+        node_type for node_type, metadata in complete_nodes.items()
+        if metadata.get("builtin_only") is True
+    }
+    visible_nodes = {}
+    for node_type, metadata in complete_nodes.items():
+        builtin_only = node_type in builtin_only_nodes
+        visible_nodes[node_type] = {
+            **metadata,
+            "authorable": not builtin_only,
+            "allowed_parent_types": list(metadata.get("allowed_parent_types", [])),
+            "allowed_child_types": list(metadata.get("allowed_child_types", [])),
+        }
     return {
         "schema_version": 2,
         "spec_schema_version": 2,
@@ -627,7 +651,7 @@ async def get_internal_agent_workflow_catalog():
             "start_node": "START",
             "end_node": "END",
         },
-        "node_catalog": get_node_catalog(),
+        "node_catalog": visible_nodes,
         "route_functions": get_route_function_registry(),
         "tool_contracts": _agent_workflow_tool_contract_catalog(),
         "defaults": {

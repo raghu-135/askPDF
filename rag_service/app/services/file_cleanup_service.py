@@ -23,6 +23,7 @@ from app.db import (
     remove_thread_indexing_status,
 )
 from app.db.vector import get_vector_db
+from app.services.content_store import get_content_store, pdf_content_key
 
 logger = logging.getLogger(__name__)
 WEBPAGES_DIR = "/static/webpages"
@@ -30,12 +31,10 @@ WEBPAGES_DIR = "/static/webpages"
 
 async def delete_file_artifacts(file_hash: str) -> None:
     """Delete the stored PDF and any webpage mapping that points to it."""
-    pdf_path = f"/static/{file_hash}.pdf"
-    if os.path.exists(pdf_path):
-        try:
-            os.remove(pdf_path)
-        except Exception as exc:
-            logger.warning("Failed to delete PDF artifact %s: %s", pdf_path, exc)
+    try:
+        await get_content_store().delete(pdf_content_key(file_hash))
+    except Exception as exc:
+        logger.warning("Failed to delete PDF content %s: %s", file_hash, exc)
 
     if not os.path.isdir(WEBPAGES_DIR):
         return

@@ -65,3 +65,44 @@ def build_debug_trace(
         error=error,
     )
     return payload["trace"]
+
+
+def finalize_and_merge_debug_payload(
+    *,
+    recorder: AgentTraceRecorder,
+    run: Any,
+    metrics: Dict[str, Any],
+    result: Optional[Dict[str, Any]] = None,
+    chat_turn_id: Optional[str] = None,
+    route: Any = None,
+    route_reason: Any = None,
+    error: Any = None,
+    run_status: Optional[str] = None,
+    completed_at: Any = None,
+) -> Dict[str, Any]:
+    """Finalize one execution phase and merge it with an earlier persisted phase."""
+
+    status = run_status or getattr(run, "status", None)
+    incoming = recorder.finalize(
+        run=run,
+        chat_turn_id=chat_turn_id,
+        metrics=metrics,
+        route=route,
+        route_reason=route_reason,
+        error=error,
+        result=result,
+    )
+    existing = getattr(run, "debug_trace_json", None)
+    if not isinstance(existing, dict):
+        return incoming
+    return merge_debug_payloads(
+        existing,
+        incoming,
+        resolved_spec=getattr(run, "resolved_spec_json", None)
+        if isinstance(getattr(run, "resolved_spec_json", None), dict)
+        else {},
+        run_status=status,
+        completed_at=completed_at if completed_at is not None else getattr(run, "completed_at", None),
+        chat_turn_id=chat_turn_id,
+        metrics=metrics,
+    )

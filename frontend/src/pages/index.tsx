@@ -35,6 +35,7 @@ import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 import { defaultMemoryManagerIntent, reviewManagerIntent, type MemoryManagerIntent } from '../lib/memory-manager';
+import type { ConversationSentence } from '../lib/chat-sentence-cache';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -51,7 +52,8 @@ export default function Home() {
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [chatSentences, setChatSentences] = useState<any[]>([]);
+  const [chatSentences, setChatSentences] = useState<ConversationSentence[]>([]);
+  const [chatPlaybackSourceKey, setChatPlaybackSourceKey] = useState('chat:none');
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
@@ -674,10 +676,17 @@ export default function Home() {
     setIsBrowserActive(target === 'browser-tab');
   }, [confirmDiscardMemoryCurator, fallbackNonMemoryTab, handleOpenHome, lastNonMemoryTabByContext, workspaceContextKey]);
 
-  const handleOpenConversationReview = useCallback(() => {
+  const handleOpenConversationReview = useCallback((draftContent?: string) => {
     if (!activeThread) return;
+    if (draftContent) {
+      handleOpenMemoryCurator({
+        ...defaultMemoryManagerIntent({ thread: activeThread, project: activeProject || threadProject }),
+        draftContent,
+      });
+      return;
+    }
     handleOpenMemoryCurator(reviewManagerIntent(activeThread));
-  }, [activeThread, handleOpenMemoryCurator]);
+  }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
     rememberNonMemoryTab('trace-tab');
@@ -757,6 +766,7 @@ export default function Home() {
                 {activeThread && (
                   <PlayerControls
                     sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
+                    sourceKey={activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey}
                     currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
                     onCurrentChange={(id) => {
                       if (activeSource === 'pdf') setCurrentPdfId(id);
@@ -899,6 +909,7 @@ export default function Home() {
                   activeThread={thread}
                   chatSentences={chatSentences}
                   setChatSentences={setChatSentences}
+                  setChatPlaybackSourceKey={setChatPlaybackSourceKey}
                   currentChatId={currentChatId}
                   activeSource={activeSource}
                   onJump={(id) => { setActiveSource('chat'); setCurrentChatId(id); setPlayRequestId(id); }}

@@ -589,12 +589,10 @@ def test_parallel_reducer_is_identity_aware_across_checkpoint_replay():
     assert len(merge_parallel_deltas([packet], [{**packet, "attempt": 2}])) == 2
 
 
-def test_parallel_rollout_gate_requires_reference_builtin_or_builder_override(monkeypatch):
-    monkeypatch.delenv("ASKPDF_AGENT_WORKFLOW_PARALLEL_V1", raising=False)
-    assert parallel_runtime_authorized({"workflow_id": "orchestrator_worker_rag_agent"}) is False
-    assert parallel_runtime_authorized({"workflow_id": "custom", "parallel_runtime_override": True}) is True
-    monkeypatch.setenv("ASKPDF_AGENT_WORKFLOW_PARALLEL_V1", "true")
+def test_parallel_runtime_requires_registered_builtin_or_builder_override():
     assert parallel_runtime_authorized({"workflow_id": "orchestrator_worker_rag_agent"}) is True
+    assert parallel_runtime_authorized({"workflow_id": "deep_research_agent"}) is True
+    assert parallel_runtime_authorized({"workflow_id": "custom", "parallel_runtime_override": True}) is True
     assert parallel_runtime_authorized({"workflow_id": "custom"}) is False
 
 

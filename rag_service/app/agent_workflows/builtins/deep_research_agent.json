@@ -1,0 +1,145 @@
+{
+  "builtin_key": "deep_research_agent",
+  "name": "Deep Research Agent",
+  "description": "A durable, bounded long-running research workflow with typed todos, isolated subagents, artifact offloading, and checkpointed continuation.",
+  "is_builtin": true,
+  "visibility": "builtin",
+  "spec_json": {
+    "schema_version": 2,
+    "version": 1,
+    "workflow_id": "deep_research_agent",
+    "runtime": {
+      "kind": "compiled_rag",
+      "label": "Deep Research Agent",
+      "failure_code": "deep_research_execution_failed",
+      "failure_reason_prefix": "Exception during Deep Research Agent execution",
+      "success_context": "Research completed by the durable Deep Research Agent workflow.",
+      "failure_context": "Deep Research Agent execution failed with durable task state retained.",
+      "features": {
+        "supports_replans": true,
+        "supports_parallel_dispatch": true,
+        "supports_long_running_tasks": true,
+        "supports_artifacts": true,
+        "allows_replans_override": false
+      },
+      "prompt_preview": "deep_research"
+    },
+    "config": {
+      "use_web_search": false,
+      "use_reranker": true,
+      "system_role": "",
+      "tool_instructions": {},
+      "custom_instructions": "",
+      "allowed_tool_ids": [
+        "thread_shape",
+        "document_evidence",
+        "focused_document_evidence",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "wikipedia_reference",
+        "wikidata_reference",
+        "arxiv_research",
+        "pubmed_research",
+        "semantic_scholar_research",
+        "stackexchange_reference",
+        "yahoo_finance_news"
+      ],
+      "prefetch_policy": {"enabled": true, "mode": "routing"},
+      "replans": 5,
+      "task_policy": {
+        "builtin_only": true,
+        "profiles": ["document_researcher", "web_researcher", "memory_researcher", "evidence_critic"],
+        "limits": {
+          "max_todos": 50,
+          "max_plan_revisions": 8,
+          "max_replans": 5,
+          "max_concurrency": 2,
+          "max_fanout": 2,
+          "max_attempts_per_todo": 2,
+          "subagent_timeout_ms": 180000,
+          "max_active_runtime_ms": 3600000,
+          "max_tool_calls": 100,
+          "max_model_tokens": 500000,
+          "max_artifacts": 200,
+          "max_artifact_bytes": 104857600,
+          "max_single_artifact_bytes": 10485760
+        },
+        "compaction": {"start_ratio": 0.7, "force_ratio": 0.85, "tool_output_chars": 32000}
+      },
+      "hitl_policy": {
+        "enabled": true,
+        "max_interrupts_per_run": 20,
+        "gates": {
+          "task_pause_gate": {
+            "enabled": true,
+            "mode": "approval",
+            "phase": "before",
+            "interrupt_type": "task_pause",
+            "title": "Deep research paused",
+            "prompt": "Resume this checkpointed research task when ready.",
+            "allowed_actions": ["approve", "reject"],
+            "default_action": "approve",
+            "routes": {"approve": "deep_task_scheduler", "reject": "finalizer"},
+            "target": {"node_id": "deep_task_scheduler", "node_type": "deep_task_scheduler"}
+          }
+        }
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 240,
+        "node_visit_limits": {
+          "context_loader": 1,
+          "deep_task_planner": 8,
+          "deep_task_scheduler": 60,
+          "deep_research_subagent": 100,
+          "deep_coordinator": 60,
+          "deep_task_synthesizer": 1,
+          "evidence_critic": 1,
+          "task_pause_gate": 16,
+          "finalizer": 1
+        }
+      },
+      "graph": {
+        "nodes": [
+          {"id": "context_loader", "type": "context_loader"},
+          {"id": "deep_task_planner", "type": "deep_task_planner"},
+          {"id": "deep_task_scheduler", "type": "deep_task_scheduler"},
+          {"id": "deep_research_subagent", "type": "deep_research_subagent"},
+          {"id": "deep_coordinator", "type": "deep_coordinator"},
+          {"id": "deep_task_synthesizer", "type": "deep_task_synthesizer"},
+          {"id": "evidence_critic", "type": "evidence_critic"},
+          {"id": "task_pause_gate", "type": "hitl_gate"},
+          {"id": "finalizer", "type": "finalizer"}
+        ],
+        "edges": [
+          {"from": "START", "to": "context_loader"},
+          {"from": "context_loader", "to": "deep_task_planner"},
+          {"from": "deep_task_planner", "to": "deep_task_scheduler"},
+          {"from": "deep_task_scheduler", "conditional": true, "route_fn": "deep_task_dispatch_route", "routes": {"dispatch": "deep_coordinator"}},
+          {"from": "deep_task_scheduler", "to": "deep_research_subagent", "dynamic": true},
+          {"from": "deep_research_subagent", "to": "deep_coordinator"},
+          {"from": "deep_coordinator", "conditional": true, "route_fn": "deep_task_route", "routes": {
+            "dispatch_more": "deep_task_scheduler",
+            "replan": "deep_task_planner",
+            "synthesize": "deep_task_synthesizer",
+            "pause": "task_pause_gate",
+            "fail": "finalizer"
+          }},
+          {"from": "task_pause_gate", "conditional": true, "route_fn": "hitl_gate_route", "routes": {"approve": "deep_task_scheduler", "reject": "finalizer"}},
+          {"from": "deep_task_synthesizer", "to": "evidence_critic"},
+          {"from": "evidence_critic", "to": "finalizer"},
+          {"from": "finalizer", "to": "END"}
+        ]
+      }
+    }
+  },
+  "metadata_json": {
+    "source": "builtin",
+    "builtin_key": "deep_research_agent",
+    "version": 1,
+    "version_id": "deep_research_agent:v1",
+    "builtin_only": true
+  }
+}

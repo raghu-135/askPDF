@@ -5,6 +5,7 @@ Critical for PostgreSQL JSONB change tracking. Without these helpers,
 mutations to nested JSONB fields may not be detected or persisted.
 """
 
+from copy import deepcopy
 from typing import Any, Dict
 
 from sqlalchemy.orm.attributes import flag_modified
@@ -67,7 +68,7 @@ def merge_jsonb_field(
 def replace_jsonb_field(
     obj: Any,
     field_name: str,
-    new_value: Dict[str, Any],
+    new_value: Any,
     *,
     touch_updated_at: bool = False,
 ) -> None:
@@ -77,8 +78,10 @@ def replace_jsonb_field(
     Usage:
         replace_jsonb_field(file, "file_status", {"parsing": {"status": "completed"}})
     """
-    new_value = dict(new_value)  # Ensure it's a new dict object
+    new_value = deepcopy(new_value)
     if touch_updated_at:
+        if not isinstance(new_value, dict):
+            raise TypeError("touch_updated_at requires an object-valued JSONB field")
         new_value["updated_at"] = iso_utc_z()
     setattr(obj, field_name, new_value)
     flag_modified(obj, field_name)

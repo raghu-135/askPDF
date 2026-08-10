@@ -13,7 +13,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
 from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, MemoryOverride, Project, Thread
 from app.db.vector import get_vector_db
-from app.models.llm_server_client import get_embedding_model
+from app.models.llm_server_client import embed_query
 from app.models.memory_tools import (
     MEMORY_APPLY_CONFIRMED,
     MEMORY_PROPOSE,
@@ -215,7 +215,7 @@ async def _semantic_stored_search(
             "ready": missing == 0,
             "reason": "global_representation_warming" if missing else None,
         })
-        vector = await invoke_with_retry(get_embedding_model(model).aembed_query, query)
+        vector = await invoke_with_retry(embed_query, model, query)
         hits = await get_vector_db().search_memory(
             query_vector=vector,
             embedding_model=model,
@@ -294,7 +294,7 @@ async def search_memory_tool(
             "ready": missing == 0,
             "reason": "global_representation_warming" if missing else None,
         }]
-        vector = await invoke_with_retry(get_embedding_model(model).aembed_query, req.query)
+        vector = await invoke_with_retry(embed_query, model, req.query)
         hits = await get_vector_db().search_memory(
             query_vector=vector,
             embedding_model=model,

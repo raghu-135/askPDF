@@ -10,8 +10,6 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import CheckIcon from '@mui/icons-material/Check';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
@@ -38,13 +36,14 @@ import {
 import {
   ConversationComposer,
   ConversationHeader,
+  ConversationMessageActions,
   ConversationMessageBubble,
   ConversationPanelTemplate,
   ConversationTranscriptFrame,
   DecisionChoiceList,
   ResizableDecisionPanel,
   WebSearchModeControl,
-  WebSourceList,
+  SourceList,
   WorkspaceContextHeader,
 } from './conversation';
 import { useWebSearchMode } from '../hooks/useWebSearchMode';
@@ -604,19 +603,11 @@ export default function MemoryManagerPanel({
               key={message.id}
               role={message.role}
               content={message.content}
-              afterContent={<WebSourceList sources={message.web_sources || []} />}
-              actions={(
-                <Tooltip title={copiedId === message.id ? 'Copied!' : 'Copy message'}>
-                  <IconButton
-                    size="small"
-                    onClick={() => void copyMessage(message)}
-                    aria-label="Copy message"
-                    sx={{ color: 'inherit', p: 0.5 }}
-                  >
-                    {copiedId === message.id ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                  </IconButton>
-                </Tooltip>
-              )}
+              afterContent={<SourceList label="Web sources used" sources={message.web_sources || []} />}
+              actions={<ConversationMessageActions
+                copied={copiedId === message.id}
+                onCopy={() => void copyMessage(message)}
+              />}
             />
           ))}
         </ConversationTranscriptFrame>
@@ -625,8 +616,8 @@ export default function MemoryManagerPanel({
       composer={hasUnconfirmedDecision ? null : (
         <Box sx={{ px: 1, py: 1 }}>
           <ConversationComposer
-            seedText={intent.mode === 'conversation_review' ? conversationReviewComposerText : ''}
-            seedVersion={intent.mode === 'conversation_review' ? 1 : 0}
+            seedText={intent.mode === 'conversation_review' ? conversationReviewComposerText : intent.draftContent || ''}
+            seedVersion={intent.mode === 'conversation_review' || intent.draftContent ? 1 : 0}
             placeholder={composerState.status === ChatComposerStatus.Ready ? readyPlaceholder : composerState.placeholder}
             disabled={composerState.disabled || contextWindow < 256}
             busy={composerState.busy}

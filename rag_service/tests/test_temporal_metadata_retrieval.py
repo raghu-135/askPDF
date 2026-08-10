@@ -760,12 +760,8 @@ async def test_search_thread_events_returns_sorted_mixed_source_events(monkeypat
         ),
     )
 
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
-            return [0.1, 0.2]
-
     monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
     monkeypatch.setattr(
         agent_tools,
         "get_document_metadata_lookup",

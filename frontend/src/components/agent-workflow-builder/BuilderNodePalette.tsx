@@ -33,6 +33,7 @@ export default function BuilderNodePalette({
   const groupedNodes = useMemo(() => {
     const groups = new Map<string, [string, AgentWorkflowCatalogResponse['node_catalog'][string]][]>();
     Object.entries(catalog.node_catalog || {}).forEach(([nodeType, entry]) => {
+      if (entry.authorable === false) return;
       const haystack = [nodeType, entry.display_name, entry.ui?.summary, ...(entry.ui?.keywords || [])].join(' ').toLowerCase();
       if (query.trim() && !haystack.includes(query.trim().toLowerCase())) return;
       const category = entry.category || 'other';

@@ -657,6 +657,9 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             file_hashes=affected_files,
         )
 
+    from app.services.task_artifact_service import delete_task_resources_for_threads
+    await delete_task_resources_for_threads(thread_ids)
+
     vector_db = get_vector_db()
     for thread_id in thread_ids:
         if not await vector_db.delete_thread_data(thread_id):

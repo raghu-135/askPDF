@@ -76,6 +76,7 @@ class AgentTraceRecorder:
         self._spans_by_id: Dict[str, Any] = {}
         self._sidecars: Dict[str, Dict[str, Any]] = {}
         self._node_span_by_node: Dict[str, str] = {}
+        self._node_span_by_visit: Dict[str, str] = {}
         self._node_spec_by_id = {
             str(node.get("id")): node
             for node in _as_list(_as_dict(_as_dict(self.resolved_spec.get("config")).get("graph")).get("nodes"))
@@ -160,6 +161,7 @@ class AgentTraceRecorder:
                 "node_type": node_type,
                 "visit_index": visit_index,
                 "status": "running",
+                "started_at": iso_utc_z(),
                 "checkpoint_before": dict(state),
             },
         )
@@ -225,7 +227,7 @@ class AgentTraceRecorder:
         before_safe, _ = sanitize_trace_detail(dict(state))
         after_safe, _ = sanitize_trace_detail(after) if after is not None else (None, {})
         changes = state_changes(before_safe, after_safe) if isinstance(after_safe, dict) else {}
-        return self._store_detail(
+        detail = self._store_detail(
             key,
             {
                 **existing,
@@ -241,6 +243,34 @@ class AgentTraceRecorder:
                 "error": str(error) if error is not None else None,
             },
         )
+        if key not in self._node_span_by_visit:
+            latest_event = dict(event or {})
+            self.record_node_event({
+                **latest_event,
+                "node": node_id,
+                "node_type": node_type,
+                "visit_index": visit_index,
+                "status": status,
+                "start_time": existing.get("started_at"),
+                "end_time": iso_utc_z(),
+                "route": dict(update).get("route"),
+                "route_reason": dict(update).get("route_reason"),
+                "output_preview": latest_event.get("output_preview") or {
+                    "changed_fields": sorted(str(value) for value in changes.keys())[:40],
+                },
+                "error": error,
+            })
+        node_span_id = self._node_span_by_visit.get(key)
+        if node_span_id:
+            for sidecar in self._sidecars.values():
+                attributes = _as_dict(sidecar.get("attributes"))
+                if (
+                    sidecar.get("kind") == OpenInferenceSpanKindValues.TOOL.value
+                    and str(attributes.get("askpdf.caller_node") or "") == node_id
+                    and int(attributes.get("askpdf.caller_visit_index") or 1) == visit_index
+                ):
+                    sidecar["parent_span_id"] = node_span_id
+        return detail
 
     def get_node_detail(self, node_id: str, visit_index: int) -> Optional[Dict[str, Any]]:
         return self._node_details.get(self._detail_key(node_id, visit_index))
@@ -383,6 +413,9 @@ class AgentTraceRecorder:
         node_display_name = self._node_display_name(node, node_type)
         status = _span_status(event)
         span_id = f"node:{node}:{index}"
+        detail_key = self._detail_key(node, event.get("visit_index"))
+        if detail_key in self._node_span_by_visit:
+            return
         llm_summary = _as_dict(_as_dict(event.get("llm_result_summary")).get("llm"))
         token_counts = _as_dict(llm_summary.get("token_counts"))
         prompt = _prompt_event(event.get("prompt_summary"))
@@ -409,9 +442,9 @@ class AgentTraceRecorder:
                 SpanAttributes.GRAPH_NODE_NAME: node_display_name,
                 "askpdf.node.id": node,
                 "askpdf.node.type": node_type,
+                "askpdf.node.visit_index": event.get("visit_index"),
                 "askpdf.node.category": node_metadata.get("category"),
                 "askpdf.node.capabilities": node_metadata.get("capabilities"),
-                "askpdf.node.visit_index": event.get("visit_index"),
                 "askpdf.parallel.dispatch_id": event.get("dispatch_id"),
                 "askpdf.parallel.work_id": event.get("work_id"),
                 "askpdf.parallel.ordinal": event.get("ordinal"),
@@ -486,6 +519,7 @@ class AgentTraceRecorder:
         )
         if node not in self._node_span_by_node:
             self._node_span_by_node[node] = span_id
+        self._node_span_by_visit[detail_key] = span_id
         if llm_summary:
             self._record_llm_span(
                 node=node,
@@ -531,6 +565,7 @@ class AgentTraceRecorder:
                 "llm.reasoning_chars": llm_summary.get("reasoning_chars"),
                 "askpdf.node.id": node,
                 "askpdf.node.type": node_type,
+                "askpdf.node.visit_index": event.get("visit_index"),
             }
         )
         self._start_span(
@@ -595,6 +630,11 @@ class AgentTraceRecorder:
                 "askpdf.caller_node": caller_node,
                 "askpdf.caller_node_type": caller_node_type,
                 "askpdf.caller_visit_index": enriched.get("caller_visit_index"),
+                "askpdf.parallel.dispatch_id": enriched.get("dispatch_id"),
+                "askpdf.parallel.work_id": enriched.get("work_id"),
+                "askpdf.parallel.ordinal": enriched.get("ordinal"),
+                "askpdf.parallel.attempt": enriched.get("attempt"),
+                "askpdf.tool.argument_hash": enriched.get("argument_hash"),
                 "askpdf.result_chars": enriched.get("result_chars"),
                 "askpdf.source_count": enriched.get("source_count"),
                 "askpdf.artifact_keys": enriched.get("artifact_keys"),

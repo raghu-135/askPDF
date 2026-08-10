@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useTheme } from '@mui/material/styles';
 import {
     Box,
-    TextField,
     Button,
     Typography,
     Paper,
@@ -16,14 +15,15 @@ import EditIcon from '@mui/icons-material/Edit';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import VolumeUpIcon from '@mui/icons-material/VolumeUp';
-import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import RouteIcon from '@mui/icons-material/Route';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { deriveChatSentences, type ChatSentenceCache } from '../lib/chat-sentence-cache';
+import {
+    deriveConversationSentences,
+    type ConversationSentence,
+    type ConversationSentenceCache,
+} from '../lib/chat-sentence-cache';
 import { getChatComposerState } from '../lib/chat-composer-state';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
@@ -75,6 +75,7 @@ import {
     type ReasoningFormat as ReasoningFormatValue,
 } from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTaskPanel';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
@@ -94,13 +95,15 @@ import {
 import {
     ConversationComposer,
     ConversationHeader,
+    ConversationMessageActions,
     ConversationMessageBubble,
     ConversationPanelTemplate,
     ConversationTranscriptFrame,
     DecisionChoiceList,
+    HumanReviewDecisionPanel,
     ResizableDecisionPanel,
     WebSearchModeControl,
-    WebSourceList,
+    SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
 
@@ -265,7 +268,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onSubmit: (text: string) => void;
     onStop: () => void;
     onOpenSettings: () => void;
-    onOpenMemoryReview?: () => void;
+    onOpenMemoryReview?: (draftContent?: string) => void;
 }) {
     const [draftPresent, setDraftPresent] = useState(Boolean(seedText));
     useEffect(() => setDraftPresent(Boolean(seedText.trim())), [seedText, seedVersion]);
@@ -321,7 +324,7 @@ const ChatComposer = React.memo(function ChatComposer({
                     <Tooltip title="Find memories in this conversation">
                         <IconButton
                             size="medium"
-                            onClick={onOpenMemoryReview}
+                            onClick={() => onOpenMemoryReview()}
                             aria-label="Find memories in this conversation"
                             sx={{ color: 'text.secondary' }}
                         >
@@ -432,32 +435,12 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                 ) : undefined}
             actions={(
                 <>
-                    <Tooltip title={copied ? "Copied!" : "Copy message"}>
-                        <IconButton
-                            size="small"
-                            onClick={() => onCopy(content, msg.id)}
-                            sx={{
-                                color: 'inherit',
-                                p: 0.5,
-                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                            }}
-                        >
-                            {copied ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                        </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Read aloud">
-                        <IconButton
-                            size="small"
-                            onClick={() => onReadAloud(index)}
-                            sx={{
-                                color: isUser ? 'inherit' : (isActive ? 'primary.main' : 'inherit'),
-                                p: 0.5,
-                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                            }}
-                        >
-                            <VolumeUpIcon fontSize="small" />
-                        </IconButton>
-                    </Tooltip>
+                    <ConversationMessageActions
+                        copied={copied}
+                        readActive={isActive}
+                        onCopy={() => onCopy(content, msg.id)}
+                        onReadAloud={() => onReadAloud(index)}
+                    />
                     {!isTestRuntime && !isUser && (
                         <Tooltip title="Fork from here">
                             <span>
@@ -585,7 +568,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                     </Box>
                 )}
                 {msg.role === MessageRole.Assistant && (
-                    <WebSourceList sources={msg.web_sources || []} />
+                    <SourceList label="Web sources used" sources={msg.web_sources || []} />
                 )}
                 </>
             )}
@@ -629,8 +612,9 @@ export interface BuilderTestConversationRuntime extends ConversationRuntime {
 
 export interface ChatInterfaceProps {
     activeThread: Thread | null;
-    chatSentences: any[];
-    setChatSentences: (sentences: any[]) => void;
+    chatSentences: ConversationSentence[];
+    setChatSentences: (sentences: ConversationSentence[]) => void;
+    setChatPlaybackSourceKey: (sourceKey: string) => void;
     currentChatId: number | null;
     activeSource: 'pdf' | 'chat';
     onJump: (id: number) => void;
@@ -643,7 +627,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
-    onOpenMemoryReview?: () => void;
+    onOpenMemoryReview?: (draftContent?: string) => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
 
@@ -665,6 +649,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     activeThread,
     chatSentences,
     setChatSentences,
+    setChatPlaybackSourceKey,
     currentChatId,
     activeSource,
     onJump,
@@ -718,6 +703,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useGlobalMemory, setUseGlobalMemory] = useState(false);
     const [projectAllowsGlobalMemory, setProjectAllowsGlobalMemory] = useState(false);
     const [agentWorkflowId, setAgentWorkflowId] = useState('');
+    const [deepResearchOpen, setDeepResearchOpen] = useState(false);
+    const [deepResearchTaskId, setDeepResearchTaskId] = useState<string | null>(null);
     const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>([]);
 
     // Model selection
@@ -750,7 +737,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
-    const sentenceCacheRef = useRef<ChatSentenceCache>(new Map());
+    const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
     const chatRootRef = useRef<HTMLDivElement | null>(null);
     const composerInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
     const humanReviewSubmissionKeyRef = useRef<string | null>(null);
@@ -1079,15 +1066,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    // Sync chatSentences with parent whenever messages change. Cache by message id/content
-    // so streaming or appending a single message does not re-tokenize the whole thread.
+    // Publish the active regular-chat transcript to the shared Kokoro player. Deep
+    // Research publishes its timeline while that mode is mounted.
     useEffect(() => {
-        setChatSentences(deriveChatSentences(messages, sentenceCacheRef.current));
-    }, [messages, setChatSentences]);
+        if (deepResearchOpen) return;
+        setChatPlaybackSourceKey(`chat:${activeThread?.id || 'none'}`);
+        setChatSentences(deriveConversationSentences(messages, sentenceCacheRef.current));
+    }, [activeThread?.id, deepResearchOpen, messages, setChatPlaybackSourceKey, setChatSentences]);
 
     const activeMessageIndex = useMemo(() => {
         if (activeSource !== 'chat' || currentChatId === null) return null;
-        return chatSentences[currentChatId]?.messageIndex;
+        return chatSentences[currentChatId]?.itemIndex;
     }, [currentChatId, chatSentences, activeSource]);
 
     const effectiveToolInstructions = useMemo(() => {
@@ -2226,7 +2215,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     }, []);
 
     const handleReadAloud = useCallback((messageIdx: number) => {
-        const firstSentence = chatSentences.find(s => s.messageIndex === messageIdx);
+        const firstSentence = chatSentences.find(s => s.itemIndex === messageIdx);
         if (firstSentence) onJump(firstSentence.id);
     }, [chatSentences, onJump]);
 
@@ -2344,6 +2333,36 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         );
     }
 
+    if (deepResearchOpen && !isTestRuntime) {
+        return <DeepResearchTaskPanel
+            threadId={activeThread.id}
+            models={availableModels}
+            model={llmModel}
+            contextWindow={contextWindow}
+            selectedTaskId={deepResearchTaskId}
+            embeddingControl={<EmbeddingModelReadinessIndicator model={activeThread.embeddingModel} ready={isEmbeddingModelValid} showStatusLabel />}
+            renderWebControl={(mode, disabled) => <WebSearchModeControl
+                mode={mode}
+                disabled={savingWebSearchMode || disabled}
+                onChange={handleWebSearchModeChange}
+            />}
+            webSearchMode={webSearchMode}
+            onModelChange={(model) => void handleLlmModelChange(model)}
+            onContextWindowChange={handleContextWindowChange}
+            onTaskSelect={setDeepResearchTaskId}
+            onBack={() => setDeepResearchOpen(false)}
+            onOpenTrace={onOpenTrace}
+            onSaveToMemory={onOpenMemoryReview}
+            chatSentences={chatSentences}
+            setChatSentences={setChatSentences}
+            setChatPlaybackSourceKey={setChatPlaybackSourceKey}
+            currentChatId={currentChatId}
+            activeSource={activeSource}
+            onJump={onJump}
+            autoScroll={autoScroll}
+        />;
+    }
+
     const forkInfo = activeThread.thread_metadata?.fork;
     const childThreadIds = Array.isArray(activeThread.thread_metadata?.fork_children)
         ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
@@ -2352,23 +2371,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
-    const pendingReviewActions = Array.isArray(pendingReviewInterrupt?.allowed_actions)
-        ? pendingReviewInterrupt.allowed_actions.map(String)
-        : [];
-    const pendingReviewTitle = pendingReviewInterrupt?.title
-        || (pendingReviewInterrupt?.proposed_tool ? 'Approve tool use?' : 'Human review required');
-    const pendingReviewProposedTool = pendingReviewInterrupt?.proposed_tool;
-    const pendingReviewIsWebApproval = pendingReviewInterrupt?.target_node_id === 'web_worker'
-        || pendingReviewInterrupt?.node_id === 'web_approval_gate'
-        || (
-            typeof pendingReviewProposedTool === 'object'
-            && pendingReviewProposedTool !== null
-            && pendingReviewProposedTool.name === 'search_web'
-        );
-    const approveLabel = pendingReviewIsWebApproval ? 'Approve web search' : 'Approve';
-    const continueWithoutLabel = pendingReviewIsWebApproval ? 'Continue without web search' : 'Continue';
-    const showDecisionPanel = Boolean(clarificationOptions || pendingHumanReview);
-
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2417,6 +2419,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         mode={webSearchMode}
                         disabled={savingWebSearchMode}
                         onChange={handleWebSearchModeChange}
+                    />
+                )}
+                trailingActions={(
+                    !isTestRuntime && <DeepResearchTaskPicker
+                        threadId={activeThread.id}
+                        selectedTaskId={deepResearchTaskId}
+                        onSelect={(taskId) => {
+                            setDeepResearchTaskId(taskId);
+                            setDeepResearchOpen(true);
+                        }}
                     />
                 )}
             />
@@ -2481,119 +2493,46 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             </ConversationTranscriptFrame>
             )}
-            decision={showDecisionPanel ? (
+            decision={clarificationOptions ? (
                     <ResizableDecisionPanel
-                        title={clarificationOptions
-                            ? 'I need a bit more clarification. Did you mean one of these?'
-                            : pendingReviewTitle}
+                        title="I need a bit more clarification. Did you mean one of these?"
                         rootRef={chatRootRef}
-                        onClose={clarificationOptions ? () => setClarificationOptions(null) : undefined}
+                        onClose={() => setClarificationOptions(null)}
                     >
-                            {clarificationOptions && (
-                                <DecisionChoiceList
-                                    presentation="editable"
-                                    choices={clarificationOptions.map((choice, index) => ({
-                                        id: String(index),
-                                        label: choice.isOriginal ? 'Original question' : `Option ${index + 1}`,
-                                        text: clarificationChoiceText(choice.text),
-                                    }))}
-                                    disabled={loading}
-                                    onChoiceTextChange={(selectedChoice, text) => {
-                                        const selectedIndex = Number(selectedChoice.id);
-                                        setClarificationOptions(prev => prev?.map((item, index) => (
-                                            index === selectedIndex ? { ...item, text } : item
-                                        )) ?? null);
-                                    }}
-                                    onSelect={(selectedChoice, text) => {
-                                        const selectedIndex = Number(selectedChoice.id);
-                                        void handleSend(text, {
-                                            bypassClarification: Boolean(clarificationOptions[selectedIndex]?.isOriginal),
-                                        });
-                                    }}
-                                    onCustomSubmit={(text) => void handleSend(text)}
-                                    customPlaceholder="Ask or explain it in your own words"
-                                />
-                            )}
-                            {pendingReviewInterrupt && (
-                                <>
-                                    {(pendingReviewInterrupt.prompt || pendingReviewInterrupt.body) && (
-                                        <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                            {pendingReviewInterrupt.prompt || pendingReviewInterrupt.body}
-                                        </Typography>
-                                    )}
-                                    {pendingReviewInterrupt.proposed_final_answer && (
-                                        <TextField
-                                            fullWidth
-                                            size="small"
-                                            multiline
-                                            minRows={5}
-                                            maxRows={12}
-                                            label={pendingReviewActions.includes(AgentRunResumeActionValue.Edit) ? 'Final answer draft' : 'Proposed final answer'}
-                                            value={humanReviewEditText}
-                                            disabled={!pendingReviewActions.includes(AgentRunResumeActionValue.Edit) || Boolean(humanReviewSubmitting)}
-                                            onChange={(event) => setHumanReviewEditText(event.target.value)}
-                                            sx={{
-                                                '& .MuiOutlinedInput-root': {
-                                                    bgcolor: 'action.hover',
-                                                },
-                                            }}
-                                        />
-                                    )}
-                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Approve) && (
-                                            <Button
-                                                size="small"
-                                                variant="contained"
-                                                startIcon={<CheckIcon fontSize="inherit" />}
-                                                disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Approve)}
-                                            >
-                                                {humanReviewSubmitting === AgentRunResumeActionValue.Approve ? 'Approving...' : approveLabel}
-                                            </Button>
-                                        )}
-                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Edit) && (
-                                            <Button
-                                                size="small"
-                                                variant="contained"
-                                                color="secondary"
-                                                startIcon={<EditIcon fontSize="inherit" />}
-                                                disabled={Boolean(humanReviewSubmitting) || !humanReviewEditText.trim()}
-                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Edit)}
-                                            >
-                                                {humanReviewSubmitting === AgentRunResumeActionValue.Edit ? 'Saving...' : 'Save edit'}
-                                            </Button>
-                                        )}
-                                        {pendingReviewActions.includes(AgentRunResumeActionValue.ContinueWithout) && (
-                                            <Button
-                                                size="small"
-                                                variant="outlined"
-                                                disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.ContinueWithout)}
-                                            >
-                                                {humanReviewSubmitting === AgentRunResumeActionValue.ContinueWithout ? 'Continuing...' : continueWithoutLabel}
-                                            </Button>
-                                        )}
-                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Reject) && (
-                                            <Button
-                                                size="small"
-                                                variant="outlined"
-                                                color="error"
-                                                startIcon={<CloseIcon fontSize="inherit" />}
-                                                disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Reject)}
-                                            >
-                                                {humanReviewSubmitting === AgentRunResumeActionValue.Reject ? 'Rejecting...' : 'Reject'}
-                                            </Button>
-                                        )}
-                                    </Box>
-                                    {humanReviewError && (
-                                        <Typography variant="caption" color="error">
-                                            {humanReviewError}
-                                        </Typography>
-                                    )}
-                                </>
-                            )}
+                            <DecisionChoiceList
+                                presentation="editable"
+                                choices={clarificationOptions.map((choice, index) => ({
+                                    id: String(index),
+                                    label: choice.isOriginal ? 'Original question' : `Option ${index + 1}`,
+                                    text: clarificationChoiceText(choice.text),
+                                }))}
+                                disabled={loading}
+                                onChoiceTextChange={(selectedChoice, text) => {
+                                    const selectedIndex = Number(selectedChoice.id);
+                                    setClarificationOptions(prev => prev?.map((item, index) => (
+                                        index === selectedIndex ? { ...item, text } : item
+                                    )) ?? null);
+                                }}
+                                onSelect={(selectedChoice, text) => {
+                                    const selectedIndex = Number(selectedChoice.id);
+                                    void handleSend(text, {
+                                        bypassClarification: Boolean(clarificationOptions[selectedIndex]?.isOriginal),
+                                    });
+                                }}
+                                onCustomSubmit={(text) => void handleSend(text)}
+                                customPlaceholder="Ask or explain it in your own words"
+                            />
                     </ResizableDecisionPanel>
+            ) : pendingReviewInterrupt ? (
+                <HumanReviewDecisionPanel
+                    interrupt={pendingReviewInterrupt}
+                    submitting={humanReviewSubmitting}
+                    error={humanReviewError}
+                    editText={humanReviewEditText}
+                    rootRef={chatRootRef}
+                    onEditTextChange={setHumanReviewEditText}
+                    onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
+                />
             ) : undefined}
             composer={(
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
@@ -2674,6 +2613,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onGlobalMemoryChange={(checked) => setUseGlobalMemory(checked)}
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);
+                }}
+                onLongRunningWorkflowSelect={() => {
+                    setSettingsDialogOpen(false);
+                    setDeepResearchTaskId(null);
+                    setDeepResearchOpen(true);
                 }}
                 onAgentWorkflowMenuOpen={refreshAgentWorkflows}
                 onSystemRoleChange={(value) => setSystemRole(value)}

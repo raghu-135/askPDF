@@ -105,6 +105,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import (
+        agent_task_repository,
         embedding_materialization_service,
         effective_memory_service,
         memory_manager_engine,
@@ -135,6 +136,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         embedding_materialization_service,
         agent_workflow_repository,
         chat_cancellation,
+        agent_task_repository,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 
@@ -155,7 +157,13 @@ def api_client(test_database_url, monkeypatch) -> Generator:
     asyncio.run(_create_test_schema(engine))
     _patch_app_session_makers(monkeypatch, session_maker)
 
-    from main import app
+    import main as main_module
+
+    async def idle_task_worker(*, stop_event, **_kwargs):
+        await stop_event.wait()
+
+    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    app = main_module.app
 
     try:
         with TestClient(app) as test_client:
@@ -173,7 +181,13 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
     await _create_test_schema(engine)
     _patch_app_session_makers(monkeypatch, session_maker)
 
-    from main import app
+    import main as main_module
+
+    async def idle_task_worker(*, stop_event, **_kwargs):
+        await stop_event.wait()
+
+    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    app = main_module.app
 
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

@@ -17,13 +17,12 @@ Endpoints:
 
 import hashlib
 import os
-import shutil
 import traceback
 from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 from app.db import (
     DEFAULT_SENTENCES_JSON,
@@ -71,6 +70,7 @@ from app.services.embedding_model_service import (
     require_embedding_model_ready,
 )
 from app.models.llm_server_client import check_embedding_model_ready
+from app.services.content_store import get_content_store, pdf_content_key
 
 router = APIRouter(tags=["files"])
 
@@ -133,11 +133,13 @@ async def _capture_current_page() -> Dict[str, Any]:
         response.raise_for_status()
         capture = response.json()
     capture_path = f"/captures/{capture['file_hash']}.pdf"
-    static_path = f"/static/{capture['file_hash']}.pdf"
-    if not os.path.exists(static_path):
+    store = get_content_store()
+    key = pdf_content_key(capture["file_hash"])
+    if not await store.exists(key):
         if not os.path.exists(capture_path):
             raise HTTPException(status_code=500, detail=f"Captured PDF not found at {capture_path}")
-        shutil.copy(capture_path, static_path)
+        with open(capture_path, "rb") as captured:
+            await store.put(key, captured)
     return capture
 
 
@@ -159,14 +161,10 @@ async def upload_pdf_endpoint(
     content = await file.read()
     file_hash = hashlib.md5(content).hexdigest()
 
-    pdf_filename = f"{file_hash}.pdf"
-    pdf_path = f"/static/{pdf_filename}"
-
-    # Save PDF to static directory if not already exists
-    import os
-    if not os.path.exists(pdf_path):
-        with open(pdf_path, "wb") as f:
-            f.write(content)
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if not await store.exists(key):
+        await store.put(key, content)
 
     # Queue file processing (parsing and indexing in background)
     await queue_file_processing(
@@ -266,10 +264,7 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
     if not await is_file_accessible_to_thread(thread_id, file_hash):
         raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
-    import os
-    pdf_path = f"/static/{file_hash}.pdf"
-
-    if not os.path.exists(pdf_path):
+    if not await get_content_store().exists(pdf_content_key(file_hash)):
         raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
 
     # Retrieve parsed sentences from database
@@ -305,11 +300,11 @@ async def download_pdf_endpoint(thread_id: str, file_hash: str):
     if not await is_file_accessible_to_thread(thread_id, file_hash):
         raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
-    import os
-    file_path = f"/static/{file_hash}.pdf"
-    if not os.path.exists(file_path):
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if not await store.exists(key):
         raise HTTPException(status_code=404, detail="PDF not found")
-    return FileResponse(file_path, media_type="application/pdf")
+    return Response(content=await store.read(key), media_type="application/pdf")
 
 
 @router.head("/threads/{thread_id}/files/{file_hash}/download")
@@ -327,8 +322,7 @@ async def check_pdf_exists_endpoint(thread_id: str, file_hash: str):
     if not await is_file_accessible_to_thread(thread_id, file_hash):
         raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
-    file_path = f"/static/{file_hash}.pdf"
-    if not os.path.exists(file_path):
+    if not await get_content_store().exists(pdf_content_key(file_hash)):
         raise HTTPException(status_code=404, detail="PDF not found")
     return Response(status_code=200)
 
@@ -602,10 +596,10 @@ async def upload_project_pdf_endpoint(
     project = await _require_ready_project(project_id)
     content = await file.read()
     file_hash = hashlib.md5(content).hexdigest()
-    pdf_path = f"/static/{file_hash}.pdf"
-    if not os.path.exists(pdf_path):
-        with open(pdf_path, "wb") as output:
-            output.write(content)
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if not await store.exists(key):
+        await store.put(key, content)
     await queue_project_file_processing(background_tasks, project, file_hash, file.filename)
     return {
         "sentences": None,
@@ -702,16 +696,17 @@ async def get_project_pdf_data_endpoint(project_id: str, file_hash: str):
 @router.get("/projects/{project_id}/files/{file_hash}/download")
 async def download_project_pdf_endpoint(project_id: str, file_hash: str):
     await _require_project_file(project_id, file_hash)
-    file_path = f"/static/{file_hash}.pdf"
-    if not os.path.exists(file_path):
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if not await store.exists(key):
         raise HTTPException(status_code=404, detail="PDF not found")
-    return FileResponse(file_path, media_type="application/pdf")
+    return Response(content=await store.read(key), media_type="application/pdf")
 
 
 @router.head("/projects/{project_id}/files/{file_hash}/download")
 async def check_project_pdf_exists_endpoint(project_id: str, file_hash: str):
     await _require_project_file(project_id, file_hash)
-    if not os.path.exists(f"/static/{file_hash}.pdf"):
+    if not await get_content_store().exists(pdf_content_key(file_hash)):
         raise HTTPException(status_code=404, detail="PDF not found")
     return Response(status_code=200)
 

@@ -20,6 +20,7 @@ from app.agent_workflows.enums import (
 )
 from app.agent_workflows.route_registry import route_function_allowed_for_node_type
 from app.agent_workflows.parallel_runtime import dispatch_sends, serial_dispatch_next
+from app.agent_workflows.deep_research_nodes import deep_task_dispatch_sends, deep_task_route
 
 
 def router_route(state: Dict[str, Any]) -> str:
@@ -95,6 +96,10 @@ def route_function_for_edge(
             return corrective_retrieval_route
         if route_fn_id == RouteFunctionId.GROUNDED_ANSWER.value:
             return grounded_answer_route
+        if route_fn_id == RouteFunctionId.DEEP_TASK_DISPATCH.value:
+            return deep_task_dispatch_sends
+        if route_fn_id == RouteFunctionId.DEEP_TASK.value:
+            return deep_task_route
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
     raise ValueError(f"Conditional edge from {source} must declare route_fn")

@@ -155,6 +155,7 @@ class RouterRagState(TypedDict, total=False):
     human_review_decision: Dict[str, Any]
     hitl_policy: Dict[str, Any]
     hitl_decisions: List[Dict[str, Any]]
+    hitl_approval_grants: Dict[str, Dict[str, Any]]
     hitl_gate_route: str
     hitl_gate_routes: Dict[str, Any]
     hitl_selected_options: Dict[str, List[str]]
@@ -225,6 +226,33 @@ class RouterRagState(TypedDict, total=False):
     verified_claims: List[Dict[str, Any]]
     contradiction_report: List[Dict[str, Any]]
     grounded_answer_route: str
+    agent_task_id: str
+    task_version: int
+    task_enabled_profiles: List[str]
+    task_limits: Dict[str, Any]
+    task_plan_revision: int
+    task_run_plan_count: int
+    task_plan: Dict[str, Any]
+    task_todos: List[Dict[str, Any]]
+    task_work_item: Dict[str, Any]
+    task_work_items: List[Dict[str, Any]]
+    task_result_packets: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    task_artifact_manifest: List[Dict[str, Any]]
+    task_evidence_manifest: List[Dict[str, Any]]
+    task_evidence_gaps: List[str]
+    task_context_summary: Dict[str, Any]
+    task_memory_snapshot: Dict[str, Any]
+    task_budget_usage: Dict[str, Any]
+    task_controller_route: str
+    task_controller_reason: str
+    task_pause_requested: bool
+    task_cancel_requested: bool
+    task_draft_metadata: Dict[str, Any]
+    task_incomplete_reasons: List[str]
+    task_critic_report: Dict[str, Any]
+    web_search_mode: str
+    task_web_access: str
+    task_web_access_decision: Dict[str, Any]
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:
