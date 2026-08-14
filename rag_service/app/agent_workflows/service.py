@@ -12,6 +12,7 @@ from app.agent_workflows.enums import AgentRunResumeAction, InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
@@ -87,6 +88,11 @@ class AgentRunService:
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
+        # Built-in manifests are source-controlled service contracts. Refresh the
+        # persisted copy before resolving one so upgrades do not leave an older
+        # database spec incompatible with the running service.
+        if workflow_id in builtin_workflow_keys() and hasattr(self.repository, "seed_builtin_workflows"):
+            await self.repository.seed_builtin_workflows()
         workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
         if workflow is None:
             await self.repository.seed_builtin_workflows()

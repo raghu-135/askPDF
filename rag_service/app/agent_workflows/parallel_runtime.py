@@ -253,6 +253,7 @@ def normalize_work_items(
             "worker_node_id": worker_id,
             "worker_type": worker_type,
             "query": query,
+            "tool_name": str(raw.get("tool_name") or "").strip() if isinstance(raw, dict) else "",
             "file_hash": file_hash or None,
             "source_strategy": source_strategy if is_corrective else proposed_strategy,
             "source_scope": file_hash or source_strategy or worker_type,
@@ -309,6 +310,7 @@ def normalize_work_items(
             "worker_node_id": worker_id,
             "worker_type": worker_type,
             "query": query,
+            "tool_name": candidate.get("tool_name"),
             "file_hash": candidate.get("file_hash"),
             "wave_id": wave,
             "corrective_provenance": is_corrective,
@@ -339,6 +341,7 @@ def work_item_proposals(parsed: Mapping[str, Any], execution_plan: Sequence[str]
             {
                 "worker_node_id": item.get("worker_node_id"),
                 "query": item.get("query") or question,
+                "tool_name": item.get("tool_name"),
                 "reason": item.get("reason") or "planner worker decision",
                 "file_hash": item.get("file_hash"),
                 "strategy": item.get("strategy"),

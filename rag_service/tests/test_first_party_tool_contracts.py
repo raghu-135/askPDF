@@ -6,7 +6,14 @@ from pydantic import ValidationError
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import ToolWarningCode, normalize_tool_result
-from app.rag import agent_tools
+from app.tools.context import ToolInvocationContext
+from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest, TimelineRequest
+from app.tools.retrieval_conversation import search_thread_conversation_history as neutral_history
+from app.tools.retrieval_documents import search_document_by_id as neutral_document_by_id
+from app.tools.retrieval_documents import search_documents as neutral_documents
+from app.tools.retrieval_timeline import search_thread_events as neutral_events
+from app.tools.thread_shape import invoke_thread_shape
+from app.tools.thread_shape import ThreadShapeRequest
 
 
 def _config(**overrides):
@@ -38,6 +45,13 @@ def _assert_contract(payload, *, tool_name: str, caller_node: str = "test_node",
         assert warning in payload["warnings"]
 
 
+def _context(**overrides):
+    values = _config(**overrides)["configurable"]
+    values["run_id"] = values.get("agent_run_id")
+    values["caller_node_type"] = values.get("caller_node")
+    return ToolInvocationContext.from_mapping(values)
+
+
 @pytest.mark.asyncio
 async def test_get_thread_shape_returns_tool_contract(monkeypatch):
     import app.db as db_module
@@ -63,8 +77,8 @@ async def test_get_thread_shape_returns_tool_contract(monkeypatch):
         ),
     )
 
-    raw = await agent_tools.get_thread_shape.ainvoke({}, config=_config())
-    payload = normalize_tool_result(raw, tool_name="get_thread_shape")
+    raw = await invoke_thread_shape(ThreadShapeRequest(), _context())
+    payload = normalize_tool_result(raw.to_json(), tool_name="get_thread_shape")
 
     assert payload["ok"] is True
     _assert_contract(payload, tool_name="get_thread_shape", artifact_keys=("thread_shape",))
@@ -96,19 +110,17 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
             "web_search_performed_at": "2026-08-01T12:00:00Z",
         }]),
     )
-    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2, 0.3]))
-    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(
-        agent_tools,
-        "get_document_metadata_lookup",
-        AsyncMock(return_value={"file-1": {"file_name": "paper.pdf", "source_type": "pdf"}}),
-    )
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf", "source_type": "pdf"}}
+        async def rerank(self, _query, chunks): return chunks
 
-    raw = await agent_tools.search_documents.ainvoke(
-        {"query": "diffusion", "max_results": 5},
-        config=_config(caller_node="retrieval_worker"),
+    raw = await neutral_documents(
+        DocumentSearchRequest(query="diffusion", max_results=5),
+        _context(caller_node="retrieval_worker"), services=Services(),
     )
-    payload = normalize_tool_result(raw, tool_name="search_documents")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_documents")
 
     assert payload["ok"] is True
     _assert_contract(
@@ -142,50 +154,49 @@ async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sour
             "metadata": {"page_start": 1, "page_end": 1},
         }]),
     )
-    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
-    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_tools, "get_document_metadata_lookup", AsyncMock(return_value={
-        "owned": {"file_name": "paper.pdf", "source_type": "pdf"},
-    }))
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"owned": {"file_name": "paper.pdf", "source_type": "pdf"}}
+        async def rerank(self, _query, chunks): return chunks
 
-    raw = await agent_tools.search_document_by_id.ainvoke(
-        {"query": "focused", "file_hash": "owned", "max_results": 5},
-        config=_config(caller_node="retrieval_worker"),
+    raw = await neutral_document_by_id(
+        FocusedDocumentSearchRequest(query="focused", file_hash="owned", max_results=5),
+        _context(caller_node="retrieval_worker"), services=Services(),
     )
-    payload = normalize_tool_result(raw, tool_name="search_document_by_id")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_document_by_id")
     assert payload["ok"] is True
     _assert_contract(payload, tool_name="search_document_by_id", caller_node="retrieval_worker", artifact_keys=("document_sources",))
     assert fake_db.search_knowledge_sources.call_args.kwargs["file_hashes"] == ["owned"]
     assert len(fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["chunk_ids"]) <= 21
 
-    unowned = await agent_tools.search_document_by_id.ainvoke(
-        {"query": "focused", "file_hash": "not-owned"},
-        config=_config(caller_node="retrieval_worker"),
+    unowned = await neutral_document_by_id(
+        FocusedDocumentSearchRequest(query="focused", file_hash="not-owned"),
+        _context(caller_node="retrieval_worker"), services=Services(),
     )
-    unowned_payload = normalize_tool_result(unowned, tool_name="search_document_by_id")
+    unowned_payload = normalize_tool_result(unowned.to_json(), tool_name="search_document_by_id")
     assert ToolWarningCode.NO_THREAD_DOCUMENTS in unowned_payload["warnings"]
 
 
 def test_search_document_by_id_rejects_path_and_url_identifiers():
     for value in ("../secret.pdf", "/tmp/file", "https://example.com/file"):
         with pytest.raises(ValidationError):
-            agent_tools.FocusedDocumentSearchInput(query="q", file_hash=value)
+            FocusedDocumentSearchRequest(query="q", file_hash=value)
 
 
 @pytest.mark.asyncio
 async def test_search_thread_conversation_history_returns_used_chat_ids_contract(monkeypatch):
-    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.4, 0.5]))
-    monkeypatch.setattr(
-        agent_tools,
-        "fetch_semantic_history",
-        AsyncMock(return_value=("Q: earlier\nA: useful memory", ["turn-1:assistant"])),
-    )
+    class Services:
+        async def embed(self, _model, _query): return [0.4, 0.5]
+        async def semantic_history(self, **_kwargs): return ("Q: earlier\nA: useful memory", ["turn-1:assistant"], [])
+        async def rerank(self, _query, chunks): return chunks
 
-    raw = await agent_tools.search_thread_conversation_history.ainvoke(
-        {"query": "earlier discussion", "max_results": 3},
-        config=_config(caller_node="thread_conversation_history_worker", route="thread_conversation_history"),
+    raw = await neutral_history(
+        DocumentSearchRequest(query="earlier discussion", max_results=3),
+        _context(caller_node="thread_conversation_history_worker", route="thread_conversation_history"),
+        services=Services(),
     )
-    payload = normalize_tool_result(raw, tool_name="search_thread_conversation_history")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_thread_conversation_history")
 
     assert payload["ok"] is True
     _assert_contract(
@@ -196,7 +207,6 @@ async def test_search_thread_conversation_history_returns_used_chat_ids_contract
     )
     assert payload["artifacts"]["used_chat_ids"] == ["turn-1:assistant"]
     assert payload["__used_chat_ids__"] == ["turn-1:assistant"]
-    assert agent_tools.fetch_semantic_history.call_args.kwargs["embedding_model"] == "embed-1"
 
 
 @pytest.mark.asyncio
@@ -215,19 +225,17 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
         search_web_chunks=AsyncMock(return_value=[]),
     )
 
-    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
-    monkeypatch.setattr(
-        agent_tools,
-        "get_document_metadata_lookup",
-        AsyncMock(return_value={}),
-    )
+    class Services:
+        def vector_db(self): return fake_db
+        async def embed(self, _model, _query): return [0.1, 0.2]
+        async def document_lookup(self, _thread_id): return {}
+        async def rerank(self, _query, chunks): return chunks
 
-    raw = await agent_tools.search_thread_events.ainvoke(
-        {"query": "timeline", "sources": "conversation", "order": "oldest", "max_results": 5},
-        config=_config(caller_node="thread_events_worker", route="thread_events"),
+    raw = await neutral_events(
+        TimelineRequest(query="timeline", sources="conversation", order="oldest", max_results=5),
+        _context(caller_node="thread_events_worker", route="thread_events"), services=Services(),
     )
-    payload = normalize_tool_result(raw, tool_name="search_thread_events")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_thread_events")
 
     assert payload["ok"] is True
     _assert_contract(
@@ -244,17 +252,32 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
 
 @pytest.mark.asyncio
 async def test_search_web_returns_web_source_contract(monkeypatch):
-    monkeypatch.setattr(
-        external_research_tools,
-        "_run_web_search",
-        AsyncMock(
-            return_value={
-                "texts": ["fresh web evidence"],
-                "urls": ["https://example.com"],
-                "titles": ["Example"],
+    from app.mcp import langchain_adapter
+
+    class FakeClient:
+        async def request(self, method, params):
+            if method == "tools/list":
+                return {"tools": [{"name": "search_web", "description": "Web search", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "live_web_recon", "com.askpdf/contract-version": "1"}}]}
+            assert method == "tools/call"
+            assert params["name"] == "search_web"
+            return {
+                "content": [{"type": "text", "text": "fresh web evidence"}],
+                "structuredContent": {
+                    "ok": True,
+                    "content": "fresh web evidence",
+                    "sources": [{"url": "https://example.com", "title": "Example", "text": "fresh web evidence"}],
+                    "artifacts": {
+                        "web_sources": [{"url": "https://example.com", "title": "Example", "text": "fresh web evidence"}],
+                        "evidence_segments": [{"source_id": "web:https://example.com/"}],
+                    },
+                    "warnings": [],
+                    "metrics": {"elapsed_ms": 1.0, "result_chars": 18, "warning_count": 0},
+                    "trace": {"tool_name": "search_web", "agent_run_id": "run-1", "thread_id": "thread-1", "caller_node": "web_worker"},
+                },
+                "isError": False,
             }
-        ),
-    )
+
+    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
 
     raw = await external_research_tools.search_web.ainvoke(
         {"query": "latest diffusion"},

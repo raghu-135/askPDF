@@ -10,6 +10,7 @@ from app.agent.prompting import (
     sanitize_custom_instructions,
     sanitize_system_role,
 )
+from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from app.agent_workflows.enums import PromptProfile, ToolName
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from app.agent_workflows.evidence import corrective_evidence_context, corrective_evidence_packets
@@ -26,6 +27,11 @@ GRAPH_TOOL_NAMES = [
     ToolName.SEARCH_WEB.value,
     ToolName.ASK_FOR_CLARIFICATION.value,
 ]
+GRAPH_TOOL_NAMES.extend(
+    name
+    for name, config in TOOL_FRIENDLY_CONFIG.items()
+    if config.get("mcp_server") and name not in GRAPH_TOOL_NAMES
+)
 
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
@@ -55,12 +61,15 @@ def _format_prefetch_summary(bundle: Optional[Dict[str, Any]]) -> str:
     if not bundle:
         return ""
     parts: List[str] = []
+    if bundle.get("thread_shape_text"):
+        parts.append("Thread shape tool output:\n" + str(bundle["thread_shape_text"]))
     if bundle.get("documents"):
         docs = bundle["documents"]
         parts.append(
             "Documents available: "
             + ", ".join(
                 str(d.get("file_name") or d.get("title") or d.get("file_hash") or "document")
+                + (f" ({d.get('page_count')} pages)" if d.get("page_count") not in (None, "") else "")
                 for d in docs[:5]
             )
         )

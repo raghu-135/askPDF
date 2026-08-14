@@ -796,6 +796,58 @@ async def test_curator_malformed_model_output_becomes_clarification(
 
 
 @pytest.mark.asyncio
+async def test_curator_memory_prefetch_domain_error_returns_retry_clarification(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_manager_engine, "check_chat_model_ready", AsyncMock(return_value=True))
+
+    class FakeTool:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, _arguments, config=None):
+            if self.name == "memory_search":
+                return json.dumps({
+                    "ok": False,
+                    "content": "Memory search unavailable",
+                    "sources": [],
+                    "artifacts": {},
+                    "warnings": ["memory_search_failed"],
+                    "metrics": {},
+                    "trace": {"tool_name": self.name},
+                    "error": {
+                        "code": "memory_search_failed",
+                        "message": "memory index unavailable",
+                        "type": "MemoryToolError",
+                        "retryable": True,
+                    },
+                })
+            raise AssertionError(f"unexpected curator tool call: {self.name}")
+
+    monkeypatch.setattr(
+        memory_manager_engine,
+        "create_mcp_langchain_tool",
+        lambda name: FakeTool(name),
+    )
+    response = await memory_manager_engine.respond_to_memory_manager(
+        MemoryManagerConversationRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryManagerMessage(role="user", content="Remember something.")],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "clarification"
+    assert response["choices"][0]["id"] == "retry-memory-search"
+    assert response["mcp_error"]["code"] == "memory_search_failed"
+    assert response["mcp_warnings"] == ["memory_search_failed"]
+
+
+@pytest.mark.asyncio
 async def test_global_memory_review_request_builds_user_review_batch(
     curator_sessionmaker,
     monkeypatch,

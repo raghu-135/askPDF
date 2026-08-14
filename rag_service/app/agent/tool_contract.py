@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
 from app.db import FileSourceType
@@ -17,6 +17,12 @@ from app.time_utils import iso_utc_z, utc_now
 
 
 logger = logging.getLogger(__name__)
+
+
+def _compat_json_default(value: Any) -> str:
+    if isinstance(value, (datetime, date, datetime_time)):
+        return value.isoformat()
+    return str(value)
 
 
 class AskPdfTool(Protocol):
@@ -72,13 +78,14 @@ class ToolMetrics(BaseModel):
 
 
 class ToolTrace(BaseModel):
-    tool_name: str
+    tool_name: str = ""
     caller_node: Optional[str] = None
     caller_node_type: Optional[str] = None
     agent_run_id: Optional[str] = None
     thread_id: Optional[str] = None
     route: Optional[str] = None
     tool_call_id: Optional[str] = None
+    mcp_request_id: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
 
@@ -91,7 +98,68 @@ class ToolResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     error: Optional[ToolError] = None
     metrics: ToolMetrics = Field(default_factory=ToolMetrics)
-    trace: ToolTrace
+    trace: ToolTrace = Field(default_factory=ToolTrace)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_constructor_fields(cls, value: Any) -> Any:
+        """Keep old first-party helpers source-compatible during migration.
+
+        The canonical wire shape remains this model; ``text`` and
+        ``structured_content`` are accepted only as input compatibility aliases.
+        """
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if "content" not in data and "text" in data:
+            data["content"] = data.pop("text")
+        structured = data.pop("structured_content", None)
+        if isinstance(structured, dict):
+            artifacts = dict(data.get("artifacts") or {})
+            for key in ("document_sources", "web_sources", "used_chat_ids", "timeline_events", "memory_refs", "evidence_segments", "thread_shape"):
+                if key in structured and key not in artifacts:
+                    artifacts[key] = structured[key]
+            data["artifacts"] = artifacts
+            if "sources" not in data and isinstance(structured.get("sources"), list):
+                data["sources"] = structured["sources"]
+            if "warnings" not in data and isinstance(structured.get("warnings"), list):
+                data["warnings"] = structured["warnings"]
+        if isinstance(data.get("error"), dict):
+            error = dict(data["error"])
+            error.setdefault("message", error.get("code", "Tool failed"))
+            data["error"] = error
+        return data
+
+    @property
+    def text(self) -> str:
+        return self.content
+
+    def structured(self, *, contract_id: str, contract_version: str = "1") -> Dict[str, Any]:
+        value = json.loads(json.dumps(self.model_dump(mode="python", exclude_none=True), default=_compat_json_default))
+        value["contract_id"] = contract_id
+        value["contract_version"] = contract_version
+        return value
+
+    def legacy_payload(self, *, contract_id: str, contract_version: str = "1") -> str:
+        structured = self.structured(contract_id=contract_id, contract_version=contract_version)
+        payload: Dict[str, Any] = {"content": self.content}
+        for key, legacy_key in {
+            "document_sources": "__document_sources__",
+            "web_sources": "__web_sources__",
+            "used_chat_ids": "__used_chat_ids__",
+            "timeline_events": "__timeline_events__",
+        }.items():
+            if structured.get("artifacts", {}).get(key):
+                payload[legacy_key] = structured["artifacts"][key]
+        if self.warnings:
+            payload["__warnings__"] = list(self.warnings)
+        if self.artifacts:
+            payload["__artifacts__"] = dict(self.artifacts)
+        if not self.ok:
+            payload["ok"] = False
+        if self.error is not None:
+            payload["error"] = self.error.model_dump(mode="json")
+        return json.dumps(payload, ensure_ascii=False)
 
     def to_payload(self, *, legacy_fields: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = self.model_dump(mode="json", exclude_none=True)
@@ -107,7 +175,29 @@ def tool_started() -> float:
     return time.perf_counter()
 
 
-def tool_trace(tool_name: str, config: RunnableConfig = None) -> ToolTrace:
+def tool_trace(
+    tool_name: str,
+    config: RunnableConfig = None,
+    *,
+    context: Any = None,
+) -> ToolTrace:
+    """Build a trace from a neutral invocation context or legacy config.
+
+    ``config`` remains for workflow compatibility, but framework-neutral
+    handlers should pass ``context`` directly and never construct a
+    LangChain-shaped configuration dictionary.
+    """
+    if context is not None:
+        return ToolTrace(
+            tool_name=tool_name,
+            caller_node=getattr(context, "caller_node", None),
+            caller_node_type=getattr(context, "caller_node_type", None),
+            agent_run_id=getattr(context, "run_id", None),
+            thread_id=getattr(context, "thread_id", None),
+            route=getattr(context, "route", None),
+            tool_call_id=getattr(context, "tool_call_id", None),
+            mcp_request_id=getattr(context, "mcp_request_id", None),
+        )
     conf = config.get("configurable", {}) if config else {}
     return ToolTrace(
         tool_name=tool_name,
@@ -117,6 +207,7 @@ def tool_trace(tool_name: str, config: RunnableConfig = None) -> ToolTrace:
         thread_id=conf.get("app_thread_id") or conf.get("thread_id"),
         route=conf.get("route"),
         tool_call_id=conf.get("tool_call_id"),
+        mcp_request_id=conf.get("mcp_request_id"),
     )
 
 
@@ -125,6 +216,7 @@ def make_tool_result(
     tool_name: str,
     content: str,
     config: RunnableConfig = None,
+    context: Any = None,
     started: Optional[float] = None,
     ok: bool = True,
     sources: Optional[List[Dict[str, Any]]] = None,
@@ -136,7 +228,7 @@ def make_tool_result(
     warning_items = [_wire_string(item) for item in (warnings or []) if item]
     elapsed_ms = (time.perf_counter() - started) * 1000 if started is not None else 0.0
     completed_at = utc_now()
-    trace = tool_trace(tool_name, config)
+    trace = tool_trace(tool_name, config, context=context)
     if started is not None:
         trace.start_time = iso_utc_z(completed_at - timedelta(milliseconds=elapsed_ms))
         trace.end_time = iso_utc_z(completed_at)
@@ -156,8 +248,9 @@ def make_tool_result(
         trace=trace,
     )
     logger.info(
-        "Tool completed | tool=%s caller_node=%s run_id=%s thread_id=%s ok=%s elapsed_ms=%.1f result_chars=%s sources=%s warnings=%s",
+        "Tool completed | tool=%s tool_call_id=%s caller_node=%s run_id=%s thread_id=%s ok=%s elapsed_ms=%.1f result_chars=%s sources=%s warnings=%s",
         result.trace.tool_name,
+        result.trace.tool_call_id,
         result.trace.caller_node,
         result.trace.agent_run_id,
         result.trace.thread_id,
@@ -181,6 +274,7 @@ def make_tool_error_result(
     tool_name: str,
     error: Exception,
     config: RunnableConfig = None,
+    context: Any = None,
     started: Optional[float] = None,
     user_message: Optional[str] = None,
     code: Optional[str] = None,
@@ -195,6 +289,7 @@ def make_tool_error_result(
         tool_name=tool_name,
         content=user_message or f"{tool_name} failed: {error}",
         config=config,
+        context=context,
         started=started,
         ok=False,
         warnings=[tool_error.code],
@@ -305,6 +400,7 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
     artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
     event = {
         "tool_name": trace.get("tool_name"),
+        "tool_call_id": trace.get("tool_call_id"),
         "caller_node": trace.get("caller_node"),
         "caller_node_type": trace.get("caller_node_type"),
         "ok": bool(payload.get("ok", True)),
@@ -319,7 +415,14 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
         "attempt": payload.get("attempt"),
         "approval_ref": payload.get("approval_ref"),
         "argument_hash": payload.get("argument_hash"),
+        "transport": payload.get("transport"),
+        "mcp_mode": payload.get("mcp_mode"),
+        "mcp_server": payload.get("mcp_server"),
+        "mcp_contract_version": payload.get("mcp_contract_version"),
+        "mcp_request_id": payload.get("mcp_request_id"),
     }
+    if not event["mcp_request_id"]:
+        event["mcp_request_id"] = trace.get("mcp_request_id")
     if trace.get("start_time"):
         event["start_time"] = trace.get("start_time")
     if trace.get("end_time"):

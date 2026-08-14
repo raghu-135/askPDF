@@ -9,6 +9,9 @@ from app.agent import external_research_tools
 from app.agent.tool_contract import collect_tool_sources, normalize_tool_result
 from app.db.vector.adapter import WeaviateAdapter
 from app.rag import agent_tools
+from app.tools.context import ToolInvocationContext
+from app.tools.contracts import TimelineRequest
+from app.tools.retrieval_timeline import search_thread_events as neutral_search_thread_events
 from app.rag import indexer
 from app.rag.retrieval import fetch_semantic_history, group_document_chunks
 
@@ -760,26 +763,29 @@ async def test_search_thread_events_returns_sorted_mixed_source_events(monkeypat
         ),
     )
 
-    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_tools, "embed_query", AsyncMock(return_value=[0.1, 0.2]))
-    monkeypatch.setattr(
-        agent_tools,
-        "get_document_metadata_lookup",
-        AsyncMock(
-            return_value={
+    class FakeServices:
+        def vector_db(self):
+            return fake_db
+
+        async def embed(self, _model, _query):
+            return [0.1, 0.2]
+
+        async def document_lookup(self, _thread_id):
+            return {
                 "file-1": {
                     "file_name": "benefits.pdf",
                     "source_type": "pdf",
                     "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 }
             }
-        ),
-    )
-    monkeypatch.setattr(agent_tools, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
 
-    raw = await agent_tools.search_thread_events.ainvoke(
-        {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
-        config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
+        async def rerank(self, _query, chunks):
+            return chunks
+
+    raw = await neutral_search_thread_events(
+        TimelineRequest(query="benefits timeline", sources="all", order="oldest", max_results=10),
+        ToolInvocationContext(thread_id="thread-1", embedding_model="embed-1"),
+        services=FakeServices(),
     )
     payload = normalize_tool_result(raw, tool_name="search_thread_events")
     events = payload["__timeline_events__"]

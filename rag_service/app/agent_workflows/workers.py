@@ -5,8 +5,14 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from langchain_core.runnables import RunnableConfig
 
-from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_thread_conversation_history, search_document_by_id, search_documents, search_durable_memory, search_thread_events
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
+
+search_web = create_mcp_langchain_tool("search_web")
+search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
+search_document_by_id = create_mcp_langchain_tool("search_document_by_id")
+search_documents = create_mcp_langchain_tool("search_documents")
+search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
+search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
@@ -147,7 +153,20 @@ async def run_tool_worker(
     tool = spec.tool
     tool_name = spec.tool_name
     work_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else {}
-    if spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
+    selected_tool_name = (
+        str(state.get("selected_tool_name") or "").strip()
+        if spec.node_name == WorkflowNodeType.WEB_WORKER.value
+        else ""
+    )
+    if selected_tool_name:
+        selected_tool = create_mcp_langchain_tool(selected_tool_name)
+        if selected_tool is not None:
+            tool = selected_tool
+            tool_name = selected_tool_name
+            tool_input = {"query": str(state.get("question") or "")}
+        else:
+            raise ValueError(f"Selected external tool is unavailable: {selected_tool_name}")
+    elif spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
         tool = search_document_by_id
         tool_name = ToolName.SEARCH_DOCUMENT_BY_ID.value
         tool_input = {
@@ -177,6 +196,7 @@ async def run_tool_worker(
         config=tool_config,
         node=node_id,
         started=started,
+        tool_name=tool_name,
     )
     payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
     artifacts = payload.get("artifacts") or {}

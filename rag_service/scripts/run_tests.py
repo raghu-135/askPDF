@@ -30,6 +30,7 @@ UNIT_TEST_FILES = [
     "test_agent_tool_contract_pytest.py",
     "test_dimension_mismatch_scenarios.py",
     "test_external_research_tools.py",
+    "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
     "test_memory_retrieval_policy_pytest.py",
@@ -44,6 +45,17 @@ UNIT_TEST_FILES = [
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
     "test_tool_registry_contracts.py",
+    "test_http_client_lifecycle.py",
+    "test_workflow_budget.py",
+]
+
+MCP_TEST_FILES = [
+    "test_mcp_context.py",
+    "test_mcp_transport.py",
+    "test_mcp_contracts.py",
+    "test_mcp_compatibility.py",
+    "test_mcp_langchain_adapter.py",
+    "test_mcp_framework_neutral.py",
 ]
 
 DB_TEST_FILES = [
@@ -210,6 +222,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         group = "api"
     elif args.schema:
         group = "schema"
+    elif args.mcp:
+        group = "mcp"
     elif args.all or args.all_tests:
         group = "all"
 
@@ -225,6 +239,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         return AGENT_CHECKPOINT_TEST_TARGETS
     if group == "schema":
         return [_test_path(name) for name in SCHEMA_TEST_FILES]
+    if group == "mcp":
+        return [_test_path(name) for name in MCP_TEST_FILES]
     if group == "standalone":
         return []
     if group == "all":
@@ -240,7 +256,7 @@ def _should_run_standalone(args: argparse.Namespace) -> bool:
         return True
     if args.file or args.test:
         return False
-    if args.unit or args.db or args.db_tests or args.db_only or args.integration or args.agent_checkpoint or args.api or args.schema:
+    if args.unit or args.db or args.db_tests or args.db_only or args.integration or args.agent_checkpoint or args.api or args.schema or args.mcp:
         return False
     return args.group == "all" or args.all or args.all_tests
 
@@ -249,7 +265,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run askPDF tests inside Docker.")
     parser.add_argument(
         "--group",
-        choices=["unit", "db", "api", "integration", "agent-checkpoint", "schema", "standalone", "all"],
+        choices=["unit", "db", "api", "integration", "agent-checkpoint", "schema", "mcp", "standalone", "all"],
         default=os.environ.get("TEST_GROUP", "all"),
     )
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -267,6 +283,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--agent-checkpoint", action="store_true")
     parser.add_argument("--api", action="store_true")
     parser.add_argument("--schema", action="store_true")
+    parser.add_argument("--mcp", action="store_true")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--all-tests", action="store_true")
     return parser.parse_args(argv)

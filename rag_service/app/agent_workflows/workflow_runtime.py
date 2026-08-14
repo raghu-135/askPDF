@@ -105,6 +105,10 @@ def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
 
 
 def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    # Import lazily because node_catalog depends on model configuration, which
+    # imports this module during application startup.
+    from app.agent_workflows.node_catalog import node_type_max_visits
+
     graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
     node_types = {
         str(node.get("id")): str(node.get("type"))
@@ -144,7 +148,11 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
                     WorkflowNodeType.WEB_WORKER.value,
                 }
             )
-            node_visit_limits[node_id] = (worker_count + 1) * (replans + 1)
+            generated_limit = (worker_count + 1) * (replans + 1)
+            # Keep generated budgets within the authoritative node contract.
+            # Otherwise resolver output can invalidate an otherwise valid
+            # built-in workflow before compilation.
+            node_visit_limits[node_id] = min(generated_limit, node_type_max_visits(node_type))
         elif node_type == WorkflowNodeType.AGGREGATOR.value:
             node_visit_limits[node_id] = replans + 1
         elif node_type == WorkflowNodeType.PARALLEL_DISPATCH.value:

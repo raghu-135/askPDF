@@ -15,6 +15,28 @@ from app.agent_workflows.node_catalog import (
 NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
 
 
+class WorkflowBudgetExceeded(RuntimeError):
+    """Raised when a workflow reaches its configured visit budget."""
+
+    def __init__(self, *, limit: int, node_id: str, node_type: str, visit_index: int,
+                 observed_visits: int, run_id: str | None = None, thread_id: str | None = None) -> None:
+        self.limit = limit
+        self.node_id = node_id
+        self.node_type = node_type
+        self.visit_index = visit_index
+        self.observed_visits = observed_visits
+        self.run_id = run_id
+        self.thread_id = thread_id
+        super().__init__(f"Graph exceeded total visit limit {limit}")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": "exhausted", "limit": self.limit, "observed": self.observed_visits,
+            "node_id": self.node_id, "node_type": self.node_type,
+            "visit_index": self.visit_index, "run_id": self.run_id, "thread_id": self.thread_id,
+        }
+
+
 def _parallel_identity(value: Any) -> str:
     if isinstance(value, dict):
         if value.get("timeline_event_at"):
@@ -389,7 +411,15 @@ def check_visit_budget(state: RouterRagState, *, node_id: str, node_type: str, v
         raise ValueError(f"Node {node_id} exceeded visit limit {limit}")
     total_limit = total_visit_limit(state)
     if total_limit is not None and len(node_visit_sequence(state)) + 1 > total_limit:
-        raise ValueError(f"Graph exceeded total visit limit {total_limit}")
+        raise WorkflowBudgetExceeded(
+            limit=total_limit,
+            node_id=node_id,
+            node_type=node_type,
+            visit_index=visit_index,
+            observed_visits=len(node_visit_sequence(state)),
+            run_id=state.get("agent_run_id"),
+            thread_id=state.get("thread_id"),
+        )
 
 
 def with_visit_accounting(

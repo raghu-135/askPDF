@@ -13,10 +13,16 @@ from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from app.agent.tool_contract import normalize_tool_result
+from app.agent.tool_registry import get_tool_contract_id
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import is_retryable_model_error
-from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_thread_conversation_history, search_document_by_id, search_documents, search_durable_memory, search_thread_events
+search_web = create_mcp_langchain_tool("search_web")
+search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
+search_document_by_id = create_mcp_langchain_tool("search_document_by_id")
+search_documents = create_mcp_langchain_tool("search_documents")
+search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
+search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.rag.chat_service import prefetch_context
 from app.agent_workflows.prompting import (
     build_evaluator_prompt,
@@ -51,7 +57,7 @@ from app.agent_workflows.evidence import (
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
-from app.agent_workflows.enums import AnswerQualityRoute, EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, WorkflowNodeType
+from app.agent_workflows.enums import AnswerQualityRoute, EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, ToolName, WorkflowNodeType
 from app.agent_workflows.corrective_nodes import (
     corrective_route_for_report,
     grounded_answer_contract_errors,
@@ -143,6 +149,7 @@ from app.agent_workflows.state import (
     runtime_route_labels as _runtime_route_labels,
     with_node_runtime_config as _with_node_runtime_config,
     with_visit_accounting as _with_visit_accounting,
+    WorkflowBudgetExceeded,
 )
 from app.time_utils import iso_utc_z, utc_now
 from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, MAX_ANSWER_QUALITY_ISSUES, MAX_ANSWER_REVISIONS, WORKER_TERMINAL_STATUSES
@@ -225,8 +232,6 @@ class NodeRegistry:
                 visit_index = int(parallel_item.get("ordinal") or 0) + 1
             else:
                 visit_index = _node_visit_counts(state).get(node_id, 0) + 1
-            if parallel_item is None:
-                _check_visit_budget(state, node_id=node_id, node_type=node_type, visit_index=visit_index)
             runtime_config = _with_node_runtime_config(
                 config,
                 node_id=node_id,
@@ -253,6 +258,8 @@ class NodeRegistry:
             elif queue is not None:
                 await queue.put({"event": "node.started", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index}})
             try:
+                if parallel_item is None:
+                    _check_visit_budget(state, node_id=node_id, node_type=node_type, visit_index=visit_index)
                 if node_type == WorkflowNodeType.HITL_GATE.value:
                     update = await self.hitl_gate(state, runtime_config, node_id=node_id)
                 else:
@@ -260,6 +267,24 @@ class NodeRegistry:
             except asyncio.CancelledError:
                 raise
             except ChatRunCancellationRequested:
+                raise
+            except WorkflowBudgetExceeded as exc:
+                exc.agent_workflow_state = {
+                    **state,
+                    "workflow_budget": exc.as_dict(),
+                    "node_events": [
+                        *(state.get("node_events") or []),
+                        {"node": node_id, "node_type": node_type, "status": "budget_exhausted",
+                         "event": "workflow_budget_exhausted", **exc.as_dict()},
+                    ],
+                }
+                failure_data = {"node_id": node_id, "node_type": node_type,
+                                "visit_index": visit_index, "event": "workflow_budget_exhausted",
+                                **exc.as_dict()}
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit("workflow.budget_exhausted", failure_data)
+                elif queue is not None:
+                    await queue.put({"event": "workflow.budget_exhausted", "data": failure_data})
                 raise
             except Exception as exc:
                 await raise_if_chat_run_cancelled(cancellation_checker, state)
@@ -420,6 +445,43 @@ class NodeRegistry:
                         if part
                     ),
                 }
+
+            tool_events = list(state.get("tool_events") or [])
+            allowed_tool_ids = state.get("allowed_tool_ids")
+            thread_shape_enabled = (
+                isinstance(allowed_tool_ids, list)
+                and get_tool_contract_id(ToolName.GET_THREAD_SHAPE.value) in allowed_tool_ids
+            )
+            if thread_shape_enabled:
+                shape_started = time.perf_counter()
+                shape_tool = create_mcp_langchain_tool(ToolName.GET_THREAD_SHAPE.value)
+                shape_config = _tool_config_for_node(
+                    state,
+                    config,
+                    caller_node=WorkflowNodeType.CONTEXT_LOADER.value,
+                    tool_name=ToolName.GET_THREAD_SHAPE.value,
+                    started=shape_started,
+                )
+                raw_shape = await _invoke_tool_for_node(
+                    shape_tool,
+                    {},
+                    state=state,
+                    config=shape_config,
+                    node=runtime_node_id(config, WorkflowNodeType.CONTEXT_LOADER.value),
+                    started=shape_started,
+                )
+                shape_payload = normalize_tool_result(
+                    raw_shape,
+                    tool_name=ToolName.GET_THREAD_SHAPE.value,
+                    config=shape_config,
+                )
+                bundle["thread_shape_text"] = shape_payload.get("content", "")
+                tool_events = _append_tool_event(
+                    state,
+                    shape_payload,
+                    tool_input={},
+                    config=shape_config,
+                )
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
@@ -455,6 +517,7 @@ class NodeRegistry:
             "used_memory_ids": [
                 item.get("memory_id") for item in bundle.get("durable_memory_refs", []) if item.get("memory_id")
             ],
+            "tool_events": tool_events,
             "node_events": _append_event(state, WorkflowNodeType.CONTEXT_LOADER.value, data, started=started, config=config),
         }
         if bundle.get("durable_memory_text"):
@@ -659,6 +722,7 @@ class NodeRegistry:
         return {
             "route": route,
             "route_reason": route_reason,
+            "selected_tool_name": parsed.get("tool_name") if route == RouterRoute.WEB.value else None,
             "clarification_options": clarification_options if route == RouterRoute.CLARIFY.value else None,
             "execution_plan": self._router_execution_plan(route, state),
             "work_item_proposals": self._router_work_item_proposals(route, parsed, state),
@@ -689,6 +753,7 @@ class NodeRegistry:
             {
                 "worker_node_id": worker_id,
                 "query": str(parsed.get("query") or state.get("question") or ""),
+                "tool_name": parsed.get("tool_name"),
                 "reason": str(parsed.get("reason") or "router source selection"),
             }
             for worker_id in cls._router_execution_plan(route, state)
@@ -720,7 +785,11 @@ class NodeRegistry:
             None,
         )
         if proposal and str(proposal.get("query") or "").strip():
-            state = {**state, "question": str(proposal["query"]).strip()}
+            state = {
+                **state,
+                "question": str(proposal["query"]).strip(),
+                "selected_tool_name": proposal.get("tool_name"),
+            }
         started = time.perf_counter()
         spec = tool_worker_spec(node_name)
         spec = replace(spec, tool=globals().get(spec.tool_name, spec.tool))
@@ -822,6 +891,7 @@ class NodeRegistry:
         branch_state = {
             **state,
             "question": str(item.get("query") or state.get("question") or ""),
+            "selected_tool_name": item.get("tool_name") or state.get("selected_tool_name"),
             "execution_plan": [str(item.get("worker_node_id") or node_name)],
             "evidence": "",
             "evidence_packets": [],

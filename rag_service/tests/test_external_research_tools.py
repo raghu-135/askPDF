@@ -11,16 +11,7 @@ from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 TOOL_PACKAGE_PINS = {
     "langgraph": "1.2.6",
     "langchain-core": "1.4.8",
-    "langchain-community": "0.4.2",
     "ddgs": "9.14.4",
-    "wikipedia": "1.4.0",
-    "mediawikiapi": "1.3",
-    "wikibase-rest-api-client": "0.2.5",
-    "arxiv": "2.4.1",
-    "xmltodict": "1.0.4",
-    "yfinance": "1.4.1",
-    "stackapi": "0.3.1",
-    "semanticscholar": "0.12.0",
 }
 
 
@@ -46,28 +37,13 @@ def test_tool_dependencies_are_exactly_pinned():
 
 
 def test_external_research_tool_candidates_exclude_searxng(monkeypatch):
-    """SearXNG-backed tools should not be registered in this lightweight expansion."""
-    seen = []
-
-    def fake_build_tool(display_name, tool_path, class_name, factory=None):
-        seen.append((display_name, tool_path, class_name))
-        return None
-
-    monkeypatch.setattr(external_research_tools, "_build_tool", fake_build_tool)
-
-    assert external_research_tools.get_external_research_tools() == []
-
-    display_names = {item[0] for item in seen}
-    assert display_names == {
-        "Wikipedia",
-        "Wikidata",
-        "arXiv",
-        "PubMed",
-        "Semantic Scholar",
-        "StackExchange",
-        "Yahoo Finance News",
+    """External provider discovery returns MCP adapters, never provider tools."""
+    tools = external_research_tools.get_external_research_tools()
+    assert {item.name for item in tools} >= {
+        "wikipedia", "wikidata", "arxiv", "pub_med", "semanticscholar",
+        "stack_exchange", "yahoo_finance_news",
     }
-    assert all("searx" not in tool_path.lower() for _, tool_path, _ in seen)
+    assert all(not hasattr(item, "provider") for item in tools)
 
 
 def test_external_research_tools_have_prompt_metadata():
@@ -87,44 +63,6 @@ def test_external_research_tools_have_prompt_metadata():
     missing = expected_tool_names - set(TOOL_FRIENDLY_CONFIG)
     assert not missing
     assert "find_topic_anchor_in_history" not in TOOL_FRIENDLY_CONFIG
-
-
-@pytest.mark.asyncio
-async def test_external_tool_wrapper_returns_contract_envelope():
-    @tool
-    async def fake_reference(query: str) -> str:
-        """Lookup fake reference material."""
-        return f"reference: {query}"
-
-    wrapped = external_research_tools._wrap_external_tool_with_contract(fake_reference)
-    raw = await wrapped.ainvoke(
-        {"query": "diffusion"},
-        config={"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}},
-    )
-    payload = normalize_tool_result(raw, tool_name=wrapped.name)
-
-    assert wrapped.name == "fake_reference"
-    assert payload["ok"] is True
-    assert payload["content"] == "reference: diffusion"
-    assert payload["trace"]["agent_run_id"] == "run-1"
-    assert payload["trace"]["caller_node"] == "web_worker"
-    assert payload["artifacts"]["provider_tool"]
-
-
-@pytest.mark.asyncio
-async def test_external_tool_wrapper_converts_provider_errors_to_recoverable_result():
-    @tool
-    async def failing_reference(query: str) -> str:
-        """Lookup fake reference material."""
-        raise RuntimeError("provider unavailable")
-
-    wrapped = external_research_tools._wrap_external_tool_with_contract(failing_reference)
-    raw = await wrapped.ainvoke({"query": "diffusion"})
-    payload = normalize_tool_result(raw, tool_name=wrapped.name)
-
-    assert payload["ok"] is False
-    assert payload["error"]["type"] == "RuntimeError"
-    assert "provider unavailable" in payload["content"]
 
 
 def test_yahoo_finance_news_guidance_requires_ticker_and_search_web_prereq():

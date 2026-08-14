@@ -26,6 +26,7 @@ const PdfUploader = React.memo(function PdfUploader({
   const [fileStatus, setFileStatus] = React.useState<{
     fileHash: string;
     status: FileStatus;
+    target: KnowledgeTarget;
   } | null>(null);
   const indexingNotifiedRef = React.useRef<string | null>(null);
   const parsingNotifiedRef = React.useRef<string | null>(null);
@@ -57,10 +58,7 @@ const PdfUploader = React.memo(function PdfUploader({
 
     const pollInterval = setInterval(async () => {
       try {
-        if (!target) {
-          return;
-        }
-        const status = await getTargetFileStatus(fileStatus.fileHash, target);
+        const status = await getTargetFileStatus(fileStatus.fileHash, fileStatus.target);
         // Ensure we have a full FileStatus object
         const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
           ? status as FileStatus
@@ -73,7 +71,8 @@ const PdfUploader = React.memo(function PdfUploader({
 
         setFileStatus({
           fileHash: fileStatus.fileHash,
-          status: fullStatus
+          status: fullStatus,
+          target: fileStatus.target,
         });
 
         if (
@@ -124,7 +123,7 @@ const PdfUploader = React.memo(function PdfUploader({
     }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, target]);
+  }, [fileStatus?.fileHash, fileStatus?.status, fileStatus?.target, onIndexingComplete, onParsingComplete]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -144,6 +143,7 @@ const PdfUploader = React.memo(function PdfUploader({
       // Set initial file status - will be updated by polling
       setFileStatus({
         fileHash: data.fileHash,
+        target,
         status: {
           parsing: { status: ProcessStatus.Pending },
           indexing: { status: ProcessStatus.Pending },

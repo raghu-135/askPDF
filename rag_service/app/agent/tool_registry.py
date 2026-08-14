@@ -437,6 +437,10 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Wikipedia",
         "description": "Lookup concise encyclopedia-style background on people, places, organizations, concepts, and historical topics.",
         "default_prompt": "Use for stable background, definitions, and entity overviews. Input should be a short entity/topic query, not a full multi-part question. Good for orientation before synthesis; do not use as the only source for current events, specialized papers, financial news, or claims that must come from uploaded documents.",
+        "mcp_server": "first_party_research",
+        "mcp_tool": "wikipedia",
+        "mcp_enabled": True,
+        "contract_version": "1",
     },
     TOOL_NAME_WIKIDATA: {
         "id": TOOL_WIKIDATA_REFERENCE,
@@ -501,5 +505,92 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Thread Shape",
         "description": "Snapshot of document inventory and QA history volume.",
         "default_prompt": "Use to choose between broad doc search, scoped search, or memory search. Call once per turn.",
+        "mcp_server": "first_party_context",
+        "mcp_tool": "get_thread_shape",
+        "mcp_enabled": True,
+        "contract_version": "1",
     },
 }
+
+# Memory-curator operations are first-party MCP contracts as well.  They are
+# intentionally grouped under the logical context server while remaining on
+# the single physical MCP endpoint.
+TOOL_FRIENDLY_CONFIG.update({
+    "memory_search": {
+        "id": "memory_search", "display_name": "Memory Search",
+        "description": "Search visible effective or stored durable memory for the memory curator.",
+        "default_prompt": "Search stored memory before proposing changes.", "category": CAT_DURABLE_MEMORY,
+        "allowed_caller_nodes": ["memory_manager"], "allowed_node_types": ["memory_manager"],
+        "required_node_capabilities": [], "artifact_keys": ["memory_refs"], "warning_codes": [],
+        "mcp_server": "first_party_context", "mcp_tool": "memory_search", "mcp_enabled": True, "contract_version": "1",
+    },
+    "memory_get": {
+        "id": "memory_get", "display_name": "Memory Get",
+        "description": "Get exact visible durable memory records by ID for the memory curator.",
+        "default_prompt": "Read exact memory records before preparing changes.", "category": CAT_DURABLE_MEMORY,
+        "allowed_caller_nodes": ["memory_manager"], "allowed_node_types": ["memory_manager"],
+        "required_node_capabilities": [], "artifact_keys": ["memory_refs"], "warning_codes": [],
+        "mcp_server": "first_party_context", "mcp_tool": "memory_get", "mcp_enabled": True, "contract_version": "1",
+    },
+    "memory_prepare_change": {
+        "id": "memory_prepare_change", "display_name": "Prepare Memory Change",
+        "description": "Validate semantic memory intents and prepare one confirmable change set.",
+        "default_prompt": "Prepare changes only after reviewing exact memory records.", "category": CAT_DURABLE_MEMORY,
+        "allowed_caller_nodes": ["memory_manager"], "allowed_node_types": ["memory_manager"],
+        "required_node_capabilities": [], "artifact_keys": ["memory_refs"], "warning_codes": [],
+        "mcp_server": "first_party_context", "mcp_tool": "memory_prepare_change", "mcp_enabled": True, "contract_version": "1",
+    },
+    "internet_search": {
+        "id": "internet_search", "display_name": "Curator Internet Search",
+        "description": "Search current public internet information for memory curation when approved.",
+        "default_prompt": "Use only when current external facts need verification and approval permits it.", "category": CAT_WEB,
+        "allowed_caller_nodes": ["memory_manager"], "allowed_node_types": ["memory_manager"],
+        "required_node_capabilities": ["web:search"], "artifact_keys": ["web_sources"], "warning_codes": [],
+        "mcp_server": "first_party_context", "mcp_tool": "internet_search", "mcp_enabled": True, "contract_version": "1",
+    },
+})
+
+# Keep the versioned caller-validation registry in sync with the MCP-only
+# curator contracts.  These operations are not part of the workflow graph,
+# but the MCP boundary still needs a canonical contract ID and metadata.
+for _curator_tool_name in ("memory_search", "memory_get", "memory_prepare_change", "internet_search"):
+    _friendly = TOOL_FRIENDLY_CONFIG[_curator_tool_name]
+    TOOL_CONTRACT_METADATA.setdefault(_curator_tool_name, {
+        "id": _friendly["id"],
+        "category": _friendly["category"],
+        "allowed_caller_nodes": list(_friendly["allowed_caller_nodes"]),
+        "allowed_node_types": list(_friendly["allowed_node_types"]),
+        "required_node_capabilities": list(_friendly["required_node_capabilities"]),
+        "artifact_keys": list(_friendly["artifact_keys"]),
+        "warning_codes": list(_friendly["warning_codes"]),
+    })
+
+# MCP exposure is mandatory for first-party execution.  Control-plane prompt
+# entries such as clarification are not executable MCP tools and remain
+# explicitly excluded until they have a concrete handler contract.
+for _tool_name, _tool_config in TOOL_FRIENDLY_CONFIG.items():
+    _tool_config.setdefault("mcp_server", "first_party_context")
+    _tool_config.setdefault("mcp_tool", _tool_name)
+    _tool_config.setdefault("contract_version", "1")
+
+for _tool_name in (
+    TOOL_NAME_GET_THREAD_SHAPE,
+    TOOL_NAME_SEARCH_DOCUMENTS,
+    TOOL_NAME_SEARCH_DOCUMENT_BY_ID,
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
+    TOOL_NAME_SEARCH_DURABLE_MEMORY,
+    TOOL_NAME_SEARCH_THREAD_EVENTS,
+    TOOL_NAME_SEARCH_WEB,
+    TOOL_NAME_WIKIPEDIA,
+    TOOL_NAME_WIKIDATA,
+    TOOL_NAME_ARXIV,
+    TOOL_NAME_PUB_MED,
+    TOOL_NAME_PUBMED,
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY,
+    TOOL_NAME_SEMANTIC_SCHOLAR,
+    TOOL_NAME_STACK_EXCHANGE,
+    TOOL_NAME_YAHOO_FINANCE_NEWS,
+):
+    TOOL_FRIENDLY_CONFIG[_tool_name]["mcp_enabled"] = True
+
+TOOL_FRIENDLY_CONFIG[TOOL_NAME_ASK_FOR_CLARIFICATION]["mcp_enabled"] = False

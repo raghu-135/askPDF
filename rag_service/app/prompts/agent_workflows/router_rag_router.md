@@ -72,7 +72,9 @@ Route this askPDF question to exactly one route.
 
 ## Output Contract
 
-Return only JSON with keys `route`, `reason`, and `clarification_options`.
+Return only JSON with keys `route`, `reason`, `tool_name`, `query`, and `clarification_options`.
+
+When route is `web`, set `tool_name` to the registered external research tool that best matches the requested source, or null when generic web search is appropriate. Do not invent tool names. Set `query` to a concise query for the selected tool. For all other routes, set `tool_name` and `query` to null.
 
 `clarification_options` must be null unless route is `clarify`.
 
