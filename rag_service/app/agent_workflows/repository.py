@@ -608,3 +608,20 @@ class AgentWorkflowRepository:
     ) -> Optional[AgentRun]:
         session = await self._get_session()
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
+
+    async def update_runtime_projection(
+        self,
+        run_id: str,
+        projection: Dict[str, Any],
+    ) -> Optional[AgentRun]:
+        """Persist bounded projection/reconciliation metadata without a new table."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                return None
+            metadata = dict(run.run_metadata_json or {})
+            metadata["projection"] = dict(projection)
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            return run

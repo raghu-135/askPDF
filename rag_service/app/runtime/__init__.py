@@ -10,6 +10,7 @@ from app.runtime.contracts import (
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
+from app.runtime.adapter import AgentRuntimeEventSink
 from app.runtime.errors import RuntimeError
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "RuntimeCapabilities",
     "RuntimeValidationIssue",
     "RuntimeValidationResult",
+    "AgentRuntimeEventSink",
     "RuntimeError",
 ]

@@ -102,7 +102,7 @@ class LangGraphRuntimeAdapter:
                 checkpointer=checkpointer,
                 execution_event_sink=event_sink,
                 cancellation_checker=context.cancellation_checker,
-                result_projector=context.result_projector,
+                persist_product_records=False,
             )
         return result_from_legacy(result)
 
@@ -120,11 +120,10 @@ class LangGraphRuntimeAdapter:
         kwargs = {
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
+            "persist_product_records": False,
         }
         if event_sink is not None:
             kwargs["execution_event_sink"] = event_sink
-        if context.result_projector is not None:
-            kwargs["result_projector"] = context.result_projector
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             result = await router_runtime.resume_compiled_rag_chat(
                 run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
@@ -148,7 +147,7 @@ class LangGraphRuntimeAdapter:
                 trace_recorder=context.trace_recorder,
                 execution_event_sink=event_sink,
                 cancellation_checker=context.cancellation_checker,
-                result_projector=context.result_projector,
+                persist_product_records=False,
             )
         return result_from_legacy(result) if result is not None else None
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Protocol
+from typing import Any, Awaitable, Mapping, Optional, Protocol
 
 from app.runtime.contracts import (
     AgentDefinition,
@@ -30,6 +30,10 @@ class RuntimeExecutionContext:
     task_worker_id: Optional[str] = None
 
 
+class AgentRuntimeEventSink(Protocol):
+    async def emit(self, event: Any) -> None: ...
+
+
 class AgentRuntimeAdapter(Protocol):
     framework: str
     builder_id: str
@@ -49,7 +53,7 @@ class AgentRuntimeAdapter(Protocol):
         request: AgentRuntimeRequest,
         *,
         context: RuntimeExecutionContext,
-        event_sink: Any = None,
+        event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult: ...
 
     async def resume(
@@ -58,7 +62,7 @@ class AgentRuntimeAdapter(Protocol):
         *,
         interrupt: Mapping[str, Any],
         context: RuntimeExecutionContext,
-        event_sink: Any = None,
+        event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult: ...
 
     async def continue_run(
@@ -66,7 +70,7 @@ class AgentRuntimeAdapter(Protocol):
         request: AgentRuntimeRequest,
         *,
         context: RuntimeExecutionContext,
-        event_sink: Any = None,
+        event_sink: AgentRuntimeEventSink | None = None,
     ) -> Optional[AgentRuntimeResult]: ...
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any: ...

@@ -229,7 +229,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             agent_run_context={**context, "run": run},
             trace_recorder=trace,
             cancellation_checker=cancellation_requested,
-            result_projector=adapter.project_task_result,
             task_id=task.id,
             task_worker_id=worker_id,
         )

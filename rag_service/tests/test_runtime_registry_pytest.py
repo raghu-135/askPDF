@@ -96,6 +96,7 @@ async def test_langgraph_adapter_start_projects_legacy_result(monkeypatch):
     assert captured["args"][2] == "embed-model"
     assert captured["kwargs"]["checkpointer"].__class__ is Checkpointer
     assert captured["kwargs"]["agent_run_context"]["agent_run_id"] == "run-1"
+    assert captured["kwargs"]["persist_product_records"] is False
 
 
 @pytest.mark.asyncio
@@ -116,3 +117,30 @@ async def test_langgraph_adapter_validates_and_projects_neutral_events():
     assert validation.issues
     assert events[0].run_id == "run-1"
     assert events[0].terminal is True
+
+
+@pytest.mark.asyncio
+async def test_projection_is_idempotent_for_existing_chat_turn(monkeypatch):
+    from app.services.agent_runtime_projection import AgentRuntimeProjection
+
+    class Turn:
+        id = "turn-1"
+        agent_run_turn_kind = "assistant_final"
+        agent_run_sequence = 0
+        completed_at = None
+        created_at = None
+
+    class Repository:
+        async def list_chat_turns_for_run(self, _run_id):
+            return [Turn()]
+
+    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    result = await AgentRuntimeProjection().project_chat_result(
+        thread_id="thread-1",
+        question="hello",
+        result={"status": "completed", "answer": "ok"},
+        run_context={"agent_run_id": "run-1"},
+        duration_ms=1.0,
+    )
+
+    assert result["chat_turn_id"] == "turn-1"

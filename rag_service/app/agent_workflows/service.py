@@ -20,6 +20,7 @@ from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
+from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
@@ -73,6 +74,7 @@ class AgentRunService:
     ):
         self.repository = repository or AgentWorkflowRepository()
         self.resolver = resolver or WorkflowResolver()
+        self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
         if delete_agent_checkpoints is not checkpointing.delete_agent_checkpoints and binding is not None:
@@ -274,6 +276,14 @@ class AgentRunService:
                     else ChatTurnStatus.CLARIFICATION.value
                     if result.get("clarification_options")
                     else AgentRunStatus.COMPLETED.value
+                )
+            if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
+                result = await self.projection.project_chat_result(
+                    thread_id=thread_id,
+                    question=getattr(req, "question", ""),
+                    result=result,
+                    run_context=context,
+                    duration_ms=duration_ms,
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
             result.pop("_parallel_attempt_records", None)
@@ -568,6 +578,17 @@ class AgentRunService:
             result.pop("_corrective_metrics_state", None)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
+            if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
+                result = await self.projection.project_chat_result(
+                    thread_id=resolution.run.thread_id,
+                    question=str(result.get("question") or ""),
+                    result=result,
+                    run_context={
+                        "agent_run_id": resolution.run.id,
+                        "agent_workflow_id": resolution.run.workflow_id,
+                    },
+                    duration_ms=float(result.get("duration_ms") or 0),
+                )
             if status == AgentRunStatus.AWAITING_HUMAN.value:
                 pending_interrupt = result.get("pending_interrupt") or {}
                 if hasattr(resume_trace_recorder, "record_interrupted_snapshot"):
