@@ -7,6 +7,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeValidationIssue,
+    RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
 
@@ -17,5 +19,7 @@ __all__ = [
     "AgentRuntimeResult",
     "ContinuationBinding",
     "RuntimeCapabilities",
+    "RuntimeValidationIssue",
+    "RuntimeValidationResult",
     "RuntimeError",
 ]

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from app.agent_workflows import checkpointing, chat_cancellation, router_runtime
+from app.agent_workflows import chat_cancellation
+from app.runtime.langgraph import checkpointing, router_runtime
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
@@ -12,8 +13,10 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeValidationIssue,
+    RuntimeValidationResult,
 )
-from app.runtime.langgraph_compat import result_from_legacy
+from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
 
 
 class LangGraphRuntimeAdapter:
@@ -21,7 +24,7 @@ class LangGraphRuntimeAdapter:
     builder_id = "langgraph_graph"
 
     async def project_task_result(self, **kwargs: Any) -> dict[str, Any]:
-        from app.agent_workflows.router_runtime import project_agent_task_result
+        from app.runtime.langgraph.router_runtime import project_agent_task_result
 
         return await project_agent_task_result(**kwargs)
 
@@ -35,6 +38,43 @@ class LangGraphRuntimeAdapter:
             continuation_cleanup=True,
             task_execution=bool(features.get("supports_long_running_tasks")),
             native_checkpoints=True,
+        )
+
+    async def validate(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> RuntimeValidationResult:
+        from app.runtime.langgraph.compiler import WorkflowCompiler
+        from app.runtime.langgraph.validator import WorkflowValidator
+
+        validator = WorkflowValidator()
+        report = validator.report(dict(spec))
+        issues = tuple(
+            RuntimeValidationIssue(
+                code=str(issue.get("code") or "invalid_workflow"),
+                message=str(issue.get("message") or "Invalid workflow"),
+                path=issue.get("path"),
+                severity=str(issue.get("severity") or "error"),
+                details=dict(issue),
+            )
+            for issue in report.get("issues") or []
+            if isinstance(issue, Mapping)
+        )
+        normalized_spec = None
+        if not issues:
+            normalized_spec = WorkflowCompiler().materialize_spec(dict(spec))
+        return RuntimeValidationResult(
+            valid=not issues,
+            issues=issues,
+            normalized_spec=normalized_spec,
+            runtime_metadata={
+                "framework": self.framework,
+                "builder_id": self.builder_id,
+                "definition_id": definition.definition_id,
+            },
         )
 
     def _legacy_context(self, request: AgentRuntimeRequest, context: RuntimeExecutionContext) -> dict[str, Any]:
@@ -132,3 +172,15 @@ class LangGraphRuntimeAdapter:
             return []
         checkpoint_id = continuation.payload.get("checkpoint_thread_id")
         return await checkpointing.delete_agent_checkpoints([str(checkpoint_id)]) if checkpoint_id else []
+
+    async def project_trace(
+        self,
+        events: list[Mapping[str, Any]],
+        *,
+        run_id: str,
+        context: RuntimeExecutionContext | None = None,
+    ) -> list[Any]:
+        return [
+            event_from_legacy(event, run_id=run_id, sequence=index)
+            for index, event in enumerate(events, start=1)
+        ]

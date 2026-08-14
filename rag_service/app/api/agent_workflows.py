@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
+from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import get_route_function_registry
@@ -19,7 +19,7 @@ from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.parallel_contracts import parallel_policy_catalog
 from app.agent_workflows.corrective_contracts import corrective_policy_catalog
-from app.agent_workflows.validator import (
+from app.runtime.langgraph.validator import (
     WorkflowResolver,
     WorkflowValidationError,
     WorkflowValidator,
@@ -32,14 +32,14 @@ from app.agent_workflows.workflow_runtime import (
     with_default_runtime,
     workflow_supports_replans,
 )
-from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
+from app.runtime.langgraph.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
 )
-from app.agent_workflows.compiler import WorkflowCompiler
+from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.trace_details import detail_manifest
-from app.agent_workflows.studio_runtime import (
+from app.runtime.langgraph.studio_runtime import (
     RUN_KIND as BUILDER_TEST_RUN_KIND,
     delete_previous_builder_tests,
     latest_builder_test,

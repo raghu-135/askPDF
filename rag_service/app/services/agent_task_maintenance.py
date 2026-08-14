@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
+from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 from app.services import agent_task_repository as tasks
 from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task

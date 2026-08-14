@@ -105,6 +105,32 @@ class RuntimeCapabilities:
 
 
 @dataclass(frozen=True)
+class RuntimeValidationIssue:
+    code: str
+    message: str
+    path: Optional[str] = None
+    severity: str = "error"
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeValidationResult:
+    valid: bool
+    issues: tuple[RuntimeValidationIssue, ...] = ()
+    normalized_spec: Optional[Mapping[str, Any]] = None
+    runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
+    contract_version: int = CONTRACT_VERSION
+
+    def to_dict(self) -> Dict[str, Any]:
+        value = asdict(self)
+        value["issues"] = [issue.to_dict() for issue in self.issues]
+        return value
+
+
+@dataclass(frozen=True)
 class AgentRuntimeResult:
     status: str
     output: Any = None

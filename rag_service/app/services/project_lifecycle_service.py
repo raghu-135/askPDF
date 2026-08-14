@@ -10,7 +10,7 @@ from typing import Any, Dict
 from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
+from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus, ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field

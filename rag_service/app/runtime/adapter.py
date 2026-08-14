@@ -11,6 +11,7 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeValidationResult,
 )
 
 
@@ -34,6 +35,14 @@ class AgentRuntimeAdapter(Protocol):
     builder_id: str
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities: ...
+
+    async def validate(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> RuntimeValidationResult: ...
 
     async def start(
         self,
@@ -65,3 +74,11 @@ class AgentRuntimeAdapter(Protocol):
     async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]: ...
 
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any: ...
+
+    async def project_trace(
+        self,
+        events: list[Mapping[str, Any]],
+        *,
+        run_id: str,
+        context: RuntimeExecutionContext | None = None,
+    ) -> list[Any]: ...

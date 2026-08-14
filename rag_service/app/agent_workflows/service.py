@@ -12,7 +12,7 @@ from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
+from app.runtime.langgraph.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.agent_workflows import checkpointing
 from app.runtime.adapter import RuntimeExecutionContext
@@ -192,8 +192,8 @@ class AgentRunService:
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
         workflow_version = _workflow_version_info(workflow)
-        from app.agent_workflows.compiler import WorkflowCompiler
-        from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
+        from app.runtime.langgraph.compiler import WorkflowCompiler
+        from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
         resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(

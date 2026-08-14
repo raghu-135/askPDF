@@ -30,7 +30,7 @@ def artifact_ownership_key(*, todo_id: Optional[str], subagent_run_id: Optional[
 
 async def delete_task_resources_for_threads(thread_ids: list[str]) -> None:
     """Delete task content and checkpoints before relational ownership rows cascade."""
-    from app.agent_workflows.checkpointing import delete_agent_checkpoints
+    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 
     artifacts = await list_artifacts_for_threads(thread_ids)
     store = get_content_store()
@@ -44,7 +44,7 @@ async def delete_task_resources_for_threads(thread_ids: list[str]) -> None:
 
 async def cleanup_deleted_task(task_id: str) -> None:
     """Idempotently remove content/checkpoints for one hidden terminal task."""
-    from app.agent_workflows.checkpointing import delete_agent_checkpoints
+    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
     from app.services import agent_task_repository as tasks
 
     store = get_content_store()

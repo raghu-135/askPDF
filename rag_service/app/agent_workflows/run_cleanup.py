@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
+from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentRun, AgentRunStatus
 from app.time_utils import utc_now

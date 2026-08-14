@@ -9,10 +9,10 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from app.agent_workflows.compiler import WorkflowCompiler
+from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.validator import WorkflowResolver
+from app.runtime.langgraph.validator import WorkflowResolver
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus, DEEP_RESEARCH_WORKFLOW_ID
 from app.services import agent_task_repository as tasks

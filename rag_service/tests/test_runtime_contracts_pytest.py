@@ -7,6 +7,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeValidationIssue,
+    RuntimeValidationResult,
 )
 from app.runtime.langgraph_compat import (
     continuation_from_run,
@@ -106,3 +108,14 @@ def test_langgraph_compat_round_trips_legacy_run_and_continuation():
     assert result.clarification == {"options": ["one", "two"]}
     assert event.event_id == "runtime-event-1"
     assert event.terminal is True
+
+
+def test_validation_contract_is_json_compatible():
+    result = RuntimeValidationResult(
+        valid=False,
+        issues=(RuntimeValidationIssue(code="invalid_workflow", message="bad spec", path="config.graph"),),
+        runtime_metadata={"framework": "langgraph"},
+    )
+
+    assert result.to_dict()["issues"][0]["path"] == "config.graph"
+    assert result.to_dict()["valid"] is False

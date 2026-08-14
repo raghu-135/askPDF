@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.validator import WorkflowValidationError, WorkflowValidator
+from app.runtime.langgraph.validator import WorkflowValidationError, WorkflowValidator
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentWorkflow, WorkflowVisibility
 from app.time_utils import utc_now
