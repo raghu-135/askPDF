@@ -71,6 +71,8 @@ def _result_dict(result: types.CallToolResult) -> dict[str, Any]:
 class InProcessMCPClient:
     """SDK ClientSession over SDK memory streams."""
 
+    descriptor_cache_key = "in_process"
+
     async def request(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
         params = dict(params or {})
         unknown_tool: str | None = None
@@ -119,6 +121,10 @@ class LoopbackHTTPMCPClient:
     def __init__(self, url: str | None = None, http_client: Any = None):
         self.url = url or os.getenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
         self.http_client = http_client
+
+    @property
+    def descriptor_cache_key(self) -> str:
+        return f"loopback_http:{self.url}"
 
     async def request(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
         params = dict(params or {})

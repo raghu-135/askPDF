@@ -9,7 +9,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Send, interrupt
 
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.agent.tool_contract import normalize_tool_result
 from app.agent_workflows.runtime_invocation import (
     append_tool_event_for_node,
@@ -23,11 +22,6 @@ from app.agent_workflows.runtime_invocation import (
 from app.agent_workflows.parallel_runtime import parallel_retryable_error
 from app.models.deep_research import DeepResearchPlanProposal, DeepResearchSubagentResult
 from app.models.llm_server_client import close_model_client, get_llm
-search_web = create_mcp_langchain_tool("search_web")
-search_documents = create_mcp_langchain_tool("search_documents")
-search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
-search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
-search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.services.agent_task_repository import (
     canonical_hash,
     block_todos,
@@ -58,9 +52,9 @@ DEEP_NODE_CRITIC = "evidence_critic"
 
 
 PROFILE_TOOL_POLICY = {
-    "document_researcher": (search_documents, search_thread_events),
-    "web_researcher": (search_web,),
-    "memory_researcher": (search_durable_memory, search_thread_conversation_history),
+    "document_researcher": ("search_documents", "search_thread_events"),
+    "web_researcher": ("search_web",),
+    "memory_researcher": ("search_durable_memory", "search_thread_conversation_history"),
     "evidence_critic": (),
 }
 
@@ -340,12 +334,11 @@ async def _invoke_profile_tools(state: Dict[str, Any], config: RunnableConfig, i
     profile_id = str((item.get("todo") or {}).get("profile_id") or "")
     query = str((item.get("todo") or {}).get("description") or state.get("question") or "")
     outputs: list[Dict[str, Any]] = []
-    for tool in PROFILE_TOOL_POLICY.get(profile_id, ()):
-        tool_name = str(getattr(tool, "name", "unknown"))
+    for tool_name in PROFILE_TOOL_POLICY.get(profile_id, ()):
         started = time.perf_counter()
         await consume_budget(str(state.get("agent_task_id") or ""), tool_calls=1)
         tool_runtime = tool_config_for_node(state, config, caller_node=DEEP_NODE_SUBAGENT, tool_name=tool_name, started=started)
-        raw = await invoke_tool_for_node(tool, {"query": query}, state=state, config=tool_runtime, node=DEEP_NODE_SUBAGENT, started=started)
+        raw = await invoke_tool_for_node(tool_name, {"query": query}, state=state, config=tool_runtime, node=DEEP_NODE_SUBAGENT, started=started)
         normalized = normalize_tool_result(raw, tool_name=tool_name, config=tool_runtime)
         append_tool_event_for_node(
             state,
@@ -378,7 +371,7 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
     item = state.get("task_work_item") if isinstance(state.get("task_work_item"), dict) else {}
     todo = item.get("todo") if isinstance(item.get("todo"), dict) else {}
     profile_id = str(todo.get("profile_id") or "")
-    policy_hash = canonical_hash({"profile_id": profile_id, "tools": [getattr(tool, "name", "") for tool in PROFILE_TOOL_POLICY.get(profile_id, ())]})
+    policy_hash = canonical_hash({"profile_id": profile_id, "tools": list(PROFILE_TOOL_POLICY.get(profile_id, ()))})
     subagent, duplicate = await record_subagent_started(
         task_id=str(item.get("task_id") or ""),
         agent_run_id=str(item.get("agent_run_id") or ""),

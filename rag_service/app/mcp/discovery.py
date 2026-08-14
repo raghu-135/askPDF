@@ -23,6 +23,9 @@ class MCPDiscoveredTool:
     contract_version: str
 
 
+_DISCOVERY_CACHE: dict[tuple[object, str], MCPDiscoveredTool] = {}
+
+
 _REQUEST_MODELS: dict[str, type[BaseModel]] = {
     "get_thread_shape": ThreadShapeRequest,
     "search_documents": DocumentSearchRequest,
@@ -45,7 +48,23 @@ def request_model_for_tool(name: str) -> type[BaseModel]:
     return _REQUEST_MODELS[name]
 
 
+def _cache_key(client: Any, name: str) -> tuple[object, str]:
+    """Use stable transport identity while keeping test/fake clients isolated."""
+    identity = getattr(client, "descriptor_cache_key", None)
+    if identity is None:
+        identity = id(client)
+    return identity, name
+
+
+def clear_discovery_cache() -> None:
+    _DISCOVERY_CACHE.clear()
+
+
 async def discover_tool(client: Any, name: str) -> MCPDiscoveredTool:
+    cache_key = _cache_key(client, name)
+    cached = _DISCOVERY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     listed = await client.request("tools/list", {})
     if not isinstance(listed, dict) or not isinstance(listed.get("tools"), list):
         raise RuntimeError("MCP discovery returned an invalid tools/list response")
@@ -64,7 +83,7 @@ async def discover_tool(client: Any, name: str) -> MCPDiscoveredTool:
         raise RuntimeError(f"MCP descriptor is missing inputSchema for {name!r}")
     if not isinstance(item.get("outputSchema"), dict) or not item["outputSchema"]:
         raise RuntimeError(f"MCP descriptor is missing outputSchema for {name!r}")
-    return MCPDiscoveredTool(
+    discovered = MCPDiscoveredTool(
         name=name,
         description=str(item.get("description") or ""),
         input_schema=dict(item.get("inputSchema") or {}),
@@ -72,3 +91,5 @@ async def discover_tool(client: Any, name: str) -> MCPDiscoveredTool:
         contract_id=str(contract_id),
         contract_version=str(version),
     )
+    _DISCOVERY_CACHE[cache_key] = discovered
+    return discovered

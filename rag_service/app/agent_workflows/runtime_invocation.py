@@ -150,14 +150,13 @@ async def invoke_llm_for_node(
 
 
 async def invoke_tool_for_node(
-    tool: Any,
+    tool_name: str,
     tool_input: Any,
     *,
     state: RouterRagState,
     config: RunnableConfig,
     node: str,
     started: float,
-    tool_name: str | None = None,
 ) -> Any:
     try:
         cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
@@ -169,7 +168,7 @@ async def invoke_tool_for_node(
         ):
             raise PermissionError("corrective durable-memory retrieval has no policy-readable scope")
         executor = resolve_tool_executor(
-            tool_name or getattr(tool, "name", ""),
+            tool_name,
             caller_node=node,
             config=config,
         )

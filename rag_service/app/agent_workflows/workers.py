@@ -5,14 +5,6 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from langchain_core.runnables import RunnableConfig
 
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
-
-search_web = create_mcp_langchain_tool("search_web")
-search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
-search_document_by_id = create_mcp_langchain_tool("search_document_by_id")
-search_documents = create_mcp_langchain_tool("search_documents")
-search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
-search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
@@ -27,7 +19,6 @@ class ToolWorkerSpec:
     tool_name: str
     evidence_kind: str
     evidence_label: str
-    tool: Any
     tool_input: Callable[[Dict[str, Any]], Any]
     skip_reason: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
     state_update: Optional[
@@ -41,7 +32,6 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_name=ToolName.SEARCH_DOCUMENTS.value,
         evidence_kind=EvidenceKind.DOCUMENT.value,
         evidence_label="Document evidence",
-        tool=search_documents,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "document_sources": [*current.get("document_sources", []), *artifacts.get("document_sources", [])],
@@ -53,7 +43,6 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_name=ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value,
         evidence_kind=EvidenceKind.THREAD_CONVERSATION_HISTORY.value,
         evidence_label="Thread conversation history evidence",
-        tool=search_thread_conversation_history,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
@@ -64,7 +53,6 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_name=ToolName.SEARCH_DURABLE_MEMORY.value,
         evidence_kind=EvidenceKind.DURABLE_MEMORY.value,
         evidence_label="Durable memory evidence",
-        tool=search_durable_memory,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "used_memory_ids": [
@@ -82,7 +70,6 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_name=ToolName.SEARCH_THREAD_EVENTS.value,
         evidence_kind=EvidenceKind.THREAD_EVENTS.value,
         evidence_label="Thread events evidence",
-        tool=search_thread_events,
         tool_input=lambda current: {
             "query": current["question"],
             "sources": ThreadTimelineSource.ALL.value,
@@ -99,7 +86,6 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_name=ToolName.SEARCH_WEB.value,
         evidence_kind=EvidenceKind.WEB.value,
         evidence_label="Web evidence",
-        tool=search_web,
         tool_input=lambda current: current["question"],
         skip_reason=lambda current: (
             "web_search_disabled"
@@ -150,7 +136,6 @@ async def run_tool_worker(
     if should_skip_worker(state, node_id):
         return skipped_worker_update(state, config, node_id, started, "not_selected_by_plan")
 
-    tool = spec.tool
     tool_name = spec.tool_name
     work_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else {}
     selected_tool_name = (
@@ -159,15 +144,9 @@ async def run_tool_worker(
         else ""
     )
     if selected_tool_name:
-        selected_tool = create_mcp_langchain_tool(selected_tool_name)
-        if selected_tool is not None:
-            tool = selected_tool
-            tool_name = selected_tool_name
-            tool_input = {"query": str(state.get("question") or "")}
-        else:
-            raise ValueError(f"Selected external tool is unavailable: {selected_tool_name}")
+        tool_name = selected_tool_name
+        tool_input = {"query": str(state.get("question") or "")}
     elif spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
-        tool = search_document_by_id
         tool_name = ToolName.SEARCH_DOCUMENT_BY_ID.value
         tool_input = {
             "query": str(state.get("question") or "")[:2_000],
@@ -190,13 +169,12 @@ async def run_tool_worker(
             "data": {"tool_name": tool_name, "node_id": node_id},
         })
     raw = await invoke_tool_for_node(
-        tool,
+        tool_name,
         tool_input,
         state=state,
         config=tool_config,
         node=node_id,
         started=started,
-        tool_name=tool_name,
     )
     payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
     artifacts = payload.get("artifacts") or {}

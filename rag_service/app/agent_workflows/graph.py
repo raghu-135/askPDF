@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
@@ -14,15 +13,8 @@ from langgraph.types import interrupt
 
 from app.agent.tool_contract import normalize_tool_result
 from app.agent.tool_registry import get_tool_contract_id
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import is_retryable_model_error
-search_web = create_mcp_langchain_tool("search_web")
-search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
-search_document_by_id = create_mcp_langchain_tool("search_document_by_id")
-search_documents = create_mcp_langchain_tool("search_documents")
-search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
-search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.rag.chat_service import prefetch_context
 from app.agent_workflows.prompting import (
     build_evaluator_prompt,
@@ -454,7 +446,6 @@ class NodeRegistry:
             )
             if thread_shape_enabled:
                 shape_started = time.perf_counter()
-                shape_tool = create_mcp_langchain_tool(ToolName.GET_THREAD_SHAPE.value)
                 shape_config = _tool_config_for_node(
                     state,
                     config,
@@ -463,7 +454,7 @@ class NodeRegistry:
                     started=shape_started,
                 )
                 raw_shape = await _invoke_tool_for_node(
-                    shape_tool,
+                    ToolName.GET_THREAD_SHAPE.value,
                     {},
                     state=state,
                     config=shape_config,
@@ -792,7 +783,6 @@ class NodeRegistry:
             }
         started = time.perf_counter()
         spec = tool_worker_spec(node_name)
-        spec = replace(spec, tool=globals().get(spec.tool_name, spec.tool))
         return await run_tool_worker(
             state,
             config,
@@ -978,7 +968,6 @@ class NodeRegistry:
     async def _run_sequential_tool_worker(self, node_name: str, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         spec = tool_worker_spec(node_name)
-        spec = replace(spec, tool=globals().get(spec.tool_name, spec.tool))
         return await run_tool_worker(
             state,
             config,

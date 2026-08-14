@@ -83,6 +83,35 @@ async def test_mcp_request_id_is_unique_per_call(monkeypatch):
     assert request_ids[0] != request_ids[1]
 
 
+@pytest.mark.asyncio
+async def test_mcp_descriptor_is_cached_per_transport_client(monkeypatch):
+    from app.mcp import discovery, langchain_adapter
+
+    discovery.clear_discovery_cache()
+    calls = []
+
+    class FakeClient:
+        descriptor_cache_key = "test-cache-client"
+
+        async def request(self, method, params):
+            calls.append(method)
+            if method == "tools/list":
+                return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
+            return {
+                "content": [{"type": "text", "text": "ok"}],
+                "structuredContent": {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}},
+                "isError": False,
+            }
+
+    client = FakeClient()
+    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: client)
+    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "one"})
+    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "two"})
+
+    assert calls.count("tools/list") == 1
+    assert calls.count("tools/call") == 2
+
+
 async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
     monkeypatch.setenv("MCP_ENABLED", "true")
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
