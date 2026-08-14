@@ -156,9 +156,14 @@ class AgentRunService:
             workflow_id=workflow.id,
             workflow_version_id=workflow_version.id if workflow_version is not None else None,
             workflow_version=workflow_version.version if workflow_version is not None else None,
+            framework=str(getattr(workflow, "framework", None) or "langgraph"),
+            builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+            definition_category=getattr(workflow, "category", None),
             resolved_spec_json=stored_resolved_spec,
             run_metadata_json={
                 "executed_workflow_id": workflow.id,
+                "framework": str(getattr(workflow, "framework", None) or "langgraph"),
+                "builder_id": str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
             },
         )
 

@@ -320,6 +320,9 @@ class AgentWorkflow(SQLModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
     )
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    category: Optional[str] = Field(default=None, index=True)
     schema_version: int = Field(default=2)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
@@ -367,6 +370,15 @@ class AgentRun(SQLModel, table=True):
     workflow_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_workflows.id", ondelete="RESTRICT"), index=True)
     )
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    definition_category: Optional[str] = Field(default=None, index=True)
+    runtime_binding_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    runtime_binding_version: int = Field(default=1)
+    runtime_binding_status: str = Field(default="active", index=True)
     run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)

@@ -69,6 +69,9 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
             metadata = {
                 "source": WorkflowVisibility.BUILTIN.value,
                 "builtin_key": builtin_key,
+                "framework": workflow_def.get("framework", "langgraph"),
+                "builder_id": workflow_def.get("builder_id", "langgraph_graph"),
+                "category": workflow_def.get("category"),
                 "version": spec_json.get("version") or 2,
                 "version_id": f"{builtin_key}:v{spec_json.get('version') or 2}",
             }
@@ -83,6 +86,9 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                     description=workflow_def["description"],
                     visibility=workflow_def["visibility"],
                     is_builtin=workflow_def["is_builtin"],
+                    framework=workflow_def.get("framework", "langgraph"),
+                    builder_id=workflow_def.get("builder_id", "langgraph_graph"),
+                    category=workflow_def.get("category"),
                     schema_version=spec_json["schema_version"],
                     spec_json=spec_json,
                     validation_result_json=validation_result,
@@ -96,6 +102,9 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                 workflow.description = workflow_def["description"]
                 workflow.visibility = workflow_def["visibility"]
                 workflow.is_builtin = workflow_def["is_builtin"]
+                workflow.framework = workflow_def.get("framework", "langgraph")
+                workflow.builder_id = workflow_def.get("builder_id", "langgraph_graph")
+                workflow.category = workflow_def.get("category")
                 workflow.schema_version = spec_json["schema_version"]
                 replace_jsonb_field(workflow, "spec_json", spec_json)
                 replace_jsonb_field(workflow, "validation_result_json", validation_result)

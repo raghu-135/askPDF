@@ -11,6 +11,18 @@ from app.agent_workflows.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPPORTED_
 
 BUILTIN_WORKFLOW_DIR = Path(__file__).with_name("builtins")
 
+BUILTIN_DISCOVERY_CATEGORIES = {
+    "router_rag_agent": "router",
+    "plan_execute_rag_agent": "replanner",
+    "evaluator_replanner_rag_agent": "replanner",
+    "orchestrator_worker_rag_agent": "replanner",
+    "corrective_self_rag_agent": "replanner",
+    "deep_research_agent": "deep",
+}
+
+DEFAULT_FRAMEWORK = "langgraph"
+DEFAULT_BUILDER_ID = "langgraph_graph"
+
 
 @lru_cache(maxsize=1)
 def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
@@ -30,6 +42,9 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         missing_runtime_fields = sorted(field for field in RUNTIME_TEXT_FIELDS if not isinstance(runtime.get(field), str) or not runtime.get(field))
         if missing_runtime_fields:
             raise ValueError(f"Builtin workflow file {path} runtime is missing: {', '.join(missing_runtime_fields)}")
+        payload["framework"] = str(payload.get("framework") or DEFAULT_FRAMEWORK)
+        payload["builder_id"] = str(payload.get("builder_id") or DEFAULT_BUILDER_ID)
+        payload["category"] = str(payload.get("category") or BUILTIN_DISCOVERY_CATEGORIES.get(builtin_key) or "router")
         payloads.append(payload)
     return tuple(payloads)
 

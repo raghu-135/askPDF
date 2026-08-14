@@ -48,6 +48,7 @@ from app.agent_workflows.studio_runtime import (
     spec_fingerprint,
     stream_builder_test,
 )
+from app.runtime.catalog import catalog_payload
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -161,6 +162,7 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         ),
         "created_at": iso_utc_z(workflow.created_at) if workflow.created_at else None,
         "updated_at": iso_utc_z(workflow.updated_at) if workflow.updated_at else None,
+        **catalog_payload(workflow),
     }
 
 
@@ -178,6 +180,9 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
     return {
         "id": str((workflow.metadata_json or {}).get("version_id") or f"{workflow.id}:v{workflow.version}"),
         "workflow_id": workflow.id,
+        "framework": getattr(workflow, "framework", "langgraph"),
+        "builder_id": getattr(workflow, "builder_id", "langgraph_graph"),
+        "category": getattr(workflow, "category", None),
         "version": workflow.version,
         "schema_version": workflow.schema_version,
         "spec_json": workflow.spec_json if isinstance(workflow.spec_json, dict) else {},
@@ -237,6 +242,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,
+        "framework": getattr(run, "framework", "langgraph"),
+        "builder_id": getattr(run, "builder_id", "langgraph_graph"),
+        "definition_category": getattr(run, "definition_category", None),
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
         "task_attempt": run.task_attempt,
@@ -244,6 +252,8 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
+        "runtime_binding_version": getattr(run, "runtime_binding_version", 1),
+        "runtime_binding_status": getattr(run, "runtime_binding_status", "active"),
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,

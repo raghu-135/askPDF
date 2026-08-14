@@ -59,11 +59,11 @@ def test_historical_migrations_upgrade_and_latest_downgrade(test_database_url: s
     _reset_test_schema(test_database_url)
     _alembic(test_database_url, "upgrade", "head")
     current = _alembic(test_database_url, "current")
-    assert "a8d3f1c6e4b2" in current.stdout
+    assert "9b4d6e2f1a7c" in current.stdout
 
     try:
         _alembic(test_database_url, "downgrade", "-1")
         downgraded = _alembic(test_database_url, "current")
-        assert "e7c4a1b9d2f6" in downgraded.stdout
+        assert "a8d3f1c6e4b2" in downgraded.stdout
     finally:
         _alembic(test_database_url, "upgrade", "head")
