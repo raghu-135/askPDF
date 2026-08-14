@@ -33,7 +33,7 @@ This is a bounded replanner. Revise only worker selection. The runtime executes 
 
 Return only JSON with keys `reason` and `worker_decisions`.
 
-`worker_decisions` must contain exactly one object for every available worker, in the listed order. Each object must contain the exact `worker_node_id`, boolean `selected`, a concise source-specific `query` when selected (otherwise null), and a concise `reason` for selecting or skipping it. Make a semantic capability decision for every worker; do not select workers by keyword matching alone.
+`worker_decisions` must contain exactly one object for every available worker, in the listed order. Each object must contain the exact `worker_node_id`, boolean `selected`, a concise source-specific `query` when selected (otherwise null), an optional registered external `tool_name` for a web worker when a specific provider is requested, and a concise `reason` for selecting or skipping it. Make a semantic capability decision for every worker; do not select workers by keyword matching alone.
 
 Live web search enabled: {USE_WEB_SEARCH}
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 import math
+from contextlib import asynccontextmanager
 from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -25,6 +26,14 @@ except Exception:
     CrossEncoder = None
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _managed_http_client(name: str):
+    """Expose an application client without transferring close ownership."""
+    from app.http_clients import get_http_client
+
+    yield get_http_client(name)
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -251,7 +260,7 @@ async def fetch_available_models():
         if not llm_api_url.endswith("/v1"):
             llm_api_url = f"{llm_api_url}/v1"
 
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             resp = await client.get(f"{llm_api_url}/models")
             if resp.status_code == 200:
                 data = resp.json()
@@ -326,7 +335,12 @@ def get_llm(
     """
     Return a configured ChatOpenAI client for the given model.
     """
-    async_client = httpx.AsyncClient() if own_async_transport else None
+    from app.http_clients import get_http_client, register_owned_client
+    async_client = (
+        register_owned_client(httpx.AsyncClient())
+        if own_async_transport
+        else get_http_client("llm")
+    )
     return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
@@ -342,12 +356,17 @@ def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
     if should_use_local_embeddings(model_name):
         return get_local_embedding_model(model_name)
 
+    from app.http_clients import get_http_client, register_owned_client
     return OpenAIEmbeddings(
         model=model_name,
         base_url=_get_base_url(),
         api_key="sk-no-key-required",
         check_embedding_ctx_length=False,
-        http_async_client=httpx.AsyncClient() if own_async_transport else None,
+        http_async_client=(
+            register_owned_client(httpx.AsyncClient())
+            if own_async_transport
+            else get_http_client("embeddings")
+        ),
     )
 
 
@@ -359,6 +378,12 @@ async def close_model_client(model: object) -> None:
     call, so execution-scoped callers must request ``own_async_transport=True``.
     """
     client = getattr(model, "http_async_client", None)
+    if client is None:
+        return
+    from app.http_clients import is_owned_client, release_owned_client
+    if not is_owned_client(client):
+        return
+    release_owned_client(client)
     close = getattr(client, "aclose", None) or getattr(client, "close", None)
     if close is not None:
         result = close()
@@ -551,7 +576,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 
@@ -613,7 +638,7 @@ async def check_model_supports_tools(model_name: str) -> bool:
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 
@@ -692,7 +717,7 @@ async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("embeddings") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 

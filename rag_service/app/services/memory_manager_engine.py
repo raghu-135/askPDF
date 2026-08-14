@@ -8,7 +8,6 @@ import uuid
 from typing import Any, Dict, List, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, or_
 from sqlalchemy.future import select
@@ -59,9 +58,7 @@ from app.services.memory_tool_service import (
     MemoryToolError,
     MemoryToolNotFoundError,
     build_memory_tool_context,
-    get_memory_tool,
-    prepare_memory_change,
-    search_memory_tool,
+    search_memory_tool,  # compatibility symbol for existing test seams; execution crosses MCP
 )
 from app.services.memory_service import index_memory_record, memory_content_hash
 from app.services.web_search_service import (
@@ -80,6 +77,8 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.time_utils import iso_utc_z, utc_now
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.result_decoder import DecodedMCPResult, decode_mcp_result
 
 
 logger = logging.getLogger(__name__)
@@ -416,12 +415,86 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
     )
     query = build_review_memory_search_query(transcript, review)
     curator_budget = compute_memory_manager_input_budget(req.context_window)
-    search_result = await search_memory_tool(tool_context, MemorySearchInput(
-        query=query,
-        view="stored",
-        max_results=curator_budget["memory_result_limit"],
-        selected_memory_id=req.memory_id,
-    ))
+    scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
+    curator_run_id = str(uuid.uuid4())
+    curator_config = {
+        "configurable": {
+            "run_id": curator_run_id,
+            "agent_run_id": curator_run_id,
+            "thread_id": req.context.thread_id,
+            "caller_node": "memory_manager",
+            "caller_node_type": "memory_manager",
+            "caller_capabilities": list(tool_context.capabilities),
+            "cancellation_scope_id": curator_run_id,
+            "extensions": {
+                "memory_tool_context": tool_context.model_dump(mode="json"),
+                "scope_ids": list(scope_ids),
+                "capabilities": list(tool_context.capabilities),
+                "web_search_mode": req.web_search_mode,
+                "web_search_decision": req.web_search_decision.model_dump(mode="json") if req.web_search_decision else None,
+                "curator_mode": req.mode,
+                "web_call_count": 0,
+                "web_call_limit": MAX_MEMORY_MANAGER_WEB_CALLS,
+            },
+        }
+    }
+    tools = [
+        create_mcp_langchain_tool("memory_search"),
+        create_mcp_langchain_tool("memory_get"),
+        create_mcp_langchain_tool("memory_prepare_change"),
+        create_mcp_langchain_tool("internet_search"),
+    ]
+    tools_by_name = {tool.name: tool for tool in tools}
+    tool_call_count = 0
+    web_call_count = 0
+
+    async def invoke_curator_tool(name: str, arguments: dict[str, Any], *, call_id: str | None = None) -> DecodedMCPResult:
+        call_config = {
+            **curator_config,
+            "configurable": {
+                **curator_config["configurable"],
+                "tool_call_id": call_id or f"memory_manager:{name}:{uuid.uuid4().hex}",
+                "extensions": {
+                    **curator_config["configurable"].get("extensions", {}),
+                    "web_call_count": web_call_count,
+                },
+            },
+        }
+        return decode_mcp_result(await tools_by_name[name].ainvoke(arguments, config=call_config))
+
+    decoded_prefetch = await invoke_curator_tool("memory_search", {
+        "query": query,
+        "view": "stored",
+        "max_results": curator_budget["memory_result_limit"],
+        "selected_memory_id": req.memory_id,
+    }, call_id=f"{curator_run_id}:memory_search:prefetch")
+    if not decoded_prefetch.ok or decoded_prefetch.error:
+        error_detail = decoded_prefetch.error or {
+            "code": "memory_search_failed",
+            "message": "Memory search did not return usable context.",
+        }
+        return {
+            "message": "Memory context is temporarily unavailable. Please retry the curator request.",
+            "state": "clarification",
+            "choices": [{
+                "id": "retry-memory-search",
+                "label": "Retry memory search",
+                "description": "Retry retrieving memory context before making a decision.",
+                "user_message": "Retry the memory search.",
+            }],
+            "operations": [],
+            "operation_summaries": [],
+            "review": review,
+            "memory_review": memory_review,
+            "embedding_readiness": [],
+            "context_memory_count": 0,
+            "consent": consent,
+            "tool_calls_used": 0,
+            "web_calls_used": 0,
+            "mcp_error": error_detail,
+            "mcp_warnings": list(decoded_prefetch.warnings),
+        }
+    search_result = decoded_prefetch.payload
     readiness = search_result.get("readiness", [])
     context_memories = list(search_result.get("memories", []))
     char_budget = curator_budget["memory_context_chars"]
@@ -456,11 +529,8 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
     }
     latest_prepared: Dict[str, Any] | None = None
     latest_intents: List[MemoryChangeIntent] = []
-    tool_call_count = 0
-    web_call_count = 0
     pending_web_search: Dict[str, str] | None = None
     available_web_sources: Dict[str, Dict[str, Any]] = {}
-    scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
     last_prepare_error: str | None = None
     selected_choice = next(
         (
@@ -471,92 +541,36 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         None,
     )
 
-    async def run_search(**kwargs):
-        result = await search_memory_tool(tool_context, MemorySearchInput(**kwargs))
-        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
-
-    async def run_get(**kwargs):
-        result = await get_memory_tool(tool_context, MemoryGetInput(**kwargs))
-        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
-
-    async def run_prepare(**kwargs):
-        nonlocal latest_intents, latest_prepared
-        prepare_req = MemoryPrepareChangeInput(**kwargs)
-        intents, input_warnings = _sanitize_curator_intents(
-            prepare_req.intents,
-            scope_ids=scope_ids,
-        )
-        if req.mode == "conversation_review":
-            intents = _restrict_conversation_review_intents(intents)
-        latest_intents = list(intents)
-        result = await prepare_memory_change(
-            tool_context,
-            MemoryPrepareChangeInput(intents=intents),
-        )
-        if input_warnings:
-            result["input_warnings"] = input_warnings
-        latest_prepared = result
-        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
-
-    async def run_web_search(**kwargs):
-        nonlocal web_call_count, pending_web_search
-        if WEB_SEARCH_CAPABILITY not in tool_context.capabilities:
-            return json.dumps({"status": "denied", "message": "Web search capability is unavailable."})
-        search_req = CuratorWebSearchInput(**kwargs)
-        if req.web_search_mode == "off":
-            return json.dumps({"status": "disabled", "message": "Internet search is off."})
-        decision = req.web_search_decision
-        if req.web_search_mode == "ask" and not (
-            decision and decision.approved and decision.query == search_req.query
-        ):
-            if decision and not decision.approved and decision.query == search_req.query:
-                return json.dumps({"status": "denied", "message": "The user declined this search."})
-            pending_web_search = {"query": search_req.query, "reason": search_req.reason}
-            return json.dumps({"status": "approval_required", **pending_web_search})
-        if web_call_count >= MAX_MEMORY_MANAGER_WEB_CALLS:
-            return json.dumps({"status": "limit_reached"})
-        web_call_count += 1
-        result = await search_internet(
-            search_req.query,
-            max_results=DEFAULT_WEB_SEARCH_RESULTS,
-        )
-        for source in result.get("sources") or []:
-            available_web_sources[source["id"]] = source
-        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
-
-    tools = [
-        StructuredTool.from_function(
-            coroutine=run_search,
-            name="memory_search",
-            description="Search visible effective or stored memory. Curators should search stored memory.",
-            args_schema=MemorySearchInput,
-        ),
-        StructuredTool.from_function(
-            coroutine=run_get,
-            name="memory_get",
-            description="Get exact visible memory records and override relationships by ID.",
-            args_schema=MemoryGetInput,
-        ),
-        StructuredTool.from_function(
-            coroutine=run_prepare,
-            name="memory_prepare_change",
-            description="Validate semantic memory intents and prepare the one confirmable change set.",
-            args_schema=MemoryPrepareChangeInput,
-        ),
-        StructuredTool.from_function(
-            coroutine=run_web_search,
-            name="internet_search",
-            description=(
-                "Search current public internet information only when external facts need verification. "
-                "Do not use for preferences, supplied facts, scope changes, or memory conflicts."
-            ),
-            args_schema=CuratorWebSearchInput,
-        ),
-    ]
-    tools_by_name = {tool.name: tool for tool in tools}
-
     async def invoke_decision(correction: str | None = None):
-        nonlocal latest_intents, latest_prepared, tool_call_count, last_prepare_error
+        nonlocal latest_intents, latest_prepared, tool_call_count, web_call_count, pending_web_search, last_prepare_error
+
+        async def consume_tool_result(name: str, result: DecodedMCPResult, arguments: dict[str, Any]) -> dict[str, Any]:
+            nonlocal latest_intents, latest_prepared, web_call_count, pending_web_search, last_prepare_error
+            payload = result.payload
+            if name == "memory_prepare_change":
+                if result.ok and not result.error and "operations" in payload:
+                    latest_prepared = payload
+                    latest_intents = [
+                        MemoryChangeIntent.model_validate(item)
+                        for item in (payload.get("canonical_intents") or arguments.get("intents") or [])
+                    ]
+                else:
+                    error = result.error or payload.get("error") or payload.get("message")
+                    last_prepare_error = str(error or "memory_prepare_change failed")
+            elif name == "internet_search":
+                status = str(payload.get("status") or "")
+                if status == "approval_required":
+                    pending_web_search = {
+                        "query": str(payload.get("query") or arguments.get("query") or ""),
+                        "reason": str(payload.get("reason") or arguments.get("reason") or ""),
+                    }
+                elif status not in {"denied", "disabled", "limit_reached"}:
+                    web_call_count += 1
+                for source in payload.get("sources") or []:
+                    if isinstance(source, dict) and source.get("id"):
+                        available_web_sources[source["id"]] = source
+            return payload
+
         messages = [SystemMessage(content=system_prompt)]
         if correction:
             messages.append(SystemMessage(content=correction))
@@ -581,12 +595,24 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                         tool_call_count += 1
                     tool = tools_by_name.get(str(call.get("name") or ""))
                     try:
-                        output = (
-                            await tool.ainvoke(call.get("args") or {})
-                            if tool is not None
-                            else json.dumps({"error": "Unknown memory tool"})
-                        )
+                        arguments = call.get("args") or {}
+                        decoded_tool = await invoke_curator_tool(
+                            str(call.get("name") or ""),
+                            arguments,
+                            call_id=str(call.get("id") or f"curator-tool-{loop_count}"),
+                        ) if tool is not None else None
+                        output = json.dumps(decoded_tool.envelope, ensure_ascii=True) if decoded_tool else json.dumps({"error": "Unknown memory tool"})
+                        if decoded_tool is not None:
+                            await consume_tool_result(str(call.get("name") or ""), decoded_tool, arguments)
                     except Exception as exc:
+                        logger.warning(
+                            "Memory-manager MCP tool failed | tool=%s error=%s",
+                            call.get("name"),
+                            exc,
+                            exc_info=True,
+                        )
+                        if str(call.get("name") or "") == "memory_prepare_change":
+                            last_prepare_error = str(exc)
                         output = json.dumps({"error": str(exc)[:500]})
                     messages.append(ToolMessage(
                         content=str(output),
@@ -601,7 +627,8 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         parsed = safe_json_object(str(getattr(response, "content", "") or ""))
         raw_web_search = parsed.get("web_search")
         if not supports_tools and isinstance(raw_web_search, dict):
-            await run_web_search(**raw_web_search)
+            web_result = await invoke_curator_tool("internet_search", raw_web_search)
+            await consume_tool_result("internet_search", web_result, raw_web_search)
             if available_web_sources and pending_web_search is None:
                 web_context = format_search_context({"sources": list(available_web_sources.values())})
                 response = await invoke_with_retry(llm.ainvoke, [
@@ -643,11 +670,16 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                     if req.mode == "conversation_review":
                         intents = _restrict_conversation_review_intents(intents)
                     latest_intents = list(intents)
-                    latest_prepared = await prepare_memory_change(
-                        tool_context,
-                        MemoryPrepareChangeInput(intents=intents),
+                    prepared_result = await invoke_curator_tool(
+                        "memory_prepare_change",
+                        {"intents": [intent.model_dump(mode="json") for intent in intents]},
                     )
-                except MemoryToolError as exc:
+                    await consume_tool_result(
+                        "memory_prepare_change",
+                        prepared_result,
+                        {"intents": [intent.model_dump(mode="json") for intent in intents]},
+                    )
+                except Exception as exc:
                     last_prepare_error = str(exc)
                     parsed["message"] = str(exc)
                     state = "clarification"

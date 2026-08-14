@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from uuid import uuid4
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
@@ -24,6 +25,8 @@ from app.agent_workflows.state import (
 from app.agent_workflows.trace import compact_preview
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.errors import MCPUnavailableError
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +72,8 @@ def append_tool_event_for_node(
 
 
 def error_summary(exc: Exception, *, code: str) -> Dict[str, Any]:
+    if isinstance(exc, MCPUnavailableError):
+        return {**exc.as_dict(), "workflow_error_code": code}
     return {
         "code": code,
         "type": type(exc).__name__,
@@ -152,6 +157,7 @@ async def invoke_tool_for_node(
     config: RunnableConfig,
     node: str,
     started: float,
+    tool_name: str | None = None,
 ) -> Any:
     try:
         cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
@@ -162,7 +168,12 @@ async def invoke_tool_for_node(
             and not corrective_memory_recall_allowed(state)
         ):
             raise PermissionError("corrective durable-memory retrieval has no policy-readable scope")
-        return await tool.ainvoke(tool_input, config=config)
+        executor = resolve_tool_executor(
+            tool_name or getattr(tool, "name", ""),
+            caller_node=node,
+            config=config,
+        )
+        return await executor.ainvoke(tool_input, config=config)
     except Exception as exc:
         append_failed_node_event(
             state,
@@ -173,6 +184,19 @@ async def invoke_tool_for_node(
             data={"input_preview": {"tool_input": tool_input}},
         )
         raise
+
+
+def resolve_tool_executor(
+    tool_name: str,
+    *,
+    caller_node: str,
+    config: RunnableConfig,
+) -> Any:
+    """Resolve every first-party workflow tool through the MCP boundary."""
+    del caller_node, config
+    if not tool_name:
+        raise ValueError("MCP tool name is required")
+    return create_mcp_langchain_tool(tool_name)
 
 
 def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
@@ -193,6 +217,18 @@ def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: s
         )
     updated = dict(config or {})
     configurable = dict(updated.get("configurable") or {})
+    metadata = dict(updated.get("metadata") or {})
+    tool_call_id = (
+        configurable.get("tool_call_id")
+        or metadata.get("tool_call_id")
+        or f"{caller_node_id}:{tool_name}:{uuid4().hex}"
+    )
+    cancellation_scope_id = (
+        configurable.get("cancellation_scope_id")
+        or metadata.get("cancellation_scope_id")
+        or state.get("agent_run_id")
+        or uuid4().hex
+    )
     configurable.update(
         {
             "agent_run_id": state.get("agent_run_id"),
@@ -201,6 +237,8 @@ def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: s
             "caller_capabilities": caller_capabilities,
             "route": state.get("route"),
             "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "cancellation_scope_id": cancellation_scope_id,
         }
     )
     if caller_node_type == "durable_memory_worker":
@@ -213,7 +251,6 @@ def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: s
             "prefetched_durable_memory_query_vector": bundle.get("_shared_query_vector"),
         })
     updated["configurable"] = configurable
-    metadata = dict(updated.get("metadata") or {})
     metadata.update(
         {
             "agent_run_id": state.get("agent_run_id"),
@@ -222,6 +259,8 @@ def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: s
             "caller_capabilities": caller_capabilities,
             "route": state.get("route"),
             "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "cancellation_scope_id": cancellation_scope_id,
         }
     )
     updated["metadata"] = metadata

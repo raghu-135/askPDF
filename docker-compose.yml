@@ -11,7 +11,10 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     env_file:
-      - .env
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     depends_on:
       rag-service:
         condition: service_healthy
@@ -36,10 +39,15 @@ services:
       - POSTGRES_MAX_OVERFLOW=20
       - ASKPDF_AGENT_CHECKPOINTER=postgres
       - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA}
+      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
+      - MCP_LOOPBACK_URL=${MCP_LOOPBACK_URL:-http://127.0.0.1:8000/internal/mcp/}
     env_file:
-      - .env
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     depends_on:
       postgresql:
         condition: service_healthy
@@ -72,10 +80,14 @@ services:
       - POSTGRES_MAX_OVERFLOW=20
       - RUN_DB_MIGRATIONS=${RUN_DB_MIGRATIONS:-true}
       - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA}
+      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
     env_file:
-      - .env
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     depends_on:
       postgresql:
         condition: service_healthy
@@ -88,7 +100,7 @@ services:
       - "8080:8080"
       - "50051:50051"
     environment:
-      - QUERY_DEFAULTS_LIMIT=${QUERY_DEFAULTS_LIMIT}
+      - QUERY_DEFAULTS_LIMIT=${QUERY_DEFAULTS_LIMIT:-20}
       - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
       - PERSISTENCE_DATA_PATH=/var/lib/weaviate
       - DEFAULT_VECTORIZER_MODULE=none
@@ -134,16 +146,16 @@ services:
       - BROWSER_DEBUG_URL=127.0.0.1:9222
       - CUSTOM_PORT=3000
       # Enable Selkies clipboard functionality
-      - SELKIES_CLIPBOARD_ENABLED=${SELKIES_CLIPBOARD_ENABLED}
-      - SELKIES_CLIPBOARD_BRIDGE_ENABLED=${SELKIES_CLIPBOARD_BRIDGE_ENABLED}
+      - SELKIES_CLIPBOARD_ENABLED=${SELKIES_CLIPBOARD_ENABLED:-true}
+      - SELKIES_CLIPBOARD_BRIDGE_ENABLED=${SELKIES_CLIPBOARD_BRIDGE_ENABLED:-true}
       # Disable Selkies gaming features
-      - SELKIES_GAMEPAD_ENABLED=${SELKIES_GAMEPAD_ENABLED}
-      - SELKIES_UI_SIDEBAR_SHOW_GAMEPADS=${SELKIES_UI_SIDEBAR_SHOW_GAMEPADS}
-      - SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE=${SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE}
+      - SELKIES_GAMEPAD_ENABLED=${SELKIES_GAMEPAD_ENABLED:-false}
+      - SELKIES_UI_SIDEBAR_SHOW_GAMEPADS=${SELKIES_UI_SIDEBAR_SHOW_GAMEPADS:-false}
+      - SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE=${SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE:-false}
       # Disable Selkies sharing features  
-      - SELKIES_UI_SIDEBAR_SHOW_SHARING=${SELKIES_UI_SIDEBAR_SHOW_SHARING}
+      - SELKIES_UI_SIDEBAR_SHOW_SHARING=${SELKIES_UI_SIDEBAR_SHOW_SHARING:-false}
       # Disable Selkies apps features
-      - SELKIES_UI_SIDEBAR_SHOW_APPS=${SELKIES_UI_SIDEBAR_SHOW_APPS}
+      - SELKIES_UI_SIDEBAR_SHOW_APPS=${SELKIES_UI_SIDEBAR_SHOW_APPS:-false}
     shm_size: '2gb'
     volumes:
       - browser_captures:/captures

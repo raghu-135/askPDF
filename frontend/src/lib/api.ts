@@ -91,11 +91,18 @@ export type KnowledgeTarget = { scope: "thread" | "project"; id: string };
 
 const targetPath = (target: KnowledgeTarget) => `${target.scope}s/${target.id}`;
 
+async function responseError(res: Response): Promise<Error & { status?: number }> {
+  const message = await res.text();
+  const error = new Error(message) as Error & { status?: number };
+  error.status = res.status;
+  return error;
+}
+
 export async function uploadPdfToTarget(file: File, target: KnowledgeTarget): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/upload`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return mapUploadResponse(await res.json());
 }
 
@@ -112,7 +119,7 @@ export async function getTargetFileStatus(
   if (options?.section) params.set("section", options.section);
   const query = params.toString();
   const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}/status${query ? `?${query}` : ""}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -128,7 +135,7 @@ export async function getFileStatus(
   const query = params.toString();
   const url = `${API_BASE}/api/threads/${threadId}/files/${fileHash}/status${query ? `?${query}` : ""}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 

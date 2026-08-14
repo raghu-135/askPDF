@@ -164,7 +164,7 @@ class TestAskPdfToolContract:
         ):
             raw = await search_durable_memory.ainvoke(
                 {"query": "launch codename"},
-                config={"configurable": {"app_thread_id": "thread-1"}},
+                config={"configurable": {"app_thread_id": "thread-1", "caller_node": "durable_memory_worker"}},
             )
 
         payload = normalize_tool_result(raw, tool_name="search_durable_memory")
@@ -219,6 +219,7 @@ class TestAskPdfToolContract:
                         "searched_scopes": [{"scope_type": "thread", "scope_id": "thread-1"}],
                     },
                     "prefetched_durable_memory_debug": {"rejection_reasons": {}},
+                    "caller_node": "durable_memory_worker",
                 }},
             )
 
@@ -252,7 +253,7 @@ class TestAskPdfToolContract:
         ):
             raw = await search_durable_memory.ainvoke(
                 {"query": "preference"},
-                config={"configurable": {"app_thread_id": "thread-1"}},
+                config={"configurable": {"app_thread_id": "thread-1", "caller_node": "durable_memory_worker"}},
             )
 
         payload = normalize_tool_result(raw, tool_name="search_durable_memory")

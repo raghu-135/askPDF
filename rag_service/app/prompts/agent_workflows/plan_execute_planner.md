@@ -69,6 +69,7 @@ Return only JSON with keys `route`, `reason`, `worker_decisions`, and `clarifica
 - `worker_node_id`: the exact available worker id.
 - `selected`: a boolean semantic decision.
 - `query`: a concise source-specific query when selected, otherwise null.
+- `tool_name`: the registered external research tool to use when this is a web worker and a specific provider is requested; otherwise null.
 - `reason`: a concise reason for selecting or skipping that worker.
 
 For `execute`, select every worker whose described capability can materially contribute to an explicit requirement or meaningfully complement, corroborate, or fill a gap in another selected source. For `direct` and `clarify`, every decision must be skipped. Do not select workers by keyword matching alone.

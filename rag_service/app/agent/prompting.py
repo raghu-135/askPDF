@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.agent.external_research_tools import get_external_research_tools
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
@@ -99,7 +98,11 @@ def _tool_description(tool_item: Any, tool_name: str) -> str:
 def _default_tool_names(use_external_research: bool = True) -> List[Any]:
     if not use_external_research:
         return list(CORE_TOOL_NAMES)
-    external_names = [getattr(tool, "name", "") for tool in get_external_research_tools()]
+    external_names = [
+        name
+        for name, metadata in TOOL_FRIENDLY_CONFIG.items()
+        if metadata.get("mcp_server") == "first_party_research"
+    ]
     return [*CORE_TOOL_NAMES, *[name for name in external_names if name]]
 
 

@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # Import modular components after logging is configured so app.* loggers emit in Docker.
 from app.api.threads import router as threads_router
@@ -55,9 +56,12 @@ from app.services.memory_service import (
 from app.services.memory_repair_scheduler import shutdown_memory_repairs
 from app.services.embedding_materialization_service import embedding_job_worker
 from app.services.agent_task_runtime import run_task_worker
+from app.mcp.server import get_http_app
+from app.http_clients import close_http_clients, init_http_clients
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
+MCP_HTTP_APP = get_http_app()
 
 
 def _record_agent_task_worker_completion(app: FastAPI, task: asyncio.Task) -> None:
@@ -101,64 +105,93 @@ async def lifespan(app: FastAPI):
     Performs startup tasks like database initialization.
     """
     logger.info("--- RAG Service Starting ---")
+    memory_maintenance_stop = None
+    memory_maintenance_task = None
+    embedding_job_stop = None
+    embedding_job_task = None
+    agent_task_worker_stop = None
+    agent_task_worker = None
+    mcp_lifespan = None
     try:
+        # Keep cleanup active from the first allocation onward.  In
+        # particular, database or MCP startup failures must not strand the
+        # application-scoped HTTP clients initialized above them.
+        await init_http_clients()
         logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
         await ensure_default_project()
         await AgentWorkflowRepository().seed_builtin_workflows()
         logger.info("Database initialization complete.")
-    except Exception as e:
-        logger.critical(f"Failed to initialize database: {e}", exc_info=True)
-        raise
 
-    try:
-        logger.info("Initializing Weaviate collections...")
-        await get_vector_db().ensure_collections()
-        logger.info("Weaviate collection initialization complete.")
-    except Exception as e:
-        logger.critical(f"Failed to initialize Weaviate collections: {e}", exc_info=True)
+        try:
+            logger.info("Initializing Weaviate collections...")
+            await get_vector_db().ensure_collections()
+            logger.info("Weaviate collection initialization complete.")
+        except Exception:
+            logger.exception("Failed to initialize Weaviate collections")
 
-    memory_maintenance_stop = asyncio.Event()
-    memory_maintenance_task = asyncio.create_task(
-        _memory_maintenance_loop(memory_maintenance_stop)
-    )
-    embedding_job_stop = asyncio.Event()
-    embedding_job_task = asyncio.create_task(embedding_job_worker(embedding_job_stop))
-    agent_task_worker_stop = asyncio.Event()
-    app.state.agent_task_worker_status = "running"
-    agent_task_worker = asyncio.create_task(
-        run_task_worker(stop_event=agent_task_worker_stop),
-        name="agent-task-worker",
-    )
-    agent_task_worker.add_done_callback(
-        lambda task: _record_agent_task_worker_completion(app, task)
-    )
-    try:
+        memory_maintenance_stop = asyncio.Event()
+        memory_maintenance_task = asyncio.create_task(
+            _memory_maintenance_loop(memory_maintenance_stop)
+        )
+        embedding_job_stop = asyncio.Event()
+        embedding_job_task = asyncio.create_task(embedding_job_worker(embedding_job_stop))
+        agent_task_worker_stop = asyncio.Event()
+        app.state.agent_task_worker_status = "running"
+        agent_task_worker = asyncio.create_task(
+            run_task_worker(stop_event=agent_task_worker_stop),
+            name="agent-task-worker",
+        )
+        agent_task_worker.add_done_callback(
+            lambda task: _record_agent_task_worker_completion(app, task)
+        )
+        # The SDK streamable-HTTP session manager is single-use. Rebuild the
+        # mounted app for every FastAPI lifespan so TestClient restarts,
+        # reloads, and application shutdown/startup cycles get a fresh manager.
+        global MCP_HTTP_APP
+        MCP_HTTP_APP = get_http_app()
+        for route in app.router.routes:
+            if getattr(route, "name", None) == "internal-mcp":
+                route.app = MCP_HTTP_APP
+                break
+        mcp_lifespan = MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP)
+        await mcp_lifespan.__aenter__()
         yield
     finally:
         logger.info("--- RAG Service Shutting Down ---")
-        app.state.agent_task_worker_status = "stopping"
-        agent_task_worker_stop.set()
+        if mcp_lifespan is not None:
+            try:
+                await mcp_lifespan.__aexit__(None, None, None)
+            except Exception:
+                logger.exception("Error during MCP lifespan shutdown")
+        if agent_task_worker is not None and agent_task_worker_stop is not None:
+            app.state.agent_task_worker_status = "stopping"
+            agent_task_worker_stop.set()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(agent_task_worker),
+                    timeout=AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Agent task worker exceeded %ss shutdown grace; cancelling active execution",
+                    AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS,
+                )
+                agent_task_worker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await agent_task_worker
+            except Exception:
+                logger.exception("Agent task worker exited unexpectedly")
+        if memory_maintenance_task is not None and memory_maintenance_stop is not None:
+            memory_maintenance_stop.set()
+            await memory_maintenance_task
+        if embedding_job_task is not None and embedding_job_stop is not None:
+            embedding_job_stop.set()
+            await embedding_job_task
         try:
-            await asyncio.wait_for(
-                asyncio.shield(agent_task_worker),
-                timeout=AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Agent task worker exceeded %ss shutdown grace; cancelling active execution",
-                AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS,
-            )
-            agent_task_worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await agent_task_worker
+            await shutdown_memory_repairs()
         except Exception:
-            logger.exception("Agent task worker exited unexpectedly")
-        memory_maintenance_stop.set()
-        await memory_maintenance_task
-        embedding_job_stop.set()
-        await embedding_job_task
-        await shutdown_memory_repairs()
+            logger.exception("Error during memory repair shutdown")
         try:
             logger.info("Closing database connections...")
             await close_db()
@@ -171,6 +204,10 @@ async def lifespan(app: FastAPI):
             logger.info("Weaviate client connection closed.")
         except Exception as e:
             logger.error(f"Error during Weaviate shutdown: {e}")
+        try:
+            await close_http_clients()
+        except Exception:
+            logger.exception("Error during HTTP client shutdown")
 
 app = FastAPI(
     title="RAG Service",
@@ -215,6 +252,13 @@ async def health_check():
         "agent_task_worker": worker_status,
     }
     return payload if healthy else JSONResponse(status_code=503, content=payload)
+
+
+app.mount("/internal/mcp/", MCP_HTTP_APP, name="internal-mcp")
+
+
+# Mount static files last to avoid shadowing API routes.
+app.mount("/files", StaticFiles(directory="/static"), name="static")
 
 
 if __name__ == "__main__":

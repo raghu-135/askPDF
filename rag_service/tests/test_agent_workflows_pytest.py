@@ -1862,6 +1862,17 @@ class TestRouterRagGraphToolConsumers:
         )
         assert allowed["configurable"]["caller_node"] == "retrieval_worker"
         assert allowed["configurable"]["tool_name"] == "search_documents"
+        assert allowed["configurable"]["tool_call_id"].startswith("retrieval_worker:search_documents:")
+        assert allowed["metadata"]["tool_call_id"] == allowed["configurable"]["tool_call_id"]
+
+        native = _tool_config(
+            state,
+            {"configurable": {"thread_id": "thread-1", "tool_call_id": "langchain-call-1"}},
+            caller_node="retrieval_worker",
+            tool_name="search_documents",
+        )
+        assert native["configurable"]["tool_call_id"] == "langchain-call-1"
+        assert native["metadata"]["tool_call_id"] == "langchain-call-1"
 
         with pytest.raises(ValueError, match="search_documents is not allowed from caller node thread_conversation_history_worker"):
             _tool_config(
@@ -2658,6 +2669,18 @@ class TestRouterRagGraphToolConsumers:
             "allowed_tool_ids": builtin_router_rag_spec()["config"]["allowed_tool_ids"],
         }
         config = {"configurable": {"thread_id": "thread-1"}}
+
+        async def fake_mcp_call(name, _arguments, _config=None):
+            payloads = {
+                "search_documents": {"content": "Document evidence.", "artifacts": {"document_sources": [{"file_hash": "file-1", "file_name": "paper.pdf"}], "web_sources": [{"url": "https://cached.example", "title": "Cached"}]}},
+                "search_thread_conversation_history": {"content": "Memory evidence.", "artifacts": {"used_chat_ids": ["turn-1:assistant"]}},
+                "search_thread_events": {"content": "Timeline evidence.", "artifacts": {"timeline_events": [{"timeline_event_type": "document_added"}]}},
+                "search_web": {"content": "Web evidence.", "artifacts": {"web_sources": [{"url": "https://example.com", "title": "Example"}]}},
+            }
+            payload = payloads[name]
+            return json.dumps({"ok": True, "content": json.dumps(payload), "sources": [], "artifacts": payload.get("artifacts", {}), "warnings": [], "metrics": {}, "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"}})
+
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
 
         monkeypatch.setattr(
             "app.agent_workflows.graph.search_documents",
@@ -3858,7 +3881,21 @@ class TestAgentRunService:
                 }
 
         fake_llm = FakeLlm()
+
         fake_web = FakeWebTool()
+        async def fake_mcp_call(name, tool_input, _config=None):
+            if name == "search_web":
+                payload = await fake_web.ainvoke(tool_input, config=_config)
+            else:
+                payload = {"content": "[THREAD SHAPE]", "artifacts": {}}
+            return json.dumps({
+                "ok": True,
+                "content": json.dumps(payload),
+                "sources": payload.get("sources", []),
+                "artifacts": payload.get("artifacts", {}),
+                "warnings": [], "metrics": {},
+                "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"},
+            })
         created_turn_ids = []
         stats_calls = []
         index_calls = []
@@ -3947,7 +3984,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -5222,6 +5259,20 @@ class TestAgentRunService:
         fake_web = FakeWebTool()
         created_turn_ids = []
 
+        async def fake_mcp_call(name, tool_input, _config=None):
+            if name == "search_web":
+                payload = await fake_web.ainvoke(tool_input, config=_config)
+            else:
+                payload = {"content": "[THREAD SHAPE]", "artifacts": {}}
+            return json.dumps({
+                "ok": True,
+                "content": json.dumps(payload),
+                "sources": payload.get("sources", []),
+                "artifacts": payload.get("artifacts", {}),
+                "warnings": [], "metrics": {},
+                "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"},
+            })
+
         async def fake_get_thread_settings(_thread_id):
             return {
                 "agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID},
@@ -5305,7 +5356,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -5588,37 +5639,43 @@ class TestAgentRunService:
                     return SimpleNamespace(content='{"route":"web","reason":"Needs live evidence.","clarification_options":null}')
                 return SimpleNamespace(content="Postgres checkpoint answer.")
 
-        class FakeWebTool:
-            name = "search_web"
-
-            def __init__(self):
-                self.calls = 0
-
-            async def ainvoke(self, tool_input, config=None):
-                self.calls += 1
-                return {
-                    "content": "Postgres web evidence.",
-                    "sources": [{"url": "https://example.test/postgres", "title": "Postgres"}],
-                    "artifacts": {
-                        "web_sources": [
-                            {
-                                "url": "https://example.test/postgres",
-                                "title": "Postgres",
-                                "preview": "Postgres web evidence.",
-                            }
-                        ]
-                    },
-                    "trace": {"tool_name": "search_web", "caller_node": "web_worker"},
-                    "metrics": {"result_chars": 22, "source_count": 1, "warning_count": 0},
-                }
-
         fake_llm = FakeLlm()
-        fake_web = FakeWebTool()
+        mcp_calls = []
+        web_payload = {
+            "content": "Postgres web evidence.",
+            "sources": [{"url": "https://example.test/postgres", "title": "Postgres"}],
+            "artifacts": {
+                "web_sources": [
+                    {
+                        "url": "https://example.test/postgres",
+                        "title": "Postgres",
+                        "preview": "Postgres web evidence.",
+                    }
+                ]
+            },
+        }
+
+        async def fake_mcp_call(name, tool_input, config=None):
+            mcp_calls.append({"name": name, "arguments": tool_input, "config": config})
+            payload = web_payload if name == "search_web" else {"content": "[THREAD SHAPE]", "artifacts": {}}
+            return json.dumps({
+                "ok": True,
+                "content": json.dumps(payload),
+                "sources": payload.get("sources", []),
+                "artifacts": payload.get("artifacts", {}),
+                "warnings": [],
+                "metrics": {},
+                "trace": {
+                    "tool_name": name,
+                    "tool_call_id": f"postgres-checkpoint:{name}",
+                    "mcp_request_id": f"mcp-postgres-checkpoint:{len(mcp_calls)}",
+                },
+            })
         created_turn_ids = []
 
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_workflow": {"workflow_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
+                "agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -5723,7 +5780,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -5790,8 +5847,17 @@ class TestAgentRunService:
         assert len(created_turn_ids) == 1
         assert len(turns) == 1
         assert turns[0].payload["answer"] == "Postgres checkpoint answer."
-        assert fake_web.calls == 1
-        assert fake_llm.calls == 2
+        search_web_calls = [call for call in mcp_calls if call["name"] == "search_web"]
+        assert len(search_web_calls) == 1
+        assert search_web_calls[0]["config"]["configurable"]["agent_run_id"] == paused_run.id
+        assert search_web_calls[0]["config"]["configurable"]["tool_call_id"]
+        assert any(
+            span.get("kind") == "TOOL"
+            and span.get("raw", {}).get("tool_name") == "search_web"
+            and span.get("raw", {}).get("mcp_request_id")
+            for span in resumed.run.debug_trace_json["trace"]["spans"]
+        )
+        assert fake_llm.calls >= 2
         assert deleted_checkpoint_thread_ids == [checkpoint_thread_id]
 
     @pytest.mark.asyncio
@@ -6358,7 +6424,10 @@ class TestRouterRagRuntime:
         assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
         assert "agent_tool_events" not in turn.payload["metadata"]
-        assert result["tool_events"] == []
+        assert len(result["tool_events"]) == 1
+        assert result["tool_events"][0]["tool_name"] == "get_thread_shape"
+        assert result["tool_events"][0]["caller_node"] == "context_loader"
+        assert result["tool_events"][0]["ok"] is True
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
         assert "Router Agent run started | run_id=run-1" in log_text
@@ -6525,6 +6594,47 @@ class TestRouterRagRuntime:
         }
         fake_llm = FakeLlm()
 
+        # Replace the MCP client boundary rather than patching the obsolete
+        # graph-level tool objects.
+        mcp_payloads = {
+            "search_documents": document_payload,
+            "search_thread_conversation_history": memory_payload,
+            "search_durable_memory": long_term_memory_payload,
+            "search_thread_events": timeline_payload,
+            "search_web": web_payload,
+        }
+        async def fake_mcp_call(name, _arguments, _config=None):
+            payload = mcp_payloads.get(name, {"content": "[THREAD SHAPE]"})
+            artifacts = dict(payload.get("artifacts") or {})
+            for key, legacy in (("document_sources", "__document_sources__"), ("web_sources", "__web_sources__"), ("used_chat_ids", "__used_chat_ids__"), ("timeline_events", "__timeline_events__")):
+                if legacy in payload:
+                    artifacts[key] = payload[legacy]
+            content = payload.get("content", "")
+            caller_node = "context_loader" if name == "get_thread_shape" else {
+                "search_documents": "retrieval_worker",
+                "search_thread_conversation_history": "thread_conversation_history_worker",
+                "search_durable_memory": "durable_memory_worker",
+                "search_thread_events": "thread_events_worker",
+                "search_web": "web_worker",
+            }.get(name)
+            return json.dumps({
+                "ok": True,
+                "content": content,
+                "sources": [],
+                "artifacts": artifacts,
+                "warnings": [],
+                "metrics": {},
+                "trace": {
+                    "tool_name": name,
+                    "caller_node": caller_node,
+                    "caller_node_type": caller_node,
+                    "contract_id": "thread_shape" if name == "get_thread_shape" else name,
+                    "tool_call_id": f"test:{name}",
+                    "mcp_request_id": f"mcp-test:{name}",
+                },
+            })
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool(document_payload))
@@ -6592,7 +6702,9 @@ class TestRouterRagRuntime:
             assert created_turn_ids == []
             assert index_calls == []
             assert stats_calls == []
-            assert result["tool_events"] == []
+            assert len(result["tool_events"]) == 1
+            assert result["tool_events"][0]["tool_name"] == "get_thread_shape"
+            assert result["tool_events"][0]["caller_node"] == "context_loader"
         else:
             assert turn is not None
             assert turn.status == expected_status
@@ -6607,31 +6719,42 @@ class TestRouterRagRuntime:
             assert created_turn_ids == [turn.id]
             assert len(index_calls) == 1
             assert len(stats_calls) == 1
-            assert len(result["tool_events"]) == 1
-            assert result["tool_events"][0]["caller_node"] == expected_nodes[3]
+            # Thread shape is an intentional context-loader MCP event.  Keep
+            # it in the trace contract while identifying the evidence event
+            # separately.
+            assert len(result["tool_events"]) == 2
+            assert result["tool_events"][0]["tool_name"] == "get_thread_shape"
+            assert result["tool_events"][0]["caller_node"] == "context_loader"
             assert result["tool_events"][0]["ok"] is True
-            assert result["tool_events"][0]["result_preview"].endswith("worker evidence.")
+            evidence_events = [
+                event for event in result["tool_events"]
+                if event.get("tool_name") != "get_thread_shape"
+            ]
+            assert len(evidence_events) == 1
+            assert evidence_events[0]["caller_node"] == expected_nodes[3]
+            assert evidence_events[0]["ok"] is True
+            assert evidence_events[0]["result_preview"].endswith("worker evidence.")
         if route == "document":
-            assert result["tool_events"][0]["tool_name"] == "search_documents"
-            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
+            assert evidence_events[0]["tool_name"] == "search_documents"
+            assert evidence_events[0]["tool_input"]["query"] == "Route coverage?"
             assert result["document_sources"] == [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}]
             assert result["answer"] == "Final answer from document route."
         elif route == "thread_conversation_history":
-            assert result["tool_events"][0]["tool_name"] == "search_thread_conversation_history"
-            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
+            assert evidence_events[0]["tool_name"] == "search_thread_conversation_history"
+            assert evidence_events[0]["tool_input"]["query"] == "Route coverage?"
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from thread_conversation_history route."
         elif route == "durable_memory":
-            assert result["tool_events"][0]["tool_name"] == "search_durable_memory"
-            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
+            assert evidence_events[0]["tool_name"] == "search_durable_memory"
+            assert evidence_events[0]["tool_input"]["query"] == "Route coverage?"
             assert result["answer"] == "Final answer from durable_memory route."
         elif route == "thread_events":
-            assert result["tool_events"][0]["tool_name"] == "search_thread_events"
-            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
+            assert evidence_events[0]["tool_name"] == "search_thread_events"
+            assert evidence_events[0]["tool_input"]["query"] == "Route coverage?"
             assert result["answer"] == "Final answer from thread_events route."
         elif route == "web":
-            assert result["tool_events"][0]["tool_name"] == "search_web"
-            assert result["tool_events"][0]["tool_input"] == "Route coverage?"
+            assert evidence_events[0]["tool_name"] == "search_web"
+            assert evidence_events[0]["tool_input"] == "Route coverage?"
             assert result["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
             assert result["answer"] == "Final answer from web route."
         else:
@@ -6734,6 +6857,19 @@ class TestRouterRagRuntime:
 
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
+        async def fake_mcp_call(name, _arguments, _config=None):
+            if name == "search_documents":
+                raise RuntimeError("document tool exploded")
+            return json.dumps({
+                "ok": True,
+                "content": "[THREAD SHAPE]",
+                "sources": [],
+                "artifacts": {},
+                "warnings": [],
+                "metrics": {},
+                "trace": {"tool_name": name},
+            })
+        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FailingTool())
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -6785,7 +6921,8 @@ class TestRouterRagRuntime:
             if event.get("node") == "retrieval_worker" and event.get("status") == "failed"
         ]
         assert failed_worker_events
-        assert result["tool_events"] == []
+        assert result["tool_events"]
+        assert result["tool_events"][0]["tool_name"] == "get_thread_shape"
         assert any(error.get("raw_message") == "document tool exploded" for error in result["errors"])
         assert turn.status == "failed"
         assert turn.agent_run_id == "run-failed"
@@ -7318,7 +7455,11 @@ class TestAgentWorkflowApi:
                 spec_json=spec,
             )
 
-        asyncio.run(seed_internal_workflow())
+        # The TestClient owns the application portal loop and the patched
+        # session maker is bound to that loop.  Running this coroutine through
+        # asyncio.run() creates a second loop and leaves asyncpg cancellation
+        # work attached to the wrong owner during teardown.
+        api_client.portal.call(seed_internal_workflow)
 
         listed = api_client.get("/api/agent-workflows")
         detail = api_client.get("/api/agent-workflows/internal_api_global_agent")

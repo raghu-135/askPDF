@@ -6,6 +6,8 @@
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
         "document_evidence",
         "thread_conversation_history",
         "durable_memory",
@@ -138,7 +140,7 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 40,
+        "max_total_visits": 33,
         "node_visit_limits": {
           "evidence_evaluator": 2,
           "thread_conversation_history_worker": 2,
@@ -147,7 +149,7 @@
           "retrieval_worker": 2,
           "thread_events_worker": 2,
           "web_worker": 2,
-          "serial_dispatch": 20,
+          "serial_dispatch": 10,
           "aggregator": 2,
           "answer_evaluator": 2,
           "answer_reviser": 1

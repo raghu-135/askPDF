@@ -10,14 +10,15 @@ import asyncio
 import uuid
 from typing import AsyncGenerator, Generator
 from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit
 
+import asyncpg
 import pytest
 import pytest_asyncio
 from faker import Faker
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    close_all_sessions,
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
@@ -50,13 +51,57 @@ def test_database_url() -> str:
     """
     test_url = os.getenv("TEST_DATABASE_URL")
     if test_url:
-        # If TEST_DATABASE_URL is set (by run_tests.sh), use it as-is
+        # The Docker test runner creates an isolated database before pytest.
+        # Direct pytest invocations (for example, `docker compose run
+        # rag-service pytest ...`) do not go through that runner, so make the
+        # configured test database available here as well.  This is limited to
+        # TEST_DATABASE_URL and never touches the application DATABASE_URL.
+        asyncio.run(_ensure_test_database(test_url))
         return test_url
     
     # Otherwise, generate a random database name for local testing
     base_url = "postgresql+asyncpg://postgres:postgres@localhost:5432"
     random_db_name = f"test_askpdf_{uuid.uuid4().hex[:12]}"
-    return f"{base_url}/{random_db_name}"
+    test_url = f"{base_url}/{random_db_name}"
+    asyncio.run(_ensure_test_database(test_url))
+    return test_url
+
+
+def _admin_database_url(database_url: str) -> tuple[str, str]:
+    normalized = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parts = urlsplit(normalized)
+    database_name = parts.path.lstrip("/")
+    if not database_name:
+        raise RuntimeError(f"TEST_DATABASE_URL must include a database name: {database_url}")
+    admin_url = urlunsplit((parts.scheme, parts.netloc, "/postgres", parts.query, parts.fragment))
+    return admin_url, database_name
+
+
+async def _ensure_test_database(database_url: str) -> None:
+    """Create TEST_DATABASE_URL's database when a direct pytest run needs it.
+
+    `scripts/run_tests.py` owns isolated database lifecycle in Docker.  This
+    fallback only creates a missing named database and intentionally does not
+    drop it, because a direct invocation may reuse the Compose PostgreSQL
+    service across multiple test commands.
+    """
+    admin_url, database_name = _admin_database_url(database_url)
+    conn = await asyncpg.connect(admin_url, timeout=10)
+    try:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1",
+            database_name,
+        )
+        if exists:
+            return
+        try:
+            await conn.execute(f'CREATE DATABASE "{database_name.replace(chr(34), chr(34) * 2)}"')
+        except asyncpg.exceptions.DuplicateDatabaseError:
+            # Another test process may have created it between the check and
+            # CREATE DATABASE.  It is safe to continue in that case.
+            return
+    finally:
+        await conn.close()
 
 
 def _build_test_engine(test_database_url: str):
@@ -73,13 +118,45 @@ async def _create_test_schema(engine):
         await conn.run_sync(SQLModel.metadata.create_all)
 
 
+async def _drain_test_loop_tasks() -> None:
+    """Allow already-scheduled cleanup callbacks to finish.
+
+    Do not cancel arbitrary tasks here.  A blanket cancellation can interrupt
+    an asyncpg command while it is scheduling its own cancellation coroutine,
+    which is then destroyed with ``Connection._cancel`` still unawaited.
+    Application-owned tasks must be cancelled and awaited by their owning
+    lifespan/fixture before this helper runs.
+    """
+    current = asyncio.current_task()
+    for _ in range(6):
+        pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
+        if not pending:
+            return
+        await asyncio.sleep(0)
+
+
 async def _drop_test_schema(engine):
-    # Service-level repositories create their own sessions from the patched maker.
-    # Close every such session before issuing DDL or disposing the asyncpg engine.
-    await close_all_sessions()
+    # Do not call SQLAlchemy's process-global close_all_sessions() here.  The
+    # sync TestClient runs on its AnyIO portal loop, while other pytest
+    # fixtures may have created sessions on their own loop; the global session
+    # registry can therefore attempt to close a transaction from the wrong
+    # loop and raise IllegalStateChangeError.  Application repositories own
+    # their sessions with async context managers, and the TestClient lifespan
+    # has already stopped MCP/workflow tasks before this teardown runs.
+    # asyncpg schedules connection-cancel work as a task. Give the owning
+    # portal loop a few turns after application/MCP shutdown to run that task
+    # before DDL and engine disposal close its loop.
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await _drain_test_loop_tasks()
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+    for _ in range(3):
+        await asyncio.sleep(0)
     await engine.dispose()
+    # asyncpg may schedule connection-cancellation cleanup from the dispose
+    # itself. Drain the owning loop after disposal, not only before DDL.
+    await _drain_test_loop_tasks()
 
 
 def _build_session_maker(engine):
@@ -110,12 +187,17 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         effective_memory_service,
         memory_manager_engine,
         memory_manager_service,
+        memory_representation_service,
+        memory_service,
         memory_tool_service,
+        memory_workspace_service,
+        project_lifecycle_service,
         thread_management_service,
     )
     from app.agent_workflows import (
         chat_cancellation,
         repository as agent_workflow_repository,
+        studio_runtime,
     )
 
     for module in (
@@ -132,9 +214,14 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         effective_memory_service,
         memory_manager_engine,
         memory_manager_service,
+        memory_representation_service,
+        memory_service,
         memory_tool_service,
+        memory_workspace_service,
+        project_lifecycle_service,
         embedding_materialization_service,
         agent_workflow_repository,
+        studio_runtime,
         chat_cancellation,
         agent_task_repository,
     ):
@@ -154,7 +241,6 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
-    asyncio.run(_create_test_schema(engine))
     _patch_app_session_makers(monkeypatch, session_maker)
 
     import main as main_module
@@ -163,14 +249,19 @@ def api_client(test_database_url, monkeypatch) -> Generator:
         await stop_event.wait()
 
     monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    # Replace only the DB initializer so startup creates the isolated schema
+    # on TestClient's portal loop before the normal seed operations run.
+    async def init_test_db():
+        await _create_test_schema(engine)
+    monkeypatch.setattr(main_module, "init_db", init_test_db)
     app = main_module.app
 
     try:
         with TestClient(app) as test_client:
             yield test_client
+            test_client.portal.call(_drop_test_schema, engine)
     finally:
         app.dependency_overrides.clear()
-        asyncio.run(_drop_test_schema(engine))
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -213,15 +304,26 @@ async def engine(test_database_url: str):
         await conn.run_sync(SQLModel.metadata.create_all)
     
     yield engine
-    
-    # Close repository-created sessions before teardown DDL and engine disposal.
-    await close_all_sessions()
+
+    # Sessions are owned and closed by their async context managers.  Do not
+    # call SQLAlchemy's process-global close_all_sessions() here: pytest-
+    # asyncio creates a new loop per test, so the global registry can retain
+    # loop-bound sessions and schedule asyncpg cancellation work on a loop
+    # that is already being torn down.
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await _drain_test_loop_tasks()
 
     # Drop all tables after test
+    for _ in range(3):
+        await asyncio.sleep(0)
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+    for _ in range(3):
+        await asyncio.sleep(0)
     
     await engine.dispose()
+    await _drain_test_loop_tasks()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -250,14 +352,17 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
         autoflush=False
     )
     
-    async with async_session() as session:
-        # Begin transaction
+    session = async_session()
+    try:
         await session.begin()
-        
         yield session
-        
-        # Rollback transaction to keep test database clean
-        await session.rollback()
+    finally:
+        # Close explicitly on the fixture's owning loop.  Relying only on the
+        # async context manager during generator teardown can leave an
+        # asyncpg cancellation task behind when pytest is rotating loops.
+        if session.in_transaction():
+            await session.rollback()
+        await session.close()
 
 
 # Test data fixtures for Thread model

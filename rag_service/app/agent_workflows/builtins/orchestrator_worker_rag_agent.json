@@ -6,6 +6,8 @@
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
         "document_evidence",
         "thread_conversation_history",
         "durable_memory",

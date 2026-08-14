@@ -91,6 +91,8 @@ def _runtime_visit_index(config: Optional[RunnableConfig]) -> Optional[int]:
 
 def format_prefetch_summary(bundle: Dict[str, Any]) -> str:
     parts = []
+    if bundle.get("thread_shape_text"):
+        parts.append("Thread shape tool output:\n" + str(bundle["thread_shape_text"]))
     if bundle.get("recent_history_text"):
         parts.append("Recent conversation:\n" + bundle["recent_history_text"])
     if bundle.get("semantic_history_text"):
@@ -101,7 +103,12 @@ def format_prefetch_summary(bundle: Dict[str, Any]) -> str:
         parts.append("Document evidence:\n" + bundle["document_evidence_text"])
     documents = bundle.get("documents") or []
     if documents:
-        names = [f"- {doc.get('file_name')} ({doc.get('file_hash')})" for doc in documents[:12]]
+        names = [
+            "- " + str(doc.get("file_name"))
+            + f" ({doc.get('file_hash')})"
+            + (f" — {doc.get('page_count')} pages" if doc.get("page_count") not in (None, "") else "")
+            for doc in documents[:12]
+        ]
         parts.append("Available documents:\n" + "\n".join(names))
     return "\n\n".join(parts).strip() or "No pre-fetched context is available."
 

@@ -23,7 +23,7 @@
       }
     },
     "config": {
-      "allowed_tool_ids": ["document_evidence", "focused_document_evidence", "thread_conversation_history", "durable_memory", "thread_events", "live_web_recon", "clarify_intent"],
+      "allowed_tool_ids": ["thread_shape", "wikipedia_reference", "document_evidence", "focused_document_evidence", "thread_conversation_history", "durable_memory", "thread_events", "live_web_recon", "clarify_intent"],
       "use_web_search": false,
       "use_reranker": true,
       "system_role": "",

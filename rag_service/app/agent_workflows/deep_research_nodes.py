@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Send, interrupt
 
-from app.agent.external_research_tools import search_web
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.agent.tool_contract import normalize_tool_result
 from app.agent_workflows.runtime_invocation import (
     append_tool_event_for_node,
@@ -23,12 +23,11 @@ from app.agent_workflows.runtime_invocation import (
 from app.agent_workflows.parallel_runtime import parallel_retryable_error
 from app.models.deep_research import DeepResearchPlanProposal, DeepResearchSubagentResult
 from app.models.llm_server_client import close_model_client, get_llm
-from app.rag.agent_tools import (
-    search_documents,
-    search_durable_memory,
-    search_thread_conversation_history,
-    search_thread_events,
-)
+search_web = create_mcp_langchain_tool("search_web")
+search_documents = create_mcp_langchain_tool("search_documents")
+search_durable_memory = create_mcp_langchain_tool("search_durable_memory")
+search_thread_conversation_history = create_mcp_langchain_tool("search_thread_conversation_history")
+search_thread_events = create_mcp_langchain_tool("search_thread_events")
 from app.services.agent_task_repository import (
     canonical_hash,
     block_todos,

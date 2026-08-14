@@ -1,413 +1,65 @@
+"""MCP caller adapters for web and external research tools.
+
+This module intentionally contains no provider implementations.  It remains
+as a small import-compatible surface for callers that still obtain tools from
+the historical module; every returned tool is an MCP client adapter.
 """
-Externally backed LangChain Community research tools.
 
-The built-in web search tools are always defined here. Additional source
-specific tools are registered only when their package/runtime dependencies are
-available, so one broken provider cannot prevent the agent from starting.
-"""
+from typing import Any
 
-import importlib
-import asyncio
-import json
-import logging
-from typing import Any, Callable, Dict, List, Optional
+from langchain_core.tools import BaseTool
 
-from langchain_core.tools import BaseTool, StructuredTool, tool
-from langchain_core.runnables import RunnableConfig
-
-from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
-from app.agent.evidence_contract import evidence_segment
+from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.rag.enums import TimelineEventType
-from app.rag.retrieval import rerank_document_chunks
-from app.services.web_search_service import DEFAULT_WEB_SEARCH_RESULTS, search_internet
-from app.time_utils import iso_utc_z
-
-logger = logging.getLogger(__name__)
-
-def _import_attr(module_path: str, attr_name: str) -> Any:
-    module = importlib.import_module(module_path)
-    return getattr(module, attr_name)
 
 
-def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except Exception:
-            return [{"snippet": raw, "title": query, "link": ""}]
-    return []
-
-
-async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
-    result = await search_internet(
-        query,
-        max_results=max_results or DEFAULT_WEB_SEARCH_RESULTS,
-        use_reranker=False,
-    )
-    sources = result.get("sources") or []
-    if not sources:
-        return None
-    return {
-        "texts": [item["snippet"] for item in sources],
-        "urls": [item["url"] for item in sources],
-        "titles": [item["title"] for item in sources],
-    }
+search_web = create_mcp_langchain_tool("search_web")
 
 
 def _format_web_context(
-    texts: List[str],
-    urls: List[str],
-    titles: List[str],
-    scores: Optional[List[float]] = None,
-    web_search_performed_at: Optional[str] = None,
-) -> Dict[str, Any]:
-    web_groups: Dict[str, Dict[str, Any]] = {}
-    web_sources: List[Dict[str, Any]] = []
+    texts: list[str],
+    urls: list[str],
+    titles: list[str],
+    scores: list[float] | None = None,
+    web_search_performed_at: str | None = None,
+) -> dict[str, Any]:
+    """Format web evidence for old presentation callers without executing tools."""
+    web_groups: dict[str, dict[str, Any]] = {}
+    web_sources: list[dict[str, Any]] = []
     for idx, (text, url, title) in enumerate(zip(texts, urls, titles)):
         if url not in web_groups:
             web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
         web_groups[url]["texts"].append(text)
-        entry: Dict[str, Any] = {
-            "text": text[:200] + "...",
-            "url": url,
-            "title": title or "Internet Search",
-        }
+        entry: dict[str, Any] = {"text": text[:200] + "...", "url": url, "title": title or "Internet Search"}
         if scores and idx < len(scores):
             entry["score"] = scores[idx]
         if web_search_performed_at:
-            entry["web_search_performed_at"] = web_search_performed_at
-            entry["timeline_event_at"] = web_search_performed_at
-            entry["timeline_event_type"] = TimelineEventType.WEB_SEARCH_PERFORMED.value
+            entry.update({
+                "web_search_performed_at": web_search_performed_at,
+                "timeline_event_at": web_search_performed_at,
+                "timeline_event_type": TimelineEventType.WEB_SEARCH_PERFORMED.value,
+            })
         web_sources.append(entry)
 
-    context_parts = []
+    content = []
     for url, group in web_groups.items():
-        combined_text = "\n".join(group["texts"])
-        prefix = (
-            f"Web result from search performed at {web_search_performed_at}:\n"
-            if web_search_performed_at else ""
-        )
-        context_parts.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
-
-    return {
-        "content": "\n\n".join(context_parts),
-        "__web_sources__": web_sources,
-    }
+        prefix = f"Web result from search performed at {web_search_performed_at}:\n" if web_search_performed_at else ""
+        content.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n' + "\n".join(group["texts"]))
+    return {"content": "\n\n".join(content), "__web_sources__": web_sources}
 
 
-@tool
-async def search_web(query: str, config: RunnableConfig = None) -> str:
-    """
-    Live web search for external or time-sensitive information.
-    Results are cached to the thread and returned with labeled sources.
-
-    Args:
-        query: Concise, keyword-rich search query.
-    """
-    started = tool_started()
-    tool_name = "search_web"
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        if not conf.get("use_web_search", False):
-            return make_tool_result(
-                tool_name=tool_name,
-                content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history.",
-                config=config,
-                started=started,
-                warnings=[ToolWarningCode.WEB_SEARCH_DISABLED],
-            ).to_json()
-        use_reranker = conf.get("use_reranker", True)
-
-        logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
-        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
-        embedding_model = conf.get("embedding_model")
-
-        result = await _run_web_search(query, max_results=DEFAULT_WEB_SEARCH_RESULTS)
-        if not result:
-            return make_tool_result(
-                tool_name=tool_name,
-                content="Web search returned no usable text.",
-                config=config,
-                started=started,
-                warnings=[ToolWarningCode.NO_USABLE_WEB_RESULTS],
-            ).to_json()
-        web_search_performed_at = iso_utc_z()
-
-        texts = result["texts"]
-        urls = result["urls"]
-        titles = result["titles"]
-        scores: Optional[List[float]] = None
-        if use_reranker:
-            web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
-            web_chunks = await rerank_document_chunks(query, web_chunks)
-            texts = [c.get("text", "") for c in web_chunks]
-            urls = [c.get("url", "") for c in web_chunks]
-            titles = [c.get("title", "") for c in web_chunks]
-            scores = [c.get("rerank_score") for c in web_chunks]
-
-        # Persist results in Weaviate for future retrieval.
-        if thread_id and embedding_model and conf.get("web_search_index", True):
-            try:
-                from app.rag.indexer import index_web_search_for_thread
-                asyncio.create_task(
-                    index_web_search_for_thread(
-                        thread_id=thread_id,
-                        query=query,
-                        texts=texts,
-                        urls=urls,
-                        titles=titles,
-                        embedding_model=embedding_model,
-                        web_search_performed_at=web_search_performed_at,
-                    )
-                )
-            except Exception as idx_err:
-                logger.warning(f"Web search indexing skipped: {idx_err}")
-
-        payload = _format_web_context(
-            texts,
-            urls,
-            titles,
-            scores=scores,
-            web_search_performed_at=web_search_performed_at,
-        )
-        web_sources = payload.get("__web_sources__", [])
-        return make_tool_result(
-            tool_name=tool_name,
-            content=payload.get("content", ""),
-            config=config,
-            started=started,
-            sources=web_sources,
-            artifacts={
-                "web_sources": web_sources,
-                "evidence_segments": [
-                    segment
-                    for index, text in enumerate(texts)
-                    if (segment := evidence_segment(
-                        kind="web",
-                        content=text,
-                        source={
-                            "url": urls[index],
-                            "title": titles[index],
-                            "web_search_performed_at": web_search_performed_at,
-                        },
-                        raw_score=scores[index] if scores and index < len(scores) else None,
-                    ))
-                ],
-            },
-        ).to_json(legacy_fields={"__web_sources__": web_sources})
-    except Exception as e:
-        logger.error(f"Web search failed: {e}", exc_info=True)
-        return make_tool_error_result(
-            tool_name=tool_name,
-            error=e,
-            config=config,
-            started=started,
-            user_message=f"Web search failed: {str(e)}",
-        ).to_json()
-
-
-def _build_tool(
-    display_name: str,
-    tool_path: str,
-    class_name: str,
-    factory: Optional[Callable[[Any], BaseTool]] = None,
-) -> Optional[BaseTool]:
-    try:
-        tool_cls = _import_attr(tool_path, class_name)
-        tool = factory(tool_cls) if factory else tool_cls()
-        wrapped_tool = _wrap_external_tool_with_contract(tool)
-        logger.info("Registered external research tool: %s (%s)", display_name, wrapped_tool.name)
-        return wrapped_tool
-    except Exception as exc:
-        logger.warning("Skipping external research tool %s: %s", display_name, exc)
-        return None
-
-
-def _tool_input_from_kwargs(kwargs: Dict[str, Any]) -> Any:
-    if len(kwargs) == 1:
-        return next(iter(kwargs.values()))
-    return kwargs
-
-
-def _wrap_external_tool_with_contract(base_tool: BaseTool) -> BaseTool:
-    """Wrap a third-party LangChain tool with the askPDF tool result contract."""
-
-    tool_name = base_tool.name
-    description = base_tool.description or f"External research tool: {tool_name}"
-
-    async def contracted_external_tool(config: RunnableConfig = None, **kwargs: Any) -> str:
-        started = tool_started()
-        try:
-            tool_input = _tool_input_from_kwargs(kwargs)
-            raw = await base_tool.ainvoke(tool_input, config=config)
-            content = raw if isinstance(raw, str) else str(raw or "")
-            warnings = [] if content.strip() else [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT]
-            return make_tool_result(
-                tool_name=tool_name,
-                content=content,
-                config=config,
-                started=started,
-                warnings=warnings,
-                artifacts={"provider_tool": base_tool.__class__.__name__},
-            ).to_json()
-        except Exception as exc:
-            return make_tool_error_result(
-                tool_name=tool_name,
-                error=exc,
-                config=config,
-                started=started,
-                user_message=f"{tool_name} failed: {exc}",
-            ).to_json()
-
-    return StructuredTool.from_function(
-        coroutine=contracted_external_tool,
-        name=tool_name,
-        description=description,
-        args_schema=base_tool.args_schema,
+def get_external_research_tools() -> list[BaseTool]:
+    """Return MCP adapters for all registry-authorized external tools."""
+    names = (
+        "wikipedia",
+        "wikidata",
+        "arxiv",
+        "pub_med",
+        "pubmed",
+        "semanticscholar",
+        "semantic_scholar",
+        "stack_exchange",
+        "yahoo_finance_news",
     )
-
-
-def _wikipedia_tool(tool_cls: Any) -> BaseTool:
-    wrapper_cls = _import_attr(
-        "langchain_community.utilities.wikipedia",
-        "WikipediaAPIWrapper",
-    )
-    return tool_cls(
-        api_wrapper=wrapper_cls(top_k_results=3, doc_content_chars_max=3000)
-    )
-
-
-def _arxiv_tool(tool_cls: Any) -> BaseTool:
-    wrapper_cls = _import_attr(
-        "langchain_community.utilities.arxiv",
-        "ArxivAPIWrapper",
-    )
-    return tool_cls(
-        api_wrapper=wrapper_cls(top_k_results=3, doc_content_chars_max=3000)
-    )
-
-
-def _pubmed_tool(tool_cls: Any) -> BaseTool:
-    wrapper_cls = _import_attr(
-        "langchain_community.utilities.pubmed",
-        "PubMedAPIWrapper",
-    )
-    return tool_cls(
-        api_wrapper=wrapper_cls(top_k_results=3, doc_content_chars_max=3000)
-    )
-
-
-def _semantic_scholar_tool(tool_cls: Any) -> BaseTool:
-    wrapper_cls = _import_attr(
-        "langchain_community.utilities.semanticscholar",
-        "SemanticScholarAPIWrapper",
-    )
-    return tool_cls(api_wrapper=wrapper_cls(top_k_results=3))
-
-
-def _wikidata_tool(_: Any) -> BaseTool:
-    @tool
-    def wikidata(query: str) -> str:
-        """
-        Lookup structured entity facts from Wikidata.
-
-        Args:
-            query: Entity or fact lookup query.
-        """
-        tool_cls = _import_attr(
-            "langchain_community.tools.wikidata.tool",
-            "WikidataQueryRun",
-        )
-        wrapper_cls = _import_attr(
-            "langchain_community.utilities.wikidata",
-            "WikidataAPIWrapper",
-        )
-        wikidata_tool = tool_cls(api_wrapper=wrapper_cls())
-        return wikidata_tool.invoke(query)
-
-    return wikidata
-
-
-def _stackexchange_tool(_: Any) -> BaseTool:
-    @tool
-    def stack_exchange(query: str) -> str:
-        """
-        Search Stack Exchange / Stack Overflow style technical Q&A.
-
-        Args:
-            query: Technical search query.
-        """
-        tool_cls = _import_attr(
-            "langchain_community.tools.stackexchange.tool",
-            "StackExchangeTool",
-        )
-        wrapper_cls = _import_attr(
-            "langchain_community.utilities.stackexchange",
-            "StackExchangeAPIWrapper",
-        )
-        stack_tool = tool_cls(api_wrapper=wrapper_cls(max_results=3))
-        return stack_tool.invoke(query)
-
-    return stack_exchange
-
-
-def get_external_research_tools() -> List[BaseTool]:
-    """
-    Return enabled free/public LangChain Community research tools.
-
-    SearXNG tools are intentionally excluded because they require a configured
-    self-hosted SearXNG instance.
-    """
-    candidates = [
-        (
-            "Wikipedia",
-            "langchain_community.tools.wikipedia.tool",
-            "WikipediaQueryRun",
-            _wikipedia_tool,
-        ),
-        (
-            "Wikidata",
-            "langchain_community.tools.wikidata.tool",
-            "WikidataQueryRun",
-            _wikidata_tool,
-        ),
-        (
-            "arXiv",
-            "langchain_community.tools.arxiv.tool",
-            "ArxivQueryRun",
-            _arxiv_tool,
-        ),
-        (
-            "PubMed",
-            "langchain_community.tools.pubmed.tool",
-            "PubmedQueryRun",
-            _pubmed_tool,
-        ),
-        (
-            "Semantic Scholar",
-            "langchain_community.tools.semanticscholar.tool",
-            "SemanticScholarQueryRun",
-            _semantic_scholar_tool,
-        ),
-        (
-            "StackExchange",
-            "langchain_community.tools.stackexchange.tool",
-            "StackExchangeTool",
-            _stackexchange_tool,
-        ),
-        (
-            "Yahoo Finance News",
-            "langchain_community.tools.yahoo_finance_news",
-            "YahooFinanceNewsTool",
-            lambda tool_cls: tool_cls(top_k=5),
-        ),
-    ]
-
-    tools: List[BaseTool] = []
-    for display_name, module_path, class_name, factory in candidates:
-        tool = _build_tool(display_name, module_path, class_name, factory)
-        if tool is not None:
-            tools.append(tool)
-    return tools
+    return [create_mcp_langchain_tool(name) for name in names if name in TOOL_FRIENDLY_CONFIG]
