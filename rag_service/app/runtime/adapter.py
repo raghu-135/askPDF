@@ -1,0 +1,67 @@
+"""Neutral runtime adapter protocol and invocation context."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Optional, Protocol
+
+from app.runtime.contracts import (
+    AgentDefinition,
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    ContinuationBinding,
+    RuntimeCapabilities,
+)
+
+
+@dataclass(frozen=True)
+class RuntimeExecutionContext:
+    """In-process compatibility inputs kept outside the wire contract."""
+
+    request: Any = None
+    embedding_model: Optional[str] = None
+    resolved_spec: Mapping[str, Any] = field(default_factory=dict)
+    agent_run_context: Mapping[str, Any] = field(default_factory=dict)
+    trace_recorder: Any = None
+    cancellation_checker: Any = None
+    result_projector: Any = None
+    task_id: Optional[str] = None
+    task_worker_id: Optional[str] = None
+
+
+class AgentRuntimeAdapter(Protocol):
+    framework: str
+    builder_id: str
+
+    async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities: ...
+
+    async def start(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: RuntimeExecutionContext,
+        event_sink: Any = None,
+    ) -> AgentRuntimeResult: ...
+
+    async def resume(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        interrupt: Mapping[str, Any],
+        context: RuntimeExecutionContext,
+        event_sink: Any = None,
+    ) -> AgentRuntimeResult: ...
+
+    async def continue_run(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: RuntimeExecutionContext,
+        event_sink: Any = None,
+    ) -> Optional[AgentRuntimeResult]: ...
+
+    async def cancel(self, request: AgentRuntimeRequest) -> Any: ...
+
+    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]: ...
+
+    async def delete_continuation(self, continuation: ContinuationBinding) -> Any: ...

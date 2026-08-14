@@ -36,7 +36,6 @@ from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_age
 from app.agent_workflows.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
-    request_chat_run_cancel,
 )
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.trace_details import detail_manifest
@@ -61,6 +60,12 @@ from app.time_utils import iso_utc_z
 
 
 router = APIRouter(tags=["agent-workflows"])
+
+
+async def request_chat_run_cancel(run_id: str, *, thread_id: str):
+    """Compatibility seam for API callers; cancellation routes through the adapter registry."""
+
+    return await AgentRunService().cancel_agent_run(run_id, thread_id=thread_id)
 
 
 async def _require_ready_thread(thread_id: str):
@@ -514,7 +519,9 @@ async def get_latest_internal_agent_workflow_test(
     if run is None:
         raise HTTPException(status_code=404, detail="Builder test run not found")
     turns = await AgentWorkflowRepository().list_chat_turns_for_run(run.id)
-    return {"agent_run": _run_payload(run, turns)}
+    payload = _run_payload(run, turns)
+    payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
+    return {"agent_run": payload}
 
 
 @router.post("/internal/agent-workflows/test-runs/{run_id}/cancel")
@@ -826,6 +833,8 @@ async def cancel_chat_agent_run(
     if not await get_thread(req.thread_id):
         raise HTTPException(status_code=404, detail="Agent run not found")
     result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
     if result.status == "missing":
         raise HTTPException(status_code=404, detail="Agent run not found")
     if result.status == CHAT_CANCEL_UNSUPPORTED:

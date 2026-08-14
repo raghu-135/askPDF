@@ -79,12 +79,30 @@ def result_from_legacy(result: Mapping[str, Any]) -> AgentRuntimeResult:
         interruption=interruption,
         usage=dict(result.get("usage") or result.get("metrics") or {}),
         runtime_metadata={
-            key: result[key]
-            for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id", "agent_workflow_version")
-            if key in result
+            **{
+                key: result[key]
+                for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id", "agent_workflow_version")
+                if key in result
+            },
+            "legacy_result": dict(result),
         },
         error=error,
     )
+
+
+def legacy_result_from_runtime(result: AgentRuntimeResult) -> dict[str, Any]:
+    """Compatibility projection used while existing control-plane code migrates."""
+
+    legacy = result.runtime_metadata.get("legacy_result") if isinstance(result.runtime_metadata, Mapping) else None
+    if isinstance(legacy, dict):
+        return dict(legacy)
+    return {
+        "status": result.status,
+        "answer": result.output,
+        "clarification_options": list((result.clarification or {}).get("options") or []),
+        "pending_interrupt": dict(result.interruption or {}),
+        "agent_error": dict(result.error or {}),
+    }
 
 
 def event_from_legacy(

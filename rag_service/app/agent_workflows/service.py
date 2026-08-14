@@ -5,7 +5,6 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.enums import AgentRunResumeAction, InterruptStatus
@@ -15,11 +14,20 @@ from app.agent_workflows.repository import AgentWorkflowRepository, InterruptRes
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows import checkpointing
+from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.catalog import definition_from_workflow
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
+from app.runtime.registry import adapter_for_definition
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
 logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
+# Kept as a compatibility seam for existing tests and integrations while the
+# adapter owns normal production checkpoint cleanup.
+delete_agent_checkpoints = checkpointing.delete_agent_checkpoints
 
 
 def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
@@ -65,6 +73,52 @@ class AgentRunService:
     ):
         self.repository = repository or AgentWorkflowRepository()
         self.resolver = resolver or WorkflowResolver()
+
+    async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
+        if delete_agent_checkpoints is not checkpointing.delete_agent_checkpoints and binding is not None:
+            checkpoint_id = binding.payload.get("checkpoint_thread_id")
+            if checkpoint_id:
+                return await delete_agent_checkpoints([str(checkpoint_id)])
+        return await adapter.delete_continuation(binding)
+
+    async def cancel_agent_run(self, run_id: str, *, thread_id: str) -> Any:
+        run = await self.repository.get_run(run_id)
+        if run is None or run.thread_id != thread_id:
+            return None
+        definition = AgentDefinition(
+            definition_id=str(run.workflow_id),
+            framework=str(getattr(run, "framework", None) or "langgraph"),
+            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+            category=getattr(run, "definition_category", None),
+        )
+        adapter = adapter_for_definition(definition)
+        request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            continuation=continuation_from_run(run),
+        )
+        return await adapter.cancel(request)
+
+    async def inspect_agent_run(self, run: Any) -> Dict[str, Any]:
+        definition = AgentDefinition(
+            definition_id=str(run.workflow_id),
+            framework=str(getattr(run, "framework", None) or "langgraph"),
+            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+            category=getattr(run, "definition_category", None),
+        )
+        adapter = adapter_for_definition(definition)
+        request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            continuation=continuation_from_run(run),
+        )
+        return dict(await adapter.inspect(request))
 
     async def run_thread_chat(
         self,
@@ -185,24 +239,30 @@ class AgentRunService:
 
         try:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
-            from app.agent_workflows import router_runtime
-
-            async with open_agent_checkpointer() as checkpointer:
-                stream_kwargs = {
-                    "cancellation_checker": lambda: chat_run_cancel_requested(run.id),
-                }
-                if execution_event_sink is not None:
-                    stream_kwargs["execution_event_sink"] = execution_event_sink
-                result = await router_runtime.execute_compiled_rag_chat(
-                    thread_id,
-                    req,
-                    embedding_model,
+            definition = definition_from_workflow(workflow)
+            adapter = adapter_for_definition(definition)
+            runtime_request = AgentRuntimeRequest(
+                run_id=run.id,
+                thread_id=thread_id,
+                definition_id=definition.definition_id,
+                framework=definition.framework,
+                builder_id=definition.builder_id,
+                input={"question": getattr(req, "question", "")},
+                options={"embedding_model": embedding_model},
+            )
+            runtime_result = await adapter.start(
+                runtime_request,
+                context=RuntimeExecutionContext(
+                    request=req,
+                    embedding_model=embedding_model,
                     resolved_spec=stored_resolved_spec,
                     agent_run_context=context,
                     trace_recorder=trace_recorder,
-                    checkpointer=checkpointer,
-                    **stream_kwargs,
-                )
+                    cancellation_checker=lambda: chat_run_cancel_requested(run.id),
+                ),
+                event_sink=execution_event_sink,
+            )
+            result = legacy_result_from_runtime(runtime_result)
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             _attach_parallel_projection(result, execution_event_sink)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
@@ -235,7 +295,7 @@ class AgentRunService:
                         run.id,
                     )
                 try:
-                    await delete_agent_checkpoints([str(run.checkpoint_thread_id or run.id)])
+                    await self._delete_continuation(adapter, continuation_from_run(run))
                     deleted = await self.repository.delete_run(run.id)
                     if not deleted:
                         raise RuntimeError(f"Canceled chat Agent Run {run.id} was not found during cleanup")
@@ -277,7 +337,7 @@ class AgentRunService:
                         run.id,
                     )
                 try:
-                    await delete_agent_checkpoints([str(run.checkpoint_thread_id or run.id)])
+                    await self._delete_continuation(adapter, continuation_from_run(run))
                     deleted = await self.repository.delete_run(run.id)
                     if not deleted:
                         raise RuntimeError(f"Clarification agent run {run.id} was not found during cleanup")
@@ -468,24 +528,35 @@ class AgentRunService:
             return resolution
 
         try:
-            from app.agent_workflows.router_runtime import resume_compiled_rag_chat
-
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
-            async with open_agent_checkpointer() as checkpointer:
-                stream_kwargs = {
-                    "cancellation_checker": lambda: chat_run_cancel_requested(resolution.run.id),
-                }
-                if execution_event_sink is not None:
-                    stream_kwargs["execution_event_sink"] = execution_event_sink
-                result = await resume_compiled_rag_chat(
-                    resolution.run,
-                    interrupt=resolution.interrupt,
-                    checkpointer=checkpointer,
+            definition = AgentDefinition(
+                definition_id=str(resolution.run.workflow_id),
+                framework=str(getattr(resolution.run, "framework", None) or "langgraph"),
+                builder_id=str(getattr(resolution.run, "builder_id", None) or "langgraph_graph"),
+                category=getattr(resolution.run, "definition_category", None),
+            )
+            adapter = adapter_for_definition(definition)
+            runtime_request = AgentRuntimeRequest(
+                run_id=resolution.run.id,
+                thread_id=resolution.run.thread_id,
+                definition_id=definition.definition_id,
+                framework=definition.framework,
+                builder_id=definition.builder_id,
+                continuation=continuation_from_run(resolution.run),
+            )
+            runtime_result = await adapter.resume(
+                runtime_request,
+                interrupt=resolution.interrupt,
+                context=RuntimeExecutionContext(
+                    agent_run_context={"run": resolution.run},
                     trace_recorder=resume_trace_recorder,
-                    **stream_kwargs,
-                )
+                    cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
+                ),
+                event_sink=execution_event_sink,
+            )
+            result = legacy_result_from_runtime(runtime_result)
             _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {

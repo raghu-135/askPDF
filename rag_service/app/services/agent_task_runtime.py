@@ -9,22 +9,19 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.router_runtime import (
-    continue_compiled_rag_chat,
-    execute_compiled_rag_chat,
-    project_agent_task_result,
-    resume_compiled_rag_chat,
-)
 from app.agent_workflows.validator import WorkflowResolver
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus, DEEP_RESEARCH_WORKFLOW_ID
 from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
+from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
+from app.runtime.registry import adapter_for_definition
 
 
 logger = logging.getLogger(__name__)
@@ -207,37 +204,47 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return await tasks.task_cancel_requested(task.id) or await tasks.active_runtime_budget_exhausted(task.id)
 
     try:
-        async with open_agent_checkpointer() as checkpointer:
-            pending = dict(run.pending_interrupt_json or {})
-            if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
-                result = await resume_compiled_rag_chat(
-                    run,
-                    interrupt=pending,
-                    checkpointer=checkpointer,
-                    trace_recorder=trace,
-                    cancellation_checker=cancellation_requested,
-                    result_projector=project_agent_task_result,
-                )
-            else:
-                result = await continue_compiled_rag_chat(
-                    run,
-                    checkpointer=checkpointer,
-                    trace_recorder=trace,
-                    cancellation_checker=cancellation_requested,
-                    result_projector=project_agent_task_result,
-                )
-                if result is None:
-                    result = await execute_compiled_rag_chat(
-                        task.thread_id,
-                        request,
-                        thread.embedding_model,
-                        resolved_spec=run.resolved_spec_json,
-                        agent_run_context=context,
-                        trace_recorder=trace,
-                        checkpointer=checkpointer,
-                        cancellation_checker=cancellation_requested,
-                        result_projector=project_agent_task_result,
-                    )
+        definition = AgentDefinition(
+            definition_id=str(run.workflow_id),
+            framework=str(getattr(run, "framework", None) or "langgraph"),
+            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+            category=getattr(run, "definition_category", None),
+        )
+        adapter = adapter_for_definition(definition)
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"question": task.objective},
+            task_id=task.id,
+            continuation=continuation_from_run(run),
+        )
+        pending = dict(run.pending_interrupt_json or {})
+        runtime_context = RuntimeExecutionContext(
+            request=request,
+            embedding_model=thread.embedding_model,
+            resolved_spec=run.resolved_spec_json,
+            agent_run_context={**context, "run": run},
+            trace_recorder=trace,
+            cancellation_checker=cancellation_requested,
+            result_projector=adapter.project_task_result,
+            task_id=task.id,
+            task_worker_id=worker_id,
+        )
+        if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
+            runtime_result = await adapter.resume(
+                runtime_request,
+                interrupt=pending,
+                context=runtime_context,
+            )
+            result = legacy_result_from_runtime(runtime_result)
+        else:
+            runtime_result = await adapter.continue_run(runtime_request, context=runtime_context)
+            if runtime_result is None:
+                runtime_result = await adapter.start(runtime_request, context=runtime_context)
+            result = legacy_result_from_runtime(runtime_result)
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
