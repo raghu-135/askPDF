@@ -12,7 +12,6 @@ from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.runtime.langgraph.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.agent_workflows import checkpointing
 from app.runtime.adapter import RuntimeExecutionContext
@@ -20,6 +19,7 @@ from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
+from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
@@ -70,10 +70,12 @@ class AgentRunService:
     def __init__(
         self,
         repository: Optional[AgentWorkflowRepository] = None,
-        resolver: Optional[WorkflowResolver] = None,
+        resolver: Optional[Any] = None,
     ):
         self.repository = repository or AgentWorkflowRepository()
-        self.resolver = resolver or WorkflowResolver()
+        # Kept for constructor compatibility with existing callers. New run
+        # preparation resolves through the concrete builder provider.
+        self.resolver = resolver
         self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
@@ -177,13 +179,25 @@ class AgentRunService:
             "tool_instructions": getattr(req, "tool_instructions_override", None),
             "custom_instructions": getattr(req, "custom_instructions_override", None),
         }
+        definition = definition_from_workflow(workflow)
         try:
-            resolved_spec = self.resolver.resolve(
-                workflow.spec_json,
-                thread_settings=thread_settings,
-                request_overrides=request_overrides,
-            )
-        except WorkflowValidationError as exc:
+            provider = builder_for_definition(definition)
+            if self.resolver is not None:
+                # Preserve the explicit test/integration injection seam while
+                # production selection remains provider-based.
+                resolved_spec = self.resolver.resolve(
+                    workflow.spec_json,
+                    thread_settings=thread_settings,
+                    request_overrides=request_overrides,
+                )
+            else:
+                resolved_spec = await provider.resolve(
+                    definition,
+                    workflow.spec_json,
+                    thread_settings=thread_settings,
+                    request_overrides=request_overrides,
+                )
+        except ValueError as exc:
             logger.exception(
                 "Selected agent workflow failed validation; aborting run | thread_id=%s requested_workflow=%s error=%s",
                 thread_id,
@@ -194,26 +208,15 @@ class AgentRunService:
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
         workflow_version = _workflow_version_info(workflow)
-        from app.runtime.langgraph.compiler import WorkflowCompiler
-        from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
-
-        resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
-        resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-            resolved_config.get("hitl_policy"),
-            thread_settings,
-        )
-        resolved_spec["config"] = resolved_config
-        stored_resolved_spec = WorkflowCompiler().materialize_spec(
-            resolved_spec,
-        )
+        stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
 
         run = await self.repository.create_run(
             thread_id=thread_id,
             workflow_id=workflow.id,
             workflow_version_id=workflow_version.id if workflow_version is not None else None,
             workflow_version=workflow_version.version if workflow_version is not None else None,
-            framework=str(getattr(workflow, "framework", None) or "langgraph"),
-            builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+            framework=definition.framework,
+            builder_id=definition.builder_id,
             definition_category=getattr(workflow, "category", None),
             resolved_spec_json=stored_resolved_spec,
             run_metadata_json={

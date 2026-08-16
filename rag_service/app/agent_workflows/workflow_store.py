@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.runtime.langgraph.validator import WorkflowValidationError, WorkflowValidator
+from app.runtime.langgraph.validator import WorkflowValidationError
+from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
+from app.runtime.contracts import AgentDefinition
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentWorkflow, WorkflowVisibility
 from app.time_utils import utc_now
@@ -60,17 +62,37 @@ async def get_workflow_by_builtin_key(session: AsyncSession, builtin_key: str) -
 
 
 async def seed_builtin_workflows(session: AsyncSession) -> None:
-    validator = WorkflowValidator()
     async with session.begin():
         for workflow_def in load_builtin_workflows():
             spec_json = workflow_def["spec_json"]
-            validation_result = validator.validate(spec_json)
             builtin_key = workflow_def["builtin_key"]
+            framework = str(workflow_def.get("framework") or "langgraph")
+            builder_id = str(workflow_def.get("builder_id") or "langgraph_graph")
+            definition = AgentDefinition(
+                definition_id=builtin_key,
+                framework=framework,
+                builder_id=builder_id,
+                category=workflow_def.get("category"),
+                display_name=workflow_def.get("name"),
+            )
+            try:
+                provider = builder_for_definition(definition)
+                validation = await provider.validate(definition, spec_json)
+            except BuilderSelectionError as exc:
+                raise WorkflowValidationError(str(exc)) from exc
+            validation_result = {
+                "valid": validation.valid,
+                "errors": [issue.message for issue in validation.issues],
+            }
+            if not validation.valid:
+                raise WorkflowValidationError(
+                    "; ".join(validation_result["errors"]) or f"Invalid workflow: {builtin_key}"
+                )
             metadata = {
                 "source": WorkflowVisibility.BUILTIN.value,
                 "builtin_key": builtin_key,
-                "framework": workflow_def.get("framework", "langgraph"),
-                "builder_id": workflow_def.get("builder_id", "langgraph_graph"),
+                "framework": framework,
+                "builder_id": builder_id,
                 "category": workflow_def.get("category"),
                 "version": spec_json.get("version") or 2,
                 "version_id": f"{builtin_key}:v{spec_json.get('version') or 2}",
@@ -86,8 +108,8 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                     description=workflow_def["description"],
                     visibility=workflow_def["visibility"],
                     is_builtin=workflow_def["is_builtin"],
-                    framework=workflow_def.get("framework", "langgraph"),
-                    builder_id=workflow_def.get("builder_id", "langgraph_graph"),
+                    framework=framework,
+                    builder_id=builder_id,
                     category=workflow_def.get("category"),
                     schema_version=spec_json["schema_version"],
                     spec_json=spec_json,
@@ -102,8 +124,8 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                 workflow.description = workflow_def["description"]
                 workflow.visibility = workflow_def["visibility"]
                 workflow.is_builtin = workflow_def["is_builtin"]
-                workflow.framework = workflow_def.get("framework", "langgraph")
-                workflow.builder_id = workflow_def.get("builder_id", "langgraph_graph")
+                workflow.framework = framework
+                workflow.builder_id = builder_id
                 workflow.category = workflow_def.get("category")
                 workflow.schema_version = spec_json["schema_version"]
                 replace_jsonb_field(workflow, "spec_json", spec_json)
@@ -211,7 +233,6 @@ async def save_custom_workflow(
     if spec_json.get("schema_version") != 2:
         raise WorkflowValidationError("internal custom agent workflow specs must use schema_version 2")
 
-    validation_result = WorkflowValidator().validate(spec_json)
     async with session.begin():
         workflow = await session.get(AgentWorkflow, workflow_id) if workflow_id else None
         existing_named_workflow = await get_workflow_by_name(session, name)
@@ -224,6 +245,28 @@ async def save_custom_workflow(
         except (TypeError, ValueError):
             next_version = 1
         workflow_key = workflow_id or spec_json.get("workflow_id") or name
+        framework = str(getattr(workflow, "framework", None) or "langgraph")
+        builder_id = str(getattr(workflow, "builder_id", None) or "langgraph_graph")
+        definition = AgentDefinition(
+            definition_id=str(workflow_key),
+            framework=framework,
+            builder_id=builder_id,
+            display_name=name,
+        )
+        try:
+            provider = builder_for_definition(definition)
+            validation = await provider.validate(definition, spec_json)
+            if not validation.valid:
+                raise WorkflowValidationError(
+                    "; ".join(issue.message for issue in validation.issues) or "Invalid workflow"
+                )
+            normalized_spec = dict(await provider.normalize(definition, spec_json))
+        except BuilderSelectionError as exc:
+            raise WorkflowValidationError(str(exc)) from exc
+        validation_result = {
+            "valid": validation.valid,
+            "errors": [issue.message for issue in validation.issues],
+        }
         metadata = {
             **previous_metadata,
             "source": "custom",
@@ -238,7 +281,9 @@ async def save_custom_workflow(
                 visibility=visibility,
                 is_builtin=False,
                 schema_version=2,
-                spec_json=spec_json,
+                framework=framework,
+                builder_id=builder_id,
+                spec_json=normalized_spec,
                 validation_result_json=validation_result,
                 metadata_json=metadata,
             )
@@ -251,7 +296,9 @@ async def save_custom_workflow(
             workflow.visibility = visibility
             workflow.is_builtin = False
             workflow.schema_version = 2
-            replace_jsonb_field(workflow, "spec_json", spec_json)
+            workflow.framework = framework
+            workflow.builder_id = builder_id
+            replace_jsonb_field(workflow, "spec_json", normalized_spec)
             replace_jsonb_field(workflow, "validation_result_json", validation_result)
             replace_jsonb_field(workflow, "metadata_json", metadata)
             workflow.updated_at = utc_now()

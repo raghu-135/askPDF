@@ -10,7 +10,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import get_route_function_registry
@@ -19,10 +18,7 @@ from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.parallel_contracts import parallel_policy_catalog
 from app.agent_workflows.corrective_contracts import corrective_policy_catalog
-from app.runtime.langgraph.validator import (
-    WorkflowResolver,
-    WorkflowValidationError,
-    WorkflowValidator,
+from app.agent_workflows.workflow_requirements import (
     workflow_node_tool_requirements,
     workflow_required_tool_ids,
 )
@@ -37,7 +33,6 @@ from app.agent_workflows.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
 )
-from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.trace_details import detail_manifest
 from app.runtime.langgraph.studio_runtime import (
     RUN_KIND as BUILDER_TEST_RUN_KIND,
@@ -48,6 +43,8 @@ from app.runtime.langgraph.studio_runtime import (
     stream_builder_test,
 )
 from app.runtime.catalog import catalog_payload
+from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
+from app.runtime.contracts import AgentDefinition
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -82,6 +79,8 @@ async def _require_ready_thread(thread_id: str):
 
 class WorkflowValidationRequest(BaseModel):
     spec: Dict[str, Any] = Field(default_factory=dict)
+    framework: str = "langgraph"
+    builder_id: str = "langgraph_graph"
 
 
 class ThreadAgentConfigValidationRequest(BaseModel):
@@ -171,9 +170,32 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
     }
 
 
+def _definition_for_workflow(workflow) -> AgentDefinition:
+    return AgentDefinition(
+        definition_id=str(workflow.id),
+        framework=str(getattr(workflow, "framework", None) or "langgraph"),
+        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+        category=getattr(workflow, "category", None),
+        display_name=getattr(workflow, "name", None),
+        definition_version=str(getattr(workflow, "version", "")) or None,
+    )
+
+
+def _provider_for_workflow(workflow):
+    return builder_for_definition(_definition_for_workflow(workflow))
+
+
+def _provider_validation_report(provider, spec: Dict[str, Any]) -> Dict[str, Any]:
+    report = provider.report(spec) if hasattr(provider, "report") else {}
+    return dict(report) if isinstance(report, dict) else {}
+
+
 def _workflow_spec_payload(workflow) -> Dict[str, Any]:
     try:
-        validation = WorkflowValidator().report(workflow.spec_json if isinstance(workflow.spec_json, dict) else {})
+        validation = {
+            "valid": bool(workflow.validation_result_json.get("valid", True)),
+            **(workflow.validation_result_json if isinstance(workflow.validation_result_json, dict) else {}),
+        }
     except Exception as exc:
         validation = {
             "valid": False,
@@ -201,11 +223,8 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
 def _is_valid_workflow_for_service(workflow) -> bool:
     if not workflow or workflow.schema_version != 2 or not isinstance(workflow.spec_json, dict):
         return False
-    try:
-        WorkflowValidator().validate(workflow.spec_json)
-    except Exception:
-        return False
-    return True
+    validation = workflow.validation_result_json if isinstance(workflow.validation_result_json, dict) else {}
+    return bool(validation.get("valid", True))
 
 
 def _debug_payload_for_response(run) -> Dict[str, Any] | None:
@@ -420,18 +439,33 @@ async def get_builtin_agent_workflow_source(builtin_key: str):
             builtin_key = canonical_key or requested_key
     if workflow is None:
         raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
-    return {
-        "builtin_key": builtin_key,
-        "name": workflow.get("name") or builtin_key,
-        "description": workflow.get("description") or "",
-        "spec_json": workflow["spec_json"],
-    }
+    definition = AgentDefinition(
+        definition_id=builtin_key,
+        framework=str(workflow.get("framework") or "langgraph"),
+        builder_id=str(workflow.get("builder_id") or "langgraph_graph"),
+    )
+    try:
+        return dict(await builder_for_definition(definition).source(builtin_key))
+    except (BuilderSelectionError, KeyError) as exc:
+        raise HTTPException(status_code=404, detail="Built-in agent workflow source not found") from exc
 
 
 @router.post("/agent-workflows/validate")
 async def validate_agent_workflow(req: WorkflowValidationRequest):
-    validator = WorkflowValidator()
-    return validator.report(req.spec)
+    definition = AgentDefinition(
+        definition_id=str(req.spec.get("workflow_id") or "validation"),
+        framework=req.framework,
+        builder_id=req.builder_id,
+    )
+    try:
+        provider = builder_for_definition(definition)
+        result = await provider.validate(definition, req.spec)
+    except BuilderSelectionError as exc:
+        raise HTTPException(status_code=400, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
+    report = _provider_validation_report(provider, req.spec)
+    report.setdefault("framework", req.framework)
+    report.setdefault("builder_id", req.builder_id)
+    return report
 
 
 @router.post("/internal/agent-workflows/test-runs/stream")
@@ -448,15 +482,14 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
         )
     try:
         candidate = dict(req.spec)
-        candidate_config = dict(candidate.get("config") or {})
-        candidate_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-            candidate_config.get("hitl_policy"),
-            {"hitl_web_approval": req.hitl_web_approval},
-        )
-        candidate["config"] = candidate_config
-        WorkflowValidator().validate(candidate)
-        resolved = WorkflowCompiler().materialize_spec(candidate)
-    except WorkflowValidationError as exc:
+        provider = _provider_for_workflow(workflow)
+        definition = _definition_for_workflow(workflow)
+        resolved = dict(await provider.resolve(
+            definition,
+            candidate,
+            thread_settings={"hitl_web_approval": req.hitl_web_approval},
+        ))
+    except (BuilderSelectionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_test_workflow", "message": str(exc)}) from exc
 
     repo = AgentWorkflowRepository()
@@ -617,7 +650,7 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
             spec_json=spec_json,
             increment_version=False,
         )
-    except (WorkflowValidationError, ValueError) as exc:
+    except (BuilderSelectionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     version_payload = _workflow_spec_payload(workflow)
     return {
@@ -644,46 +677,16 @@ async def delete_internal_agent_workflow(workflow_id: str):
 
 @router.get("/internal/agent-workflows/catalog")
 async def get_internal_agent_workflow_catalog():
-    complete_nodes = get_node_catalog()
-    builtin_only_nodes = {
-        node_type for node_type, metadata in complete_nodes.items()
-        if metadata.get("builtin_only") is True
-    }
-    visible_nodes = {}
-    for node_type, metadata in complete_nodes.items():
-        builtin_only = node_type in builtin_only_nodes
-        visible_nodes[node_type] = {
-            **metadata,
-            "authorable": not builtin_only,
-            "allowed_parent_types": list(metadata.get("allowed_parent_types", [])),
-            "allowed_child_types": list(metadata.get("allowed_child_types", [])),
-        }
-    return {
-        "schema_version": 2,
-        "spec_schema_version": 2,
-        "graph_spec": {
-            "required_schema_version": 2,
-            "requires_explicit_route_fn": True,
-            "reserved_node_ids": ["START", "END"],
-            "start_node": "START",
-            "end_node": "END",
-        },
-        "node_catalog": visible_nodes,
-        "route_functions": get_route_function_registry(),
-        "tool_contracts": _agent_workflow_tool_contract_catalog(),
-        "defaults": {
-            "context_policy": {
-                "evidence_packet_limit": 12,
-                "evidence_packet_content_limit": 2000,
-                "final_prompt_assembly": "evidence_packets",
-            },
-            "loop_policy": {
-                "default_max_node_visits": 1,
-            },
-            "parallel_policy": parallel_policy_catalog(),
-            "corrective_policy": corrective_policy_catalog(),
-        },
-    }
+    definition = AgentDefinition(
+        definition_id="catalog",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+    )
+    try:
+        catalog = await builder_for_definition(definition).catalog(definition)
+    except BuilderSelectionError as exc:
+        raise HTTPException(status_code=503, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
+    return dict(catalog.payload)
 
 
 @router.get("/internal/agent-workflows/{workflow_id}")
@@ -720,14 +723,16 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     if not workflow:
         raise HTTPException(status_code=404, detail="Agent workflow not found")
 
-    resolver = WorkflowResolver()
+    provider = _provider_for_workflow(workflow)
+    definition = _definition_for_workflow(workflow)
     try:
-        resolved_spec = resolver.resolve(
+        resolved_spec = await provider.resolve(
+            definition,
             workflow.spec_json,
             thread_settings=thread_settings,
             request_overrides=req.overrides,
         )
-    except WorkflowValidationError as exc:
+    except ValueError as exc:
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
         for source in (thread_settings or {}, req.overrides or {}):
@@ -736,10 +741,8 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
                 if value is not None:
                     candidate_config[key] = value
         candidate["config"] = candidate_config
-        try:
-            report = WorkflowValidator().report(candidate)
-        except Exception as report_exc:
-            report = {"valid": False, "errors": [str(report_exc)], "warnings": []}
+        report = _provider_validation_report(provider, candidate)
+        report["errors"] = report.get("errors") or [str(exc)]
         report["errors"] = report["errors"] or [str(exc)]
         return {
             "valid": False,
@@ -749,17 +752,12 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
             "resolved_spec_json": candidate,
         }
 
-    resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
-    resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-        resolved_config.get("hitl_policy"),
-        thread_settings,
-    )
-    resolved_spec["config"] = resolved_config
+    validation = await provider.validate(definition, resolved_spec)
     return {
-        "valid": True,
+        "valid": validation.valid,
         "workflow_id": workflow.id,
         "workflow_version": workflow.version,
-        "validation": WorkflowValidator().report(resolved_spec),
+        "validation": _provider_validation_report(provider, resolved_spec),
         "resolved_spec_json": resolved_spec,
     }
 

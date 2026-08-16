@@ -16,6 +16,10 @@ from app.runtime.contracts import (
 )
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
 
+# Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
+# while the provider owns builder selection in Phase 6.
+from app.runtime.langgraph import checkpointing, router_runtime
+
 
 class LangGraphRuntimeAdapter:
     framework = "langgraph"

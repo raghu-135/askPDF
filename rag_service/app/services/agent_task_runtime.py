@@ -9,10 +9,8 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.runtime.langgraph.validator import WorkflowResolver
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus, DEEP_RESEARCH_WORKFLOW_ID
 from app.services import agent_task_repository as tasks
@@ -22,6 +20,7 @@ from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
+from app.runtime.builder_registry import builder_for_definition
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +81,15 @@ async def ensure_task_run(task_id: str):
         raise RuntimeError("deep_research_workflow_unavailable")
 
     thread_settings = await get_thread_settings(task.thread_id)
-    resolved = WorkflowResolver().resolve(
+    definition = AgentDefinition(
+        definition_id=str(workflow.id),
+        framework=str(getattr(workflow, "framework", None) or "langgraph"),
+        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+        category=getattr(workflow, "category", None),
+    )
+    provider = builder_for_definition(definition)
+    resolved = await provider.resolve(
+        definition,
         workflow.spec_json,
         thread_settings=thread_settings,
         request_overrides={"use_web_search": bool((task.config_json or {}).get("use_web_search"))},
@@ -94,7 +101,7 @@ async def ensure_task_run(task_id: str):
     config["task_policy"] = task_policy
     config["use_web_search"] = bool((task.config_json or {}).get("use_web_search"))
     resolved["config"] = config
-    frozen_spec = WorkflowCompiler().materialize_spec(resolved)
+    frozen_spec = dict(await provider.normalize(definition, resolved))
     metadata = dict(getattr(workflow, "metadata_json", None) or {})
     version = int(metadata.get("version") or workflow.schema_version or 1)
     run = await repository.create_run(
@@ -186,7 +193,15 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         if workflow is None:
             raise RuntimeError("deep_research_workflow_unavailable")
         thread_settings = await get_thread_settings(task.thread_id)
-        resolved = WorkflowResolver().resolve(
+        definition = AgentDefinition(
+            definition_id=str(workflow.id),
+            framework=str(getattr(workflow, "framework", None) or "langgraph"),
+            builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+            category=getattr(workflow, "category", None),
+        )
+        provider = builder_for_definition(definition)
+        resolved = await provider.resolve(
+            definition,
             workflow.spec_json,
             thread_settings=thread_settings,
             request_overrides={"use_web_search": bool(config.get("use_web_search"))},
@@ -198,7 +213,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         resolved_config["task_policy"] = task_policy
         resolved_config["use_web_search"] = bool(config.get("use_web_search"))
         resolved["config"] = resolved_config
-        run.resolved_spec_json = WorkflowCompiler().materialize_spec(resolved)
+        run.resolved_spec_json = dict(await provider.normalize(definition, resolved))
     todos = await tasks.list_todos(task.id)
     task_web_access = await tasks.get_task_web_access(task.id)
     request = SimpleNamespace(
@@ -261,7 +276,9 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         # contain a materialized graph without the v2 envelope marker.  Keep
         # the same run/continuation identity and normalize only the in-flight
         # snapshot sent to the runtime so those paused runs remain resumable.
-        resolved_spec = WorkflowCompiler().materialize_spec(dict(run.resolved_spec_json or {}))
+        resolved_spec = dict(await builder_for_definition(definition).normalize(
+            definition, dict(run.resolved_spec_json or {})
+        ))
         if resolved_spec != (run.resolved_spec_json or {}):
             run.resolved_spec_json = resolved_spec
         runtime_request = AgentRuntimeRequest(
