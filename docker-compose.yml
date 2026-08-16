@@ -40,6 +40,8 @@ services:
       - ASKPDF_AGENT_CHECKPOINTER=postgres
       - AGENT_RUNTIME_EXTERNAL_ENABLED=${AGENT_RUNTIME_EXTERNAL_ENABLED:-true}
       - LANGGRAPH_RUNTIME_URL=http://langgraph-runtime:8100
+      - HERMES_RUNTIME_ENABLED=${HERMES_RUNTIME_ENABLED:-false}
+      - HERMES_RUNTIME_URL=http://hermes-runtime:8200
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
@@ -104,6 +106,31 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  hermes-runtime:
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    environment:
+      - LOG_LEVEL=INFO
+      - HERMES_API_URL=${HERMES_API_URL:-http://hermes-agent:8000}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:-}
+      - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
+      - HERMES_MODEL=${HERMES_MODEL:-}
+      - HERMES_RUNTIME_READ_TIMEOUT_SECONDS=${HERMES_RUNTIME_READ_TIMEOUT_SECONDS:-30}
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      rag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12

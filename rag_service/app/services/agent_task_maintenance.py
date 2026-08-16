@@ -4,7 +4,6 @@ import asyncio
 import logging
 from datetime import timedelta
 
-from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 from app.services import agent_task_repository as tasks
 from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
@@ -60,6 +59,7 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
             utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
             limit=bounded,
         )
+        from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
         deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
         await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
         deleted_checkpoints = len(deleted_checkpoint_ids)

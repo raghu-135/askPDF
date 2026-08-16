@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from typing import Any, Dict, Literal, Optional
 
@@ -413,6 +414,8 @@ async def list_agent_workflows():
     valid_workflows = []
     for workflow in workflows:
         try:
+            if getattr(workflow, "framework", "langgraph") == "hermes" and os.getenv("HERMES_RUNTIME_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+                continue
             if _is_valid_workflow_for_service(workflow):
                 valid_workflows.append(workflow)
         except Exception:
@@ -475,6 +478,8 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Base agent workflow not found")
+    if getattr(workflow, "framework", "langgraph") != "langgraph":
+        raise HTTPException(status_code=409, detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this runtime"})
     if req.use_web_search and not req.allow_external_tools:
         raise HTTPException(
             status_code=409,
@@ -676,11 +681,14 @@ async def delete_internal_agent_workflow(workflow_id: str):
 
 
 @router.get("/internal/agent-workflows/catalog")
-async def get_internal_agent_workflow_catalog():
+async def get_internal_agent_workflow_catalog(
+    framework: str = Query("langgraph"),
+    builder_id: str = Query("langgraph_graph"),
+):
     definition = AgentDefinition(
         definition_id="catalog",
-        framework="langgraph",
-        builder_id="langgraph_graph",
+        framework=framework,
+        builder_id=builder_id,
     )
     try:
         catalog = await builder_for_definition(definition).catalog(definition)

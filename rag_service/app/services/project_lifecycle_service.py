@@ -632,6 +632,7 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             checkpoint_ids = list((await session.execute(
                 select(AgentRun.checkpoint_thread_id).where(
                     AgentRun.thread_id.in_(thread_ids),
+                    AgentRun.framework == "langgraph",
                     AgentRun.checkpoint_thread_id.is_not(None),
                 )
             )).scalars().all())

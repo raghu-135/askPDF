@@ -65,6 +65,7 @@ function AgentRunDebugPanel({
   const isMultiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti;
   const executionThreadId = runDetails?.thread_id || null;
   const executionWorkflowId = runDetails?.workflow_id;
+  const executionFramework = (runDetails as any)?.framework || (runDetails as any)?.runtime_metadata?.framework;
   const executionResolvedSpec = runDetails?.resolved_spec_json;
   const executionStatus = runDetails?.status || (running ? 'running' : undefined);
   const executionDetailsAvailable = Boolean(runDetails && !running);
@@ -463,11 +464,12 @@ function AgentRunDebugPanel({
       )}
       {executionTraceView && (
         <>
-          <AgentExecutionView
+      <AgentExecutionView
             runId={runId}
             threadId={executionThreadId}
             resolvedSpec={executionResolvedSpec}
-            workflowId={executionWorkflowId}
+        workflowId={executionWorkflowId}
+        framework={executionFramework}
             traceView={executionTraceView}
             status={executionStatus}
             running={running}

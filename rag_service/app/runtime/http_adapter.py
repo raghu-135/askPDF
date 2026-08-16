@@ -1,4 +1,8 @@
-"""HTTP client for the separately deployable LangGraph runtime."""
+"""Shared HTTP/SSE client for separately deployable runtimes.
+
+The transport is framework-neutral; concrete adapters override only identity,
+endpoint configuration, and framework-specific capability/result translation.
+"""
 
 from __future__ import annotations
 
@@ -70,7 +74,7 @@ def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
     }
 
 
-class HttpLangGraphRuntimeAdapter:
+class HttpRuntimeAdapter:
     framework = "langgraph"
     builder_id = "langgraph_graph"
 
@@ -268,3 +272,7 @@ class HttpLangGraphRuntimeAdapter:
 
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
         return [event_from_dict(event) for event in events]
+
+
+# Compatibility name retained for existing LangGraph callers.
+HttpLangGraphRuntimeAdapter = HttpRuntimeAdapter

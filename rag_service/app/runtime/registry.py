@@ -21,13 +21,19 @@ def _default_langgraph_adapter() -> AgentRuntimeAdapter:
     return LangGraphRuntimeAdapter()
 
 
+def _default_hermes_adapter() -> AgentRuntimeAdapter:
+    from app.runtime.hermes_adapter import HermesRuntimeAdapter
+
+    return HermesRuntimeAdapter()
+
+
 class RuntimeSelectionError(ValueError):
     """Raised when a concrete definition cannot be routed to a runtime."""
 
 
 class RuntimeRegistry:
     def __init__(self, adapters: list[AgentRuntimeAdapter] | None = None):
-        active = adapters or [_default_langgraph_adapter()]
+        active = adapters or [_default_langgraph_adapter(), _default_hermes_adapter()]
         self._adapters: Dict[tuple[str, str], AgentRuntimeAdapter] = {
             (adapter.framework, adapter.builder_id): adapter for adapter in active
         }

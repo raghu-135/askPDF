@@ -15,7 +15,7 @@ class BuilderSelectionError(ValueError):
 class BuilderRegistry:
     def __init__(self, providers: list[AgentBuilderProvider] | None = None):
         self._providers: Dict[tuple[str, str], AgentBuilderProvider] = {}
-        for provider in providers or [self._default_langgraph_provider()]:
+        for provider in providers or [self._default_langgraph_provider(), self._default_hermes_provider()]:
             self.register(provider)
 
     @staticmethod
@@ -23,6 +23,12 @@ class BuilderRegistry:
         from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
         return LangGraphBuilderProvider()
+
+    @staticmethod
+    def _default_hermes_provider() -> AgentBuilderProvider:
+        from app.runtime.hermes_builder import HermesBuilderProvider
+
+        return HermesBuilderProvider()
 
     def register(self, provider: AgentBuilderProvider) -> None:
         self._providers[(provider.framework, provider.builder_id)] = provider
@@ -59,4 +65,3 @@ def get_builder_registry() -> BuilderRegistry:
 
 def builder_for_definition(definition: AgentDefinition) -> AgentBuilderProvider:
     return get_builder_registry().get(definition)
-

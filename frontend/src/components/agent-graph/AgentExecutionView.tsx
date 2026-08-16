@@ -63,6 +63,7 @@ function AgentExecutionView({
   runId,
   threadId,
   resolvedSpec,
+  framework,
   workflowId,
   traceView,
   status,
@@ -77,6 +78,7 @@ function AgentExecutionView({
   runId?: string | null;
   threadId?: string | null;
   resolvedSpec?: Record<string, any>;
+  framework?: string;
   workflowId?: string;
   traceView: TraceRunView;
   status?: string;
@@ -88,6 +90,7 @@ function AgentExecutionView({
   chatMode?: boolean;
   detailsAvailable?: boolean;
 }) {
+  const graphSupported = framework !== 'hermes';
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunNodeDetail> = {};
     traceView.nodes.forEach((node) => {
@@ -427,25 +430,31 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
-      <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-        <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
-          <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
-            Execution graph
-          </Box>
-          {graphOpen && (
-            <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
-              <AgentDebugCanvas
-                resolvedSpec={resolvedSpec}
-                workflowId={workflowId}
-                traceView={traceView}
-                focusedTraceRefs={focusedTraceRefs}
-                selectedVisitRef={selectedVisit}
-                onSelectionChange={handleGraphSelection}
-              />
+      {graphSupported ? (
+        <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
+          <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
+            <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
+              Execution graph
             </Box>
-          )}
-        </Box>
-      </Paper>
+            {graphOpen && (
+              <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
+                <AgentDebugCanvas
+                  resolvedSpec={resolvedSpec}
+                  workflowId={workflowId}
+                  traceView={traceView}
+                  focusedTraceRefs={focusedTraceRefs}
+                  selectedVisitRef={selectedVisit}
+                  onSelectionChange={handleGraphSelection}
+                />
+              </Box>
+            )}
+          </Box>
+        </Paper>
+      ) : (
+        <Paper elevation={0} square sx={{ px: 1, py: 0.8, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
+          <Typography variant="caption" color="text.secondary">{framework || 'Runtime'} exposes a normalized trace without graph semantics.</Typography>
+        </Paper>
+      )}
     </Stack>
   );
 }

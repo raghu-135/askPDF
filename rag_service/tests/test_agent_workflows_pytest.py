@@ -3083,6 +3083,7 @@ class TestAgentWorkflowRepository:
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
             DEEP_RESEARCH_AGENT_ID,
+            "hermes_rag_agent",
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION

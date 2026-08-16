@@ -69,7 +69,21 @@ async def create_run(
     if workflow_version is not None:
         run_metadata["workflow_version"] = workflow_version
     run_id = str(uuid.uuid4())
-    effective_checkpoint_thread_id = checkpoint_thread_id or run_id
+    is_langgraph = framework == "langgraph"
+    effective_checkpoint_thread_id = (checkpoint_thread_id or run_id) if is_langgraph else checkpoint_thread_id
+    default_runtime_binding = (
+        {
+            "binding_type": "langgraph_checkpoint",
+            "binding_version": runtime_binding_version,
+            "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
+        }
+        if is_langgraph
+        else {
+            "binding_type": f"{framework}_session",
+            "binding_version": runtime_binding_version,
+            "payload": {},
+        }
+    )
     run = AgentRun(
         id=run_id,
         thread_id=thread_id,
@@ -83,11 +97,7 @@ async def create_run(
         resolved_spec_json=resolved_spec_json,
         status=running_status,
         checkpoint_thread_id=effective_checkpoint_thread_id,
-        runtime_binding_json=dict(runtime_binding_json or {
-            "binding_type": "langgraph_checkpoint",
-            "binding_version": runtime_binding_version,
-            "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
-        }),
+        runtime_binding_json=dict(runtime_binding_json or default_runtime_binding),
         runtime_binding_status="active",
         started_at=utc_now(),
     )
