@@ -250,7 +250,18 @@ class AgentRunService:
                 framework=definition.framework,
                 builder_id=definition.builder_id,
                 input={"question": getattr(req, "question", "")},
-                options={"embedding_model": embedding_model},
+                options={
+                    "embedding_model": embedding_model,
+                    "llm_model": getattr(req, "llm_model", None),
+                    "use_web_search": getattr(req, "use_web_search", None),
+                    "use_reranker": getattr(req, "use_reranker", None),
+                    "replans": getattr(req, "replans", None),
+                    "system_role_override": getattr(req, "system_role_override", None),
+                    "tool_instructions_override": getattr(req, "tool_instructions_override", None),
+                    "custom_instructions_override": getattr(req, "custom_instructions_override", None),
+                    "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
+                    "hitl_web_approval": getattr(req, "hitl_web_approval", None),
+                },
             )
             runtime_result = await adapter.start(
                 runtime_request,

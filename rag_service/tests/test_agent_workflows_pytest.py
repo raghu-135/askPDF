@@ -42,6 +42,7 @@ from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_no
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
+from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.agent_workflows.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
@@ -1057,6 +1058,16 @@ class TestRouterRagWorkflowValidator:
         result = WorkflowValidator().validate(materialized)
 
         assert result == {"valid": True, "errors": []}
+
+    def test_materialized_legacy_snapshot_gets_v2_schema_marker(self):
+        spec = builtin_router_rag_v2_spec()
+        spec.pop("schema_version", None)
+
+        materialized = WorkflowCompiler().materialize_spec(spec)
+
+        assert materialized["schema_version"] == 2
+        assert WorkflowValidator().validate(materialized) == {"valid": True, "errors": []}
+        assert WorkflowCompiler().compile(spec) is not None
 
     def test_hitl_materializer_omits_ambiguous_unconfigured_bypass(self):
         graph = {
@@ -3985,10 +3996,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
@@ -4959,9 +4970,9 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeDocumentTool())
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         thread_response = await async_api_client.post(
             "/api/threads",
@@ -5357,10 +5368,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
@@ -5781,10 +5792,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as first_session:
             first_repo = AgentWorkflowRepository(first_session)
@@ -6335,10 +6346,10 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.rag.chat_service.group_document_chunks", fake_group_document_chunks)
         monkeypatch.setattr("app.db.vector.get_vector_db", lambda: FakeVectorDb())
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="What is this document about?",
@@ -6642,10 +6653,10 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.agent_workflows.graph.search_durable_memory", FakeTool(long_term_memory_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_thread_events", FakeTool(timeline_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_web", FakeTool(web_payload))
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="Route coverage?",
@@ -6681,6 +6692,7 @@ class TestRouterRagRuntime:
                 "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
             },
             trace_recorder=make_trace_recorder(run_id, sample_thread.id, spec),
+            result_projector=AgentRuntimeProjection().project_chat_result,
         )
 
         async with session_factory() as check_session:
@@ -6871,8 +6883,8 @@ class TestRouterRagRuntime:
             })
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FailingTool())
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
 
         req = SimpleNamespace(
             question="What is in the document?",

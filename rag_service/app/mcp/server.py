@@ -119,7 +119,13 @@ def get_http_app() -> Any:
         json_response=True,
         stateless=True,
         security_settings=TransportSecuritySettings(
-            allowed_hosts=["localhost", "127.0.0.1", "rag-service", "host.docker.internal"],
+            allowed_hosts=[
+                "localhost",
+                "127.0.0.1",
+                "rag-service",
+                "rag-service:8000",
+                "host.docker.internal",
+            ],
         ),
     )
 

@@ -156,6 +156,49 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return
 
     config = dict(task.config_json or {})
+    existing_artifacts = await tasks.list_artifacts(task.id)
+    artifact_manifest: list[dict[str, Any]] = []
+    artifact_contents: dict[str, str] = {}
+    from app.services.content_store import get_content_store
+    content_store = get_content_store()
+    for artifact in existing_artifacts[: int(config.get("max_context_artifacts", 200))]:
+        manifest = {
+            "id": artifact.id, "kind": artifact.kind, "sha256": artifact.sha256,
+            "byte_size": artifact.byte_size, "summary": artifact.summary_json,
+            "todo_id": artifact.todo_id, "subagent_run_id": artifact.subagent_run_id,
+            "provenance": dict(artifact.provenance_json or {}),
+        }
+        artifact_manifest.append(manifest)
+        if artifact.kind in {"intermediate_report", "context_summary", "tool_output"} and artifact.byte_size <= 20_000:
+            try:
+                artifact_contents[artifact.id] = (await content_store.read(artifact.object_key)).decode("utf-8", errors="replace")
+            except (FileNotFoundError, OSError):
+                continue
+    # Some task runs were created before the run snapshot was populated. Do
+    # not create a replacement run: reconstruct the same concrete deep
+    # workflow definition and attach its materialized spec to this run before
+    # continuation is sent to the runtime.
+    if not isinstance(run.resolved_spec_json, dict) or not run.resolved_spec_json.get("config"):
+        workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        if workflow is None:
+            await AgentWorkflowRepository().seed_builtin_workflows()
+            workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        if workflow is None:
+            raise RuntimeError("deep_research_workflow_unavailable")
+        thread_settings = await get_thread_settings(task.thread_id)
+        resolved = WorkflowResolver().resolve(
+            workflow.spec_json,
+            thread_settings=thread_settings,
+            request_overrides={"use_web_search": bool(config.get("use_web_search"))},
+        )
+        resolved_config = dict(resolved.get("config") or {})
+        task_policy = dict(resolved_config.get("task_policy") or {})
+        task_policy["limits"] = dict(config.get("limits") or {})
+        task_policy["profiles"] = list(config.get("enabled_profiles") or [])
+        resolved_config["task_policy"] = task_policy
+        resolved_config["use_web_search"] = bool(config.get("use_web_search"))
+        resolved["config"] = resolved_config
+        run.resolved_spec_json = WorkflowCompiler().materialize_spec(resolved)
     todos = await tasks.list_todos(task.id)
     task_web_access = await tasks.get_task_web_access(task.id)
     request = SimpleNamespace(
@@ -189,6 +232,9 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             "artifact_ids": list(todo.artifact_ids_json or []), "version": todo.version,
         } for todo in todos],
         task_budget_usage=dict(task.budgets_json or {}),
+        runtime_execution_mode=True,
+        runtime_artifact_manifest=artifact_manifest,
+        runtime_artifact_contents=artifact_contents,
     )
     repository = AgentWorkflowRepository()
     trace = AgentTraceRecorder(run)
@@ -211,6 +257,13 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             category=getattr(run, "definition_category", None),
         )
         adapter = adapter_for_definition(definition)
+        # Task runs created before the external runtime was introduced may
+        # contain a materialized graph without the v2 envelope marker.  Keep
+        # the same run/continuation identity and normalize only the in-flight
+        # snapshot sent to the runtime so those paused runs remain resumable.
+        resolved_spec = WorkflowCompiler().materialize_spec(dict(run.resolved_spec_json or {}))
+        if resolved_spec != (run.resolved_spec_json or {}):
+            run.resolved_spec_json = resolved_spec
         runtime_request = AgentRuntimeRequest(
             run_id=run.id,
             thread_id=run.thread_id,
@@ -225,7 +278,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         runtime_context = RuntimeExecutionContext(
             request=request,
             embedding_model=thread.embedding_model,
-            resolved_spec=run.resolved_spec_json,
+            resolved_spec=resolved_spec,
             agent_run_context={**context, "run": run},
             trace_recorder=trace,
             cancellation_checker=cancellation_requested,
@@ -244,6 +297,38 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             if runtime_result is None:
                 runtime_result = await adapter.start(runtime_request, context=runtime_context)
             result = legacy_result_from_runtime(runtime_result)
+        # Runtime artifacts are data, not product records. Project them in
+        # rag-service after the stream completes and translate deterministic
+        # runtime IDs to the persisted artifact IDs used by task APIs.
+        runtime_artifacts = [value for value in result.get("runtime_artifacts") or [] if isinstance(value, dict) and value.get("content") is not None]
+        artifact_id_map: dict[str, str] = {}
+        for artifact in runtime_artifacts:
+            projected = await persist_task_artifact(
+                task_id=task.id,
+                agent_run_id=run.id,
+                kind=str(artifact.get("kind") or "tool_output"),
+                content=str(artifact.get("content") or ""),
+                media_type=str(artifact.get("media_type") or "text/plain"),
+                todo_id=artifact.get("todo_id"),
+                # Runtime subagent IDs are intentionally opaque and are not
+                # product FK values; task ownership is retained in provenance.
+                provenance={**dict(artifact.get("provenance") or {}), "runtime_artifact_id": artifact.get("artifact_id"), "runtime_subagent_run_id": artifact.get("subagent_run_id")},
+                source_refs=dict(artifact.get("source_refs") or {}),
+            )
+            if artifact.get("artifact_id"):
+                artifact_id_map[str(artifact["artifact_id"])] = projected.id
+        if artifact_id_map:
+            def replace_ids(value: Any) -> Any:
+                if isinstance(value, str):
+                    return artifact_id_map.get(value, value)
+                if isinstance(value, list):
+                    return [replace_ids(item) for item in value]
+                if isinstance(value, dict):
+                    return {key: replace_ids(item) for key, item in value.items()}
+                return value
+            for key in ("task_todos", "task_artifact_manifest", "task_evidence_manifest", "task_result_packets"):
+                if key in result:
+                    result[key] = replace_ids(result[key])
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})

@@ -1,0 +1,21 @@
+# Framework execution, model, MCP transport, and runtime checkpoint dependencies.
+# Product SQLModel/Alembic/test dependencies intentionally stay out of this image.
+fastapi
+uvicorn
+httpx
+pydantic
+python-dateutil>=2.9.0
+mcp==1.29.0
+langgraph==1.2.6
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+langchain-core==1.4.8
+langchain-openai
+langchain-text-splitters
+ddgs==9.14.4
+opentelemetry-sdk
+opentelemetry-api>=1.24.0
+openinference-semantic-conventions
+sentence-transformers==5.6.1
+torch==2.13.0
+transformers==5.14.1

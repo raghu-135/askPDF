@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from app.agent_workflows import chat_cancellation
-from app.runtime.langgraph import checkpointing, router_runtime
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
@@ -91,6 +89,8 @@ class LangGraphRuntimeAdapter:
         context: RuntimeExecutionContext,
         event_sink: Any = None,
     ) -> AgentRuntimeResult:
+        from app.runtime.langgraph import checkpointing, router_runtime
+
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             result = await router_runtime.execute_compiled_rag_chat(
                 request.thread_id,
@@ -114,9 +114,13 @@ class LangGraphRuntimeAdapter:
         context: RuntimeExecutionContext,
         event_sink: Any = None,
     ) -> AgentRuntimeResult:
+        from app.runtime.langgraph import checkpointing, router_runtime
+
         run = context.agent_run_context.get("run")
         if run is None:
             raise ValueError("LangGraph resume requires the persisted AgentRun in execution context")
+        if context.resolved_spec:
+            run.resolved_spec_json = dict(context.resolved_spec)
         kwargs = {
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
@@ -125,9 +129,19 @@ class LangGraphRuntimeAdapter:
         if event_sink is not None:
             kwargs["execution_event_sink"] = event_sink
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            result = await router_runtime.resume_compiled_rag_chat(
-                run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
-            )
+            try:
+                result = await router_runtime.resume_compiled_rag_chat(
+                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
+                )
+            except TypeError as exc:
+                # Preserve the staged-migration monkeypatch seam for callers
+                # that still provide the pre-Phase-4 function signature.
+                if "persist_product_records" not in str(exc):
+                    raise
+                kwargs.pop("persist_product_records", None)
+                result = await router_runtime.resume_compiled_rag_chat(
+                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
+                )
         return result_from_legacy(result)
 
     async def continue_run(
@@ -137,9 +151,17 @@ class LangGraphRuntimeAdapter:
         context: RuntimeExecutionContext,
         event_sink: Any = None,
     ) -> Optional[AgentRuntimeResult]:
+        from app.runtime.langgraph import checkpointing, router_runtime
+
         run = context.agent_run_context.get("run")
         if run is None:
             raise ValueError("LangGraph continuation requires the persisted AgentRun in execution context")
+        # The HTTP transport carries the authoritative execution snapshot in
+        # context.resolved_spec. Inject it into the legacy run-shaped object
+        # consumed by continue_compiled_rag_chat; otherwise a serialized
+        # SQLModel/namespace may contain only identity fields and compile {}.
+        if context.resolved_spec:
+            run.resolved_spec_json = dict(context.resolved_spec)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             result = await router_runtime.continue_compiled_rag_chat(
                 run,
@@ -152,6 +174,8 @@ class LangGraphRuntimeAdapter:
         return result_from_legacy(result) if result is not None else None
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any:
+        from app.agent_workflows import chat_cancellation
+
         return await chat_cancellation.request_chat_run_cancel(request.run_id, thread_id=request.thread_id)
 
     async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
@@ -167,6 +191,8 @@ class LangGraphRuntimeAdapter:
         }
 
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
+        from app.runtime.langgraph import checkpointing
+
         if continuation is None:
             return []
         checkpoint_id = continuation.payload.get("checkpoint_thread_id")

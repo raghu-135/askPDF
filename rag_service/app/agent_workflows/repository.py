@@ -196,6 +196,45 @@ class AgentWorkflowRepository:
         session = await self._get_session()
         return await run_store_list_runs_for_thread(session, thread_id, limit=limit, status=status)
 
+    async def list_runtime_reconciliation_candidates(self, *, limit: int = 100) -> list[AgentRun]:
+        """Return bounded runs whose runtime projection may need recovery.
+
+        JSON projection metadata is intentionally filtered in Python for
+        compatibility with PostgreSQL and the in-memory test session.
+        """
+        session = await self._get_session()
+        bounded = max(1, min(int(limit), 500))
+        async with session.begin():
+            result = await session.execute(
+                select(AgentRun)
+                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN, RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, AgentRunStatus.CANCELLED.value]))
+                .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
+                .limit(max(bounded * 4, bounded))
+            )
+            runs = list(result.scalars().all())
+        candidates: list[AgentRun] = []
+        for run in runs:
+            projection = dict((run.run_metadata_json or {}).get("projection") or {})
+            if projection.get("runtime_result") or projection.get("terminal_event_id") or projection.get("reconciliation_status") in {"pending", "deferred", "failed"}:
+                candidates.append(run)
+            if len(candidates) >= bounded:
+                break
+        return candidates
+
+    async def list_nonterminal_runtime_runs(self, *, limit: int = 500) -> list[AgentRun]:
+        """Return active runtime-backed runs before an intentional checkpoint reset."""
+        session = await self._get_session()
+        bounded = max(1, min(int(limit), 1000))
+        async with session.begin():
+            result = await session.execute(
+                select(AgentRun)
+                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN]))
+                .where(AgentRun.checkpoint_thread_id.is_not(None))
+                .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
+                .limit(bounded)
+            )
+            return list(result.scalars().all())
+
     async def prune_runs_before(
         self,
         cutoff: datetime,

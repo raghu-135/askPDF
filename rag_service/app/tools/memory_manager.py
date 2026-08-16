@@ -18,12 +18,7 @@ from app.models.memory_tools import (
 from app.services.memory_tool_service import get_memory_tool, prepare_memory_change, search_memory_tool
 from app.services.web_search_service import DEFAULT_WEB_SEARCH_RESULTS, WEB_SEARCH_CAPABILITY, search_internet
 from app.tools.context import ToolInvocationContext
-
-
-class InternetSearchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    query: str = Field(min_length=1, max_length=1000)
-    reason: str = Field(default="Verify current external information", max_length=500)
+from app.tools.contracts import InternetSearchRequest
 
 
 def _manager_context(context: ToolInvocationContext) -> MemoryToolContext:

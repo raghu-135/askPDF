@@ -8,6 +8,7 @@
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
+#   ./run_tests.sh --phase5                 # Run isolated external-runtime hardening checks
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
@@ -36,6 +37,15 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
+PHASE5_PROJECT_NAME="${ASKPDF_PHASE5_PROJECT_NAME:-askpdf-phase5-test}"
+PHASE5_COMPOSE_ARGS=(-p "$PHASE5_PROJECT_NAME" -f docker-compose.phase5-test.yml)
+
+args=("$@")
+for arg in "${args[@]}"; do
+    if [ "$arg" = "--phase5" ]; then
+        RUN_PHASE5=1
+    fi
+done
 
 cleanup() {
     if [ "${ASKPDF_KEEP_TEST_CONTAINERS:-}" = "1" ]; then
@@ -44,6 +54,9 @@ cleanup() {
     fi
 
     "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
+    if [ "${RUN_PHASE5:-0}" = "1" ]; then
+        "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
+    fi
 }
 
 trap cleanup EXIT
@@ -53,7 +66,44 @@ run_frontend_tests() {
     "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm frontend-test-runner
 }
 
-args=("$@")
+if [ "${RUN_PHASE5:-0}" = "1" ]; then
+    echo "Starting isolated Phase 5 Compose environment '$PHASE5_PROJECT_NAME'..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate rag-service langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_contracts_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_http_adapter_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true test-runner --file test_external_runtime_smoke_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_service_lifecycle_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_agent_runtime_reconciliation_pytest.py
+    # The broad legacy suites intentionally exercise the injectable in-process
+    # adapter; the external boundary is covered by the focused protocol and
+    # lifecycle suites above plus the restart smoke below.
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --file test_agent_workflows_pytest.py
+    echo "Restarting langgraph-runtime to verify readiness and checkpoint service continuity..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" stop langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" start langgraph-runtime
+    runtime_ready=0
+    for attempt in $(seq 1 45); do
+        if "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); assert health["status"] == "ok" and ready["status"] == "ok"; print(json.dumps({"health": health, "ready": ready}, sort_keys=True))'; then
+            runtime_ready=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$runtime_ready" -ne 1 ]; then
+        echo "Runtime readiness did not recover after restart" >&2
+        exit 1
+    fi
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --unit
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --db
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --api
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --integration
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --agent-checkpoint
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --schema
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --mcp
+    exit 0
+fi
+
 backend_args=()
 run_frontend=0
 frontend_only=0

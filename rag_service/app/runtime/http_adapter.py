@@ -1,0 +1,270 @@
+"""HTTP client for the separately deployable LangGraph runtime."""
+
+from __future__ import annotations
+
+import os
+import hashlib
+import json
+import inspect
+import asyncio
+from typing import Any, Mapping
+
+import httpx
+
+from app.runtime.adapter import AgentRuntimeEventSink, RuntimeExecutionContext
+from app.runtime.contracts import (
+    AgentDefinition,
+    AgentRuntimeEvent,
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    ContinuationBinding,
+    RuntimeCapabilities,
+    RuntimeValidationResult,
+)
+from app.runtime.errors import RuntimeError
+from app.runtime.transport import (
+    capabilities_from_dict,
+    event_from_dict,
+    result_from_dict,
+    sse_encode,
+    validation_from_dict,
+    iter_sse,
+)
+
+
+def _safe_json(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _safe_json(item) for key, item in value.items() if str(key) != "request"}
+    if isinstance(value, (list, tuple)):
+        return [_safe_json(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _safe_json(value.model_dump(mode="json"))
+    if hasattr(value, "__dict__"):
+        return _safe_json(vars(value))
+    return str(value)
+
+
+def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
+    """Serialize only execution inputs; repositories and writers never cross the wire."""
+
+    request_payload = _safe_json(context.request)
+    if isinstance(request_payload, Mapping):
+        request_payload = dict(request_payload)
+        # The external runtime must select its MCP-backed, persistence-free
+        # context loader. This is transport metadata, not product state.
+        request_payload.setdefault("runtime_execution_mode", True)
+
+    return {
+        "embedding_model": context.embedding_model,
+        # Task execution historically carried request-only fields (objective,
+        # limits, model selection, and tool policy) on the legacy request
+        # object. Preserve that input explicitly across the HTTP boundary;
+        # it is execution input, not a product repository or writer.
+        "request_payload": request_payload,
+        "resolved_spec": _safe_json(context.resolved_spec),
+        "agent_run_context": _safe_json(context.agent_run_context),
+        "task_id": context.task_id,
+        "task_worker_id": context.task_worker_id,
+    }
+
+
+class HttpLangGraphRuntimeAdapter:
+    framework = "langgraph"
+    builder_id = "langgraph_graph"
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        client: httpx.AsyncClient | None = None,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime:8100")).rstrip("/")
+        self._client = client
+        self._owns_client = client is None
+        self._timeout = httpx.Timeout(
+            read_timeout or float(os.getenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")),
+            connect=connect_timeout or float(os.getenv("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS", "5")),
+            write=float(os.getenv("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS", "10")),
+        )
+        self._execution_timeout = float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600"))
+
+    async def _client_for_request(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._owns_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
+        headers = {"accept": "application/json", "x-runtime-contract-version": str(request.contract_version if request else 1)}
+        if request is not None:
+            headers["x-agent-run-id"] = request.run_id
+            if request.trace_id:
+                headers["x-request-id"] = request.trace_id
+            traceparent = request.options.get("traceparent")
+            if traceparent:
+                headers["traceparent"] = str(traceparent)
+            tracestate = request.options.get("tracestate")
+            if tracestate:
+                headers["tracestate"] = str(tracestate)
+            if request.authentication.get("token"):
+                headers["authorization"] = str(request.authentication["token"])
+            if request.permissions:
+                headers["x-agent-permissions"] = json.dumps(dict(request.permissions), separators=(",", ":"))
+        token = os.getenv("LANGGRAPH_RUNTIME_TOKEN")
+        if token:
+            headers["authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:
+        try:
+            response = await (await self._client_for_request()).request(method, self.base_url + path, headers=self._headers(request), **kwargs)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.TimeoutException as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_timeout", retryable=True, safe_message="Agent runtime timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response")
+        if int(payload.get("contract_version") or 1) != 1:
+            raise RuntimeError("runtime_contract_unsupported", "Agent runtime contract version is unsupported")
+        if payload.get("error"):
+            error = payload["error"]
+            raise RuntimeError(
+                code=str(error.get("code") or "runtime_failed"),
+                safe_message=str(error.get("safe_message") or "Agent runtime failed"),
+                retryable=bool(error.get("retryable")),
+                details=dict(error.get("details") or {}),
+                runtime_metadata=dict(payload.get("runtime_metadata") or {}),
+            )
+        return payload.get("result") if "result" in payload else payload
+
+    async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
+        value = await self._json("GET", "/v1/capabilities")
+        return capabilities_from_dict(value.get("capabilities") or value)
+
+    async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
+        value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
+        return validation_from_dict(value.get("validation") or value)
+
+    async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
+        body = {"request": request.to_dict(), "context": context_to_dict(context), **dict(payload or {})}
+        headers = {**self._headers(request), "accept": "text/event-stream"}
+        seen: dict[str, str] = {}
+        terminal: AgentRuntimeResult | None = None
+        terminal_hash: str | None = None
+        terminal_event_id: str | None = None
+        last_sequence = 0
+        async def consume() -> None:
+            nonlocal terminal, terminal_hash, terminal_event_id, last_sequence
+            client = await self._client_for_request()
+            async with client.stream("POST", self.base_url + path, headers=headers, json=body) as response:
+                response.raise_for_status()
+                async for _name, item in iter_sse(response):
+                    envelope = item["data"]
+                    if not isinstance(envelope, Mapping):
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event envelope")
+                    event_payload = envelope.get("event") or envelope
+                    if not isinstance(event_payload, Mapping):
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event")
+                    event = event_from_dict(event_payload)
+                    if event.run_id != request.run_id:
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a mismatched run ID")
+                    if event.contract_version != request.contract_version:
+                        raise RuntimeError("runtime_contract_unsupported", "Agent runtime event contract version is unsupported")
+                    event_hash = hashlib.sha256(json.dumps(event.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
+                    if event.event_id in seen:
+                        if seen[event.event_id] != event_hash:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting duplicate event IDs")
+                        continue
+                    seen[event.event_id] = event_hash
+                    if event.sequence <= last_sequence:
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime event sequence is not monotonic")
+                    last_sequence = event.sequence
+                    if event_sink is not None:
+                        emit = getattr(event_sink, "emit", None)
+                        if emit is not None:
+                            await self._emit_to_sink(emit, event)
+                    if envelope.get("result") is not None:
+                        if not event.terminal:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to a nonterminal event")
+                        if terminal_event_id is not None and event.event_id != terminal_event_id:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal result")
+                        candidate = result_from_dict(envelope["result"])
+                        candidate_hash = hashlib.sha256(json.dumps(candidate.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
+                        if terminal_hash is not None and candidate_hash != terminal_hash:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting terminal results")
+                        terminal = candidate
+                        terminal_hash = candidate_hash
+                        terminal_event_id = event.event_id
+        try:
+            await asyncio.wait_for(consume(), timeout=self._execution_timeout)
+        except RuntimeError:
+            raise
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True) from exc
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed SSE data") from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_stream_timeout", retryable=True, safe_message="Agent runtime stream timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_stream_error", retryable=True, safe_message="Agent runtime stream failed") from exc
+        if terminal is None:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime stream ended without a terminal result")
+        return terminal
+
+    @staticmethod
+    async def _emit_to_sink(emit: Any, event: AgentRuntimeEvent) -> None:
+        """Bridge neutral events to the existing legacy SSE sink when needed."""
+
+        try:
+            parameters = inspect.signature(emit).parameters.values()
+            positional = [
+                parameter
+                for parameter in parameters
+                if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            accepts_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters)
+        except (TypeError, ValueError):
+            positional = []
+            accepts_varargs = False
+
+        if accepts_varargs or len(positional) >= 2:
+            await emit(event.kind, dict(event.payload))
+        else:
+            await emit(event)
+
+    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
+
+    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self._stream("/v1/runs/%s/resume" % request.run_id, request, context=context, payload={"interrupt": _safe_json(interrupt)}, event_sink=event_sink)
+
+    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
+        result = await self._stream("/v1/runs/%s/continue" % request.run_id, request, context=context, payload=None, event_sink=event_sink)
+        if result.status == "no_continuation":
+            return None
+        return result
+
+    async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self._json("POST", "/v1/runs/%s/cancel" % request.run_id, request=request, json={"request": request.to_dict()})
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self._json("POST", "/v1/runs/%s/inspect" % request.run_id, request=request, json={"request": request.to_dict()})
+        return dict(value or {}) if isinstance(value, Mapping) else {}
+
+    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
+        binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
+        return await self._json("DELETE", "/v1/continuations/%s" % binding_id, json={"continuation": continuation.to_dict()})
+
+    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
+        return [event_from_dict(event) for event in events]

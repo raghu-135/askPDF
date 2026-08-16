@@ -96,11 +96,15 @@ def legacy_result_from_runtime(result: AgentRuntimeResult) -> dict[str, Any]:
     legacy = result.runtime_metadata.get("legacy_result") if isinstance(result.runtime_metadata, Mapping) else None
     if isinstance(legacy, dict):
         return dict(legacy)
+    clarification_options = list((result.clarification or {}).get("options") or [])
+    interruption = dict(result.interruption or {})
     return {
         "status": result.status,
         "answer": result.output,
-        "clarification_options": list((result.clarification or {}).get("options") or []),
-        "pending_interrupt": dict(result.interruption or {}),
+        # Preserve the existing API contract. The frontend distinguishes null
+        # from an empty array/object when deciding whether to render panels.
+        "clarification_options": clarification_options or None,
+        "pending_interrupt": interruption or None,
         "agent_error": dict(result.error or {}),
     }
 

@@ -417,7 +417,12 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         report_artifact = next((value for value in attempt_artifacts if value.kind == "intermediate_report"), None)
         report_content = None
         if report_artifact is not None:
-            report_content = (await get_content_store().read(report_artifact.object_key)).decode("utf-8", errors="replace")[:200_000]
+            try:
+                report_content = (await get_content_store().read(report_artifact.object_key)).decode("utf-8", errors="replace")[:200_000]
+            except FileNotFoundError:
+                # Preserve the timeline when an artifact predates shared
+                # content-volume mounting or was cleaned up independently.
+                report_content = None
         items.append({
             "id": f"subagent:{attempt.id}",
             "type": timeline_type,
@@ -455,9 +460,13 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         evidence_manifest = [value for value in final_provenance.get("evidence_manifest") or [] if isinstance(value, dict)]
         evidence_ids = {str(value.get("id") or "") for value in evidence_manifest}
         evidence_artifacts = [artifact for artifact in all_artifacts if artifact.id in evidence_ids and artifact.validity == "valid"]
+        try:
+            final_report_content = (await get_content_store().read(final_report.object_key)).decode("utf-8", errors="replace")[:500_000]
+        except FileNotFoundError:
+            final_report_content = None
         items.append({
             "id": f"final:{final_report.id}", "type": "final_report", "status": "incomplete" if final_provenance.get("incomplete") else run.status,
-            "primary_content": (await get_content_store().read(final_report.object_key)).decode("utf-8", errors="replace")[:500_000],
+            "primary_content": final_report_content,
             "timestamp": maybe_iso_utc_z(final_report.created_at),
             "folds": {
                 "evidence_gaps": list(final_provenance.get("evidence_gaps") or []),

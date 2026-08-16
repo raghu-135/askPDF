@@ -18,20 +18,48 @@ from app.agent_workflows.parallel_contracts import ParallelEventName
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
 from app.agent_workflows.state import merge_parallel_deltas, WorkflowBudgetExceeded
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
-from app.db import (
-    AgentRunStatus,
-    ChatTurnStatus,
-    ReasoningFormat,
-    create_chat_turn,
-    increment_qa_stats,
-    update_message_context_compact,
-)
-from app.rag.indexer import index_chat_memory_for_thread
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.agent_workflows.trace import compact_preview
 
 
 logger = logging.getLogger(__name__)
+
+
+class _Status:
+    RUNNING = type("Value", (), {"value": "running"})
+    AWAITING_HUMAN = type("Value", (), {"value": "awaiting_human"})
+    COMPLETED = type("Value", (), {"value": "completed"})
+    FAILED = type("Value", (), {"value": "failed"})
+    CANCELLED = type("Value", (), {"value": "cancelled"})
+    MARKDOWN = type("Value", (), {"value": "markdown"})
+    NONE = type("Value", (), {"value": "none"})
+
+
+AgentRunStatus = ChatTurnStatus = ReasoningFormat = _Status
+
+
+async def create_chat_turn(**kwargs: Any) -> Any:
+    from app.db import create_chat_turn as _create_chat_turn
+    return await _create_chat_turn(**kwargs)
+
+
+async def index_chat_memory_for_thread(**kwargs: Any) -> Any:
+    from app.rag.indexer import index_chat_memory_for_thread as _index_chat_memory_for_thread
+    return await _index_chat_memory_for_thread(**kwargs)
+
+
+async def increment_qa_stats(*args: Any, **kwargs: Any) -> Any:
+    from app.db import increment_qa_stats as _increment_qa_stats
+    return await _increment_qa_stats(*args, **kwargs)
+
+
+async def update_message_context_compact(*args: Any, **kwargs: Any) -> Any:
+    from app.db import update_message_context_compact as _update_message_context_compact
+    return await _update_message_context_compact(*args, **kwargs)
+
+
+def _product_chat():
+    return create_chat_turn, increment_qa_stats, update_message_context_compact
 
 
 def _corrective_metrics_state(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -302,6 +330,11 @@ async def _persist_success_turn(
     duration_ms: float,
     success_context: str,
 ) -> Dict[str, Any]:
+    # The runtime service uses persist_product_records=False. Keep the
+    # product-only PDF/indexing dependency out of the framework execution
+    # import graph; rag-service loads it only when projecting a legacy result.
+    create_chat_turn, increment_qa_stats, update_message_context_compact = _product_chat()
+
     answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
     status = ChatTurnStatus.COMPLETED.value
     embedding_model = result.get("embedding_model")
@@ -472,6 +505,8 @@ async def handle_router_rag_chat(
         checkpointer=checkpointer,
         execution_event_sink=_kwargs.get("execution_event_sink"),
         cancellation_checker=_kwargs.get("cancellation_checker"),
+        result_projector=_kwargs.get("result_projector"),
+        persist_product_records=_kwargs.get("persist_product_records", True),
     )
 
 
@@ -688,6 +723,10 @@ async def _handle_compiled_rag_chat(
         "task_context_summary": {},
         "task_memory_snapshot": dict(getattr(req, "task_memory_snapshot", None) or {}),
         "task_budget_usage": dict(getattr(req, "task_budget_usage", None) or {}),
+        "runtime_execution_mode": bool(getattr(req, "runtime_execution_mode", False)),
+        "runtime_artifact_manifest": list(getattr(req, "runtime_artifact_manifest", None) or []),
+        "runtime_artifact_contents": dict(getattr(req, "runtime_artifact_contents", None) or {}),
+        "runtime_artifacts": [],
         "task_incomplete_reasons": [],
         "task_pause_requested": False,
         "task_cancel_requested": False,
@@ -938,6 +977,7 @@ async def _handle_compiled_rag_chat(
             "agent_route_reason": route_reason,
             "agent_error": error_payload,
         }
+        create_chat_turn, _, _ = _product_chat()
         turn = await create_chat_turn(
             thread_id=thread_id,
             question=req.question,

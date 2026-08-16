@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import os
 from typing import Dict
 
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.contracts import AgentDefinition
-from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+
+
+def _default_langgraph_adapter() -> AgentRuntimeAdapter:
+    """Select transport at process startup while retaining an emergency fallback."""
+
+    if os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+
+        return HttpLangGraphRuntimeAdapter()
+    from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+
+    return LangGraphRuntimeAdapter()
 
 
 class RuntimeSelectionError(ValueError):
@@ -15,7 +27,7 @@ class RuntimeSelectionError(ValueError):
 
 class RuntimeRegistry:
     def __init__(self, adapters: list[AgentRuntimeAdapter] | None = None):
-        active = adapters or [LangGraphRuntimeAdapter()]
+        active = adapters or [_default_langgraph_adapter()]
         self._adapters: Dict[tuple[str, str], AgentRuntimeAdapter] = {
             (adapter.framework, adapter.builder_id): adapter for adapter in active
         }

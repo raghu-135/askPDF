@@ -15,7 +15,6 @@ from app.agent.tool_contract import normalize_tool_result
 from app.agent.tool_registry import get_tool_contract_id
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import is_retryable_model_error
-from app.rag.chat_service import prefetch_context
 from app.agent_workflows.prompting import (
     build_evaluator_prompt,
     build_grounded_answer_verifier_prompt,
@@ -155,6 +154,22 @@ from app.agent_workflows.deep_research_nodes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Compatibility seams retained for existing graph tests and studio callers.
+# They are lazy so importing the runtime package does not import the product
+# database-backed retrieval implementation.
+async def prefetch_context(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    from app.rag.chat_service import prefetch_context as _prefetch_context
+
+    return await _prefetch_context(*args, **kwargs)
+
+
+search_documents = None
+search_thread_conversation_history = None
+search_durable_memory = None
+search_thread_events = None
+search_web = None
 
 
 async def _emit_corrective_event(config: RunnableConfig, event: str, data: Dict[str, Any]) -> None:
@@ -415,15 +430,49 @@ class NodeRegistry:
     async def context_loader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         try:
-            bundle = await prefetch_context(
-                thread_id=state["thread_id"],
-                raw_question=state["question"],
-                embedding_model=state["embedding_model"],
-                context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
-                use_web_search=state.get("use_web_search", False),
-                use_reranker=state.get("use_reranker", True),
-                prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),
-            )
+            if state.get("runtime_execution_mode"):
+                # The external runtime cannot open the product database. Use
+                # the MCP retrieval contracts, whose server-side handlers
+                # remain owned by rag-service, for the same evidence inputs.
+                async def retrieve(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+                    raw = await _invoke_tool_for_node(
+                        tool_name,
+                        arguments,
+                        state=state,
+                        config=config,
+                        node=runtime_node_id(config, WorkflowNodeType.CONTEXT_LOADER.value),
+                        started=started,
+                    )
+                    return normalize_tool_result(raw, tool_name=tool_name, config=config)
+
+                question = state["question"]
+                document = await retrieve(ToolName.SEARCH_DOCUMENTS.value, {"query": question, "max_results": 10})
+                conversation = await retrieve(ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value, {"query": question, "max_results": 10})
+                memory = await retrieve(ToolName.SEARCH_DURABLE_MEMORY.value, {"query": question, "max_results": 10})
+                web = {}
+                if state.get("use_web_search"):
+                    web = await retrieve(ToolName.SEARCH_WEB.value, {"query": question})
+                bundle = {
+                    "recent_history_text": "",
+                    "semantic_history_text": conversation.get("content", ""),
+                    "document_evidence_text": document.get("content", ""),
+                    "durable_memory_text": memory.get("content", ""),
+                    "document_sources": document.get("sources", []),
+                    "web_sources": web.get("sources", []),
+                    "used_chat_ids": [],
+                    "durable_memory_refs": memory.get("artifacts", {}).get("memory_refs", []),
+                    "durable_memory_retrieval_debug": memory.get("metrics", {}),
+                }
+            else:
+                bundle = await prefetch_context(
+                    thread_id=state["thread_id"],
+                    raw_question=state["question"],
+                    embedding_model=state["embedding_model"],
+                    context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
+                    use_web_search=state.get("use_web_search", False),
+                    use_reranker=state.get("use_reranker", True),
+                    prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),
+                )
             transient_history = str(state.get("transient_history_text") or "").strip()
             if transient_history:
                 persisted_history = str(bundle.get("recent_history_text") or "").strip()

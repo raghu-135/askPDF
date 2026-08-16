@@ -9,6 +9,8 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeValidationIssue,
     RuntimeValidationResult,
+    RuntimeArtifact,
+    RuntimeTaskContext,
 )
 from app.runtime.langgraph_compat import (
     continuation_from_run,
@@ -119,3 +121,17 @@ def test_validation_contract_is_json_compatible():
 
     assert result.to_dict()["issues"][0]["path"] == "config.graph"
     assert result.to_dict()["valid"] is False
+
+
+def test_runtime_task_context_and_artifact_are_json_compatible():
+    artifact = RuntimeArtifact(kind="intermediate_report", content="report", todo_id="todo-1")
+    context = RuntimeTaskContext(
+        task_id="task-1",
+        objective="research",
+        todos=({"id": "todo-1", "status": "pending"},),
+        artifact_manifests=(artifact.to_dict(),),
+        artifact_contents={artifact.artifact_id or "runtime": "report"},
+    )
+
+    assert artifact.to_dict()["kind"] == "intermediate_report"
+    assert context.to_dict()["todos"][0]["id"] == "todo-1"

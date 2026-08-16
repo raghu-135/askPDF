@@ -6,14 +6,17 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional
 
 
-@dataclass(frozen=True)
-class RuntimeError:
+@dataclass
+class RuntimeError(Exception):
     code: str
     safe_message: str
     retryable: bool = False
     details: Mapping[str, Any] = field(default_factory=dict)
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     contract_version: int = 1
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.safe_message)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

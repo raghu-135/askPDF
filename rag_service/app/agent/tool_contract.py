@@ -11,12 +11,12 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, model_validator
 
 from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
-from app.db import FileSourceType
 from app.rag.enums import TimelineSourceType
 from app.time_utils import iso_utc_z, utc_now
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_DOCUMENT_SOURCE_TYPE = "pdf"
 
 
 def _compat_json_default(value: Any) -> str:
@@ -473,7 +473,7 @@ def collect_tool_sources(
                 "text": event.get("excerpt", ""),
                 "file_hash": event.get("file_hash"),
                 "file_name": event.get("file_name"),
-                "source_type": event.get("document_source_type", FileSourceType.PDF.value),
+                "source_type": event.get("document_source_type", DEFAULT_DOCUMENT_SOURCE_TYPE),
                 "document_available_in_thread_at": event.get("document_available_in_thread_at"),
                 "timeline_event_at": event.get("timeline_event_at"),
                 "timeline_event_type": event.get("timeline_event_type"),

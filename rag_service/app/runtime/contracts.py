@@ -151,6 +151,48 @@ class AgentRuntimeResult:
         return value
 
 
+@dataclass(frozen=True)
+class RuntimeArtifact:
+    """Bounded artifact output; persistence remains a control-plane concern."""
+
+    kind: str
+    content: Optional[str] = None
+    artifact_id: Optional[str] = None
+    sha256: Optional[str] = None
+    media_type: str = "text/plain"
+    todo_id: Optional[str] = None
+    subagent_run_id: Optional[str] = None
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+    source_refs: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeTaskContext:
+    """Read-only product context supplied to a runtime task invocation."""
+
+    task_id: str
+    objective: str = ""
+    todos: tuple[Mapping[str, Any], ...] = ()
+    artifact_manifests: tuple[Mapping[str, Any], ...] = ()
+    artifact_contents: Mapping[str, str] = field(default_factory=dict)
+    limits: Mapping[str, Any] = field(default_factory=dict)
+    permissions: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "objective": self.objective,
+            "todos": [dict(value) for value in self.todos],
+            "artifact_manifests": [dict(value) for value in self.artifact_manifests],
+            "artifact_contents": dict(self.artifact_contents),
+            "limits": dict(self.limits),
+            "permissions": dict(self.permissions),
+        }
+
+
 def mapping_copy(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """Return a shallow JSON-compatible mapping copy for adapter boundaries."""
 

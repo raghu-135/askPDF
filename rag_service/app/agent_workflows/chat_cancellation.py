@@ -4,10 +4,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from app.db import AgentRunStatus
-from app.db.connection_sqlmodel import async_session_maker
-from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import AgentRun
 
 
 CHAT_CANCEL_REQUESTED = "cancel_requested"
@@ -16,6 +12,10 @@ CHAT_CANCEL_AWAITING_HUMAN = "awaiting_human"
 CHAT_CANCEL_UNSUPPORTED = "unsupported"
 BUILDER_TEST_RUN_KIND = "builder_test"
 logger = logging.getLogger(__name__)
+
+# Lazy-import placeholders preserve the historic monkeypatch seams without
+# importing the product database when the external runtime starts.
+async_session_maker = None
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,13 @@ class ChatRunCancellationRequested(Exception):
 async def request_chat_run_cancel(run_id: str, *, thread_id: str) -> ChatRunCancelResult:
     """Request cancellation for one ordinary running chat Agent Run."""
 
-    async with async_session_maker() as session:
+    from app.db import AgentRunStatus
+    from app.db.connection_sqlmodel import async_session_maker as default_session_maker
+    from app.db.jsonb_utils import replace_jsonb_field
+    from app.db.models_sqlmodel import AgentRun
+    session_maker = async_session_maker or default_session_maker
+
+    async with session_maker() as session:
         async with session.begin():
             run = await session.get(AgentRun, run_id)
             if run is None or run.thread_id != thread_id:
@@ -74,7 +80,11 @@ async def chat_run_cancel_requested(run_id: str) -> bool:
     """Read cancellation state in a fresh session so checks work across workers."""
 
     try:
-        async with async_session_maker() as session:
+        from app.db import AgentRunStatus
+        from app.db.connection_sqlmodel import async_session_maker as default_session_maker
+        from app.db.models_sqlmodel import AgentRun
+        session_maker = async_session_maker or default_session_maker
+        async with session_maker() as session:
             async with session.begin():
                 run = await session.get(AgentRun, run_id)
                 return bool(

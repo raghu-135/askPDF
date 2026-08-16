@@ -34,16 +34,29 @@ class AgentRuntimeProjection:
         await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
         return True
 
+    async def project_terminal_result(self, *, run: Any, result: Mapping[str, Any], terminal_event_id: str | None = None) -> dict[str, Any]:
+        from app.services.agent_runtime_reconciliation import record_terminal_result
+
+        await record_terminal_result(run, result, terminal_event_id=terminal_event_id)
+        return await self.reconcile_run(run=run, result=result)
+
+    async def persist_trace(self, *, run: Any, events: list[Any]) -> None:
+        for event in events:
+            await self.apply_event(run=run, event=event)
+
     async def project_chat_result(
         self,
         *,
         thread_id: str,
         question: str,
         result: Mapping[str, Any],
-        run_context: Mapping[str, Any],
-        duration_ms: float,
+        run_context: Mapping[str, Any] | None = None,
+        duration_ms: float = 0.0,
+        success_context: str = "",
+        agent_run_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         projected = dict(result)
+        run_context = run_context or agent_run_context or {}
         status = str(projected.get("status") or "completed")
         if status not in {ChatTurnStatus.COMPLETED.value, "failed"}:
             return projected
