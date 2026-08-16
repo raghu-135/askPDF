@@ -8,7 +8,7 @@
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
-#   ./run_tests.sh --phase5                 # Run isolated external-runtime hardening checks
+#   ./run_tests.sh --phase5                 # Run isolated external-runtime integration checks
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
@@ -37,8 +37,8 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
-PHASE5_PROJECT_NAME="${ASKPDF_PHASE5_PROJECT_NAME:-askpdf-phase5-test}"
-PHASE5_COMPOSE_ARGS=(-p "$PHASE5_PROJECT_NAME" -f docker-compose.phase5-test.yml)
+PHASE5_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_PHASE5_PROJECT_NAME:-askpdf-runtime-integration-test}}"
+PHASE5_COMPOSE_ARGS=(-p "$PHASE5_PROJECT_NAME" -f docker-compose.runtime-integration.yml)
 
 args=("$@")
 for arg in "${args[@]}"; do

@@ -11,7 +11,7 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - phase5_postgres_data:/var/lib/postgresql/data
+      - runtime_integration_postgres_data:/var/lib/postgresql/data
 
   runtime-checkpoint-db-init:
     image: postgres:16-alpine
@@ -39,14 +39,14 @@ services:
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       DEFAULT_VECTORIZER_MODULE: none
       ENABLE_API_BASED_MODULES: "true"
-      CLUSTER_HOSTNAME: phase5-test
+      CLUSTER_HOSTNAME: runtime-integration-test
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
     volumes:
-      - phase5_weaviate_data:/var/lib/weaviate
+      - runtime_integration_weaviate_data:/var/lib/weaviate
 
   rag-service:
     build:
@@ -83,7 +83,7 @@ services:
     volumes:
       - ./rag_service:/app
       - .:/workspace:ro
-      - phase5_product_data:/static
+      - runtime_integration_product_data:/static
     extra_hosts:
       - host.docker.internal:host-gateway
     healthcheck:
@@ -168,12 +168,12 @@ services:
     volumes:
       - ./rag_service:/app
       - .:/workspace:ro
-      - phase5_test_data:/data
+      - runtime_integration_test_data:/data
     extra_hosts:
       - host.docker.internal:host-gateway
 
 volumes:
-  phase5_postgres_data:
-  phase5_weaviate_data:
-  phase5_product_data:
-  phase5_test_data:
+  runtime_integration_postgres_data:
+  runtime_integration_weaviate_data:
+  runtime_integration_product_data:
+  runtime_integration_test_data:
