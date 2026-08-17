@@ -12,6 +12,7 @@ COPY requirements-control-plane.txt requirements-control-plane.txt
 COPY requirements-langgraph-runtime.txt requirements-langgraph-runtime.txt
 COPY requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
+RUN python -m spacy download en_core_web_sm
 
 COPY alembic alembic
 COPY scripts scripts

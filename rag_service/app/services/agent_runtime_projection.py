@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
-import hashlib
-import json
 
 from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats, update_message_context_compact
 from app.rag.indexer import index_chat_memory_for_thread
@@ -63,15 +61,41 @@ class AgentRuntimeProjection:
         status = str(projected.get("status") or "completed")
         if status not in {ChatTurnStatus.COMPLETED.value, "failed"}:
             return projected
+        from app.services.agent_runtime_reconciliation import result_hash
+
         run_id = run_context.get("agent_run_id")
-        result_hash = hashlib.sha256(
-            json.dumps(projected, sort_keys=True, default=str, separators=(",", ":")).encode()
-        ).hexdigest()
+        digest = result_hash(projected)
         existing = None
+        repository = None
+        projection: dict[str, Any] = {}
         if run_id:
             from app.agent_workflows.repository import AgentWorkflowRepository
 
-            turns = await AgentWorkflowRepository().list_chat_turns_for_run(str(run_id))
+            repository = AgentWorkflowRepository()
+            fresh_run = await repository.get_run(str(run_id))
+            projection = dict(
+                ((getattr(fresh_run, "run_metadata_json", None) or {}).get("projection") or {})
+            )
+            applied_hash = projection.get("result_hash")
+            if projection.get("status") == "applied":
+                if applied_hash != digest:
+                    raise ValueError("runtime_terminal_result_conflict")
+                projected.update(
+                    {
+                        "answer": projected.get("final_answer") or projected.get("answer") or "",
+                        "chat_turn_id": projection.get("chat_turn_id"),
+                        "user_message_id": projection.get("user_message_id"),
+                        "assistant_message_id": projection.get("assistant_message_id"),
+                        "agent_run_turn_kind": "assistant_final",
+                        "agent_run_sequence": 0,
+                        "duration_ms": duration_ms,
+                    }
+                )
+                return projected
+            if applied_hash and applied_hash != digest:
+                raise ValueError("runtime_terminal_result_conflict")
+
+            turns = await repository.list_chat_turns_for_run(str(run_id))
             existing = next(
                 (
                     turn for turn in turns
@@ -139,18 +163,22 @@ class AgentRuntimeProjection:
                 "duration_ms": duration_ms,
             }
         )
-        if run_id:
-            from app.agent_workflows.repository import AgentWorkflowRepository
-
-            repository = AgentWorkflowRepository()
+        if run_id and repository is not None:
             if hasattr(repository, "update_runtime_projection"):
                 await repository.update_runtime_projection(
                     str(run_id),
                     {
-                        "version": 1,
+                        **projection,
+                        "version": max(int(projection.get("version") or 0), 1),
                         "status": "applied",
-                        "result_hash": result_hash,
-                        "terminal_event_id": projected.get("terminal_event_id"),
+                        "result_hash": digest,
+                        "terminal_event_id": (
+                            projected.get("terminal_event_id")
+                            or projection.get("terminal_event_id")
+                        ),
+                        "chat_turn_id": turn.id,
+                        "user_message_id": f"{turn.id}:user",
+                        "assistant_message_id": f"{turn.id}:assistant",
                     },
                 )
         return projected

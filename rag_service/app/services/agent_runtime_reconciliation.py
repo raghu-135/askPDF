@@ -41,7 +41,13 @@ async def record_runtime_event(run: Any, event: Any) -> bool:
 async def record_terminal_result(run: Any, result: Mapping[str, Any], *, terminal_event_id: str | None = None) -> dict[str, Any]:
     """Record a bounded terminal snapshot before product projection."""
 
-    metadata = dict(getattr(run, "run_metadata_json", None) or {})
+    repository = AgentWorkflowRepository()
+    fresh_run = await repository.get_run(str(run.id))
+    metadata = dict(
+        getattr(fresh_run, "run_metadata_json", None)
+        or getattr(run, "run_metadata_json", None)
+        or {}
+    )
     projection = dict(metadata.get("projection") or {})
     digest = result_hash(result)
     existing = projection.get("result_hash")
@@ -54,7 +60,7 @@ async def record_terminal_result(run: Any, result: Mapping[str, Any], *, termina
         "terminal_event_id": terminal_event_id or projection.get("terminal_event_id"),
         "runtime_result": dict(result),
     })
-    await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
+    await repository.update_runtime_projection(run.id, projection)
     return projection
 
 
