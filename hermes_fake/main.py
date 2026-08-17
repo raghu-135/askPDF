@@ -59,13 +59,13 @@ async def _events(run_id: str) -> AsyncIterator[str]:
     counters["event_streams"] += 1
     if mode == "delayed":
         await asyncio.sleep(1)
-    yield _frame("message.delta", {"delta": "deterministic "})
+    yield _frame("message.delta", {"event_id": f"{run_id}:progress-1", "delta": "deterministic "})
     if mode == "missing_terminal":
         return
     if mode == "unterminated":
-        yield _frame("run.completed", {"output": "deterministic result"}, terminated=False)
+        yield _frame("run.completed", {"event_id": f"{run_id}:terminal", "output": "deterministic result"}, terminated=False)
     else:
-        yield _frame("run.completed", {"output": "deterministic result"})
+        yield _frame("run.completed", {"event_id": f"{run_id}:terminal", "output": "deterministic result"})
     record["status"] = "completed"
 
 

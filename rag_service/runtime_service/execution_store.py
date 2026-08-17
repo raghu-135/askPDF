@@ -8,6 +8,7 @@ PostgreSQL when AGENT_RUNTIME_EXECUTION_DATABASE_URL is configured.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -62,6 +63,23 @@ def _event_id(run_id: str, attempt: int, event_id: str) -> str:
     return event_id if event_id.startswith(prefix) else f"{prefix}{event_id}"
 
 
+def request_fingerprint(operation: str, request: Mapping[str, Any]) -> str:
+    """Fingerprint only execution semantics, excluding transport metadata."""
+    value = {
+        "operation": operation,
+        "run_id": request.get("run_id"),
+        "definition_id": request.get("definition_id"),
+        "framework": request.get("framework"),
+        "builder_id": request.get("builder_id"),
+        "input": request.get("input") or {},
+        "options": request.get("options") or {},
+        "interrupt": request.get("interrupt") or {},
+        "continuation": request.get("continuation"),
+    }
+    encoded = json.dumps(_json_safe(value), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class ExecutionRecord:
     run_id: str
@@ -81,10 +99,17 @@ class ExecutionRecord:
     lease_expires_at: str | None = None
     heartbeat_at: str | None = None
     fencing_token: int = 0
+    request_fingerprint: str | None = None
+    last_operation_id: str | None = None
+    retry_source_attempt: int | None = None
 
 
 class LeaseLostError(RuntimeError):
     """Raised when a worker attempts to mutate a run it no longer owns."""
+
+
+class ExecutionConflictError(RuntimeError):
+    """Raised when an operation conflicts with an immutable terminal record."""
 
 
 class ExecutionStore:
@@ -92,6 +117,7 @@ class ExecutionStore:
         self.database_url = database_url or os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL", "")
         self._records: dict[str, ExecutionRecord] = {}
         self._events: dict[str, list[dict[str, Any]]] = {}
+        self._operations: dict[tuple[str, str], dict[str, Any]] = {}
         self._condition = None
         self._pool = None
         self.owner_id = os.getenv("AGENT_RUNTIME_WORKER_ID") or f"runtime-{uuid.uuid4().hex}"
@@ -132,6 +158,18 @@ class ExecutionStore:
                     ,lease_expires_at timestamptz
                     ,heartbeat_at timestamptz
                     ,fencing_token bigint not null default 0
+                    ,request_fingerprint text
+                    ,last_operation_id text
+                    ,retry_source_attempt integer
+                );
+                create table if not exists runtime_operations (
+                    run_id text not null references runtime_executions(run_id) on delete cascade,
+                    operation_id text not null,
+                    operation text not null,
+                    request_fingerprint text not null,
+                    attempt integer not null,
+                    created_at timestamptz not null default now(),
+                    primary key (run_id, operation_id)
                 );
                 create table if not exists runtime_events (
                     run_id text not null references runtime_executions(run_id) on delete cascade,
@@ -162,6 +200,9 @@ class ExecutionStore:
                 alter table runtime_executions add column if not exists lease_expires_at timestamptz;
                 alter table runtime_executions add column if not exists heartbeat_at timestamptz;
                 alter table runtime_executions add column if not exists fencing_token bigint not null default 0;
+                alter table runtime_executions add column if not exists request_fingerprint text;
+                alter table runtime_executions add column if not exists last_operation_id text;
+                alter table runtime_executions add column if not exists retry_source_attempt integer;
                 """
             )
 
@@ -170,17 +211,33 @@ class ExecutionStore:
             await self._pool.close()
             self._pool = None
 
-    async def create(self, run_id: str, operation: str, request: Mapping[str, Any], payload: Mapping[str, Any]) -> ExecutionRecord:
-        record = ExecutionRecord(run_id, operation, dict(request), dict(payload))
+    async def create(
+        self,
+        run_id: str,
+        operation: str,
+        request: Mapping[str, Any],
+        payload: Mapping[str, Any],
+        *,
+        operation_id: str | None = None,
+        source_attempt: int | None = None,
+    ) -> ExecutionRecord:
+        fingerprint = request_fingerprint(operation, request)
+        record = ExecutionRecord(run_id, operation, dict(request), dict(payload), request_fingerprint=fingerprint, last_operation_id=operation_id, retry_source_attempt=source_attempt)
         if self._pool is None:
             if run_id in self._records:
                 existing = self._records[run_id]
-                if operation == "start" and existing.status in {"failed", "cancelled", "no_continuation"}:
-                    # Failed/empty/cancelled executions are retryable. Keep
-                    # the prior attempt for audit/replay, but make the new
-                    # attempt the current durable execution.
-                    existing.operation = operation
-                    existing.request = dict(request)
+                if operation == "retry":
+                    if not operation_id:
+                        raise ExecutionConflictError("retry requires operation_id")
+                    prior = self._operations.get((run_id, operation_id))
+                    if prior is not None:
+                        return existing
+                    if existing.status not in {"completed", "failed", "cancelled", "no_continuation"}:
+                        raise ExecutionConflictError("only terminal executions can be retried")
+                    if source_attempt is None or source_attempt != existing.attempt:
+                        raise ExecutionConflictError("retry source_attempt does not match the current terminal attempt")
+                    existing.operation = str(request.get("retry_operation") or "start")
+                    existing.request = dict(request.get("retry_request") or request)
                     existing.payload = dict(payload)
                     existing.status = "queued"
                     existing.cancel_requested = False
@@ -191,24 +248,15 @@ class ExecutionStore:
                     existing.owner_id = None
                     existing.lease_expires_at = None
                     existing.heartbeat_at = None
+                    existing.request_fingerprint = fingerprint
+                    existing.last_operation_id = operation_id
+                    existing.retry_source_attempt = source_attempt
+                    self._operations[(run_id, operation_id)] = {"attempt": existing.attempt, "fingerprint": fingerprint}
                     return existing
-                if (
-                    operation in {"resume", "continue_run"}
-                    and existing.status not in {"queued", "running"}
-                    and existing.continuation is not None
-                ):
-                    existing.operation = operation
-                    existing.request = dict(request)
-                    existing.payload = dict(payload)
-                    existing.status = "queued"
-                    existing.cancel_requested = False
-                    existing.attempt += 1
-                    existing.result = None
-                    existing.error = None
-                    existing.owner_id = None
-                    existing.lease_expires_at = None
-                    existing.heartbeat_at = None
-                    return existing
+                if existing.status in {"completed", "failed", "cancelled", "no_continuation"}:
+                    if existing.request_fingerprint in {None, fingerprint}:
+                        return existing
+                    raise ExecutionConflictError("terminal execution is immutable; use retry")
                 return existing
             self._records[run_id] = record
             self._events.setdefault(run_id, [])
@@ -216,43 +264,40 @@ class ExecutionStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 existing = await connection.fetchrow(
-                    "select operation, status, attempt, continuation from runtime_executions where run_id=$1 for update",
+                    "select operation, request, status, attempt, continuation, request_fingerprint from runtime_executions where run_id=$1 for update",
                     run_id,
                 )
-                if (
-                    existing is not None
-                    and operation == "start"
-                    and existing["status"] in {"failed", "cancelled", "no_continuation"}
-                ):
-                    await connection.execute(
-                        """update runtime_executions
+                if existing is not None and operation == "retry":
+                    if not operation_id:
+                        raise ExecutionConflictError("retry requires operation_id")
+                    prior = await connection.fetchrow("select attempt from runtime_operations where run_id=$1 and operation_id=$2", run_id, operation_id)
+                    if prior is not None:
+                        pass
+                    elif existing["status"] not in {"completed", "failed", "cancelled", "no_continuation"}:
+                        raise ExecutionConflictError("only terminal executions can be retried")
+                    elif source_attempt is None or source_attempt != existing["attempt"]:
+                        raise ExecutionConflictError("retry source_attempt does not match the current terminal attempt")
+                    else:
+                        await connection.execute(
+                            """update runtime_executions
                            set operation=$2, request=$3::jsonb, payload=$4::jsonb,
                                status='queued', cancel_requested=false, attempt=attempt+1,
                                continuation=null, result=null, error=null, owner_id=null,
-                               lease_expires_at=null, heartbeat_at=null, updated_at=now()
+                               lease_expires_at=null, heartbeat_at=null, updated_at=now(),
+                               request_fingerprint=$5, last_operation_id=$6, retry_source_attempt=$7
                            where run_id=$1""",
-                        run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))),
-                    )
-                elif (
-                    existing is not None
-                    and operation in {"resume", "continue_run"}
-                    and existing["status"] not in {"queued", "running"}
-                    and existing["continuation"] is not None
-                ):
-                    await connection.execute(
-                        """update runtime_executions
-                           set operation=$2, request=$3::jsonb, payload=$4::jsonb,
-                               status='queued', cancel_requested=false, attempt=attempt+1,
-                               result=null, error=null, owner_id=null,
-                               lease_expires_at=null, heartbeat_at=null, updated_at=now()
-                           where run_id=$1""",
-                        run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))),
-                    )
+                            run_id, str(request.get("retry_operation") or "start"), json.dumps(_json_safe(dict(request.get("retry_request") or request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
+                        )
+                        await connection.execute("insert into runtime_operations(run_id, operation_id, operation, request_fingerprint, attempt) values($1,$2,$3,$4,(select attempt from runtime_executions where run_id=$1))", run_id, operation_id, operation, fingerprint)
+                elif existing is not None and existing["status"] in {"completed", "failed", "cancelled", "no_continuation"}:
+                    existing_fingerprint = existing["request_fingerprint"] or request_fingerprint(existing["operation"], _json_object(existing["request"]) or {})
+                    if existing_fingerprint != fingerprint:
+                        raise ExecutionConflictError("terminal execution is immutable; use retry")
                 elif existing is None:
                     await connection.execute(
-                        """insert into runtime_executions(run_id, operation, request, payload, status)
-                           values($1,$2,$3::jsonb,$4::jsonb,'queued')""",
-                        run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))),
+                        """insert into runtime_executions(run_id, operation, request, payload, status, request_fingerprint, last_operation_id, retry_source_attempt)
+                           values($1,$2,$3::jsonb,$4::jsonb,'queued',$5,$6,$7)""",
+                        run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
                     )
         return await self.get(run_id)  # type: ignore[return-value]
 
@@ -274,6 +319,9 @@ class ExecutionStore:
             lease_expires_at=row["lease_expires_at"].isoformat() if row.get("lease_expires_at") else None,
             heartbeat_at=row["heartbeat_at"].isoformat() if row.get("heartbeat_at") else None,
             fencing_token=int(row.get("fencing_token") or 0),
+            request_fingerprint=row.get("request_fingerprint") if hasattr(row, "get") else None,
+            last_operation_id=row.get("last_operation_id") if hasattr(row, "get") else None,
+            retry_source_attempt=row.get("retry_source_attempt") if hasattr(row, "get") else None,
         )
 
     async def claim(self, run_id: str, *, owner_id: str | None = None, lease_seconds: int | None = None) -> int | None:
@@ -445,7 +493,26 @@ class ExecutionStore:
         return events
 
     async def nonterminal(self) -> list[ExecutionRecord]:
+        return await self.list_recovery_candidates(limit=100)
+
+    async def list_recovery_candidates(self, limit: int = 100) -> list[ExecutionRecord]:
+        """Return bounded nonterminal records for repeated lease recovery."""
+        limit = max(1, min(int(limit), 1000))
         if self._pool is None:
-            return [record for record in self._records.values() if record.status not in {"completed", "failed", "cancelled"}]
-        rows = await self._pool.fetch("select run_id from runtime_executions where status not in ('completed','failed','cancelled','no_continuation')")
+            records = [record for record in self._records.values() if record.status not in {"completed", "failed", "cancelled", "no_continuation"}]
+            now = datetime.now(timezone.utc)
+            def recovery_key(record: ExecutionRecord) -> tuple[int, str, str]:
+                expired = 0
+                if record.lease_expires_at:
+                    expired = 0 if datetime.fromisoformat(record.lease_expires_at) <= now else 1
+                return expired, record.updated_at, record.run_id
+            return sorted(records, key=recovery_key)[:limit]
+        rows = await self._pool.fetch(
+            """select run_id from runtime_executions
+               where status not in ('completed','failed','cancelled','no_continuation')
+               order by case when lease_expires_at is not null and lease_expires_at < now() then 0 else 1 end,
+                        updated_at, run_id
+               limit $1""",
+            limit,
+        )
         return [record for row in rows if (record := await self.get(row["run_id"])) is not None]

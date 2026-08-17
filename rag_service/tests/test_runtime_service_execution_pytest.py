@@ -110,7 +110,7 @@ async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_resume_reads_only_the_new_attempt_terminal_result(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resume_after_a_terminal_start_requires_explicit_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     class FakeAdapter:
@@ -131,15 +131,41 @@ async def test_resume_reads_only_the_new_attempt_terminal_result(monkeypatch: py
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-hitl"))
-        second = await _read_events(
-            client,
-            "POST",
+        response = await client.post(
             "/v1/runs/run-hitl/resume",
             json={**_payload("run-hitl"), "interrupt": {"decision": "approve"}},
         )
 
-    assert calls == ["start", "resume"]
+    assert calls == ["start"]
     assert first[-1]["result"]["output"]["answer"] == "paused result"
-    assert second[-1]["result"]["output"]["answer"] == "resumed result"
-    assert first[-1]["event"]["event_id"] != second[-1]["event"]["event_id"]
-    assert second[-1]["event"]["attempt"] == 2
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    class FakeAdapter:
+        async def start(self, request, *, context, event_sink=None):
+            nonlocal calls
+            calls += 1
+            return AgentRuntimeResult(status="completed", output={"answer": f"attempt-{calls}"})
+
+    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    app = create_app(execution_store=ExecutionStore())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-explicit-retry"))
+        retry_payload = {
+            "attempt_id": "retry-operation-1",
+            "source_attempt": 1,
+            "operation": "start",
+            "request": _request("run-explicit-retry"),
+        }
+        retried = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
+        repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
+
+    assert calls == 2
+    assert first[-1]["result"]["output"]["answer"] == "attempt-1"
+    assert retried[-1]["result"]["output"]["answer"] == "attempt-2"
+    assert repeated[-1]["result"]["output"]["answer"] == "attempt-2"

@@ -111,6 +111,8 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
         echo "Runtime readiness did not recover after restart" >&2
         exit 1
     fi
+    echo "Verifying execution recovery after restart and lease expiry..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false -e AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=true test-runner --file test_runtime_service_lifecycle_pytest.py --test test_recovery_loop_reclaims_a_lease_after_restart
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --unit
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --db
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --api

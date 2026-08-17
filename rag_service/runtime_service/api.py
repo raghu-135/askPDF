@@ -25,7 +25,7 @@ from app.runtime.transport import (
     sse_encode,
     json_envelope,
 )
-from runtime_service.execution_store import ExecutionStore, LeaseLostError
+from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -118,28 +118,60 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         runtime_state["draining"] = False
         await execution_store.initialize()
-        # Re-claim durable nonterminal executions after a runtime restart.
-        # The worker is defined below, but FastAPI enters lifespan only after
-        # create_app has finished constructing the complete application.
-        for record in await execution_store.nonterminal():
-            try:
-                recovered_request = request_from_dict(record.request)
-                fencing_token = await execution_store.claim(record.run_id)
-                if fencing_token is None:
+        recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        recovery_interval = max(
+            1.0,
+            float(os.getenv("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS", str(max(1.0, execution_store.lease_seconds / 3)))),
+        )
+        recovery_batch_size = max(1, min(1000, int(os.getenv("AGENT_RUNTIME_RECOVERY_BATCH_SIZE", "100"))))
+
+        async def recover_once() -> None:
+            for record in await execution_store.list_recovery_candidates(recovery_batch_size):
+                if runtime_state["active"].get(record.run_id) is not None:
                     continue
-                task = asyncio.create_task(
-                    _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt, fencing_token=fencing_token),
-                    name=f"agent-runtime-recovery-{record.run_id}",
-                )
-                runtime_state["active"][record.run_id] = task
-                task.add_done_callback(
-                    lambda done_task, run_id=record.run_id: runtime_state["active"].pop(run_id, None)
-                    if runtime_state["active"].get(run_id) is done_task else None
-                )
-            except Exception:
-                logger.exception("Unable to recover runtime execution | run_id=%s", record.run_id)
+                try:
+                    recovered_request = request_from_dict(record.request)
+                    fencing_token = await execution_store.claim(record.run_id)
+                    if fencing_token is None:
+                        # Another worker still owns a valid lease. The next
+                        # scan must reconsider this record after expiry.
+                        continue
+                    task = asyncio.create_task(
+                        _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt, fencing_token=fencing_token),
+                        name=f"agent-runtime-recovery-{record.run_id}",
+                    )
+                    runtime_state["active"][record.run_id] = task
+                    task.add_done_callback(
+                        lambda done_task, run_id=record.run_id: runtime_state["active"].pop(run_id, None)
+                        if runtime_state["active"].get(run_id) is done_task else None
+                    )
+                except Exception:
+                    logger.exception("Unable to recover runtime execution | run_id=%s", record.run_id)
+
+        recovery_task: asyncio.Task[Any] | None = None
+        if recovery_enabled:
+            await recover_once()
+
+            async def recovery_loop() -> None:
+                while not runtime_state["draining"]:
+                    try:
+                        await asyncio.sleep(recovery_interval)
+                        if not runtime_state["draining"]:
+                            await recover_once()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("Runtime recovery scan failed")
+
+            recovery_task = asyncio.create_task(recovery_loop(), name="agent-runtime-recovery-loop")
         yield
         runtime_state["draining"] = True
+        if recovery_task is not None:
+            recovery_task.cancel()
+            try:
+                await recovery_task
+            except asyncio.CancelledError:
+                pass
         grace = max(1.0, float(os.getenv("AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS", "30")))
         deadline = time.monotonic() + grace
         while runtime_state["active"] and time.monotonic() < deadline:
@@ -164,6 +196,17 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
             adapter = LangGraphRuntimeAdapter()
         return adapter
+
+    async def _preflight_operation(run_id: str, payload: Mapping[str, Any], operation: str) -> None:
+        """Return an HTTP conflict before opening an SSE response."""
+        record = await execution_store.get(run_id)
+        if record is None or record.status not in {"completed", "failed", "cancelled", "no_continuation"}:
+            return
+        request = request_from_dict(payload["request"])
+        fingerprint = request_fingerprint(operation, request.to_dict())
+        existing = record.request_fingerprint or request_fingerprint(record.operation, record.request)
+        if fingerprint != existing:
+            raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False})
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -340,6 +383,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         after_sequence: int = 0,
         *,
         allow_start: bool = True,
+        operation_id: str | None = None,
+        source_attempt: int | None = None,
     ) -> AsyncIterator[str]:
         request = request_from_dict(payload["request"])
         if expected_run_id and request.run_id != expected_run_id:
@@ -351,7 +396,17 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             # replace a durable execution record, especially after terminal
             # completion or after a process restart.
             if allow_start:
-                record = await execution_store.create(request.run_id, operation, request.to_dict(), payload)
+                try:
+                    record = await execution_store.create(
+                        request.run_id,
+                        operation,
+                        request.to_dict(),
+                        payload,
+                        operation_id=operation_id,
+                        source_attempt=source_attempt,
+                    )
+                except ExecutionConflictError as exc:
+                    raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": str(exc), "retryable": False}) from exc
             else:
                 record = await execution_store.get(request.run_id)
                 if record is None:
@@ -359,16 +414,15 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
             task = runtime_state["active"].get(request.run_id)
             terminal_statuses = {"completed", "failed", "cancelled", "no_continuation"}
-            explicitly_retryable = allow_start and operation in {"resume", "continue_run"} and record.status not in terminal_statuses
             should_start = allow_start and (
-                record.status == "queued" or explicitly_retryable
+                record.status == "queued"
             )
             if should_start and (task is None or task.done()):
                 fencing_token = await execution_store.claim(request.run_id)
                 if fencing_token is None:
                     raise HTTPException(status_code=409, detail="runtime execution is owned by another worker")
                 task = asyncio.create_task(
-                    _execute_operation(payload, operation, request, attempt=record.attempt, fencing_token=fencing_token),
+                    _execute_operation(payload, record.operation, request_from_dict(record.request), attempt=record.attempt, fencing_token=fencing_token),
                     name=f"agent-runtime-{request.run_id}",
                 )
                 runtime_state["active"][request.run_id] = task
@@ -397,6 +451,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:
+        request = request_from_dict(payload["request"])
+        await _preflight_operation(request.run_id, payload, "start")
         return StreamingResponse(stream_operation(payload, "start"), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")
@@ -418,11 +474,33 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        await _preflight_operation(run_id, payload, "resume")
         return StreamingResponse(stream_operation(payload, "resume", run_id), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/continue")
     async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        await _preflight_operation(run_id, payload, "continue_run")
         return StreamingResponse(stream_operation(payload, "continue_run", run_id), media_type="text/event-stream")
+
+    @app.post("/v1/runs/{run_id}/retry")
+    async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        request_payload = dict(payload.get("request") or {})
+        if str(request_payload.get("run_id") or run_id) != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        attempt_id = str(payload.get("attempt_id") or "")
+        source_attempt = payload.get("source_attempt")
+        if not attempt_id or source_attempt is None:
+            raise HTTPException(status_code=400, detail={"code": "retry_metadata_required", "safe_message": "attempt_id and source_attempt are required", "retryable": False})
+        retry_payload = dict(payload)
+        retry_payload["request"] = {
+            **request_payload,
+            "retry_operation": str(payload.get("operation") or "start"),
+            "retry_request": request_payload,
+        }
+        return StreamingResponse(
+            stream_operation(retry_payload, "retry", run_id, operation_id=attempt_id, source_attempt=int(source_attempt)),
+            media_type="text/event-stream",
+        )
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:

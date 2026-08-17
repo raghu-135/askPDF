@@ -39,9 +39,9 @@ def _error(code: str, message: str, *, retryable: bool = False) -> dict[str, Any
     return {"code": code, "safe_message": message, "retryable": retryable, "details": {}}
 
 
-def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, Any] | None = None, *, terminal: bool = False, continuation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, Any] | None = None, *, event_id: str | None = None, source_event_id: str | None = None, terminal: bool = False, continuation: Mapping[str, Any] | None = None) -> dict[str, Any]:
     event = {
-        "event_id": f"{run_id}:{sequence}",
+        "event_id": event_id or f"{run_id}:{sequence}",
         "run_id": run_id,
         "sequence": sequence,
         "kind": kind,
@@ -51,6 +51,8 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
     }
     if continuation is not None:
         event["continuation"] = dict(continuation)
+    if source_event_id is not None:
+        event["source_event_id"] = str(source_event_id)
     return event
 
 
@@ -270,7 +272,7 @@ def create_app() -> FastAPI:
         session_id = (neutral_request.get("continuation") or {}).get("payload", {}).get("session_id")
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
-        sequence = 1
+        sequence = store.next_sequence(run_id) if os.getenv("HERMES_RUNTIME_EVENT_ID_MODE", "durable").strip().lower() == "durable" else 1
         output_chars = 0
         terminal_seen = False
 
@@ -278,6 +280,9 @@ def create_app() -> FastAPI:
             nonlocal output_chars, sequence, terminal_seen, session_id
             raw = json.loads("\n".join(frame_data))
             event_payload = raw if isinstance(raw, Mapping) else {"value": raw}
+            source_event_id = event_payload.get("event_id") or event_payload.get("id") or event_payload.get("sequence")
+            if source_event_id is not None:
+                source_event_id = f"{frame_event_name}:{source_event_id}"
             kind = _hermes_event_kind(frame_event_name, event_payload)
             terminal = kind in {"run.completed", "run.failed", "run.cancelled"}
             if kind == "output.delta":
@@ -286,7 +291,7 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes output exceeded the configured limit"))
             if sequence > max_events:
                 raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes emitted too many events"))
-            event = _neutral_event(run_id, sequence, kind, event_payload, terminal=terminal, continuation=continuation)
+            event = _neutral_event(run_id, sequence, kind, event_payload, source_event_id=source_event_id, terminal=terminal, continuation=continuation)
             result = None
             if terminal:
                 terminal_seen = True

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from runtime_service.execution_store import ExecutionStore, LeaseLostError, _json_safe
+from runtime_service.execution_store import ExecutionConflictError, ExecutionStore, LeaseLostError, _json_safe
 
 
 @pytest.mark.asyncio
-async def test_continuation_probe_can_be_replaced_by_start() -> None:
+async def test_terminal_continuation_probe_is_immutable_under_repeated_start() -> None:
     store = ExecutionStore()
 
     await store.create("run-1", "continue_run", {"run_id": "run-1"}, {"request": {"run_id": "run-1"}})
@@ -20,15 +20,14 @@ async def test_continuation_probe_can_be_replaced_by_start() -> None:
         {"event_id": "run-1:terminal", "kind": "run.continuation_empty", "terminal": True, "payload": {}},
     )
 
-    record = await store.create("run-1", "start", {"run_id": "run-1"}, {"request": {"run_id": "run-1"}})
-
-    assert record.operation == "start"
-    assert record.status == "queued"
-    assert await store.events_after("run-1") == []
+    with pytest.raises(ExecutionConflictError):
+        await store.create("run-1", "start", {"run_id": "run-1"}, {"request": {"run_id": "run-1"}})
+    assert (await store.get("run-1")).status == "no_continuation"
+    assert len(await store.events_after("run-1")) == 1
 
 
 @pytest.mark.asyncio
-async def test_failed_start_can_be_retried_with_the_same_run_id() -> None:
+async def test_failed_start_is_immutable_under_transport_retry() -> None:
     store = ExecutionStore()
 
     await store.create("run-2", "start", {"run_id": "run-2"}, {"request": {"run_id": "run-2"}})
@@ -40,12 +39,42 @@ async def test_failed_start_can_be_retried_with_the_same_run_id() -> None:
 
     record = await store.create("run-2", "start", {"run_id": "run-2"}, {"request": {"run_id": "run-2"}})
 
-    assert record.status == "queued"
-    assert await store.events_after("run-2") == []
+    assert record.status == "failed"
+    assert len(await store.events_after("run-2")) == 1
 
 
 @pytest.mark.asyncio
-async def test_resume_creates_a_new_attempt_without_replaying_prior_terminal_events() -> None:
+async def test_terminal_request_conflict_requires_explicit_retry() -> None:
+    store = ExecutionStore()
+    await store.create("run-retry", "start", {"run_id": "run-retry", "input": {"question": "one"}}, {"request": {"run_id": "run-retry"}})
+    await store.set_status("run-retry", "cancelled")
+
+    with pytest.raises(ExecutionConflictError):
+        await store.create("run-retry", "start", {"run_id": "run-retry", "input": {"question": "two"}}, {"request": {"run_id": "run-retry"}})
+
+    retried = await store.create(
+        "run-retry",
+        "retry",
+        {"run_id": "run-retry", "retry_operation": "start", "retry_request": {"run_id": "run-retry"}},
+        {"request": {"run_id": "run-retry"}},
+        operation_id="retry-1",
+        source_attempt=1,
+    )
+    assert retried.status == "queued"
+    assert retried.attempt == 2
+    repeated = await store.create(
+        "run-retry",
+        "retry",
+        {"run_id": "run-retry", "retry_operation": "start", "retry_request": {"run_id": "run-retry"}},
+        {"request": {"run_id": "run-retry"}},
+        operation_id="retry-1",
+        source_attempt=1,
+    )
+    assert repeated.attempt == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_transport_retry_is_read_only_after_terminal_completion() -> None:
     store = ExecutionStore()
     await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})
     binding = {"binding_type": "checkpoint", "payload": {"id": "cp-1"}}
@@ -55,24 +84,10 @@ async def test_resume_creates_a_new_attempt_without_replaying_prior_terminal_eve
     )
     await store.set_status("run-resume", "completed")
 
-    resumed = await store.create(
-        "run-resume",
-        "resume",
-        {"run_id": "run-resume"},
-        {"request": {"run_id": "run-resume"}},
-    )
-    assert resumed.attempt == 2
-    assert await store.events_after("run-resume") == []
-
-    await store.append(
-        "run-resume",
-        {"event_id": "run-resume:terminal", "kind": "run.completed", "terminal": True},
-    )
-    current = await store.events_after("run-resume")
-    all_events = await store.events_after("run-resume", attempt=1) + current
-    assert len(current) == 1
-    assert current[0]["attempt"] == 2
-    assert current[0]["event_id"] != all_events[0]["event_id"]
+    with pytest.raises(ExecutionConflictError):
+        await store.create("run-resume", "resume", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})
+    assert (await store.get("run-resume")).attempt == 1
+    assert len(await store.events_after("run-resume")) == 1
 
 
 @pytest.mark.asyncio
