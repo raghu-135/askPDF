@@ -151,20 +151,40 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
+        hermes_ready = False
+        mcp_required = os.getenv("ASKPDF_MCP_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+        mcp_ready = not mcp_required
+        mcp_checked = False
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(upstream_url() + "/health")
-            ready = 200 <= response.status_code < 400
-            if ready and os.getenv("ASKPDF_MCP_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}:
-                mcp_url = os.getenv("ASKPDF_MCP_HEALTH_URL") or (os.getenv("ASKPDF_MCP_URL", "").rstrip("/") + "/healthz")
-                if not mcp_url or mcp_url == "/healthz":
-                    ready = False
-                else:
-                    mcp_response = await client.get(mcp_url)
-                    ready = ready and 200 <= mcp_response.status_code < 400
+                hermes_ready = 200 <= response.status_code < 400
+                if hermes_ready and mcp_required:
+                    mcp_url = os.getenv("ASKPDF_MCP_HEALTH_URL") or (os.getenv("ASKPDF_MCP_URL", "").rstrip("/") + "/healthz")
+                    if mcp_url and mcp_url != "/healthz":
+                        mcp_checked = True
+                        mcp_response = await client.get(mcp_url)
+                        mcp_ready = 200 <= mcp_response.status_code < 400
         except Exception:
-            ready = False
-        return JSONResponse({"status": "ok" if ready else "not_ready", "checks": {"hermes": {"status": "ok" if ready else "failed", "storage_backend": state["storage_backend"], "worker_count": state["worker_count"]}}}, status_code=200 if ready else 503)
+            pass
+        ready = hermes_ready and mcp_ready
+        return JSONResponse(
+            {
+                "status": "ok" if ready else "not_ready",
+                "checks": {
+                    "hermes": {
+                        "status": "ok" if hermes_ready else "failed",
+                        "storage_backend": state["storage_backend"],
+                        "worker_count": state["worker_count"],
+                    },
+                    "mcp": {
+                        "status": "ok" if mcp_ready else ("failed" if mcp_checked else "not_checked"),
+                        "required": mcp_required,
+                    },
+                },
+            },
+            status_code=200 if ready else 503,
+        )
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request) -> dict[str, Any]:
