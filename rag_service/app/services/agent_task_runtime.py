@@ -17,7 +17,7 @@ from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
@@ -70,6 +70,12 @@ async def ensure_task_run(task_id: str):
         raise ValueError("task_not_found")
     active = await tasks.get_task_run(task_id)
     if active is not None and active.status in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
+        # An existing active run may have a checkpoint to continue after a
+        # worker restart.  Mark it explicitly so a newly-created run is not
+        # mistaken for a continuation merely because LangGraph reserves its
+        # checkpoint thread ID at creation time.
+        metadata = dict(active.run_metadata_json or {})
+        setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
         return active
 
     repository = AgentWorkflowRepository()
@@ -114,8 +120,17 @@ async def ensure_task_run(task_id: str):
         definition_category=getattr(workflow, "category", None),
         resolved_spec_json=frozen_spec,
         user_id=task.user_id,
-        run_metadata_json={"executed_workflow_id": workflow.id, "run_kind": "agent_task", "agent_task_id": task.id},
+        run_metadata_json={
+            "executed_workflow_id": workflow.id,
+            "run_kind": "agent_task",
+            "agent_task_id": task.id,
+            "runtime_started": False,
+        },
     )
+    # create_run intentionally allocates the LangGraph checkpoint identity up
+    # front.  That identity is not evidence that a checkpoint exists yet.
+    # Keep this process-local marker until the first start operation completes.
+    setattr(run, "_fresh_runtime_run", True)
     await tasks.attach_run(task.id, run, parent_run_id=active.id if active is not None else None)
     return run
 
@@ -305,18 +320,30 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_id=task.id,
             task_worker_id=worker_id,
         )
-        if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
+        if getattr(run, "_fresh_runtime_run", False):
+            runtime_result = await adapter.start(runtime_request, context=runtime_context)
+            await repository.mark_runtime_started(run.id)
+        elif pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
             runtime_result = await adapter.resume(
                 runtime_request,
                 interrupt=pending,
                 context=runtime_context,
             )
-            result = legacy_result_from_runtime(runtime_result)
         else:
             runtime_result = await adapter.continue_run(runtime_request, context=runtime_context)
-            if runtime_result is None:
-                runtime_result = await adapter.start(runtime_request, context=runtime_context)
-            result = legacy_result_from_runtime(runtime_result)
+        if runtime_result is None:
+            # A continuation is optional at the runtime boundary.  A missing
+            # checkpoint is a terminal runtime outcome, not a legacy result
+            # object and must not reach legacy_result_from_runtime(None).
+            runtime_result = AgentRuntimeResult(
+                status="failed",
+                error={
+                    "code": "runtime_continuation_missing",
+                    "message": "The LangGraph run has no durable checkpoint to continue",
+                    "retryable": False,
+                },
+            )
+        result = legacy_result_from_runtime(runtime_result)
         # Runtime artifacts are data, not product records. Project them in
         # rag-service after the stream completes and translate deterministic
         # runtime IDs to the persisted artifact IDs used by task APIs.

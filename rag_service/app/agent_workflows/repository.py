@@ -692,3 +692,16 @@ class AgentWorkflowRepository:
             run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
             run.runtime_binding_status = status
             return run
+
+    async def mark_runtime_started(self, run_id: str) -> Optional[AgentRun]:
+        """Persist that the initial runtime start has been submitted."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                return None
+            metadata = dict(run.run_metadata_json or {})
+            metadata["runtime_started"] = True
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            return run

@@ -47,6 +47,10 @@ def upgrade() -> None:
                 created_at timestamptz not null default now(),
                 updated_at timestamptz not null default now()
             );
+            """
+        )
+        op.execute(
+            """
             CREATE TABLE IF NOT EXISTS runtime_events (
                 run_id text not null references runtime_executions(run_id) on delete cascade,
                 sequence integer not null,

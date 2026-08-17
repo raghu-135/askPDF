@@ -113,6 +113,24 @@ services:
     volumes:
       - ./rag_service:/app
 
+  runtime-db-migrate:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.db.migrate_runtime"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      POSTGRES_POOL_SIZE: "1"
+      POSTGRES_MAX_OVERFLOW: "1"
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      RUN_RUNTIME_DB_MIGRATIONS: "true"
+    depends_on:
+      runtime-checkpoint-db-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./rag_service:/app
+
   langgraph-runtime:
     build:
       context: ./rag_service
@@ -139,6 +157,8 @@ services:
       rag-service:
         condition: service_healthy
       runtime-checkpoint-db-init:
+        condition: service_completed_successfully
+      runtime-db-migrate:
         condition: service_completed_successfully
       fake-llm:
         condition: service_healthy

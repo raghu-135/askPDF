@@ -25,8 +25,11 @@ def upgrade() -> None:
         ALTER TABLE runtime_executions
             ADD COLUMN IF NOT EXISTS request_fingerprint text,
             ADD COLUMN IF NOT EXISTS last_operation_id text,
-            ADD COLUMN IF NOT EXISTS retry_source_attempt integer;
-
+            ADD COLUMN IF NOT EXISTS retry_source_attempt integer
+        """
+    )
+    op.execute(
+        """
         CREATE TABLE IF NOT EXISTS runtime_operations (
             run_id text not null references runtime_executions(run_id) on delete cascade,
             operation_id text not null,
@@ -50,6 +53,6 @@ def downgrade() -> None:
         ALTER TABLE runtime_executions
             DROP COLUMN IF EXISTS retry_source_attempt,
             DROP COLUMN IF EXISTS last_operation_id,
-            DROP COLUMN IF EXISTS request_fingerprint;
+            DROP COLUMN IF EXISTS request_fingerprint
         """
     )
