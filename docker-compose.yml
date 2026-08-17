@@ -118,12 +118,13 @@ services:
       retries: 12
 
   hermes-runtime:
+    profiles: ["second-runtime-proof"]
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile
     environment:
       - LOG_LEVEL=INFO
-      - HERMES_API_URL=${HERMES_API_URL:-http://hermes-agent:8000}
+      - HERMES_API_URL=${HERMES_API_URL:-}
       - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
       - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-}
       - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
@@ -142,7 +143,7 @@ services:
       rag-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8200/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8200/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12

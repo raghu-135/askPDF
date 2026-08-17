@@ -6,7 +6,11 @@ from copy import deepcopy
 import os
 from typing import Any, Mapping
 
-from app.runtime.builder import BuilderCapabilities, BuilderCatalog
+from app.runtime.builder import (
+    BuilderCapabilities,
+    BuilderCatalog,
+    UnsupportedRequestOverrideError,
+)
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
@@ -19,6 +23,29 @@ from app.runtime.contracts import (
 class LangGraphBuilderProvider:
     framework = "langgraph"
     builder_id = "langgraph_graph"
+
+    def filter_request_overrides(
+        self,
+        definition: AgentDefinition,
+        overrides: Mapping[str, Any] | None,
+        *,
+        reject_unsupported: bool,
+    ) -> Mapping[str, Any]:
+        from app.agent_workflows.workflow_runtime import ALLOWED_WORKFLOW_CONFIG_KEYS
+
+        supplied = {
+            str(key): value
+            for key, value in dict(overrides or {}).items()
+            if value is not None
+        }
+        unsupported = set(supplied) - ALLOWED_WORKFLOW_CONFIG_KEYS
+        if unsupported and reject_unsupported:
+            raise UnsupportedRequestOverrideError(unsupported)
+        return {
+            key: value
+            for key, value in supplied.items()
+            if key in ALLOWED_WORKFLOW_CONFIG_KEYS
+        }
 
     @staticmethod
     def _external_runtime_enabled() -> bool:
@@ -129,10 +156,15 @@ class LangGraphBuilderProvider:
     ) -> Mapping[str, Any]:
         from app.runtime.langgraph.validator import WorkflowResolver
 
+        filtered_overrides = self.filter_request_overrides(
+            definition,
+            request_overrides,
+            reject_unsupported=False,
+        )
         resolved = WorkflowResolver().resolve(
             dict(spec),
             thread_settings=thread_settings,
-            request_overrides=request_overrides,
+            request_overrides=dict(filtered_overrides),
         )
         config = dict(resolved.get("config") or {})
         if self._external_runtime_enabled():

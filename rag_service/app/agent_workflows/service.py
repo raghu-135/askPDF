@@ -191,21 +191,29 @@ class AgentRunService:
         definition = definition_from_workflow(workflow)
         try:
             provider = builder_for_definition(definition)
+            provider_request_overrides = provider.filter_request_overrides(
+                definition,
+                request_overrides,
+                reject_unsupported=False,
+            )
             if self.resolver is not None:
                 # Preserve the explicit test/integration injection seam while
                 # production selection remains provider-based.
                 resolved_spec = self.resolver.resolve(
                     workflow.spec_json,
                     thread_settings=thread_settings,
-                    request_overrides=request_overrides,
+                    request_overrides=provider_request_overrides,
                 )
             else:
                 resolved_spec = await provider.resolve(
                     definition,
                     workflow.spec_json,
                     thread_settings=thread_settings,
-                    request_overrides=request_overrides,
+                    request_overrides=provider_request_overrides,
                 )
+            # Normalize again at the persistence boundary so injected/custom
+            # resolvers cannot bypass the selected provider's final contract.
+            stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
         except ValueError as exc:
             logger.exception(
                 "Selected agent workflow failed validation; aborting run | thread_id=%s requested_workflow=%s error=%s",
@@ -217,7 +225,6 @@ class AgentRunService:
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
         workflow_version = _workflow_version_info(workflow)
-        stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
 
         run = await self.repository.create_run(
             thread_id=thread_id,

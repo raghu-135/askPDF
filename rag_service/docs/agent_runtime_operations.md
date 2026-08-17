@@ -40,3 +40,20 @@ to one worker and one replica. `HERMES_RUNTIME_STORAGE_BACKEND=file` and
 `HERMES_RUNTIME_WORKERS=1` are enforced at startup. A production Hermes
 deployment must replace this store with the PostgreSQL execution-store
 contract before scaling horizontally.
+
+This gateway is a development/proof runtime, not a production deployment. It
+rewrites the complete journal for every state or event update and retains all
+events indefinitely. Do not run multiple workers or replicas, and do not use it
+in production until the file journal is replaced by PostgreSQL or another
+shared transactional store with a defined retention policy.
+
+Hermes is excluded from the default Compose application. Start it explicitly
+with a reachable, separately managed Hermes API:
+
+```bash
+HERMES_API_URL=http://host.docker.internal:<port> \
+docker compose --profile second-runtime-proof up
+```
+
+`/healthz` is liveness-only. Compose and deployment readiness use `/readyz`,
+which requires both the Hermes upstream and the configured MCP dependency.

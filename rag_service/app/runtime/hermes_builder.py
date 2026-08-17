@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from app.runtime.builder import BuilderCapabilities, BuilderCatalog
+from app.runtime.builder import (
+    BuilderCapabilities,
+    BuilderCatalog,
+    UnsupportedRequestOverrideError,
+)
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
@@ -23,6 +27,7 @@ class HermesBuilderProvider:
         "max_output_chars", "max_duration_seconds", "max_event_count",
         "allow_subagents", "allow_persistent_memory", "cancellation_mode",
     }
+    _supported_request_override_keys: frozenset[str] = frozenset()
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
@@ -92,12 +97,37 @@ class HermesBuilderProvider:
             raise ValueError("; ".join(issue.message for issue in validation.issues))
         return dict(spec)
 
+    def filter_request_overrides(
+        self,
+        definition: AgentDefinition,
+        overrides: Mapping[str, Any] | None,
+        *,
+        reject_unsupported: bool,
+    ) -> Mapping[str, Any]:
+        supplied = {
+            str(key): value
+            for key, value in dict(overrides or {}).items()
+            if value is not None
+        }
+        unsupported = set(supplied) - self._supported_request_override_keys
+        if unsupported and reject_unsupported:
+            raise UnsupportedRequestOverrideError(unsupported)
+        return {
+            key: value
+            for key, value in supplied.items()
+            if key in self._supported_request_override_keys
+        }
+
     async def resolve(self, definition: AgentDefinition, spec: Mapping[str, Any], *, thread_settings: Mapping[str, Any] | None = None, request_overrides: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         resolved = dict(await self.normalize(definition, spec))
         config = dict(resolved.get("config") or {})
-        config.update(dict(request_overrides or {}))
+        config.update(self.filter_request_overrides(
+            definition,
+            request_overrides,
+            reject_unsupported=False,
+        ))
         resolved["config"] = config
-        return resolved
+        return await self.normalize(definition, resolved)
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog:
         capabilities = await self.capabilities(definition or AgentDefinition("catalog", self.framework, self.builder_id))

@@ -346,6 +346,17 @@ Environment variables are now managed using a `.env` file for better security an
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
 - Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
+- The Hermes Phase 7 gateway is an opt-in development proof, not a production runtime. Its file journal rewrites the entire journal on every update, retains events indefinitely, and is restricted to one worker and one replica. Do not deploy it to production until it uses PostgreSQL or another shared transactional journal with a retention policy.
+
+Start the Hermes proof only when a separate Hermes API is reachable:
+
+```bash
+HERMES_API_URL=http://host.docker.internal:<port> \
+docker compose --profile second-runtime-proof up
+```
+
+The Hermes container uses `/readyz` for deployment health; `/healthz` is
+liveness-only and does not prove that Hermes can execute requests.
 
 ### Setup Instructions
 

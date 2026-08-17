@@ -107,6 +107,11 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
 
 
 def create_app() -> FastAPI:
+    hermes_api_url = os.getenv("HERMES_API_URL", "").strip()
+    if not hermes_api_url:
+        raise RuntimeError(
+            "HERMES_API_URL is required for the Hermes Phase 7 proof runtime"
+        )
     storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "file").strip().lower()
     worker_count = int(os.getenv("HERMES_RUNTIME_WORKERS", os.getenv("WEB_CONCURRENCY", "1")))
     if storage_backend != "file":
@@ -134,7 +139,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AskPDF Hermes Runtime", version=os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"), lifespan=lifespan)
 
     def upstream_url() -> str:
-        return os.getenv("HERMES_API_URL", "http://hermes-agent:8000").rstrip("/")
+        return hermes_api_url.rstrip("/")
 
     def timeout(max_seconds: float | None = None) -> httpx.Timeout:
         read_timeout = float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))

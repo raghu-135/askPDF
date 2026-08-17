@@ -68,6 +68,14 @@ class BuilderCatalog:
         }
 
 
+class UnsupportedRequestOverrideError(ValueError):
+    """Raised when an explicit request uses overrides a provider does not own."""
+
+    def __init__(self, keys: list[str] | tuple[str, ...] | set[str]):
+        self.keys = tuple(sorted(str(key) for key in keys))
+        super().__init__(f"Unsupported request overrides: {', '.join(self.keys)}")
+
+
 class AgentBuilderProvider(Protocol):
     framework: str
     builder_id: str
@@ -90,6 +98,14 @@ class AgentBuilderProvider(Protocol):
         spec: Mapping[str, Any],
         *,
         options: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def filter_request_overrides(
+        self,
+        definition: AgentDefinition,
+        overrides: Mapping[str, Any] | None,
+        *,
+        reject_unsupported: bool,
     ) -> Mapping[str, Any]: ...
 
     async def resolve(

@@ -18,6 +18,7 @@ def _payload(allowed_tools):
 
 
 def test_hermes_accepts_allowlisted_mcp_document_tool(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence,clarify_intent")
     with TestClient(create_app()) as client:
         response = client.post("/v1/validate", json=_payload(["document_evidence"]))
@@ -26,6 +27,7 @@ def test_hermes_accepts_allowlisted_mcp_document_tool(monkeypatch):
 
 
 def test_hermes_rejects_tool_outside_allowlist(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence")
     with TestClient(create_app()) as client:
         response = client.post("/v1/validate", json=_payload(["admin_delete_everything"]))

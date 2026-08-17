@@ -78,6 +78,7 @@ async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
     return await implementation(*args, **kwargs)
 from app.runtime.catalog import catalog_payload
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
+from app.runtime.builder import UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
@@ -771,12 +772,38 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     provider = _provider_for_workflow(workflow)
     definition = _definition_for_workflow(workflow)
     try:
+        request_overrides = provider.filter_request_overrides(
+            definition,
+            req.overrides,
+            reject_unsupported=True,
+        )
         resolved_spec = await provider.resolve(
             definition,
             workflow.spec_json,
             thread_settings=thread_settings,
-            request_overrides=req.overrides,
+            request_overrides=request_overrides,
         )
+    except UnsupportedRequestOverrideError as exc:
+        issues = [
+            {
+                "code": "unsupported_request_override",
+                "severity": "error",
+                "message": f"The selected builder does not support request override: {key}",
+                "path": f"overrides.{key}",
+            }
+            for key in exc.keys
+        ]
+        return {
+            "valid": False,
+            "workflow_id": workflow.id,
+            "workflow_version": workflow.version,
+            "validation": {
+                "valid": False,
+                "errors": [issue["code"] for issue in issues],
+                "issues": issues,
+            },
+            "resolved_spec_json": dict(workflow.spec_json or {}),
+        }
     except ValueError as exc:
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
