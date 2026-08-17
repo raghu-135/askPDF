@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from runtime_service.execution_store import ExecutionStore, _json_safe
+from runtime_service.execution_store import ExecutionStore, LeaseLostError, _json_safe
 
 
 @pytest.mark.asyncio
@@ -117,10 +117,13 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    os.environ["AGENT_RUNTIME_SCHEMA_AUTO_CREATE"] = "true"
     await store.initialize()
     run_id = f"runtime-store-{uuid.uuid4().hex}"
     try:
         await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}})
+        fencing_token = await store.claim(run_id)
+        assert fencing_token is not None
         continuation = {
             "binding_type": "langgraph_checkpoint",
             "payload": {"checkpoint_id": "postgres-checkpoint"},
@@ -139,7 +142,16 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
                 "continuation": continuation,
                 "terminal": True,
             },
+            owner_id=store.owner_id,
+            fencing_token=fencing_token,
         )
+        with pytest.raises(LeaseLostError):
+            await store.append(
+                run_id,
+                {"event_id": f"{run_id}:stale", "kind": "runtime.event"},
+                owner_id="stale-worker",
+                fencing_token=fencing_token,
+            )
 
         events = await store.events_after(run_id)
         record = await store.get(run_id)
@@ -164,3 +176,15 @@ def test_json_safe_converts_legacy_runtime_objects() -> None:
     )
 
     assert value == {"run": {"id": "run-1"}, "items": [{"value": 1}]}
+
+
+@pytest.mark.asyncio
+async def test_runtime_lease_fences_competing_workers_and_mutations() -> None:
+    store = ExecutionStore()
+    await store.create("leased", "start", {"run_id": "leased"}, {"request": {"run_id": "leased"}})
+    first = await store.claim("leased", owner_id="worker-a")
+    assert first is not None
+    assert await store.claim("leased", owner_id="worker-b") is None
+    with pytest.raises(LeaseLostError):
+        await store.append("leased", {"event_id": "stale", "kind": "runtime.event"}, owner_id="worker-b", fencing_token=1)
+    assert await store.heartbeat("leased", owner_id="worker-a", fencing_token=first)

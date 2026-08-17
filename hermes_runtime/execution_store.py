@@ -1,10 +1,11 @@
-"""Small durable gateway journal for Hermes executions.
+"""Single-process proof journal for Hermes executions.
 
 The upstream Hermes run/session identifiers and event frames are persisted so
 the gateway can reconnect subscribers after a process restart.  The file is
 intended to be backed by a persistent container volume; deployments may swap
 this implementation for the same Postgres schema used by the LangGraph
-runtime without changing the gateway API.
+runtime without changing the gateway API. This implementation is not safe for
+multiple workers or replicas.
 """
 
 from __future__ import annotations
@@ -12,7 +13,16 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
+
+
+class HermesExecutionStoreProtocol(Protocol):
+    """Storage contract for replacing proof storage with PostgreSQL later."""
+
+    def create(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+    def update(self, run_id: str, **values: Any) -> None: ...
+    def append(self, run_id: str, frame: str) -> None: ...
+    def frames_after(self, run_id: str, after_event_id: str | None = None) -> list[str]: ...
 
 
 class HermesExecutionStore:

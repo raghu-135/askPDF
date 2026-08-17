@@ -25,7 +25,7 @@ from app.runtime.transport import (
     sse_encode,
     json_envelope,
 )
-from runtime_service.execution_store import ExecutionStore
+from runtime_service.execution_store import ExecutionStore, LeaseLostError
 
 
 logger = logging.getLogger(__name__)
@@ -124,9 +124,17 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         for record in await execution_store.nonterminal():
             try:
                 recovered_request = request_from_dict(record.request)
-                runtime_state["active"][record.run_id] = asyncio.create_task(
-                    _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt),
+                fencing_token = await execution_store.claim(record.run_id)
+                if fencing_token is None:
+                    continue
+                task = asyncio.create_task(
+                    _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt, fencing_token=fencing_token),
                     name=f"agent-runtime-recovery-{record.run_id}",
+                )
+                runtime_state["active"][record.run_id] = task
+                task.add_done_callback(
+                    lambda done_task, run_id=record.run_id: runtime_state["active"].pop(run_id, None)
+                    if runtime_state["active"].get(run_id) is done_task else None
                 )
             except Exception:
                 logger.exception("Unable to recover runtime execution | run_id=%s", record.run_id)
@@ -229,10 +237,11 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any, *, attempt: int) -> None:
+    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any, *, attempt: int, fencing_token: int) -> None:
         """Run independently of any HTTP subscriber and journal every event."""
         run_id = request.run_id
         cancellation_event = asyncio.Event()
+        owner_id = execution_store.owner_id
 
         async def cancellation_probe() -> bool:
             return cancellation_event.is_set() or await execution_store.is_cancel_requested(run_id)
@@ -251,9 +260,22 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
                         terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
                     )
-                await execution_store.append(run_id, event.to_dict(), attempt=attempt)
+                await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
 
-        await execution_store.set_status(run_id, "running")
+        await execution_store.set_status(run_id, "running", owner_id=owner_id, fencing_token=fencing_token)
+        heartbeat_stop = asyncio.Event()
+
+        async def heartbeat() -> None:
+            interval = max(1.0, execution_store.lease_seconds / 3)
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    if not await execution_store.heartbeat(run_id, owner_id=owner_id, fencing_token=fencing_token):
+                        cancellation_event.set()
+                        return
+
+        heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
         context = _context(payload, request, cancellation_checker=cancellation_probe)
         try:
             execution_timeout = max(1.0, float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600")))
@@ -279,27 +301,37 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 payload={"status": result.status},
                 continuation=result.continuation,
             )
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
-            await execution_store.set_status(run_id, result.status, result=result.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+            await execution_store.set_status(run_id, result.status, result=result.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+        except LeaseLostError:
+            logger.warning("Runtime worker lost its lease; abandoning execution | run_id=%s", run_id)
+            return
         except asyncio.TimeoutError:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
             result = AgentRuntimeResult(status="failed", error=exc.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": exc.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
         except Exception as exc:
             logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
             error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def stream_operation(
         payload: Mapping[str, Any],
@@ -332,8 +364,11 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 record.status == "queued" or explicitly_retryable
             )
             if should_start and (task is None or task.done()):
+                fencing_token = await execution_store.claim(request.run_id)
+                if fencing_token is None:
+                    raise HTTPException(status_code=409, detail="runtime execution is owned by another worker")
                 task = asyncio.create_task(
-                    _execute_operation(payload, operation, request, attempt=record.attempt),
+                    _execute_operation(payload, operation, request, attempt=record.attempt, fencing_token=fencing_token),
                     name=f"agent-runtime-{request.run_id}",
                 )
                 runtime_state["active"][request.run_id] = task

@@ -39,7 +39,7 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
-PHASE5_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_PHASE5_PROJECT_NAME:-askpdf-runtime-integration-test}}"
+PHASE5_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_PHASE5_PROJECT_NAME:-askpdf-runtime-integration-test-$$}}"
 PHASE5_COMPOSE_ARGS=(-p "$PHASE5_PROJECT_NAME" -f docker-compose.runtime-integration.yml)
 
 args=("$@")
@@ -63,7 +63,7 @@ cleanup() {
     fi
 
     "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
-    if [ "${RUN_PHASE5:-0}" = "1" ]; then
+    if [ "${RUN_PHASE5:-0}" = "1" ] || [ "${RUN_PHASE7:-0}" = "1" ]; then
         "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
     fi
 }
@@ -122,14 +122,16 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
 fi
 
 if [ "${RUN_PHASE7:-0}" = "1" ]; then
+    PHASE7_RECOVERY_RUN_ID="${PHASE7_RECOVERY_RUN_ID:-phase7-recovery-$$}"
+    export PHASE7_RECOVERY_RUN_ID
     echo "Starting deterministic Phase 7 Hermes runtime proof..."
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate rag-service hermes-fake hermes-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_integration_pytest.py
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_restart_pytest.py --test test_seed_restart_recovery_record
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE7_RECOVERY_RUN_ID="$PHASE7_RECOVERY_RUN_ID" test-runner --file test_hermes_runtime_restart_pytest.py --test test_seed_restart_recovery_record
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" restart hermes-runtime
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_restart_pytest.py --test test_recovered_run_reconnects_without_another_upstream_start
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE7_RECOVERY_RUN_ID="$PHASE7_RECOVERY_RUN_ID" test-runner --file test_hermes_runtime_restart_pytest.py --test test_recovered_run_reconnects_without_another_upstream_start
     exit 0
 fi
 

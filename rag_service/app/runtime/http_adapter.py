@@ -161,16 +161,29 @@ class HttpRuntimeAdapter:
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
         body = {"request": request.to_dict(), "context": context_to_dict(context), **dict(payload or {})}
-        headers = {**self._headers(request), "accept": "text/event-stream"}
         seen: dict[str, str] = {}
         terminal: AgentRuntimeResult | None = None
         terminal_hash: str | None = None
         terminal_event_id: str | None = None
         last_sequence = 0
-        async def consume() -> None:
+        last_event_id: str | None = None
+
+        async def consume(method: str, stream_path: str, *, replay: bool = False) -> None:
             nonlocal terminal, terminal_hash, terminal_event_id, last_sequence
+            nonlocal last_event_id
             client = await self._client_for_request()
-            async with client.stream("POST", self.base_url + path, headers=headers, json=body) as response:
+            headers = {**self._headers(request), "accept": "text/event-stream"}
+            params: dict[str, Any] | None = None
+            if replay:
+                params = {"after_sequence": last_sequence}
+                if last_event_id:
+                    headers["last-event-id"] = last_event_id
+            kwargs: dict[str, Any] = {"headers": headers}
+            if method == "POST":
+                kwargs["json"] = body
+            if params:
+                kwargs["params"] = params
+            async with client.stream(method, self.base_url + stream_path, **kwargs) as response:
                 response.raise_for_status()
                 async for _name, item in iter_sse(response):
                     envelope = item["data"]
@@ -193,6 +206,7 @@ class HttpRuntimeAdapter:
                     if event.sequence <= last_sequence:
                         raise RuntimeError("runtime_protocol_error", "Agent runtime event sequence is not monotonic")
                     last_sequence = event.sequence
+                    last_event_id = event.event_id
                     if event_sink is not None:
                         emit = getattr(event_sink, "emit", None)
                         if emit is not None:
@@ -213,8 +227,41 @@ class HttpRuntimeAdapter:
                         terminal = candidate
                         terminal_hash = candidate_hash
                         terminal_event_id = event.event_id
+
+        reconnect_attempts = max(0, int(os.getenv("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS", "5")))
+        reconnect_backoff = max(0.01, float(os.getenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.25")))
+        reconnect_deadline = min(
+            self._execution_timeout,
+            max(1.0, float(os.getenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "30"))),
+        )
+        reconnect_started = asyncio.get_running_loop().time()
+        reconnect_count = 0
         try:
-            await asyncio.wait_for(consume(), timeout=self._execution_timeout)
+            try:
+                await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
+            except httpx.HTTPError:
+                # The runtime may have committed the execution even though
+                # the subscriber connection failed. Fall through to durable
+                # replay before surfacing a transport error.
+                pass
+            while terminal is None:
+                if reconnect_count >= reconnect_attempts or asyncio.get_running_loop().time() - reconnect_started >= reconnect_deadline:
+                    raise RuntimeError("runtime_stream_error", "Agent runtime stream ended before a terminal result", retryable=True)
+                await asyncio.sleep(min(reconnect_backoff * (2 ** reconnect_count), 5.0))
+                reconnect_count += 1
+                try:
+                    await asyncio.wait_for(
+                        consume("GET", f"/v1/runs/{request.run_id}/events", replay=True),
+                        timeout=max(1.0, reconnect_deadline),
+                    )
+                except httpx.HTTPStatusError as exc:
+                    # The initial POST may have been lost before the runtime
+                    # committed its durable record. Retry the same idempotent
+                    # operation once the replay endpoint reports not-found.
+                    if exc.response.status_code == 404 and last_sequence == 0:
+                        await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
+                    else:
+                        raise
         except RuntimeError:
             raise
         except asyncio.TimeoutError as exc:

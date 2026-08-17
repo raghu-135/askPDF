@@ -26,7 +26,6 @@ REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
     "test_control_plane_import_boundary_pytest.py",
-    "test_runtime_execution_store_pytest.py",
     "test_builder_provider_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_runtime_adapter_pytest.py",
@@ -36,6 +35,8 @@ UNIT_TEST_FILES = [
     "test_agent_tool_contract_pytest.py",
     "test_dimension_mismatch_scenarios.py",
     "test_external_research_tools.py",
+    "test_runtime_execution_store_pytest.py",
+    "test_runtime_http_adapter_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",

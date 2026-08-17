@@ -105,8 +105,14 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
 
 
 def create_app() -> FastAPI:
+    storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "file").strip().lower()
+    worker_count = int(os.getenv("HERMES_RUNTIME_WORKERS", os.getenv("WEB_CONCURRENCY", "1")))
+    if storage_backend != "file":
+        raise RuntimeError("Hermes PostgreSQL execution storage is not enabled in the Phase 7 proof")
+    if worker_count > 1:
+        raise RuntimeError("Hermes file execution storage supports one worker only")
     store = HermesExecutionStore()
-    state: dict[str, Any] = {"active": {}, "draining": False, "store": store}
+    state: dict[str, Any] = {"active": {}, "draining": False, "store": store, "storage_backend": storage_backend, "worker_count": worker_count}
     start_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -156,7 +162,7 @@ def create_app() -> FastAPI:
                     ready = ready and 200 <= mcp_response.status_code < 400
         except Exception:
             ready = False
-        return JSONResponse({"status": "ok" if ready else "not_ready", "checks": {"hermes": {"status": "ok" if ready else "failed"}}}, status_code=200 if ready else 503)
+        return JSONResponse({"status": "ok" if ready else "not_ready", "checks": {"hermes": {"status": "ok" if ready else "failed", "storage_backend": state["storage_backend"], "worker_count": state["worker_count"]}}}, status_code=200 if ready else 503)
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request) -> dict[str, Any]:

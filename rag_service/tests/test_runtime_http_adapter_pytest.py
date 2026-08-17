@@ -197,3 +197,30 @@ async def test_http_adapter_rejects_result_on_nonterminal_event():
     with pytest.raises(RuntimeError, match="nonterminal event"):
         await adapter.start(request, context=RuntimeExecutionContext())
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_replays_after_transport_disconnect_before_terminal():
+    request = _request()
+    calls: list[str] = []
+    progress = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {}}
+    terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method + " " + http_request.url.path)
+        if http_request.method == "POST":
+            raise httpx.ReadError("subscriber disconnected", request=http_request)
+        body = (
+            f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': progress})}\n\n"
+            f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+        )
+        assert http_request.url.params["after_sequence"] == "0"
+        assert "last-event-id" not in http_request.headers
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    result = await adapter.start(request, context=RuntimeExecutionContext())
+    assert result.output == "recovered"
+    assert calls == ["POST /v1/runs/start", "GET /v1/runs/run-1/events"]
+    await client.aclose()
