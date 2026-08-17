@@ -6,7 +6,9 @@ from urllib.parse import urlparse
 
 
 def mcp_request_timeout_seconds() -> float:
-    raw = os.getenv("MCP_REQUEST_TIMEOUT_SECONDS", "30").strip()
+    # Retrieval and document parsing can legitimately take longer than the
+    # HTTP client's short default, especially on a cold local-model start.
+    raw = os.getenv("MCP_REQUEST_TIMEOUT_SECONDS", "120").strip()
     try:
         value = float(raw)
     except ValueError as exc:

@@ -80,6 +80,7 @@ services:
       - LOG_LEVEL=INFO
       - ASKPDF_AGENT_CHECKPOINTER=postgres
       - AGENT_CHECKPOINT_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
       - ASKPDF_AGENT_CHECKPOINTER_SETUP=true
       - ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=false
       - WEAVIATE_URL=http://weaviate:8080
@@ -125,6 +126,7 @@ services:
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
       - HERMES_MODEL=${HERMES_MODEL:-}
       - HERMES_RUNTIME_READ_TIMEOUT_SECONDS=${HERMES_RUNTIME_READ_TIMEOUT_SECONDS:-30}
+      - HERMES_RUNTIME_STATE_PATH=/var/lib/hermes/runtime-state.json
     env_file:
       - path: .env.example
         required: true
@@ -138,6 +140,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    volumes:
+      - hermes_runtime_state:/var/lib/hermes
 
   runtime-checkpoint-db-init:
     image: postgres:16-alpine
@@ -260,3 +264,4 @@ volumes:
   pdf_data:
   postgres_data:
   browser_captures:
+  hermes_runtime_state:

@@ -767,8 +767,8 @@ export default function AgentWorkflowBuilderPage() {
         name: persistenceForm.name.trim(),
         description: persistenceForm.description,
         spec_json: saveSpec,
-        framework: 'langgraph',
-        builder_id: 'langgraph_graph',
+        framework: persistedWorkflow?.workflow.framework || undefined,
+        builder_id: persistedWorkflow?.workflow.builder_id || undefined,
       });
       setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setPersistenceForm((previous) => ({

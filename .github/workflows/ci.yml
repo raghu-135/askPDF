@@ -39,6 +39,9 @@ jobs:
       - name: Build Docker images
         run: docker compose build
 
+      - name: Check diff hygiene
+        run: git diff --check
+
   tests:
     name: Test suite
     runs-on: ubuntu-latest
@@ -52,6 +55,12 @@ jobs:
 
       - name: Run Postgres checkpoint/resume test
         run: ./run_tests.sh --agent-checkpoint
+
+      - name: Run mandatory external LangGraph phase
+        run: ./run_tests.sh --phase5
+
+      - name: Run mandatory Hermes phase
+        run: ./run_tests.sh --phase7
 
       - name: Stop test services
         if: always()

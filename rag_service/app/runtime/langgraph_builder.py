@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import os
 from typing import Any, Mapping
 
 from app.runtime.builder import BuilderCapabilities, BuilderCatalog
@@ -17,6 +19,27 @@ from app.runtime.contracts import (
 class LangGraphBuilderProvider:
     framework = "langgraph"
     builder_id = "langgraph_graph"
+
+    @staticmethod
+    def _external_runtime_enabled() -> bool:
+        return os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+
+    @staticmethod
+    def _normalize_external_hitl_policy(policy: Any, thread_settings: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply thread HITL settings without importing the LangGraph graph."""
+        normalized = deepcopy(policy) if isinstance(policy, dict) else {}
+        if not bool(thread_settings.get("hitl_web_approval")):
+            return normalized
+        normalized["enabled"] = True
+        gates = dict(normalized.get("gates") or {})
+        gate = dict(gates.get("web_approval_gate") or {})
+        gate.setdefault("mode", "approval")
+        gate.setdefault("phase", "before")
+        gates["web_approval_gate"] = gate
+        normalized["gates"] = gates
+        return normalized
 
     async def capabilities(self, definition: AgentDefinition) -> BuilderCapabilities:
         return BuilderCapabilities(
@@ -78,7 +101,6 @@ class LangGraphBuilderProvider:
         *,
         options: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
-        from app.runtime.langgraph.compiler import WorkflowCompiler
         from app.runtime.langgraph.validator import WorkflowValidationError
 
         candidate = dict(spec)
@@ -86,6 +108,15 @@ class LangGraphBuilderProvider:
         if not validation.valid:
             message = "; ".join(issue.message for issue in validation.issues)
             raise WorkflowValidationError(message or "Invalid workflow")
+
+        if self._external_runtime_enabled():
+            # Materialization is framework-owned and happens in
+            # langgraph-runtime. The control plane stores the validated,
+            # resolved neutral spec without importing the local compiler.
+            return candidate
+
+        from app.runtime.langgraph.compiler import WorkflowCompiler
+
         return WorkflowCompiler().materialize_spec(candidate)
 
     async def resolve(
@@ -96,7 +127,6 @@ class LangGraphBuilderProvider:
         thread_settings: Mapping[str, Any] | None = None,
         request_overrides: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
-        from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
         from app.runtime.langgraph.validator import WorkflowResolver
 
         resolved = WorkflowResolver().resolve(
@@ -105,6 +135,17 @@ class LangGraphBuilderProvider:
             request_overrides=request_overrides,
         )
         config = dict(resolved.get("config") or {})
+        if self._external_runtime_enabled():
+            # The control plane only freezes neutral workflow inputs. The
+            # runtime container owns LangGraph validation/materialization.
+            config["hitl_policy"] = self._normalize_external_hitl_policy(
+                config.get("hitl_policy"), thread_settings or {}
+            )
+            resolved["config"] = config
+            return resolved
+
+        from app.runtime.langgraph.graph import normalize_hitl_policy_for_thread_settings
+
         config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
             config.get("hitl_policy"), thread_settings or {}
         )

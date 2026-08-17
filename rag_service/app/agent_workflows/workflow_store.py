@@ -219,8 +219,8 @@ async def save_custom_workflow(
     workflow_id: Optional[str],
     name: str,
     spec_json: Dict[str, Any],
-    framework: str = "langgraph",
-    builder_id: str = "langgraph_graph",
+    framework: Optional[str] = None,
+    builder_id: Optional[str] = None,
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
     increment_version: bool = True,
@@ -241,14 +241,20 @@ async def save_custom_workflow(
         if existing_named_workflow is not None and (workflow is None or existing_named_workflow.id != workflow.id):
             raise ValueError(f"agent workflow name already exists: {name}")
         previous_metadata = workflow.metadata_json if workflow and isinstance(workflow.metadata_json, dict) else {}
+        stored_framework = str(getattr(workflow, "framework", "") or "") if workflow is not None else ""
+        stored_builder_id = str(getattr(workflow, "builder_id", "") or "") if workflow is not None else ""
+        if workflow is not None and framework is not None and framework != stored_framework:
+            raise ValueError("workflow framework identity is immutable")
+        if workflow is not None and builder_id is not None and builder_id != stored_builder_id:
+            raise ValueError("workflow builder identity is immutable")
         previous_version = previous_metadata.get("version")
         try:
             next_version = int(previous_version) + 1 if workflow is not None and increment_version else int(previous_version or 1)
         except (TypeError, ValueError):
             next_version = 1
         workflow_key = workflow_id or spec_json.get("workflow_id") or name
-        framework = str(getattr(workflow, "framework", None) or framework or "langgraph")
-        builder_id = str(getattr(workflow, "builder_id", None) or builder_id or "langgraph_graph")
+        framework = stored_framework or str(framework or "langgraph")
+        builder_id = stored_builder_id or str(builder_id or "langgraph_graph")
         definition = AgentDefinition(
             definition_id=str(workflow_key),
             framework=framework,
@@ -318,8 +324,8 @@ async def save_internal_workflow_version(
     workflow_id: str,
     name: str,
     spec_json: Dict[str, Any],
-    framework: str = "langgraph",
-    builder_id: str = "langgraph_graph",
+    framework: Optional[str] = None,
+    builder_id: Optional[str] = None,
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
     changelog: str = "",

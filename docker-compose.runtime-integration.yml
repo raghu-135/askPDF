@@ -51,7 +51,8 @@ services:
   rag-service:
     build:
       context: ./rag_service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.test
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -64,7 +65,8 @@ services:
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
-      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:1234/v1}
+      MCP_REQUEST_TIMEOUT_SECONDS: "120"
+      LLM_API_URL: ${LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
       - path: .env.example
@@ -119,11 +121,13 @@ services:
       LOG_LEVEL: INFO
       ASKPDF_AGENT_CHECKPOINTER: postgres
       AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
       ASKPDF_AGENT_CHECKPOINTER_SETUP: "true"
       ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK: "false"
       MCP_TRANSPORT: loopback_http
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
-      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:1234/v1}
+      MCP_REQUEST_TIMEOUT_SECONDS: "120"
+      LLM_API_URL: ${LLM_API_URL:-http://fake-llm:9000/v1}
       AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
     env_file:
       - path: .env.example
@@ -135,16 +139,29 @@ services:
         condition: service_healthy
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
+      fake-llm:
+        condition: service_healthy
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12
 
+  fake-llm:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.fake-llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/v1/models"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   test-runner:
     build:
       context: ./rag_service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.test
     entrypoint: ["python", "scripts/run_tests.py"]
     environment:
       LOG_LEVEL: INFO
@@ -155,7 +172,7 @@ services:
       AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       WEAVIATE_URL: http://weaviate:8080
-      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:1234/v1}
+      LLM_API_URL: ${LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
       - path: .env.example
@@ -164,6 +181,8 @@ services:
         required: false
     depends_on:
       langgraph-runtime:
+        condition: service_healthy
+      fake-llm:
         condition: service_healthy
     volumes:
       - ./rag_service:/app

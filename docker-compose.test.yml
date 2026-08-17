@@ -15,7 +15,7 @@ services:
   test-runner:
     build:
       context: ./rag_service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.test
     entrypoint: ["python", "scripts/run_tests.py"]
     env_file:
       - .env

@@ -776,6 +776,8 @@ export interface AgentWorkflow {
   visibility?: string;
   is_builtin?: boolean;
   is_default?: boolean;
+  framework?: string;
+  builder_id?: string;
   supports_replans?: boolean;
   supports_long_running_tasks?: boolean;
   created_at?: string | null;

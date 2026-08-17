@@ -72,6 +72,11 @@ def result_from_legacy(result: Mapping[str, Any]) -> AgentRuntimeResult:
         clarification = {"options": list(result["clarification_options"])}
     interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), dict) else None
     error = result.get("agent_error") if isinstance(result.get("agent_error"), dict) else None
+    # The runtime context carries a legacy ORM-shaped ``run`` object for
+    # checkpoint continuation. It is execution input, not result data, and
+    # must never cross the JSON/SSE or durable execution-store boundary.
+    legacy_result = dict(result)
+    legacy_result.pop("run", None)
     return AgentRuntimeResult(
         status=status,
         output=result.get("answer") if "answer" in result else result.get("final_output"),
@@ -80,11 +85,11 @@ def result_from_legacy(result: Mapping[str, Any]) -> AgentRuntimeResult:
         usage=dict(result.get("usage") or result.get("metrics") or {}),
         runtime_metadata={
             **{
-                key: result[key]
+                key: legacy_result[key]
                 for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id", "agent_workflow_version")
-                if key in result
+                if key in legacy_result
             },
-            "legacy_result": dict(result),
+            "legacy_result": legacy_result,
         },
         error=error,
     )

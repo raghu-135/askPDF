@@ -126,8 +126,8 @@ class InternalAgentWorkflowSaveRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
-    framework: str = "langgraph"
-    builder_id: str = "langgraph_graph"
+    framework: Optional[str] = None
+    builder_id: Optional[str] = None
 
 
 class AgentRunResumeRequest(BaseModel):

@@ -9,6 +9,8 @@
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
 #   ./run_tests.sh --phase5                 # Run isolated external-runtime integration checks
+#   ./run_tests.sh --phase5-real            # Run Phase 5 against a configured real provider
+#   ./run_tests.sh --phase7                 # Run mandatory Hermes runtime contract checks
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
@@ -45,6 +47,13 @@ for arg in "${args[@]}"; do
     if [ "$arg" = "--phase5" ]; then
         RUN_PHASE5=1
     fi
+    if [ "$arg" = "--phase5-real" ]; then
+        RUN_PHASE5=1
+        RUN_PHASE5_REAL=1
+    fi
+    if [ "$arg" = "--phase7" ]; then
+        RUN_PHASE7=1
+    fi
 done
 
 cleanup() {
@@ -68,10 +77,18 @@ run_frontend_tests() {
 
 if [ "${RUN_PHASE5:-0}" = "1" ]; then
     echo "Starting isolated Phase 5 Compose environment '$PHASE5_PROJECT_NAME'..."
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate rag-service langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_contracts_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_http_adapter_pytest.py
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true test-runner --file test_external_runtime_smoke_pytest.py
+    if [ "${RUN_PHASE5_REAL:-0}" = "1" ]; then
+        if [ -z "${PHASE5_EXTERNAL_LLM_MODEL:-}" ]; then
+            echo "--phase5-real requires PHASE5_EXTERNAL_LLM_MODEL" >&2
+            exit 1
+        fi
+        "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL="$PHASE5_EXTERNAL_LLM_MODEL" test-runner --file test_external_runtime_smoke_pytest.py
+    else
+        "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL=phase5-deterministic test-runner --file test_external_runtime_smoke_pytest.py
+    fi
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_service_lifecycle_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_agent_runtime_reconciliation_pytest.py
     # The broad legacy suites intentionally exercise the injectable in-process
@@ -101,6 +118,13 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --agent-checkpoint
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --schema
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --mcp
+    exit 0
+fi
+
+if [ "${RUN_PHASE7:-0}" = "1" ]; then
+    echo "Running mandatory Phase 7 Hermes contract checks..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
     exit 0
 fi
 

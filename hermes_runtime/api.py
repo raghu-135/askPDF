@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator, Mapping
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from hermes_runtime.execution_store import HermesExecutionStore
 
 
 WIRE_VERSION = 1
@@ -82,11 +83,20 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
 
 
 def create_app() -> FastAPI:
-    state: dict[str, Any] = {"active": set(), "draining": False}
+    store = HermesExecutionStore()
+    state: dict[str, Any] = {"active": {}, "draining": False, "store": store}
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         state["draining"] = False
+        # Recovered records remain inspectable. Their upstream bindings are
+        # intentionally not discarded when the gateway process restarts.
+        for run_id, record in list(store.records.items()):
+            if record.get("status") in {"queued", "running"} and record.get("payload"):
+                state["active"][run_id] = asyncio.create_task(
+                    _background_run(record["payload"], None),
+                    name=f"hermes-runtime-recovery-{run_id}",
+                )
         yield
         state["draining"] = True
 
@@ -235,10 +245,13 @@ def create_app() -> FastAPI:
         output_chars = 0
         try:
             async with httpx.AsyncClient(timeout=timeout(max_duration_seconds)) as client:
-                response = await client.post(upstream_url() + "/v1/runs", headers=headers, json=upstream_payload)
-                response.raise_for_status()
-                start = response.json()
-                upstream_run_id = str(start.get("run_id") or start.get("id") or "")
+                existing_binding = (neutral_request.get("continuation") or {}).get("payload") or {}
+                upstream_run_id = str(existing_binding.get("upstream_run_id") or "")
+                if not upstream_run_id:
+                    response = await client.post(upstream_url() + "/v1/runs", headers=headers, json=upstream_payload)
+                    response.raise_for_status()
+                    start = response.json()
+                    upstream_run_id = str(start.get("run_id") or start.get("id") or "")
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
                 headers["X-Hermes-Run-Id"] = upstream_run_id
@@ -299,12 +312,55 @@ def create_app() -> FastAPI:
         except httpx.HTTPError as exc:
             event = _neutral_event(run_id, sequence, "run.failed", {"error": _error("hermes_upstream_error", "Hermes runtime is unavailable", retryable=True)}, terminal=True)
             yield _sse(event, {"status": "failed", "error": _error("hermes_upstream_error", str(exc), retryable=True)})
+    async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
+        run_id = str((payload.get("request") or {}).get("run_id") or "")
+        try:
+            async for frame in stream_run(payload, request):
+                state["store"].append(run_id, frame)
+                if "event: run.completed" in frame:
+                    state["store"].update(run_id, status="completed")
+                elif "event: run.failed" in frame:
+                    state["store"].update(run_id, status="failed")
+                elif "event: run.cancelled" in frame:
+                    state["store"].update(run_id, status="cancelled")
         finally:
-            state["active"].discard(run_id)
+            state["active"].pop(run_id, None)
+
+    async def _subscribe(run_id: str, after_event_id: str | None = None) -> AsyncIterator[str]:
+        sent = after_event_id
+        while True:
+            frames = state["store"].frames_after(run_id, sent)
+            if frames:
+                for frame in frames:
+                    yield frame
+                    sent = next((line[3:].strip() for line in frame.splitlines() if line.startswith("id:")), sent)
+                    if any(line in frame for line in ("event: run.completed", "event: run.failed", "event: run.cancelled")):
+                        return
+            record = state["store"].records.get(run_id)
+            if record is None:
+                return
+            if record.get("status") in {"completed", "failed", "cancelled"}:
+                return
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(0.1)
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any], request: Request) -> StreamingResponse:
-        return StreamingResponse(stream_run(payload, request), media_type="text/event-stream")
+        run_id = str((payload.get("request") or {}).get("run_id") or "")
+        if not run_id:
+            raise HTTPException(status_code=400, detail=_error("runtime_protocol_error", "run_id is required"))
+        state["store"].create(run_id, payload)
+        task = state["active"].get(run_id)
+        if task is None or task.done():
+            task = asyncio.create_task(_background_run(payload, request), name=f"hermes-runtime-{run_id}")
+            state["active"][run_id] = task
+        return StreamingResponse(_subscribe(run_id), media_type="text/event-stream")
+
+    @app.get("/v1/runs/{run_id}/events")
+    async def events(run_id: str, after_event_id: str | None = None) -> StreamingResponse:
+        if run_id not in state["store"].records:
+            raise HTTPException(status_code=404, detail="runtime run not found")
+        return StreamingResponse(_subscribe(run_id, after_event_id), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str) -> JSONResponse:

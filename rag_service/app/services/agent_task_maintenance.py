@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import timedelta
 
 from app.services import agent_task_repository as tasks
@@ -16,6 +17,15 @@ CHECKPOINT_RETENTION_DAYS = 7
 MAINTENANCE_INTERVAL_SECONDS = 60.0
 MAINTENANCE_BATCH_SIZE = 100
 _maintenance_lock = asyncio.Lock()
+
+
+def _external_runtime_enabled() -> bool:
+    return os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> dict[str, int]:
@@ -55,14 +65,17 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
                 await store.delete(key)
                 orphaned_content += 1
 
-        checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
-            utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
-            limit=bounded,
-        )
-        from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
-        deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
-        await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
-        deleted_checkpoints = len(deleted_checkpoint_ids)
+        deleted_checkpoints = 0
+        if not _external_runtime_enabled():
+            checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
+                utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
+                limit=bounded,
+            )
+            from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
+
+            deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
+            await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
+            deleted_checkpoints = len(deleted_checkpoint_ids)
         runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,

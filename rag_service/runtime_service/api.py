@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Mapping
@@ -24,6 +25,7 @@ from app.runtime.transport import (
     sse_encode,
     json_envelope,
 )
+from runtime_service.execution_store import ExecutionStore
 
 
 logger = logging.getLogger(__name__)
@@ -106,10 +108,24 @@ def create_app() -> FastAPI:
         "active": {},
         "readiness": {},
     }
+    execution_store = ExecutionStore()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         runtime_state["draining"] = False
+        await execution_store.initialize()
+        # Re-claim durable nonterminal executions after a runtime restart.
+        # The worker is defined below, but FastAPI enters lifespan only after
+        # create_app has finished constructing the complete application.
+        for record in await execution_store.nonterminal():
+            try:
+                recovered_request = request_from_dict(record.request)
+                runtime_state["active"][record.run_id] = asyncio.create_task(
+                    _execute_operation(record.payload, record.operation, recovered_request),
+                    name=f"agent-runtime-recovery-{record.run_id}",
+                )
+            except Exception:
+                logger.exception("Unable to recover runtime execution | run_id=%s", record.run_id)
         yield
         runtime_state["draining"] = True
         grace = max(1.0, float(os.getenv("AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS", "30")))
@@ -118,6 +134,7 @@ def create_app() -> FastAPI:
             await asyncio.sleep(0.1)
         for task in list(runtime_state["active"].values()):
             task.cancel()
+        await execution_store.close()
 
     app = FastAPI(
         title="AskPDF LangGraph Runtime",
@@ -208,100 +225,120 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    async def stream_operation(payload: Mapping[str, Any], operation: str, expected_run_id: str | None = None) -> AsyncIterator[str]:
+    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any) -> None:
+        """Run independently of any HTTP subscriber and journal every event."""
+        run_id = request.run_id
+        cancellation_event = asyncio.Event()
+
+        async def cancellation_probe() -> bool:
+            return cancellation_event.is_set() or await execution_store.is_cancel_requested(run_id)
+
+        class DurableSink:
+            async def emit(self, *args: Any) -> None:
+                if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
+                    event = args[0]
+                else:
+                    kind = str(args[0]) if args else "runtime.event"
+                    event = AgentRuntimeEvent(
+                        event_id=f"{run_id}:{uuid.uuid4().hex}",
+                        run_id=run_id,
+                        sequence=0,
+                        kind=kind,
+                        payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
+                        terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
+                    )
+                await execution_store.append(run_id, event.to_dict())
+
+        await execution_store.set_status(run_id, "running")
+        context = _context(payload, request, cancellation_checker=cancellation_probe)
+        try:
+            execution_timeout = max(1.0, float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600")))
+            result = await asyncio.wait_for(
+                getattr(get_adapter(), operation)(
+                    request,
+                    **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
+                    context=context,
+                    event_sink=DurableSink(),
+                ),
+                timeout=execution_timeout,
+            )
+            if result is None:
+                result = AgentRuntimeResult(status="no_continuation", runtime_metadata={"continuation_available": False})
+            result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
+            terminal_kind = "run.continuation_empty" if result.status == "no_continuation" else "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
+            terminal = AgentRuntimeEvent(
+                event_id=f"{run_id}:terminal",
+                run_id=run_id,
+                sequence=0,
+                kind=terminal_kind,
+                terminal=True,
+                payload={"status": result.status},
+                continuation=result.continuation,
+            )
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.set_status(run_id, result.status, result=result.to_dict())
+        except asyncio.TimeoutError:
+            error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
+            result = AgentRuntimeResult(status="failed", error=error.to_dict())
+            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
+        except RuntimeError as exc:
+            logger.exception("LangGraph runtime failed | run_id=%s", run_id)
+            result = AgentRuntimeResult(status="failed", error=exc.to_dict())
+            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": exc.to_dict()})
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict())
+        except Exception as exc:
+            logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
+            error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
+            result = AgentRuntimeResult(status="failed", error=error.to_dict())
+            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
+
+    async def stream_operation(payload: Mapping[str, Any], operation: str, expected_run_id: str | None = None, after_sequence: int = 0) -> AsyncIterator[str]:
         request = request_from_dict(payload["request"])
         if expected_run_id and request.run_id != expected_run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         if runtime_state["draining"]:
             raise HTTPException(status_code=503, detail="runtime is draining")
-        existing_task = runtime_state["active"].get(request.run_id)
-        if existing_task is not None and not existing_task.done():
-            raise HTTPException(status_code=409, detail="runtime run is already active")
-        cancellation_event = cancellation_events.setdefault(request.run_id, asyncio.Event())
-
-        async def cancellation_probe() -> bool:
-            return cancellation_event.is_set()
-
-        context = _context(payload, request, cancellation_checker=cancellation_probe)
-        sink = _QueueSink(request.run_id)
-        task = asyncio.create_task(
-            getattr(get_adapter(), operation)(
-                request,
-                **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
-                context=context,
-                event_sink=sink,
-            )
-        )
-        runtime_state["active"][request.run_id] = task
+        record = await execution_store.create(request.run_id, operation, request.to_dict(), payload)
+        task = runtime_state["active"].get(request.run_id)
+        if task is None or task.done():
+            task = asyncio.create_task(_execute_operation(payload, operation, request), name=f"agent-runtime-{request.run_id}")
+            runtime_state["active"][request.run_id] = task
         def _remove_finished(done_task: asyncio.Task[Any]) -> None:
             if runtime_state["active"].get(request.run_id) is done_task:
                 runtime_state["active"].pop(request.run_id, None)
-            cancellation_events.pop(request.run_id, None)
         task.add_done_callback(_remove_finished)
-        execution_timeout = max(1.0, float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600")))
-        deadline = time.monotonic() + execution_timeout
-        try:
-            while True:
-                if task.done() and sink.queue.empty():
-                    break
-                try:
-                    event = await asyncio.wait_for(sink.queue.get(), timeout=min(10.0, max(0.1, deadline - time.monotonic())))
-                except asyncio.TimeoutError:
-                    if time.monotonic() >= deadline:
-                        task.cancel()
-                        error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
-                        terminal = AgentRuntimeEvent(event_id=f"{request.run_id}:terminal", run_id=request.run_id, sequence=sink.sequence + 1, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-                        yield sse_encode(terminal, result=AgentRuntimeResult(status="failed", error=error.to_dict()))
-                        return
-                    # Keep the HTTP stream alive while a model or MCP call is
-                    # executing and no runtime event has been produced yet.
-                    yield ": keep-alive\n\n"
-                    continue
-                if event is None:
-                    continue
-                yield sse_encode(event)
-            try:
-                result = task.result()
-            except RuntimeError as exc:
-                logger.exception("LangGraph runtime failed with a mapped runtime error | run_id=%s", request.run_id)
-                event = AgentRuntimeEvent(event_id=f"{request.run_id}:terminal", run_id=request.run_id, sequence=sink.sequence + 1, kind="run.failed", terminal=True, payload={"error": exc.to_dict()})
-                yield sse_encode(event, result=AgentRuntimeResult(status="failed", error=exc.to_dict()))
+        last_sequence = after_sequence
+        while True:
+            events = await execution_store.events_after(request.run_id, last_sequence)
+            for item in events:
+                event = event_from_dict(item)
+                result = result_from_dict(item["result"]) if item.get("result") else None
+                yield sse_encode(event, result=result)
+                last_sequence = max(last_sequence, event.sequence)
+                if event.terminal:
+                    return
+            record = await execution_store.get(request.run_id)
+            if record and record.status in {"completed", "failed", "cancelled", "no_continuation"}:
                 return
-            except Exception as exc:
-                logger.exception("LangGraph runtime execution failed | run_id=%s", request.run_id)
-                error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
-                event = AgentRuntimeEvent(event_id=f"{request.run_id}:terminal", run_id=request.run_id, sequence=sink.sequence + 1, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-                yield sse_encode(event, result=AgentRuntimeResult(status="failed", error=error.to_dict()))
-                return
-            if result is None:
-                # A continuation probe is allowed to find no resumable
-                # checkpoint. The control plane uses this result to start the
-                # task as a new execution on the same persisted run.
-                result = AgentRuntimeResult(
-                    status="no_continuation",
-                    runtime_metadata={"continuation_available": False},
-                )
-            result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
-            terminal_kind = (
-                "run.continuation_empty"
-                if result.status == "no_continuation"
-                else "run.cancelled"
-                if result.status == "cancelled"
-                else "run.failed"
-                if result.status == "failed"
-                else "run.completed"
-            )
-            terminal = AgentRuntimeEvent(event_id=f"{request.run_id}:terminal", run_id=request.run_id, sequence=sink.sequence + 1, kind=terminal_kind, terminal=True, payload={"status": result.status})
-            yield sse_encode(terminal, result=result)
-        finally:
-            # Disconnecting the SSE subscriber must not cancel the execution.
-            # Explicit cancel, the runtime deadline, or shutdown owns task cancellation.
-            if task.done():
-                _remove_finished(task)
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(0.1)
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:
         return StreamingResponse(stream_operation(payload, "start"), media_type="text/event-stream")
+
+    @app.get("/v1/runs/{run_id}/events")
+    async def events(run_id: str, after_sequence: int = 0) -> StreamingResponse:
+        record = await execution_store.get(run_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="runtime run not found")
+        payload = {"request": record.request, "context": record.payload.get("context") or {}}
+        return StreamingResponse(stream_operation(payload, record.operation, run_id, after_sequence), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
@@ -316,6 +353,7 @@ def create_app() -> FastAPI:
         request = request_from_dict(payload["request"])
         if request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
+        await execution_store.request_cancel(request.run_id)
         cancellation_events.setdefault(request.run_id, asyncio.Event()).set()
         return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": request.run_id, "status": "cancellation_requested"})
 
@@ -324,7 +362,17 @@ def create_app() -> FastAPI:
         request = request_from_dict(payload["request"])
         if request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
-        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=dict(await get_adapter().inspect(request)))
+        durable = await execution_store.get(run_id)
+        runtime_inspection = dict(await get_adapter().inspect(request))
+        if durable is not None:
+            runtime_inspection.update({
+                "run_id": run_id,
+                "status": durable.status,
+                "cancel_requested": durable.cancel_requested,
+                "last_sequence": durable.next_sequence - 1,
+                "durable": execution_store.durable,
+            })
+        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=runtime_inspection)
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:

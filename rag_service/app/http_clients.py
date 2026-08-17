@@ -14,7 +14,7 @@ _shared_lazy: set[Any] = set()
 
 def _timeout(name: str = "default") -> httpx.Timeout:
     env_name = "MCP_REQUEST_TIMEOUT_SECONDS" if name == "mcp" else "HTTP_CLIENT_TIMEOUT_SECONDS"
-    raw = os.getenv(env_name, "30").strip()
+    raw = os.getenv(env_name, "120" if name == "mcp" else "30").strip()
     try:
         seconds = float(raw)
     except ValueError as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +27,7 @@ def _workflow(workflow_id: str) -> dict:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("workflow_id", ["router_rag_agent", "evaluator_replanner_rag_agent"])
 async def test_external_runtime_executes_builtin_workflows(workflow_id):
-    run_id = f"phase5-smoke-{workflow_id}"
+    run_id = f"phase5-smoke-{workflow_id}-{uuid.uuid4().hex}"
     spec = _workflow(workflow_id)
     definition = AgentDefinition(
         definition_id=workflow_id,

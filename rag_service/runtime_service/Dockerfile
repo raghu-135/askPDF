@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl g++ libgomp1 && rm -rf /var/lib/apt/lists/*
+COPY requirements-control-plane.txt requirements-control-plane.txt
+COPY requirements-langgraph-runtime.txt requirements-langgraph-runtime.txt
 COPY requirements-runtime.txt requirements-runtime.txt
 RUN pip install -r requirements-runtime.txt
 
