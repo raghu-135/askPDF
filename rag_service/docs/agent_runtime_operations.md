@@ -11,6 +11,23 @@ must provision `runtime_executions` and `runtime_events` through a migration or
 bootstrap job before starting the runtime. The Compose proof explicitly sets
 `AGENT_RUNTIME_SCHEMA_AUTO_CREATE=true`.
 
+The runtime lease migration is `0d7e4a9b2c1f`. Apply the normal application
+migrations with `DATABASE_URL`, then apply the runtime migrations with the
+dedicated bootstrap command:
+
+```bash
+cd rag_service
+AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints \
+python -m app.db.migrate_runtime
+```
+
+The bootstrap stamps legacy runtime databases at the pre-runtime baseline and
+then runs the runtime revision using the standard `DATABASE_URL` convention.
+The migration is guarded so it is safe for the
+application database, where runtime-owned tables are not present. Existing
+runtime tables receive the lease/fencing columns without losing checkpoints or
+execution records.
+
 The control-plane HTTP adapter reconnects to the durable events endpoint after
 an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,
 `AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS`, and

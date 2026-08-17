@@ -137,4 +137,3 @@ def test_session_id_precedence_and_recovery_payload_injection() -> None:
     recovered = _recovery_payload(record)
     assert recovered["request"]["continuation"]["payload"]["upstream_run_id"] == "up-1"
     assert record["payload"]["request"].get("continuation") is None
-

@@ -26,4 +26,3 @@ def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monk
     assert payload["status"] == "not_ready"
     assert payload["checks"]["checkpoint_store"]["backend"] == "memory"
     assert "DATABASE_URL" not in response.text
-
