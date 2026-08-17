@@ -82,6 +82,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
         run_id=str(value["run_id"]),
         sequence=int(value["sequence"]),
         kind=str(value["kind"]),
+        attempt=int(value.get("attempt") or 1),
         payload=dict(value.get("payload") or {}),
         occurred_at=value.get("occurred_at"),
         terminal=bool(value.get("terminal")),

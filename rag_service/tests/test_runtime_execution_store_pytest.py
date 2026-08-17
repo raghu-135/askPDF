@@ -45,6 +45,37 @@ async def test_failed_start_can_be_retried_with_the_same_run_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_creates_a_new_attempt_without_replaying_prior_terminal_events() -> None:
+    store = ExecutionStore()
+    await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})
+    binding = {"binding_type": "checkpoint", "payload": {"id": "cp-1"}}
+    await store.append(
+        "run-resume",
+        {"event_id": "run-resume:terminal", "kind": "run.completed", "terminal": True, "continuation": binding},
+    )
+    await store.set_status("run-resume", "completed")
+
+    resumed = await store.create(
+        "run-resume",
+        "resume",
+        {"run_id": "run-resume"},
+        {"request": {"run_id": "run-resume"}},
+    )
+    assert resumed.attempt == 2
+    assert await store.events_after("run-resume") == []
+
+    await store.append(
+        "run-resume",
+        {"event_id": "run-resume:terminal", "kind": "run.completed", "terminal": True},
+    )
+    current = await store.events_after("run-resume")
+    all_events = await store.events_after("run-resume", attempt=1) + current
+    assert len(current) == 1
+    assert current[0]["attempt"] == 2
+    assert current[0]["event_id"] != all_events[0]["event_id"]
+
+
+@pytest.mark.asyncio
 async def test_event_round_trip_preserves_neutral_continuation_metadata() -> None:
     store = ExecutionStore()
     await store.create("run-3", "start", {"run_id": "run-3"}, {"request": {"run_id": "run-3"}})

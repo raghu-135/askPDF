@@ -77,6 +77,7 @@ class AgentRuntimeEvent:
     run_id: str
     sequence: int
     kind: str
+    attempt: int = 1
     payload: Mapping[str, Any] = field(default_factory=dict)
     occurred_at: Optional[str] = None
     terminal: bool = False

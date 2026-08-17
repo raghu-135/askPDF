@@ -57,6 +57,11 @@ def _event_row_to_dict(row: Any) -> dict[str, Any]:
     return item
 
 
+def _event_id(run_id: str, attempt: int, event_id: str) -> str:
+    prefix = f"{run_id}:attempt:{attempt}:"
+    return event_id if event_id.startswith(prefix) else f"{prefix}{event_id}"
+
+
 @dataclass
 class ExecutionRecord:
     run_id: str
@@ -66,6 +71,7 @@ class ExecutionRecord:
     status: str = "queued"
     cancel_requested: bool = False
     next_sequence: int = 1
+    attempt: int = 1
     continuation: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
@@ -102,6 +108,7 @@ class ExecutionStore:
                     status text not null,
                     cancel_requested boolean not null default false,
                     next_sequence integer not null default 1,
+                    attempt integer not null default 1,
                     continuation jsonb,
                     result jsonb,
                     error jsonb,
@@ -111,6 +118,7 @@ class ExecutionStore:
                 create table if not exists runtime_events (
                     run_id text not null references runtime_executions(run_id) on delete cascade,
                     sequence integer not null,
+                    attempt integer not null default 1,
                     event_id text not null,
                     kind text not null,
                     payload jsonb not null,
@@ -130,6 +138,8 @@ class ExecutionStore:
                 alter table runtime_events add column if not exists runtime_version text;
                 alter table runtime_events add column if not exists contract_version integer;
                 alter table runtime_events add column if not exists continuation jsonb;
+                alter table runtime_executions add column if not exists attempt integer not null default 1;
+                alter table runtime_events add column if not exists attempt integer not null default 1;
                 """
             )
 
@@ -144,12 +154,33 @@ class ExecutionStore:
             if run_id in self._records:
                 existing = self._records[run_id]
                 if operation == "start" and existing.status in {"failed", "cancelled", "no_continuation"}:
-                    # Failed/empty/cancelled executions are retryable. Clear
-                    # their terminal event so a retry cannot short-circuit on
-                    # the previous attempt's result.
-                    self._records[run_id] = record
-                    self._events[run_id] = []
-                    return record
+                    # Failed/empty/cancelled executions are retryable. Keep
+                    # the prior attempt for audit/replay, but make the new
+                    # attempt the current durable execution.
+                    existing.operation = operation
+                    existing.request = dict(request)
+                    existing.payload = dict(payload)
+                    existing.status = "queued"
+                    existing.cancel_requested = False
+                    existing.attempt += 1
+                    existing.continuation = None
+                    existing.result = None
+                    existing.error = None
+                    return existing
+                if (
+                    operation in {"resume", "continue_run"}
+                    and existing.status not in {"queued", "running"}
+                    and existing.continuation is not None
+                ):
+                    existing.operation = operation
+                    existing.request = dict(request)
+                    existing.payload = dict(payload)
+                    existing.status = "queued"
+                    existing.cancel_requested = False
+                    existing.attempt += 1
+                    existing.result = None
+                    existing.error = None
+                    return existing
                 return existing
             self._records[run_id] = record
             self._events.setdefault(run_id, [])
@@ -157,7 +188,7 @@ class ExecutionStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 existing = await connection.fetchrow(
-                    "select operation, status from runtime_executions where run_id=$1 for update",
+                    "select operation, status, attempt, continuation from runtime_executions where run_id=$1 for update",
                     run_id,
                 )
                 if (
@@ -165,12 +196,25 @@ class ExecutionStore:
                     and operation == "start"
                     and existing["status"] in {"failed", "cancelled", "no_continuation"}
                 ):
-                    await connection.execute("delete from runtime_events where run_id=$1", run_id)
                     await connection.execute(
                         """update runtime_executions
                            set operation=$2, request=$3::jsonb, payload=$4::jsonb,
-                               status='queued', cancel_requested=false, next_sequence=1,
+                               status='queued', cancel_requested=false, attempt=attempt+1,
                                continuation=null, result=null, error=null, updated_at=now()
+                           where run_id=$1""",
+                        run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))),
+                    )
+                elif (
+                    existing is not None
+                    and operation in {"resume", "continue_run"}
+                    and existing["status"] not in {"queued", "running"}
+                    and existing["continuation"] is not None
+                ):
+                    await connection.execute(
+                        """update runtime_executions
+                           set operation=$2, request=$3::jsonb, payload=$4::jsonb,
+                               status='queued', cancel_requested=false, attempt=attempt+1,
+                               result=null, error=null, updated_at=now()
                            where run_id=$1""",
                         run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))),
                     )
@@ -192,7 +236,7 @@ class ExecutionStore:
         return ExecutionRecord(
             run_id=row["run_id"], operation=row["operation"],
             request=_json_object(row["request"]) or {}, payload=_json_object(row["payload"]) or {},
-            status=row["status"], cancel_requested=row["cancel_requested"], next_sequence=row["next_sequence"],
+            status=row["status"], cancel_requested=row["cancel_requested"], next_sequence=row["next_sequence"], attempt=row["attempt"],
             continuation=_json_object(row["continuation"]),
             result=_json_object(row["result"]), error=_json_object(row["error"]),
             created_at=row["created_at"].isoformat(), updated_at=row["updated_at"].isoformat(),
@@ -222,10 +266,13 @@ class ExecutionStore:
         record = await self.get(run_id)
         return bool(record and record.cancel_requested)
 
-    async def append(self, run_id: str, event: Mapping[str, Any], result: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    async def append(self, run_id: str, event: Mapping[str, Any], result: Mapping[str, Any] | None = None, *, attempt: int | None = None) -> dict[str, Any]:
         item = dict(event)
         if self._pool is None:
             record = self._records[run_id]
+            attempt = attempt or record.attempt
+            item["attempt"] = attempt
+            item["event_id"] = _event_id(run_id, attempt, item["event_id"])
             existing = next((value for value in self._events.setdefault(run_id, []) if value["event_id"] == item["event_id"]), None)
             if existing is not None:
                 return existing
@@ -238,20 +285,24 @@ class ExecutionStore:
             return item
         async with self._pool.acquire() as connection:
             async with connection.transaction():
-                row = await connection.fetchrow("select next_sequence from runtime_executions where run_id=$1 for update", run_id)
+                row = await connection.fetchrow("select next_sequence, attempt from runtime_executions where run_id=$1 for update", run_id)
+                attempt = attempt or int(row["attempt"])
                 sequence = int(row["next_sequence"])
                 item["sequence"] = sequence
+                item["attempt"] = attempt
+                item["event_id"] = _event_id(run_id, attempt, item["event_id"])
                 continuation = item.get("continuation")
                 inserted = await connection.fetchrow(
                     """insert into runtime_events(
-                           run_id, sequence, event_id, kind, payload, occurred_at,
+                           run_id, sequence, attempt, event_id, kind, payload, occurred_at,
                            trace_id, runtime_version, contract_version,
                            continuation, terminal, result
-                       ) values($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb)
+                       ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb)
                        on conflict (run_id, event_id) do nothing
                        returning *""",
                     run_id,
                     sequence,
+                    item["attempt"],
                     item["event_id"],
                     item.get("kind", "runtime.event"),
                     json.dumps(_json_safe(item.get("payload") or {})),
@@ -284,10 +335,13 @@ class ExecutionStore:
                     )
         return item
 
-    async def events_after(self, run_id: str, sequence: int = 0) -> list[dict[str, Any]]:
+    async def events_after(self, run_id: str, sequence: int = 0, *, attempt: int | None = None) -> list[dict[str, Any]]:
+        if attempt is None:
+            record = await self.get(run_id)
+            attempt = record.attempt if record else None
         if self._pool is None:
-            return [dict(item) for item in self._events.get(run_id, []) if int(item.get("sequence", 0)) > sequence]
-        rows = await self._pool.fetch("select * from runtime_events where run_id=$1 and sequence>$2 order by sequence", run_id, sequence)
+            return [dict(item) for item in self._events.get(run_id, []) if int(item.get("sequence", 0)) > sequence and (attempt is None or int(item.get("attempt", 1)) == attempt)]
+        rows = await self._pool.fetch("select * from runtime_events where run_id=$1 and sequence>$2 and ($3::integer is null or attempt=$3) order by sequence", run_id, sequence, attempt)
         events = []
         for row in rows:
             events.append(_event_row_to_dict(row))

@@ -125,7 +125,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             try:
                 recovered_request = request_from_dict(record.request)
                 runtime_state["active"][record.run_id] = asyncio.create_task(
-                    _execute_operation(record.payload, record.operation, recovered_request),
+                    _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt),
                     name=f"agent-runtime-recovery-{record.run_id}",
                 )
             except Exception:
@@ -229,7 +229,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any) -> None:
+    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any, *, attempt: int) -> None:
         """Run independently of any HTTP subscriber and journal every event."""
         run_id = request.run_id
         cancellation_event = asyncio.Event()
@@ -251,7 +251,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
                         terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
                     )
-                await execution_store.append(run_id, event.to_dict())
+                await execution_store.append(run_id, event.to_dict(), attempt=attempt)
 
         await execution_store.set_status(run_id, "running")
         context = _context(payload, request, cancellation_checker=cancellation_probe)
@@ -279,26 +279,26 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 payload={"status": result.status},
                 continuation=result.continuation,
             )
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
             await execution_store.set_status(run_id, result.status, result=result.to_dict())
         except asyncio.TimeoutError:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
             result = AgentRuntimeResult(status="failed", error=exc.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": exc.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict())
         except Exception as exc:
             logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
             error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
             terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
+            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
 
     async def stream_operation(
@@ -333,7 +333,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             )
             if should_start and (task is None or task.done()):
                 task = asyncio.create_task(
-                    _execute_operation(payload, operation, request),
+                    _execute_operation(payload, operation, request, attempt=record.attempt),
                     name=f"agent-runtime-{request.run_id}",
                 )
                 runtime_state["active"][request.run_id] = task
@@ -343,9 +343,10 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         runtime_state["active"].pop(request.run_id, None)
 
                 task.add_done_callback(_remove_finished)
+            attempt = record.attempt
         last_sequence = after_sequence
         while True:
-            events = await execution_store.events_after(request.run_id, last_sequence)
+            events = await execution_store.events_after(request.run_id, last_sequence, attempt=attempt)
             for item in events:
                 event = event_from_dict(item)
                 result = result_from_dict(item["result"]) if item.get("result") else None

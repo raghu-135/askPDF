@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
+from app.runtime.contracts import ContinuationBinding
 from runtime_service.api import create_app
 from runtime_service.execution_store import ExecutionStore
 
@@ -106,3 +107,39 @@ async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pyt
     assert started.is_set()
     assert calls == 1
     assert all(events[-1]["event"]["terminal"] for events in results)
+
+
+@pytest.mark.asyncio
+async def test_resume_reads_only_the_new_attempt_terminal_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class FakeAdapter:
+        async def start(self, request, *, context, event_sink=None):
+            calls.append("start")
+            return AgentRuntimeResult(
+                status="completed",
+                output={"answer": "paused result"},
+                continuation=ContinuationBinding("checkpoint", {"id": "cp-1"}),
+            )
+
+        async def resume(self, request, *, interrupt, context, event_sink=None):
+            calls.append("resume")
+            return AgentRuntimeResult(status="completed", output={"answer": "resumed result"})
+
+    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    app = create_app(execution_store=ExecutionStore())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-hitl"))
+        second = await _read_events(
+            client,
+            "POST",
+            "/v1/runs/run-hitl/resume",
+            json={**_payload("run-hitl"), "interrupt": {"decision": "approve"}},
+        )
+
+    assert calls == ["start", "resume"]
+    assert first[-1]["result"]["output"]["answer"] == "paused result"
+    assert second[-1]["result"]["output"]["answer"] == "resumed result"
+    assert first[-1]["event"]["event_id"] != second[-1]["event"]["event_id"]
+    assert second[-1]["event"]["attempt"] == 2
