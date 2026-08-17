@@ -211,6 +211,11 @@ class ExecutionStore:
             await self._pool.close()
             self._pool = None
 
+    async def health(self) -> bool:
+        if self._pool is None:
+            return not self.database_url
+        return bool(await self._pool.fetchval("select true"))
+
     async def create(
         self,
         run_id: str,

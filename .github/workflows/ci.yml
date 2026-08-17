@@ -57,6 +57,7 @@ jobs:
         run: ./run_tests.sh --agent-checkpoint
 
       - name: Run mandatory external LangGraph phase
+        timeout-minutes: 15
         run: ./run_tests.sh --phase5
 
       - name: Run mandatory Hermes phase

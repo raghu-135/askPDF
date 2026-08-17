@@ -184,6 +184,21 @@ class HttpRuntimeAdapter:
             if params:
                 kwargs["params"] = params
             async with client.stream(method, self.base_url + stream_path, **kwargs) as response:
+                if response.status_code >= 400:
+                    try:
+                        failure = await response.aread()
+                        envelope = json.loads(failure)
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                        envelope = {}
+                    error = envelope.get("error") if isinstance(envelope, Mapping) else None
+                    if isinstance(error, Mapping) and error.get("code"):
+                        raise RuntimeError(
+                            code=str(error["code"]),
+                            safe_message=str(error.get("safe_message") or "Agent runtime rejected the operation"),
+                            retryable=bool(error.get("retryable")),
+                            details=dict(error.get("details") or {}),
+                            runtime_metadata=dict(envelope.get("runtime_metadata") or {}),
+                        )
                 response.raise_for_status()
                 async for _name, item in iter_sse(response):
                     envelope = item["data"]

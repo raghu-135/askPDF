@@ -117,6 +117,33 @@ async def test_http_adapter_preserves_event_identity_and_terminal_result():
 
 
 @pytest.mark.asyncio
+async def test_http_adapter_preserves_dependency_admission_error():
+    request = _request()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={
+            "contract_version": 1,
+            "status": "failed",
+            "error": {
+                "code": "runtime_dependency_unavailable",
+                "safe_message": "A dependency required by this agent is unavailable",
+                "retryable": True,
+                "details": {"dependency": "mcp", "missing_capability_ids": ["document_evidence"]},
+            },
+            "runtime_metadata": {"framework": "langgraph"},
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.start(request, context=RuntimeExecutionContext())
+    assert caught.value.code == "runtime_dependency_unavailable"
+    assert caught.value.retryable is True
+    assert caught.value.details["dependency"] == "mcp"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_http_adapter_translates_events_for_legacy_two_argument_sink():
     request = _request()
     event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}

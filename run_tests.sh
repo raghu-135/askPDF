@@ -75,33 +75,88 @@ run_frontend_tests() {
     "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm frontend-test-runner
 }
 
+phase5_diagnostics() {
+    echo "Phase 5 failed; collecting bounded service diagnostics..." >&2
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" ps || true
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" logs --tail=200 langgraph-runtime rag-service || true
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" logs --tail=100 fake-llm || true
+}
+
+phase5_test() {
+    if ! "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm --no-deps "$@"; then
+        phase5_diagnostics
+        return 1
+    fi
+}
+
 if [ "${RUN_PHASE5:-0}" = "1" ]; then
+    trap phase5_diagnostics ERR
+    if [ "${RUN_PHASE5_REAL:-0}" = "1" ]; then
+        if [ -z "${LLM_API_URL:-}" ]; then
+            echo "--phase5-real requires LLM_API_URL" >&2
+            exit 1
+        fi
+        export PHASE5_RUNTIME_LLM_API_URL="$LLM_API_URL"
+    else
+        export PHASE5_RUNTIME_LLM_API_URL="http://fake-llm:9000/v1"
+    fi
     echo "Starting isolated Phase 5 Compose environment '$PHASE5_PROJECT_NAME'..."
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_contracts_pytest.py
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_http_adapter_pytest.py
+    phase5_test test-runner --file test_runtime_contracts_pytest.py
+    phase5_test test-runner --file test_runtime_http_adapter_pytest.py
     if [ "${RUN_PHASE5_REAL:-0}" = "1" ]; then
         if [ -z "${PHASE5_EXTERNAL_LLM_MODEL:-}" ]; then
             echo "--phase5-real requires PHASE5_EXTERNAL_LLM_MODEL" >&2
             exit 1
         fi
-        "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL="$PHASE5_EXTERNAL_LLM_MODEL" test-runner --file test_external_runtime_smoke_pytest.py
+        phase5_test -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL="$PHASE5_EXTERNAL_LLM_MODEL" test-runner --file test_external_runtime_smoke_pytest.py
     else
-        "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL=phase5-deterministic test-runner --file test_external_runtime_smoke_pytest.py
+        phase5_test -e PHASE5_EXTERNAL_SMOKE=true -e PHASE5_EXTERNAL_LLM_MODEL=phase5-deterministic test-runner --file test_external_runtime_smoke_pytest.py
     fi
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_runtime_service_lifecycle_pytest.py
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_agent_runtime_reconciliation_pytest.py
-    # The broad legacy suites intentionally exercise the injectable in-process
-    # adapter; the external boundary is covered by the focused protocol and
-    # lifecycle suites above plus the restart smoke below.
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --file test_agent_workflows_pytest.py
+    phase5_test test-runner --file test_runtime_service_execution_pytest.py
+    phase5_test test-runner --file test_runtime_service_lifecycle_pytest.py
+    phase5_test test-runner --file test_agent_runtime_reconciliation_pytest.py
+    phase5_test test-runner --file test_control_plane_import_boundary_pytest.py
+    echo "Verifying dependency outage isolation and admission recovery..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" stop rag-service fake-llm
+    dependencies_degraded=0
+    for attempt in $(seq 1 30); do
+        if "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] in {"degraded", "unavailable"} and dependencies["provider"]["state"] in {"degraded", "unavailable"}'; then
+            dependencies_degraded=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$dependencies_degraded" != "1" ]; then
+        echo "Runtime dependencies did not become degraded while readiness remained healthy" >&2
+        exit 1
+    fi
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+        'import json, urllib.error, urllib.request; payload={"request":{"run_id":"phase5-dependency-outage","thread_id":"phase5-thread","definition_id":"router_rag_agent","framework":"langgraph","builder_id":"langgraph_graph","input":{"question":"test"},"options":{"llm_model":"phase5-deterministic","embedding_model":"phase5-deterministic-embedding"}},"context":{"embedding_model":"phase5-deterministic-embedding","resolved_spec":{"config":{"allowed_tool_ids":["document_evidence"]}}}}; request=urllib.request.Request("http://127.0.0.1:8100/v1/runs/start", data=json.dumps(payload).encode(), headers={"content-type":"application/json"}, method="POST");
+try: urllib.request.urlopen(request, timeout=3); raise AssertionError("dependent run was admitted")
+except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 503 and body["error"]["code"] == "runtime_dependency_unavailable" and body["error"]["retryable"] is True'
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" start fake-llm rag-service
+    dependencies_available=0
+    for attempt in $(seq 1 45); do
+        if "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+            'import json, urllib.request; dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert dependencies["mcp"]["state"] == "available" and dependencies["provider"]["state"] == "available"'; then
+            dependencies_available=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$dependencies_available" != "1" ]; then
+        echo "Runtime dependency monitor did not recover after services restarted" >&2
+        exit 1
+    fi
     echo "Restarting langgraph-runtime to verify readiness and checkpoint service continuity..."
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" stop langgraph-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" start langgraph-runtime
     runtime_ready=0
     for attempt in $(seq 1 45); do
         if "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); assert health["status"] == "ok" and ready["status"] == "ok"; print(json.dumps({"health": health, "ready": ready}, sort_keys=True))'; then
+            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); startup=json.load(urllib.request.urlopen("http://127.0.0.1:8100/startupz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and startup["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] == "available" and dependencies["mcp"]["protocol"] == "mcp"; assert dependencies["provider"]["state"] == "available"; print(json.dumps({"health": health, "startup": startup, "ready": ready, "dependencies": dependencies}, sort_keys=True))'; then
             runtime_ready=1
             break
         fi
@@ -112,14 +167,8 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
         exit 1
     fi
     echo "Verifying execution recovery after restart and lease expiry..."
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false -e AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=true test-runner --file test_runtime_service_lifecycle_pytest.py --test test_recovery_loop_reclaims_a_lease_after_restart
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --unit
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --db
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --api
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --integration
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --agent-checkpoint
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --schema
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm -e AGENT_RUNTIME_EXTERNAL_ENABLED=false test-runner --mcp
+    phase5_test -e AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=true test-runner --file test_runtime_service_lifecycle_pytest.py --test test_recovery_loop_reclaims_a_lease_after_restart
+    trap - ERR
     exit 0
 fi
 

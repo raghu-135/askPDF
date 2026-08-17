@@ -11,7 +11,6 @@ from typing import Any, AsyncIterator, Mapping
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-import httpx
 
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
@@ -26,9 +25,19 @@ from app.runtime.transport import (
     json_envelope,
 )
 from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
+from runtime_service.dependencies import (
+    DependencyMonitor,
+    langgraph_dependency_requirements,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+class DependencyUnavailable(Exception):
+    def __init__(self, details: Mapping[str, Any]) -> None:
+        self.details = dict(details)
+        super().__init__("A dependency required by this agent is unavailable")
 
 
 def _namespace(value: Any) -> Any:
@@ -105,10 +114,12 @@ class _QueueSink:
 def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     runtime_state: dict[str, Any] = {
         "draining": False,
+        "started": False,
         "active": {},
         "readiness": {},
     }
     execution_store = execution_store or ExecutionStore()
+    dependency_monitor = DependencyMonitor()
     # Serialize the durable-record check and task registration.  Without this
     # small critical section, two subscribers can both observe no active task
     # and start the same execution.
@@ -118,6 +129,14 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         runtime_state["draining"] = False
         await execution_store.initialize()
+        from app.agent_workflows.checkpointing import open_agent_checkpointer
+
+        async with open_agent_checkpointer():
+            pass
+        runtime_state["started"] = True
+        dependency_stop = asyncio.Event()
+        await dependency_monitor.refresh()
+        dependency_task = asyncio.create_task(dependency_monitor.run(dependency_stop), name="agent-runtime-dependency-monitor")
         recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         recovery_interval = max(
             1.0,
@@ -130,6 +149,15 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 if runtime_state["active"].get(record.run_id) is not None:
                     continue
                 try:
+                    admission_failure = dependency_monitor.unavailable(langgraph_dependency_requirements(record.payload))
+                    if admission_failure:
+                        logger.info(
+                            "Runtime recovery deferred | run_id=%s dependency=%s reason=%s",
+                            record.run_id,
+                            admission_failure["dependency"],
+                            admission_failure["reason"],
+                        )
+                        continue
                     recovered_request = request_from_dict(record.request)
                     fencing_token = await execution_store.claim(record.run_id)
                     if fencing_token is None:
@@ -166,6 +194,12 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             recovery_task = asyncio.create_task(recovery_loop(), name="agent-runtime-recovery-loop")
         yield
         runtime_state["draining"] = True
+        dependency_stop.set()
+        dependency_task.cancel()
+        try:
+            await dependency_task
+        except asyncio.CancelledError:
+            pass
         if recovery_task is not None:
             recovery_task.cancel()
             try:
@@ -188,6 +222,23 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     adapter: Any = None
     cancellation_events: dict[str, asyncio.Event] = {}
 
+    @app.exception_handler(DependencyUnavailable)
+    async def dependency_unavailable_handler(request: Request, exc: DependencyUnavailable) -> JSONResponse:
+        return JSONResponse(
+            json_envelope(
+                status="failed",
+                request_id=request.headers.get("x-request-id"),
+                error={
+                    "code": "runtime_dependency_unavailable",
+                    "safe_message": str(exc),
+                    "retryable": True,
+                    "details": exc.details,
+                },
+                runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+            ),
+            status_code=503,
+        )
+
     def get_adapter() -> Any:
         """Load legacy execution code only when an execution operation is called."""
         nonlocal adapter
@@ -208,49 +259,56 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         if fingerprint != existing:
             raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False})
 
+    def _admit_dependencies(payload: Mapping[str, Any]) -> None:
+        failure = dependency_monitor.unavailable(langgraph_dependency_requirements(payload))
+        if failure:
+            raise DependencyUnavailable(failure)
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "service": "langgraph-runtime"}
 
-    async def _probe(url: str, timeout: float) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(url)
-            return {"status": "ok" if response.status_code < 500 else "failed", "http_status": response.status_code}
-        except Exception as exc:
-            return {"status": "failed", "error": type(exc).__name__}
+    @app.get("/startupz")
+    async def startupz() -> JSONResponse:
+        started = bool(runtime_state["started"])
+        return JSONResponse({"status": "ok" if started else "starting"}, status_code=200 if started else 503)
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
-        if runtime_state["draining"]:
-            return JSONResponse({"status": "draining"}, status_code=503)
-        checks: dict[str, Any] = {}
-        if os.getenv("ASKPDF_AGENT_CHECKPOINTER", "memory").strip().lower() != "postgres":
-            checks["checkpoint_store"] = {"status": "ok", "backend": "memory"}
-        else:
-            try:
-                from app.agent_workflows.checkpointing import open_agent_checkpointer
+        checks: dict[str, Any] = {
+            "startup": {"status": "ok" if runtime_state["started"] else "failed"},
+            "draining": {"status": "failed" if runtime_state["draining"] else "ok"},
+        }
+        try:
+            checks["execution_store"] = {"status": "ok" if await execution_store.health() else "failed"}
+        except Exception as exc:
+            checks["execution_store"] = {"status": "failed", "error": type(exc).__name__}
+        try:
+            from app.agent_workflows.checkpointing import open_agent_checkpointer
 
-                async with open_agent_checkpointer():
-                    pass
-                checks["checkpoint_store"] = {"status": "ok", "backend": "postgres"}
-            except Exception as exc:
-                checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}
-        mcp_url = os.getenv("MCP_LOOPBACK_URL", "").strip()
-        if mcp_url:
-            checks["mcp"] = await _probe(mcp_url, float(os.getenv("AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS", "5")))
-        else:
-            checks["mcp"] = {"status": "not_configured"}
-        provider_url = os.getenv("LLM_API_URL", "").strip()
-        if provider_url:
-            provider_base = provider_url.rstrip("/")
-            models_url = provider_base + "/models" if provider_base.endswith("/v1") else provider_base + "/v1/models"
-            checks["provider"] = await _probe(models_url, float(os.getenv("AGENT_RUNTIME_PROVIDER_READY_TIMEOUT_SECONDS", "10")))
-        else:
-            checks["provider"] = {"status": "not_configured"}
+            async with open_agent_checkpointer(setup=False) as checkpointer:
+                await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
+            checks["checkpoint_store"] = {
+                "status": "ok",
+                "backend": os.getenv("ASKPDF_AGENT_CHECKPOINTER", "memory").strip().lower(),
+            }
+        except Exception as exc:
+            checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}
+        if os.getenv("AGENT_RUNTIME_LEGACY_STRICT_READINESS", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            for name, value in dependency_monitor.snapshot().items():
+                checks[name] = {"status": "ok" if value["state"] == "available" else "failed", "state": value["state"]}
         healthy = all(value.get("status") == "ok" for value in checks.values())
         runtime_state["readiness"] = checks
         return JSONResponse({"status": "ok" if healthy else "not_ready", "checks": checks}, status_code=200 if healthy else 503)
+
+    @app.get("/v1/dependencies")
+    async def dependencies(request: Request) -> dict[str, Any]:
+        return json_envelope(
+            status="ok",
+            request_id=request.headers.get("x-request-id"),
+            result={"dependencies": dependency_monitor.snapshot(), "counters": dict(dependency_monitor.counters)},
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        )
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request) -> dict[str, Any]:
@@ -453,6 +511,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:
         request = request_from_dict(payload["request"])
         await _preflight_operation(request.run_id, payload, "start")
+        _admit_dependencies(payload)
         return StreamingResponse(stream_operation(payload, "start"), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")
@@ -475,11 +534,13 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "resume")
+        _admit_dependencies(payload)
         return StreamingResponse(stream_operation(payload, "resume", run_id), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/continue")
     async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "continue_run")
+        _admit_dependencies(payload)
         return StreamingResponse(stream_operation(payload, "continue_run", run_id), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/retry")
@@ -497,19 +558,20 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             "retry_operation": str(payload.get("operation") or "start"),
             "retry_request": request_payload,
         }
+        _admit_dependencies(retry_payload)
         return StreamingResponse(
             stream_operation(retry_payload, "retry", run_id, operation_id=attempt_id, source_attempt=int(source_attempt)),
             media_type="text/event-stream",
         )
 
     @app.post("/v1/runs/{run_id}/cancel")
-    async def cancel(run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        request = request_from_dict(payload["request"])
-        if request.run_id != run_id:
+    async def cancel(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
+        runtime_request = request_from_dict(payload["request"])
+        if runtime_request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
-        await execution_store.request_cancel(request.run_id)
-        cancellation_events.setdefault(request.run_id, asyncio.Event()).set()
-        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": request.run_id, "status": "cancellation_requested"})
+        await execution_store.request_cancel(runtime_request.run_id)
+        cancellation_events.setdefault(runtime_request.run_id, asyncio.Event()).set()
+        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result={"run_id": runtime_request.run_id, "status": "cancellation_requested"})
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
