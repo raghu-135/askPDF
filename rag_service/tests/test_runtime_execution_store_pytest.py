@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -40,6 +42,86 @@ async def test_failed_start_can_be_retried_with_the_same_run_id() -> None:
 
     assert record.status == "queued"
     assert await store.events_after("run-2") == []
+
+
+@pytest.mark.asyncio
+async def test_event_round_trip_preserves_neutral_continuation_metadata() -> None:
+    store = ExecutionStore()
+    await store.create("run-3", "start", {"run_id": "run-3"}, {"request": {"run_id": "run-3"}})
+
+    continuation = {
+        "binding_type": "langgraph_checkpoint",
+        "payload": {"checkpoint_id": "checkpoint-1"},
+        "binding_version": 2,
+        "runtime_version": "runtime-7",
+    }
+    await store.append(
+        "run-3",
+        {
+            "event_id": "run-3:paused",
+            "kind": "run.interrupted",
+            "payload": {"reason": "human_input"},
+            "occurred_at": "2026-08-17T12:00:00Z",
+            "trace_id": "trace-3",
+            "runtime_version": "runtime-7",
+            "contract_version": 1,
+            "continuation": continuation,
+            "terminal": True,
+        },
+    )
+
+    events = await store.events_after("run-3")
+    record = await store.get("run-3")
+    assert events[0]["continuation"] == continuation
+    assert events[0]["trace_id"] == "trace-3"
+    assert events[0]["runtime_version"] == "runtime-7"
+    assert events[0]["contract_version"] == 1
+    assert record.continuation == continuation
+
+
+@pytest.mark.asyncio
+async def test_postgres_event_round_trip_updates_execution_continuation() -> None:
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+
+    store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    await store.initialize()
+    run_id = f"runtime-store-{uuid.uuid4().hex}"
+    try:
+        await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}})
+        continuation = {
+            "binding_type": "langgraph_checkpoint",
+            "payload": {"checkpoint_id": "postgres-checkpoint"},
+            "binding_version": 1,
+            "runtime_version": "runtime-pg",
+        }
+        await store.append(
+            run_id,
+            {
+                "event_id": f"{run_id}:paused",
+                "kind": "run.interrupted",
+                "payload": {"reason": "human_input"},
+                "trace_id": "trace-pg",
+                "runtime_version": "runtime-pg",
+                "contract_version": 1,
+                "continuation": continuation,
+                "terminal": True,
+            },
+        )
+
+        events = await store.events_after(run_id)
+        record = await store.get(run_id)
+        assert events[0]["continuation"] == continuation
+        assert events[0]["trace_id"] == "trace-pg"
+        assert record is not None
+        assert record.continuation == continuation
+    finally:
+        # The Docker test runner drops the isolated database.  Keep direct
+        # invocations tidy when they reuse a development test database.
+        if store._pool is not None:
+            await store._pool.execute("delete from runtime_executions where run_id=$1", run_id)
+        await store.close()
 
 
 def test_json_safe_converts_legacy_runtime_objects() -> None:

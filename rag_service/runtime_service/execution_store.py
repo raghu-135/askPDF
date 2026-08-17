@@ -48,6 +48,15 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _event_row_to_dict(row: Any) -> dict[str, Any]:
+    """Convert a PostgreSQL event row back to the complete wire envelope."""
+    item = dict(row)
+    item["payload"] = _json_object(item.get("payload")) or {}
+    item["continuation"] = _json_object(item.get("continuation"))
+    item["result"] = _json_object(item.get("result"))
+    return item
+
+
 @dataclass
 class ExecutionRecord:
     run_id: str
@@ -105,12 +114,22 @@ class ExecutionStore:
                     event_id text not null,
                     kind text not null,
                     payload jsonb not null,
+                    occurred_at text,
+                    trace_id text,
+                    runtime_version text,
+                    contract_version integer,
+                    continuation jsonb,
                     terminal boolean not null default false,
                     result jsonb,
                     created_at timestamptz not null default now(),
                     primary key (run_id, sequence),
                     unique (run_id, event_id)
                 );
+                alter table runtime_events add column if not exists occurred_at text;
+                alter table runtime_events add column if not exists trace_id text;
+                alter table runtime_events add column if not exists runtime_version text;
+                alter table runtime_events add column if not exists contract_version integer;
+                alter table runtime_events add column if not exists continuation jsonb;
                 """
             )
 
@@ -214,7 +233,7 @@ class ExecutionStore:
             record.next_sequence += 1
             item["result"] = dict(result) if result else None
             self._events[run_id].append(item)
-            if item.get("continuation"):
+            if item.get("continuation") is not None:
                 record.continuation = dict(item["continuation"])
             return item
         async with self._pool.acquire() as connection:
@@ -222,13 +241,47 @@ class ExecutionStore:
                 row = await connection.fetchrow("select next_sequence from runtime_executions where run_id=$1 for update", run_id)
                 sequence = int(row["next_sequence"])
                 item["sequence"] = sequence
-                await connection.execute(
-                    """insert into runtime_events(run_id, sequence, event_id, kind, payload, terminal, result)
-                       values($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb)
-                       on conflict (run_id, event_id) do nothing""",
-                    run_id, sequence, item["event_id"], item.get("kind", "runtime.event"), json.dumps(_json_safe(item.get("payload") or {})), bool(item.get("terminal")), json.dumps(_json_safe(dict(result))) if result else None,
+                continuation = item.get("continuation")
+                inserted = await connection.fetchrow(
+                    """insert into runtime_events(
+                           run_id, sequence, event_id, kind, payload, occurred_at,
+                           trace_id, runtime_version, contract_version,
+                           continuation, terminal, result
+                       ) values($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb)
+                       on conflict (run_id, event_id) do nothing
+                       returning *""",
+                    run_id,
+                    sequence,
+                    item["event_id"],
+                    item.get("kind", "runtime.event"),
+                    json.dumps(_json_safe(item.get("payload") or {})),
+                    item.get("occurred_at"),
+                    item.get("trace_id"),
+                    item.get("runtime_version"),
+                    item.get("contract_version"),
+                    json.dumps(_json_safe(continuation)) if continuation is not None else None,
+                    bool(item.get("terminal")),
+                    json.dumps(_json_safe(dict(result))) if result else None,
                 )
-                await connection.execute("update runtime_executions set next_sequence=next_sequence+1, updated_at=now() where run_id=$1", run_id)
+                if inserted is None:
+                    existing = await connection.fetchrow(
+                        "select * from runtime_events where run_id=$1 and event_id=$2",
+                        run_id,
+                        item["event_id"],
+                    )
+                    return _event_row_to_dict(existing)
+
+                if continuation is not None:
+                    await connection.execute(
+                        "update runtime_executions set continuation=$2::jsonb, next_sequence=next_sequence+1, updated_at=now() where run_id=$1",
+                        run_id,
+                        json.dumps(_json_safe(continuation)),
+                    )
+                else:
+                    await connection.execute(
+                        "update runtime_executions set next_sequence=next_sequence+1, updated_at=now() where run_id=$1",
+                        run_id,
+                    )
         return item
 
     async def events_after(self, run_id: str, sequence: int = 0) -> list[dict[str, Any]]:
@@ -237,10 +290,7 @@ class ExecutionStore:
         rows = await self._pool.fetch("select * from runtime_events where run_id=$1 and sequence>$2 order by sequence", run_id, sequence)
         events = []
         for row in rows:
-            item = dict(row)
-            item["payload"] = _json_object(item.get("payload")) or {}
-            item["result"] = _json_object(item.get("result"))
-            events.append(item)
+            events.append(_event_row_to_dict(row))
         return events
 
     async def nonterminal(self) -> list[ExecutionRecord]:

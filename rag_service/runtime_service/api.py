@@ -102,13 +102,17 @@ class _QueueSink:
             self.queue.put_nowait(event)
 
 
-def create_app() -> FastAPI:
+def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     runtime_state: dict[str, Any] = {
         "draining": False,
         "active": {},
         "readiness": {},
     }
-    execution_store = ExecutionStore()
+    execution_store = execution_store or ExecutionStore()
+    # Serialize the durable-record check and task registration.  Without this
+    # small critical section, two subscribers can both observe no active task
+    # and start the same execution.
+    execution_start_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -297,21 +301,48 @@ def create_app() -> FastAPI:
             await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict())
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict())
 
-    async def stream_operation(payload: Mapping[str, Any], operation: str, expected_run_id: str | None = None, after_sequence: int = 0) -> AsyncIterator[str]:
+    async def stream_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        expected_run_id: str | None = None,
+        after_sequence: int = 0,
+        *,
+        allow_start: bool = True,
+    ) -> AsyncIterator[str]:
         request = request_from_dict(payload["request"])
         if expected_run_id and request.run_id != expected_run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         if runtime_state["draining"]:
             raise HTTPException(status_code=503, detail="runtime is draining")
-        record = await execution_store.create(request.run_id, operation, request.to_dict(), payload)
-        task = runtime_state["active"].get(request.run_id)
-        if task is None or task.done():
-            task = asyncio.create_task(_execute_operation(payload, operation, request), name=f"agent-runtime-{request.run_id}")
-            runtime_state["active"][request.run_id] = task
-        def _remove_finished(done_task: asyncio.Task[Any]) -> None:
-            if runtime_state["active"].get(request.run_id) is done_task:
-                runtime_state["active"].pop(request.run_id, None)
-        task.add_done_callback(_remove_finished)
+        async with execution_start_lock:
+            # Event subscriptions are observers.  They must never create or
+            # replace a durable execution record, especially after terminal
+            # completion or after a process restart.
+            if allow_start:
+                record = await execution_store.create(request.run_id, operation, request.to_dict(), payload)
+            else:
+                record = await execution_store.get(request.run_id)
+                if record is None:
+                    raise HTTPException(status_code=404, detail="runtime run not found")
+
+            task = runtime_state["active"].get(request.run_id)
+            terminal_statuses = {"completed", "failed", "cancelled", "no_continuation"}
+            explicitly_retryable = allow_start and operation in {"resume", "continue_run"} and record.status not in terminal_statuses
+            should_start = allow_start and (
+                record.status == "queued" or explicitly_retryable
+            )
+            if should_start and (task is None or task.done()):
+                task = asyncio.create_task(
+                    _execute_operation(payload, operation, request),
+                    name=f"agent-runtime-{request.run_id}",
+                )
+                runtime_state["active"][request.run_id] = task
+
+                def _remove_finished(done_task: asyncio.Task[Any]) -> None:
+                    if runtime_state["active"].get(request.run_id) is done_task:
+                        runtime_state["active"].pop(request.run_id, None)
+
+                task.add_done_callback(_remove_finished)
         last_sequence = after_sequence
         while True:
             events = await execution_store.events_after(request.run_id, last_sequence)
@@ -338,7 +369,16 @@ def create_app() -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="runtime run not found")
         payload = {"request": record.request, "context": record.payload.get("context") or {}}
-        return StreamingResponse(stream_operation(payload, record.operation, run_id, after_sequence), media_type="text/event-stream")
+        return StreamingResponse(
+            stream_operation(
+                payload,
+                record.operation,
+                run_id,
+                after_sequence,
+                allow_start=False,
+            ),
+            media_type="text/event-stream",
+        )
 
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
