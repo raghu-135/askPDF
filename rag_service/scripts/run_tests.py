@@ -181,7 +181,9 @@ def _run(command: list[str], env: dict[str, str] | None = None) -> None:
 
 def _run_standalone(pdf_path: str | None = None) -> None:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(APP_DIR)
+    # Keep the backend import root and include the repository root for the
+    # root-level Hermes gateway used by the Phase 7 integration proof.
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
 
     if pdf_path:
         candidate = Path(pdf_path)
@@ -324,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     env["DATABASE_URL"] = test_db_url
     env["TEST_DATABASE_URL"] = test_db_url
     env["DATA_DIR"] = data_dir
-    env["PYTHONPATH"] = str(APP_DIR)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
     if agent_checkpoint_run:
         env["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
         env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url

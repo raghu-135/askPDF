@@ -8,6 +8,8 @@ this gateway only translates between the neutral wire contract and Hermes' API.
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -53,12 +55,32 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
 
 
 def _sse(event: Mapping[str, Any], result: Mapping[str, Any] | None = None) -> str:
-    import json
-
     payload = {"event": dict(event)}
     if result is not None:
         payload["result"] = dict(result)
     return f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
+
+
+def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a durable record and restore its upstream binding into the request."""
+    payload = copy.deepcopy(dict(record.get("payload") or {}))
+    request = dict(payload.get("request") or {})
+    continuation = record.get("continuation")
+    if isinstance(continuation, Mapping):
+        request["continuation"] = copy.deepcopy(dict(continuation))
+    payload["request"] = request
+    return payload
+
+
+def _response_session_id(value: Mapping[str, Any]) -> str | None:
+    """Extract a Hermes session ID from supported start-response shapes."""
+    direct = value.get("session_id")
+    if direct:
+        return str(direct)
+    session = value.get("session")
+    if isinstance(session, Mapping) and session.get("id"):
+        return str(session["id"])
+    return None
 
 
 def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
@@ -85,6 +107,7 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
 def create_app() -> FastAPI:
     store = HermesExecutionStore()
     state: dict[str, Any] = {"active": {}, "draining": False, "store": store}
+    start_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -94,7 +117,7 @@ def create_app() -> FastAPI:
         for run_id, record in list(store.records.items()):
             if record.get("status") in {"queued", "running"} and record.get("payload"):
                 state["active"][run_id] = asyncio.create_task(
-                    _background_run(record["payload"], None),
+                    _background_run(_recovery_payload(record), None),
                     name=f"hermes-runtime-recovery-{run_id}",
                 )
         yield
@@ -243,6 +266,43 @@ def create_app() -> FastAPI:
             headers["X-Hermes-Session-Id"] = str(session_id)
         sequence = 1
         output_chars = 0
+        terminal_seen = False
+
+        def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+            nonlocal output_chars, sequence, terminal_seen, session_id
+            raw = json.loads("\n".join(frame_data))
+            event_payload = raw if isinstance(raw, Mapping) else {"value": raw}
+            kind = _hermes_event_kind(frame_event_name, event_payload)
+            terminal = kind in {"run.completed", "run.failed", "run.cancelled"}
+            if kind == "output.delta":
+                output_chars += len(str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or ""))
+                if output_chars > max_output_chars:
+                    raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes output exceeded the configured limit"))
+            if sequence > max_events:
+                raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes emitted too many events"))
+            event = _neutral_event(run_id, sequence, kind, event_payload, terminal=terminal, continuation=continuation)
+            result = None
+            if terminal:
+                terminal_seen = True
+                status = "completed" if kind == "run.completed" else "cancelled" if kind == "run.cancelled" else "failed"
+                output = event_payload.get("output") or event_payload.get("content")
+                if output is not None:
+                    output = str(output)[:max_output_chars]
+                result = {
+                    "status": status,
+                    "output": output,
+                    "runtime_metadata": {
+                        "session_id": session_id,
+                        "upstream_run_id": upstream_run_id,
+                        "mcp_server": config.get("mcp_server"),
+                        "allowed_tool_ids": list(config.get("allowed_tool_ids") or []),
+                    },
+                    "continuation": continuation,
+                    "error": event_payload.get("error"),
+                }
+            sequence += 1
+            return event, result
+
         try:
             async with httpx.AsyncClient(timeout=timeout(max_duration_seconds)) as client:
                 existing_binding = (neutral_request.get("continuation") or {}).get("payload") or {}
@@ -251,9 +311,14 @@ def create_app() -> FastAPI:
                     response = await client.post(upstream_url() + "/v1/runs", headers=headers, json=upstream_payload)
                     response.raise_for_status()
                     start = response.json()
+                    response_session_id = _response_session_id(start)
+                    if not session_id and response_session_id:
+                        session_id = response_session_id
                     upstream_run_id = str(start.get("run_id") or start.get("id") or "")
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
+                if session_id:
+                    headers["X-Hermes-Session-Id"] = str(session_id)
                 headers["X-Hermes-Run-Id"] = upstream_run_id
                 continuation = {
                     "binding_type": "hermes_session",
@@ -274,43 +339,39 @@ def create_app() -> FastAPI:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
                             if data:
-                                import json
-                                raw = json.loads("\n".join(data))
-                                event_payload = raw if isinstance(raw, Mapping) else {"value": raw}
-                                kind = _hermes_event_kind(event_name, event_payload)
-                                terminal = kind in {"run.completed", "run.failed", "run.cancelled"}
-                                if kind == "output.delta":
-                                    output_chars += len(str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or ""))
-                                    if output_chars > max_output_chars:
-                                        raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes output exceeded the configured limit"))
-                                if sequence > max_events:
-                                    raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes emitted too many events"))
-                                event = _neutral_event(run_id, sequence, kind, event_payload, terminal=terminal, continuation=continuation)
-                                result = None
-                                if terminal:
-                                    status = "completed" if kind == "run.completed" else "cancelled" if kind == "run.cancelled" else "failed"
-                                    output = event_payload.get("output") or event_payload.get("content")
-                                    if output is not None:
-                                        output = str(output)[:max_output_chars]
-                                    result = {"status": status, "output": output, "runtime_metadata": {"session_id": session_id, "upstream_run_id": upstream_run_id, "mcp_server": config.get("mcp_server"), "allowed_tool_ids": list(config.get("allowed_tool_ids") or [])}, "continuation": continuation, "error": event_payload.get("error")}
+                                event, result = process_frame(event_name, data)
                                 yield _sse(event, result)
-                                sequence += 1
+                                if terminal_seen:
+                                    return
                             event_name, data = "message", []
                             continue
                         if line.startswith("event:"):
                             event_name = line[6:].strip()
                         elif line.startswith("data:"):
                             data.append(line[5:].lstrip())
-                    if not data:
-                        event = _neutral_event(run_id, sequence, "run.completed", {"output": ""}, terminal=True, continuation=continuation)
-                        yield _sse(event, {"status": "completed", "output": "", "runtime_metadata": {"session_id": session_id, "upstream_run_id": upstream_run_id}, "continuation": continuation})
+                    if data and not terminal_seen:
+                        event, result = process_frame(event_name, data)
+                        yield _sse(event, result)
+                        if terminal_seen:
+                            return
+                    if not terminal_seen:
+                        error = _error("hermes_upstream_protocol_error", "Hermes closed the event stream without a terminal event", retryable=True)
+                        event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
+                        terminal_seen = True
+                        yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
         except HTTPException as exc:
+            if terminal_seen:
+                return
             detail = exc.detail if isinstance(exc.detail, Mapping) else _error("hermes_runtime_error", str(exc.detail))
             error = detail if isinstance(detail, Mapping) and detail.get("code") else _error("hermes_runtime_error", str(exc.detail))
             event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True)
+            terminal_seen = True
             yield _sse(event, {"status": "failed", "error": error})
         except httpx.HTTPError as exc:
+            if terminal_seen:
+                return
             event = _neutral_event(run_id, sequence, "run.failed", {"error": _error("hermes_upstream_error", "Hermes runtime is unavailable", retryable=True)}, terminal=True)
+            terminal_seen = True
             yield _sse(event, {"status": "failed", "error": _error("hermes_upstream_error", str(exc), retryable=True)})
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
@@ -349,11 +410,13 @@ def create_app() -> FastAPI:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         if not run_id:
             raise HTTPException(status_code=400, detail=_error("runtime_protocol_error", "run_id is required"))
-        state["store"].create(run_id, payload)
-        task = state["active"].get(run_id)
-        if task is None or task.done():
-            task = asyncio.create_task(_background_run(payload, request), name=f"hermes-runtime-{run_id}")
-            state["active"][run_id] = task
+        async with start_lock:
+            record = state["store"].create(run_id, payload)
+            task = state["active"].get(run_id)
+            if record.get("status") == "queued" and (task is None or task.done()):
+                state["store"].update(run_id, status="running")
+                task = asyncio.create_task(_background_run(payload, request), name=f"hermes-runtime-{run_id}")
+                state["active"][run_id] = task
         return StreamingResponse(_subscribe(run_id), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")

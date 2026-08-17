@@ -10,7 +10,7 @@
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
 #   ./run_tests.sh --phase5                 # Run isolated external-runtime integration checks
 #   ./run_tests.sh --phase5-real            # Run Phase 5 against a configured real provider
-#   ./run_tests.sh --phase7                 # Run mandatory Hermes runtime contract checks
+#   ./run_tests.sh --phase7                 # Run deterministic Hermes runtime proof
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
@@ -122,9 +122,14 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
 fi
 
 if [ "${RUN_PHASE7:-0}" = "1" ]; then
-    echo "Running mandatory Phase 7 Hermes contract checks..."
+    echo "Starting deterministic Phase 7 Hermes runtime proof..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate rag-service hermes-fake hermes-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_integration_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_restart_pytest.py --test test_seed_restart_recovery_record
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" restart hermes-runtime
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_restart_pytest.py --test test_recovered_run_reconnects_without_another_upstream_start
     exit 0
 fi
 

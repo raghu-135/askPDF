@@ -158,6 +158,41 @@ services:
       timeout: 3s
       retries: 12
 
+  hermes-fake:
+    build:
+      context: .
+      dockerfile: hermes_fake/Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hermes-runtime:
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    environment:
+      HERMES_API_URL: http://hermes-fake:8000
+      ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
+      ASKPDF_MCP_REQUIRED: "false"
+      HERMES_MCP_ALLOWED_TOOLS: document_evidence,thread_conversation_history,clarify_intent
+      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
+      PYTHONPATH: /workspace:/app
+      HERMES_RUNTIME_READ_TIMEOUT_SECONDS: "30"
+    depends_on:
+      hermes-fake:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    volumes:
+      - runtime_integration_hermes_state:/var/lib/hermes
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   test-runner:
     build:
       context: ./rag_service
@@ -171,6 +206,11 @@ services:
       POSTGRES_MAX_OVERFLOW: "5"
       AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
+      HERMES_RUNTIME_ENABLED: "true"
+      HERMES_RUNTIME_URL: http://hermes-runtime:8200
+      HERMES_FAKE_URL: http://hermes-fake:8000
+      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
+      PYTHONPATH: /workspace:/app
       WEAVIATE_URL: http://weaviate:8080
       LLM_API_URL: ${LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
@@ -180,14 +220,13 @@ services:
       - path: .env
         required: false
     depends_on:
-      langgraph-runtime:
-        condition: service_healthy
-      fake-llm:
+      hermes-runtime:
         condition: service_healthy
     volumes:
       - ./rag_service:/app
       - .:/workspace:ro
       - runtime_integration_test_data:/data
+      - runtime_integration_hermes_state:/var/lib/hermes
     extra_hosts:
       - host.docker.internal:host-gateway
 
@@ -196,3 +235,4 @@ volumes:
   runtime_integration_weaviate_data:
   runtime_integration_product_data:
   runtime_integration_test_data:
+  runtime_integration_hermes_state:
