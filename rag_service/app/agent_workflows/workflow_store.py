@@ -219,6 +219,8 @@ async def save_custom_workflow(
     workflow_id: Optional[str],
     name: str,
     spec_json: Dict[str, Any],
+    framework: str = "langgraph",
+    builder_id: str = "langgraph_graph",
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
     increment_version: bool = True,
@@ -245,8 +247,8 @@ async def save_custom_workflow(
         except (TypeError, ValueError):
             next_version = 1
         workflow_key = workflow_id or spec_json.get("workflow_id") or name
-        framework = str(getattr(workflow, "framework", None) or "langgraph")
-        builder_id = str(getattr(workflow, "builder_id", None) or "langgraph_graph")
+        framework = str(getattr(workflow, "framework", None) or framework or "langgraph")
+        builder_id = str(getattr(workflow, "builder_id", None) or builder_id or "langgraph_graph")
         definition = AgentDefinition(
             definition_id=str(workflow_key),
             framework=framework,
@@ -255,6 +257,9 @@ async def save_custom_workflow(
         )
         try:
             provider = builder_for_definition(definition)
+            capabilities = await provider.capabilities(definition)
+            if workflow is None and not capabilities.authoring:
+                raise ValueError(f"runtime_capability_unsupported: {framework}/{builder_id} does not support authoring")
             validation = await provider.validate(definition, spec_json)
             if not validation.valid:
                 raise WorkflowValidationError(
@@ -313,6 +318,8 @@ async def save_internal_workflow_version(
     workflow_id: str,
     name: str,
     spec_json: Dict[str, Any],
+    framework: str = "langgraph",
+    builder_id: str = "langgraph_graph",
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
     changelog: str = "",
@@ -325,6 +332,8 @@ async def save_internal_workflow_version(
         description=description,
         visibility=visibility,
         spec_json=spec_json,
+        framework=framework,
+        builder_id=builder_id,
         increment_version=increment_version,
     )
     return workflow, workflow_version(workflow)

@@ -117,6 +117,10 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - HERMES_API_URL=${HERMES_API_URL:-http://hermes-agent:8000}
+      - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
+      - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-}
+      - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
+      - HERMES_MCP_ALLOWED_TOOLS=${HERMES_MCP_ALLOWED_TOOLS:-document_evidence,thread_conversation_history,clarify_intent}
       - HERMES_API_TOKEN=${HERMES_API_TOKEN:-}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
       - HERMES_MODEL=${HERMES_MODEL:-}

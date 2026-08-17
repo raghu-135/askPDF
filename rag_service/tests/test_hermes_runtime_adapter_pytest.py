@@ -23,3 +23,13 @@ async def test_hermes_resume_is_explicitly_unsupported():
 def test_hermes_continuation_binding_is_opaque():
     binding = ContinuationBinding("hermes_session", {"session_id": "session-1"})
     assert binding.to_dict()["payload"]["session_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
+    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    for operation in (adapter.cancel, adapter.inspect):
+        with pytest.raises(RuntimeError, match="binding"):
+            await operation(request)

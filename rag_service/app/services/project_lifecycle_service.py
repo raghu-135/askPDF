@@ -10,7 +10,6 @@ from typing import Any, Dict
 from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
-from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus, ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field
@@ -35,6 +34,11 @@ from app.services.file_cleanup_service import delete_file_artifacts
 from app.services.memory_service import index_memory_record
 from app.services.memory_policy import merge_project_settings_json
 from app.time_utils import iso_utc_z, utc_now
+
+
+async def delete_agent_checkpoints(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints as implementation
+    return await implementation(*args, **kwargs)
 
 
 ACTIVE_RUN_STATUSES = {

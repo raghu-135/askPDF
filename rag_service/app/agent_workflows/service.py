@@ -13,7 +13,6 @@ from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
-from app.agent_workflows import checkpointing
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
@@ -28,7 +27,12 @@ logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
 # Kept as a compatibility seam for existing tests and integrations while the
 # adapter owns normal production checkpoint cleanup.
-delete_agent_checkpoints = checkpointing.delete_agent_checkpoints
+async def _default_delete_agent_checkpoints(*args: Any, **kwargs: Any):
+    from app.agent_workflows.checkpointing import delete_agent_checkpoints as implementation
+    return await implementation(*args, **kwargs)
+
+
+delete_agent_checkpoints = _default_delete_agent_checkpoints
 
 
 def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
@@ -79,11 +83,16 @@ class AgentRunService:
         self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
-        if delete_agent_checkpoints is not checkpointing.delete_agent_checkpoints and binding is not None:
+        if delete_agent_checkpoints is not _default_delete_agent_checkpoints and binding is not None:
             checkpoint_id = binding.payload.get("checkpoint_thread_id")
             if checkpoint_id:
                 return await delete_agent_checkpoints([str(checkpoint_id)])
-        return await adapter.delete_continuation(binding)
+        try:
+            return await adapter.delete_continuation(binding)
+        except Exception as exc:
+            if getattr(exc, "code", None) == "runtime_capability_unsupported":
+                return {"status": "unsupported", "code": exc.code}
+            raise
 
     async def cancel_agent_run(self, run_id: str, *, thread_id: str) -> Any:
         run = await self.repository.get_run(run_id)
@@ -230,6 +239,8 @@ class AgentRunService:
         trace_recorder = AgentTraceRecorder(run)
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
             execution_event_sink.bind_trace_recorder(trace_recorder)
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
+            execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -278,6 +289,8 @@ class AgentRunService:
                 ),
                 event_sink=execution_event_sink,
             )
+            if runtime_result.continuation is not None:
+                await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
             result = legacy_result_from_runtime(runtime_result)
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             _attach_parallel_projection(result, execution_event_sink)

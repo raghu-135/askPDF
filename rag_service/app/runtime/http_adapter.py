@@ -197,6 +197,10 @@ class HttpRuntimeAdapter:
                         emit = getattr(event_sink, "emit", None)
                         if emit is not None:
                             await self._emit_to_sink(emit, event)
+                        if event.continuation is not None:
+                            persist_binding = getattr(event_sink, "persist_runtime_binding", None)
+                            if persist_binding is not None:
+                                await persist_binding(request.run_id, event.continuation)
                     if envelope.get("result") is not None:
                         if not event.terminal:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to a nonterminal event")

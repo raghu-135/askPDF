@@ -49,6 +49,22 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
     assert capabilities.to_dict()["resume"] is True
 
 
+def test_runtime_event_can_carry_an_opaque_continuation_binding():
+    binding = ContinuationBinding(
+        binding_type="hermes_session",
+        runtime_version="hermes-gateway-1",
+        payload={"session_id": "session-1", "upstream_run_id": "hermes-run-7"},
+    )
+    event = AgentRuntimeEvent(
+        event_id="event-1",
+        run_id="run-1",
+        sequence=1,
+        kind="runtime.session_started",
+        continuation=binding,
+    )
+    assert event.to_dict()["continuation"]["payload"]["upstream_run_id"] == "hermes-run-7"
+
+
 def test_catalog_identity_is_concrete_and_category_is_metadata_only():
     workflow = SimpleNamespace(
         id="router_rag_agent",

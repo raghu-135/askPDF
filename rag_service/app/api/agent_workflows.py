@@ -29,20 +29,53 @@ from app.agent_workflows.workflow_runtime import (
     with_default_runtime,
     workflow_supports_replans,
 )
-from app.runtime.langgraph.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
 )
 from app.agent_workflows.trace_details import detail_manifest
-from app.runtime.langgraph.studio_runtime import (
-    RUN_KIND as BUILDER_TEST_RUN_KIND,
-    delete_previous_builder_tests,
-    latest_builder_test,
-    request_builder_test_cancel,
-    spec_fingerprint,
-    stream_builder_test,
-)
+BUILDER_TEST_RUN_KIND = "builder_test"
+
+
+async def delete_agent_checkpoints(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints as implementation
+    return await implementation(*args, **kwargs)
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def open_agent_checkpointer():
+    from app.runtime.langgraph.checkpointing import open_agent_checkpointer as implementation
+    async with implementation() as checkpointer:
+        yield checkpointer
+
+
+async def latest_builder_test(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.studio_runtime import latest_builder_test as implementation
+    return await implementation(*args, **kwargs)
+
+
+async def request_builder_test_cancel(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.studio_runtime import request_builder_test_cancel as implementation
+    return await implementation(*args, **kwargs)
+
+
+def spec_fingerprint(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.studio_runtime import spec_fingerprint as implementation
+    return implementation(*args, **kwargs)
+
+
+async def stream_builder_test(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.studio_runtime import stream_builder_test as implementation
+    async for event in implementation(*args, **kwargs):
+        yield event
+
+
+async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
+    from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
+    return await implementation(*args, **kwargs)
 from app.runtime.catalog import catalog_payload
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.contracts import AgentDefinition
@@ -93,6 +126,8 @@ class InternalAgentWorkflowSaveRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
+    framework: str = "langgraph"
+    builder_id: str = "langgraph_graph"
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -653,6 +688,8 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
             name=req.name,
             description=req.description,
             spec_json=spec_json,
+            framework=req.framework,
+            builder_id=req.builder_id,
             increment_version=False,
         )
     except (BuilderSelectionError, ValueError) as exc:

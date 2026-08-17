@@ -21,6 +21,15 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         if os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
             raise RuntimeError("runtime_disabled", "Hermes runtime is disabled")
 
+    def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
+        headers = super()._headers(request)
+        token = os.getenv("HERMES_RUNTIME_TOKEN") or os.getenv("HERMES_API_TOKEN")
+        if token:
+            headers["authorization"] = f"Bearer {token}"
+        elif os.getenv("LANGGRAPH_RUNTIME_TOKEN") and headers.get("authorization") == f"Bearer {os.getenv('LANGGRAPH_RUNTIME_TOKEN')}":
+            headers.pop("authorization", None)
+        return headers
+
     async def start(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult:
         self._ensure_enabled()
         return await super().start(request, context=context, event_sink=event_sink)
@@ -36,8 +45,29 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
         raise RuntimeError("runtime_capability_unsupported", "Hermes continuation is not enabled for this proof runtime")
 
+    async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        self._ensure_enabled()
+        if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
+            raise RuntimeError("runtime_binding_missing", "Hermes cancellation requires an upstream run binding")
+        value = await self._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/cancel",
+            request=request,
+            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+        )
+        return dict(value or {})
+
+    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        self._ensure_enabled()
+        if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
+            raise RuntimeError("runtime_binding_missing", "Hermes inspection requires an upstream run binding")
+        value = await self._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/inspect",
+            request=request,
+            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+        )
+        return dict(value or {})
+
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        if continuation is None:
-            return {"status": "empty"}
-        session_id = str(continuation.payload.get("session_id") or "")
-        return await self._json("DELETE", f"/v1/continuations/{session_id}", json={"continuation": continuation.to_dict()})
+        raise RuntimeError("runtime_capability_unsupported", "Hermes does not expose safe durable session deletion")

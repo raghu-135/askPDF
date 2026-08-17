@@ -17,7 +17,11 @@
       "mcp_server": "askpdf",
       "allowed_tool_ids": ["document_evidence", "thread_conversation_history", "clarify_intent"],
       "max_output_chars": 12000,
-      "max_duration_seconds": 300
+      "max_duration_seconds": 300,
+      "max_event_count": 200,
+      "allow_subagents": false,
+      "allow_persistent_memory": false,
+      "cancellation_mode": "upstream_stop"
     }
   }
 }

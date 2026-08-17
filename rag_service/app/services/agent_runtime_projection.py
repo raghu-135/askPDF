@@ -32,6 +32,9 @@ class AgentRuntimeProjection:
             }
         )
         await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
+        continuation = getattr(event, "continuation", None)
+        if continuation is not None:
+            await AgentWorkflowRepository().update_runtime_binding(run.id, continuation)
         return True
 
     async def project_terminal_result(self, *, run: Any, result: Mapping[str, Any], terminal_event_id: str | None = None) -> dict[str, Any]:

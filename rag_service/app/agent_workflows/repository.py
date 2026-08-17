@@ -144,6 +144,8 @@ class AgentWorkflowRepository:
         workflow_id: Optional[str],
         name: str,
         spec_json: Dict[str, Any],
+        framework: str = "langgraph",
+        builder_id: str = "langgraph_graph",
         description: str = "",
         visibility: str = "internal",
         increment_version: bool = True,
@@ -154,6 +156,8 @@ class AgentWorkflowRepository:
             workflow_id=workflow_id,
             name=name,
             spec_json=spec_json,
+            framework=framework,
+            builder_id=builder_id,
             description=description,
             visibility=visibility,
             increment_version=increment_version,
@@ -165,6 +169,8 @@ class AgentWorkflowRepository:
         workflow_id: str,
         name: str,
         spec_json: Dict[str, Any],
+        framework: str = "langgraph",
+        builder_id: str = "langgraph_graph",
         description: str = "",
         visibility: str = "internal",
         changelog: str = "",
@@ -176,6 +182,8 @@ class AgentWorkflowRepository:
             workflow_id=workflow_id,
             name=name,
             spec_json=spec_json,
+            framework=framework,
+            builder_id=builder_id,
             description=description,
             visibility=visibility,
             changelog=changelog,
@@ -663,4 +671,24 @@ class AgentWorkflowRepository:
             metadata = dict(run.run_metadata_json or {})
             metadata["projection"] = dict(projection)
             replace_jsonb_field(run, "run_metadata_json", metadata)
+            return run
+
+    async def update_runtime_binding(
+        self,
+        run_id: str,
+        binding: Any,
+        *,
+        status: str = "active",
+    ) -> Optional[AgentRun]:
+        """Persist runtime-owned opaque continuation state idempotently."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                return None
+            value = binding.to_dict() if hasattr(binding, "to_dict") else dict(binding or {})
+            replace_jsonb_field(run, "runtime_binding_json", value)
+            run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
+            run.runtime_binding_status = status
             return run

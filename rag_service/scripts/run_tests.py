@@ -28,6 +28,7 @@ UNIT_TEST_FILES = [
     "test_builder_provider_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_runtime_adapter_pytest.py",
+    "test_external_hermes_runtime_smoke_pytest.py",
     "test_agent_prompt_behavior.py",
     "test_agent_retry_behavior.py",
     "test_agent_tool_contract_pytest.py",

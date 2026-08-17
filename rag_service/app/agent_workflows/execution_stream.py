@@ -23,9 +23,17 @@ class AgentExecutionEventSink:
         self._parallel_events: list[Dict[str, Any]] = []
         self._runtime_event_ids: set[str] = set()
         self._trace_recorder: Any = None
+        self._runtime_binding_persister: Any = None
 
     def bind_trace_recorder(self, recorder: Any) -> None:
         self._trace_recorder = recorder
+
+    def bind_runtime_binding_persister(self, persister: Any) -> None:
+        self._runtime_binding_persister = persister
+
+    async def persist_runtime_binding(self, run_id: str, binding: Any) -> None:
+        if self._runtime_binding_persister is not None:
+            await self._runtime_binding_persister(run_id, binding)
 
     def parallel_events(self) -> list[Dict[str, Any]]:
         return [dict(item) for item in self._parallel_events]

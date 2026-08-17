@@ -71,7 +71,7 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
 class _QueueSink:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
-        self.queue: asyncio.Queue[AgentRuntimeEvent | None] = asyncio.Queue()
+        self.queue: asyncio.Queue[AgentRuntimeEvent | None] = asyncio.Queue(maxsize=max(100, int(os.getenv("AGENT_RUNTIME_EVENT_BUFFER_SIZE", "1000"))))
         self.sequence = 0
 
     async def emit(self, *args: Any) -> None:
@@ -90,7 +90,14 @@ class _QueueSink:
                 terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
             )
         self.sequence = max(self.sequence, event.sequence)
-        await self.queue.put(event)
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            self.queue.put_nowait(event)
 
 
 def create_app() -> FastAPI:
@@ -207,6 +214,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         if runtime_state["draining"]:
             raise HTTPException(status_code=503, detail="runtime is draining")
+        existing_task = runtime_state["active"].get(request.run_id)
+        if existing_task is not None and not existing_task.done():
+            raise HTTPException(status_code=409, detail="runtime run is already active")
         cancellation_event = cancellation_events.setdefault(request.run_id, asyncio.Event())
 
         async def cancellation_probe() -> bool:
@@ -223,6 +233,11 @@ def create_app() -> FastAPI:
             )
         )
         runtime_state["active"][request.run_id] = task
+        def _remove_finished(done_task: asyncio.Task[Any]) -> None:
+            if runtime_state["active"].get(request.run_id) is done_task:
+                runtime_state["active"].pop(request.run_id, None)
+            cancellation_events.pop(request.run_id, None)
+        task.add_done_callback(_remove_finished)
         execution_timeout = max(1.0, float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600")))
         deadline = time.monotonic() + execution_timeout
         try:
@@ -279,10 +294,10 @@ def create_app() -> FastAPI:
             terminal = AgentRuntimeEvent(event_id=f"{request.run_id}:terminal", run_id=request.run_id, sequence=sink.sequence + 1, kind=terminal_kind, terminal=True, payload={"status": result.status})
             yield sse_encode(terminal, result=result)
         finally:
-            runtime_state["active"].pop(request.run_id, None)
-            cancellation_events.pop(request.run_id, None)
-            if not task.done():
-                task.cancel()
+            # Disconnecting the SSE subscriber must not cancel the execution.
+            # Explicit cancel, the runtime deadline, or shutdown owns task cancellation.
+            if task.done():
+                _remove_finished(task)
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:

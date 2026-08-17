@@ -832,6 +832,8 @@ export interface SaveInternalAgentWorkflowPayload {
   name: string;
   description?: string;
   spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
+  framework?: string;
+  builder_id?: string;
 }
 
 export interface ThreadAgentConfigValidationResponse {

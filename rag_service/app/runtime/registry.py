@@ -33,15 +33,23 @@ class RuntimeSelectionError(ValueError):
 
 class RuntimeRegistry:
     def __init__(self, adapters: list[AgentRuntimeAdapter] | None = None):
-        active = adapters or [_default_langgraph_adapter(), _default_hermes_adapter()]
-        self._adapters: Dict[tuple[str, str], AgentRuntimeAdapter] = {
-            (adapter.framework, adapter.builder_id): adapter for adapter in active
-        }
+        self._adapters: Dict[tuple[str, str], AgentRuntimeAdapter] = {}
+        self._initialized = adapters is not None
+        for adapter in adapters or []:
+            self.register(adapter)
+
+    def _ensure_defaults(self) -> None:
+        if self._initialized:
+            return
+        self._initialized = True
+        self.register(_default_langgraph_adapter())
+        self.register(_default_hermes_adapter())
 
     def register(self, adapter: AgentRuntimeAdapter) -> None:
         self._adapters[(adapter.framework, adapter.builder_id)] = adapter
 
     def get(self, definition: AgentDefinition) -> AgentRuntimeAdapter:
+        self._ensure_defaults()
         key = (definition.framework, definition.builder_id)
         adapter = self._adapters.get(key)
         if adapter is None:

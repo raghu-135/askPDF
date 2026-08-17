@@ -18,9 +18,13 @@ from app.runtime.errors import RuntimeError
 class HermesBuilderProvider:
     framework = "hermes"
     builder_id = "hermes_agent"
+    _allowed_config_keys = {
+        "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
+        "max_output_chars", "max_duration_seconds", "max_event_count",
+        "allow_subagents", "allow_persistent_memory", "cancellation_mode",
+    }
 
-    @staticmethod
-    def _issues(spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
+    def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
         if spec.get("schema_version") != 2:
             issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 2", "schema_version"))
@@ -34,7 +38,17 @@ class HermesBuilderProvider:
             for key in ("system_prompt", "mcp_server", "allowed_tool_ids"):
                 if not config.get(key):
                     issues.append(RuntimeValidationIssue("missing_config_field", f"Hermes config requires {key}", f"config.{key}"))
-            if any(key in config for key in ("graph", "nodes", "edges", "route_fn")):
+            if not isinstance(config.get("allowed_tool_ids"), list) or not all(isinstance(item, str) and item for item in config.get("allowed_tool_ids") or []):
+                issues.append(RuntimeValidationIssue("invalid_tool_allowlist", "Hermes allowed_tool_ids must be a non-empty string list", "config.allowed_tool_ids"))
+            unknown = sorted(set(config) - self._allowed_config_keys)
+            if unknown:
+                issues.append(RuntimeValidationIssue("unsupported_config_field", f"Hermes config does not support: {', '.join(unknown)}", "config"))
+            for key, minimum in (("max_output_chars", 1), ("max_duration_seconds", 1), ("max_event_count", 1)):
+                if key in config and (not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < minimum):
+                    issues.append(RuntimeValidationIssue("invalid_limit", f"{key} must be a positive integer", f"config.{key}"))
+            if config.get("allow_subagents") is True or config.get("allow_persistent_memory") is True:
+                issues.append(RuntimeValidationIssue("unsupported_execution_policy", "Hermes proof definitions cannot enable subagents or persistent memory", "config"))
+            if any(key in config for key in ("graph", "nodes", "edges", "route_fn")) or any(key in spec for key in ("graph", "nodes", "edges", "route_fn")):
                 issues.append(RuntimeValidationIssue("graph_fields_not_supported", "Hermes definitions cannot contain graph fields", "config"))
         return issues
 

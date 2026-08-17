@@ -87,6 +87,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
         terminal=bool(value.get("terminal")),
         trace_id=value.get("trace_id"),
         runtime_version=value.get("runtime_version"),
+        continuation=_binding(value.get("continuation")),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 

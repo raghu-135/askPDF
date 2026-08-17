@@ -106,6 +106,8 @@ def legacy_result_from_runtime(result: AgentRuntimeResult) -> dict[str, Any]:
         "clarification_options": clarification_options or None,
         "pending_interrupt": interruption or None,
         "agent_error": dict(result.error or {}),
+        "runtime_metadata": dict(result.runtime_metadata or {}),
+        "runtime_binding": result.continuation.to_dict() if result.continuation is not None else None,
     }
 
 

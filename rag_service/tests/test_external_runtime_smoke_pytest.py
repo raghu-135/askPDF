@@ -13,11 +13,10 @@ from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from app.runtime.adapter import RuntimeExecutionContext
 
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("PHASE5_EXTERNAL_SMOKE", "").lower() not in {"1", "true", "yes", "on"}
-    or not os.getenv("PHASE5_EXTERNAL_LLM_MODEL"),
-    reason="requires PHASE5_EXTERNAL_SMOKE and PHASE5_EXTERNAL_LLM_MODEL",
-)
+_phase5_enabled = os.getenv("PHASE5_EXTERNAL_SMOKE", "").lower() in {"1", "true", "yes", "on"}
+if _phase5_enabled and not os.getenv("PHASE5_EXTERNAL_LLM_MODEL"):
+    raise RuntimeError("PHASE5_EXTERNAL_SMOKE=true requires PHASE5_EXTERNAL_LLM_MODEL")
+pytestmark = pytest.mark.skipif(not _phase5_enabled, reason="requires PHASE5_EXTERNAL_SMOKE=true")
 
 
 def _workflow(workflow_id: str) -> dict:

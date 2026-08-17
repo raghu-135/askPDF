@@ -82,10 +82,14 @@ class AgentRuntimeEvent:
     terminal: bool = False
     trace_id: Optional[str] = None
     runtime_version: Optional[str] = None
+    continuation: Optional[ContinuationBinding] = None
     contract_version: int = CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        if self.continuation is not None:
+            value["continuation"] = self.continuation.to_dict()
+        return value
 
 
 @dataclass(frozen=True)
