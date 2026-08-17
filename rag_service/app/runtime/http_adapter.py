@@ -295,6 +295,12 @@ class HttpRuntimeAdapter:
     async def _emit_to_sink(emit: Any, event: AgentRuntimeEvent) -> None:
         """Bridge neutral events to the existing legacy SSE sink when needed."""
 
+        owner = getattr(emit, "__self__", None)
+        emit_runtime_event = getattr(owner, "emit_runtime_event", None)
+        if emit_runtime_event is not None:
+            await emit_runtime_event(event)
+            return
+
         try:
             parameters = inspect.signature(emit).parameters.values()
             positional = [

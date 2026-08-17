@@ -25,6 +25,7 @@ from app.db.models_sqlmodel import (
     ThreadFile,
     AgentWorkflow,
     AgentRun,
+    AgentRunEvent,
     AgentTask,
 )
 

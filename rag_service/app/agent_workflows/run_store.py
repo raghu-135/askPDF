@@ -6,10 +6,11 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import AgentRun, ChatTurn
-from app.time_utils import utc_now
+from app.db.models_sqlmodel import AgentRun, AgentRunEvent, ChatTurn
+from app.time_utils import parse_datetime_utc, utc_now
 
 
 async def get_run(session: AsyncSession, run_id: str) -> Optional[AgentRun]:
@@ -159,3 +160,45 @@ async def set_run_debug_trace(
         await session.flush()
         await session.refresh(run)
         return run
+
+
+async def append_run_event(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    event_id: str,
+    sequence: int,
+    attempt: int,
+    kind: str,
+    payload_json: Dict[str, Any],
+    occurred_at: Any = None,
+    trace_id: Optional[str] = None,
+) -> bool:
+    values = {
+        "id": str(uuid.uuid4()),
+        "agent_run_id": run_id,
+        "event_id": event_id,
+        "sequence": max(0, int(sequence or 0)),
+        "attempt": max(1, int(attempt or 1)),
+        "kind": kind,
+        "payload_json": dict(payload_json or {}),
+        "occurred_at": parse_datetime_utc(occurred_at) if occurred_at else None,
+        "trace_id": trace_id,
+        "created_at": utc_now(),
+    }
+    statement = pg_insert(AgentRunEvent).values(**values).on_conflict_do_nothing(
+        constraint="uq_agent_run_events_run_event"
+    )
+    async with session.begin():
+        result = await session.execute(statement)
+        return bool(result.rowcount)
+
+
+async def list_run_events(session: AsyncSession, run_id: str) -> list[AgentRunEvent]:
+    async with session.begin():
+        result = await session.execute(
+            select(AgentRunEvent)
+            .where(AgentRunEvent.agent_run_id == run_id)
+            .order_by(AgentRunEvent.attempt.asc(), AgentRunEvent.sequence.asc(), AgentRunEvent.created_at.asc())
+        )
+        return list(result.scalars().all())

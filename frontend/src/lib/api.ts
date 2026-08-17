@@ -1011,6 +1011,7 @@ export interface AgentDebugSummary {
   durationMs?: number | null;
   metrics?: Record<string, any>;
   nodes?: Record<string, any>[];
+  operations?: Record<string, any>[];
   tools?: Record<string, any>[];
   usedNodeCount?: number;
   availableNodeCount?: number | null;
@@ -1036,6 +1037,11 @@ export interface AgentRunDebug {
   detail_manifest?: AgentRunNodeDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
+  topology?: {
+    available?: boolean;
+    kind?: string | null;
+    operation_refs?: boolean;
+  };
 }
 
 export interface AgentRunNodeDetailManifest {
@@ -1163,6 +1169,18 @@ export async function getAgentRunNodeDetails(
 ): Promise<AgentRunNodeDetail> {
   const params = new URLSearchParams({ thread_id: threadId, node_id: nodeId, visit_index: String(visitIndex) });
   const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/details?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()).detail;
+}
+
+export async function getAgentRunOperationDetails(
+  runId: string,
+  threadId: string,
+  operationId: string,
+  visitIndex: number,
+): Promise<AgentRunNodeDetail> {
+  const params = new URLSearchParams({ thread_id: threadId, visit_index: String(visitIndex) });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/operations/${encodeURIComponent(operationId)}/details?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()).detail;
 }

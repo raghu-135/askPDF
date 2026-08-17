@@ -12,6 +12,12 @@ from typing import Any, Dict, Mapping, Optional
 
 
 CONTRACT_VERSION = 1
+RUNTIME_OPERATION_EVENT_KINDS = frozenset({
+    "operation.started",
+    "operation.completed",
+    "operation.failed",
+    "operation.skipped",
+})
 
 
 def _dict(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:

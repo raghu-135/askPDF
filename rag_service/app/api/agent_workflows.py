@@ -273,11 +273,20 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     if trace is None or summary is None:
         return None
     compact_debug = {key: value for key, value in debug.items() if key != "details"}
+    summary = dict(summary)
+    summary.setdefault("operations", list(summary.get("nodes") or []))
+    graph = compact_debug.get("graph") if isinstance(compact_debug.get("graph"), dict) else {}
+    topology_available = bool(graph.get("nodes") or graph.get("edges"))
     return {
         **compact_debug,
         "trace": trace,
         "summary": summary,
         "detail_manifest": detail_manifest(debug.get("details")),
+        "topology": {
+            "available": topology_available,
+            "kind": "graph" if topology_available else None,
+            "operation_refs": topology_available,
+        },
     }
 
 
@@ -328,6 +337,14 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
+        "observability": {
+            "event_projection_version": 1,
+            "topology_available": bool(
+                isinstance(run.debug_trace_json, dict)
+                and isinstance(run.debug_trace_json.get("graph"), dict)
+                and (run.debug_trace_json["graph"].get("nodes") or run.debug_trace_json["graph"].get("edges"))
+            ),
+        },
     }
     return payload
 
@@ -893,6 +910,41 @@ async def get_agent_run_node_details(
         if str(detail.get("node_id") or "") == node_id and detail_visit == visit_index:
             return {"run_id": run.id, "detail": detail}
     raise HTTPException(status_code=404, detail="Node visit details are unavailable")
+
+
+@router.get("/agent-runs/{run_id}/operations/{operation_id}/details")
+async def get_agent_run_operation_details(
+    run_id: str,
+    operation_id: str,
+    visit_index: int = Query(..., ge=1),
+    thread_id: str = Query(..., min_length=1),
+):
+    repo = AgentWorkflowRepository()
+    run = await repo.get_run(run_id)
+    if run is None or run.thread_id != thread_id or not await get_thread(thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else {}
+    for detail in debug.get("details") if isinstance(debug.get("details"), list) else []:
+        if not isinstance(detail, dict):
+            continue
+        if str(detail.get("operation_id") or detail.get("node_id") or "") == operation_id and max(1, int(detail.get("visit_index") or 1)) == visit_index:
+            return {"run_id": run.id, "detail": detail}
+    for event in reversed(await repo.list_run_events(run_id)):
+        payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+        if str(payload.get("operation_id") or "") == operation_id and max(1, int(payload.get("visit_index") or 1)) == visit_index:
+            return {
+                "run_id": run.id,
+                "detail": {
+                    "operation_id": operation_id,
+                    "node_id": operation_id,
+                    "node_type": payload.get("operation_type"),
+                    "visit_index": visit_index,
+                    "status": str(event.kind).split(".")[-1],
+                    "event": payload,
+                    "safety": {"bounded": True},
+                },
+            }
+    raise HTTPException(status_code=404, detail="Operation visit details are unavailable")
 
 
 @router.post("/agent-runs/{run_id}/cancel")

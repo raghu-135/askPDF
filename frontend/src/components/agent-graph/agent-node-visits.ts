@@ -79,10 +79,9 @@ export const applySelectedVisitOverlay = <T extends { nodes: AgentGraphNode[]; e
   selected: AgentNodeVisitRef | null | undefined,
 ): T => {
   if (!selected) return graph;
-  const selectedKey = agentNodeVisitKey(selected);
-  const selectedRow = traceNodes.find((node) => agentNodeVisitKey(node) === selectedKey);
-  const nodeVisits = getChronologicalNodeVisits(traceNodes, selected.nodeId);
-  const selectedPosition = nodeVisits.findIndex((visit) => agentNodeVisitKey(visit) === selectedKey);
+  const topologyVisits = traceNodes.filter((node) => String(node.topologyRef?.id || node.id) === selected.nodeId);
+  const selectedRow = topologyVisits.find((node) => normalizeVisitIndex(node.visitIndex) === selected.visitIndex);
+  const selectedPosition = topologyVisits.findIndex((visit) => visit === selectedRow);
   const route = getNodeVisitRoute(selectedRow);
   return {
     ...graph,

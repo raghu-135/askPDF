@@ -18,6 +18,7 @@ from app.runtime.langgraph_compat import (
     request_for_run,
     result_from_legacy,
 )
+from app.runtime.observability import normalize_runtime_event
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():
@@ -151,3 +152,27 @@ def test_runtime_task_context_and_artifact_are_json_compatible():
 
     assert artifact.to_dict()["kind"] == "intermediate_report"
     assert context.to_dict()["todos"][0]["id"] == "todo-1"
+
+
+def test_langgraph_node_events_normalize_to_topology_linked_operations():
+    kind, payload = normalize_runtime_event(
+        "node.completed",
+        {"node_id": "planner", "node_type": "planner", "visit_index": 2, "elapsed_ms": 17},
+    )
+
+    assert kind == "operation.completed"
+    assert payload["operation_id"] == "planner"
+    assert payload["operation_type"] == "planner"
+    assert payload["visit_index"] == 2
+    assert payload["topology_ref"] == {"kind": "graph_node", "id": "planner"}
+
+
+def test_runtime_operations_remain_topology_optional():
+    kind, payload = normalize_runtime_event(
+        "operation.started",
+        {"operation_id": "hermes_session", "operation_type": "agent_session"},
+    )
+
+    assert kind == "operation.started"
+    assert payload["operation_id"] == "hermes_session"
+    assert "topology_ref" not in payload

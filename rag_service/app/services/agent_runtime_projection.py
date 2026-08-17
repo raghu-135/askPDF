@@ -45,6 +45,44 @@ class AgentRuntimeProjection:
         for event in events:
             await self.apply_event(run=run, event=event)
 
+    async def rebuild_trace_from_events(self, *, run: Any, result: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+        """Rebuild the retained compatibility trace from the canonical journal."""
+
+        from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
+        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.runtime.observability import project_event_to_trace_recorder
+
+        repository = AgentWorkflowRepository()
+        if not hasattr(repository, "list_run_events") or not hasattr(repository, "set_run_debug_trace"):
+            # Compatibility for injected repositories used by older callers;
+            # the canonical repository always exposes both operations.
+            return None
+        events = await repository.list_run_events(run.id)
+        if not events:
+            return None
+        recorder = AgentTraceRecorder(run)
+        for event in events:
+            project_event_to_trace_recorder(
+                recorder,
+                str(event.kind),
+                event.payload_json if isinstance(event.payload_json, dict) else {},
+            )
+        result_payload = dict(result or {})
+        debug = finalize_and_merge_debug_payload(
+            recorder=recorder,
+            run=run,
+            metrics=dict(getattr(run, "metrics_json", None) or {}),
+            result=result_payload or None,
+            chat_turn_id=result_payload.get("chat_turn_id"),
+            route=result_payload.get("route"),
+            route_reason=result_payload.get("route_reason"),
+            error=result_payload.get("agent_error") or getattr(run, "error_json", None),
+            run_status=str(result_payload.get("status") or getattr(run, "status", "")),
+            completed_at=getattr(run, "completed_at", None),
+        )
+        await repository.set_run_debug_trace(run.id, debug)
+        return debug
+
     async def project_chat_result(
         self,
         *,
@@ -197,4 +235,5 @@ class AgentRuntimeProjection:
             run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
             duration_ms=float(result.get("duration_ms") or 0),
         )
+        await self.rebuild_trace_from_events(run=run, result=projected)
         return projected

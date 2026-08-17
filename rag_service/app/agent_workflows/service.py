@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.enums import AgentRunResumeAction, InterruptStatus
+from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
@@ -244,10 +245,20 @@ class AgentRunService:
 
         started = time.perf_counter()
         trace_recorder = AgentTraceRecorder(run)
+        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
+            # Non-streaming callers still need the same durable runtime event
+            # journal and retained trace projection as SSE callers.
+            execution_event_sink = AgentExecutionEventSink(include_details=False)
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
             execution_event_sink.bind_trace_recorder(trace_recorder)
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
             execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        if (
+            execution_event_sink is not None
+            and hasattr(execution_event_sink, "bind_runtime_event_persister")
+            and hasattr(self.repository, "append_run_event")
+        ):
+            execution_event_sink.bind_runtime_event_persister(run.id, self.repository.append_run_event)
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -515,6 +526,16 @@ class AgentRunService:
         )
         if resolution is None:
             return None
+        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
+            execution_event_sink = AgentExecutionEventSink(include_details=False)
+        if (
+            hasattr(execution_event_sink, "bind_runtime_event_persister")
+            and hasattr(self.repository, "append_run_event")
+        ):
+            execution_event_sink.bind_runtime_event_persister(
+                resolution.run.id,
+                self.repository.append_run_event,
+            )
         if execution_event_sink is not None:
             await execution_event_sink.emit(
                 "run.started",
@@ -575,6 +596,14 @@ class AgentRunService:
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
+            if (
+                execution_event_sink is not None
+                and hasattr(execution_event_sink, "bind_runtime_event_persister")
+                and hasattr(self.repository, "append_run_event")
+            ):
+                execution_event_sink.bind_runtime_event_persister(resolution.run.id, self.repository.append_run_event)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
+                execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
             definition = AgentDefinition(
                 definition_id=str(resolution.run.workflow_id),
                 framework=str(getattr(resolution.run, "framework", None) or "langgraph"),

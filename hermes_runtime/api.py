@@ -301,7 +301,7 @@ def create_app() -> FastAPI:
         output_chars = 0
         terminal_seen = False
 
-        def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal output_chars, sequence, terminal_seen, session_id
             raw = json.loads("\n".join(frame_data))
             event_payload = raw if isinstance(raw, Mapping) else {"value": raw}
@@ -337,7 +337,27 @@ def create_app() -> FastAPI:
                     "error": event_payload.get("error"),
                 }
             sequence += 1
-            return event, result
+            operation_event = None
+            if terminal:
+                operation_event = _neutral_event(
+                    run_id,
+                    sequence,
+                    "operation.failed" if kind == "run.failed" else "operation.completed",
+                    {
+                        "operation_id": "hermes_session",
+                        "operation_type": "agent_session",
+                        "operation_label": "Hermes Agent",
+                        "visit_index": 1,
+                        "status": status,
+                        "error": event_payload.get("error"),
+                    },
+                    continuation=continuation,
+                )
+                sequence += 1
+                event["sequence"] = sequence
+                event["event_id"] = f"{run_id}:{sequence}"
+                sequence += 1
+            return event, result, operation_event
 
         try:
             async with httpx.AsyncClient(timeout=timeout(max_duration_seconds)) as client:
@@ -364,7 +384,13 @@ def create_app() -> FastAPI:
                 }
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
                 sequence += 1
-                yield _sse(_neutral_event(run_id, sequence, "runtime.session_started", {"session_id": session_id}, continuation=continuation))
+                yield _sse(_neutral_event(run_id, sequence, "operation.started", {
+                    "operation_id": "hermes_session",
+                    "operation_type": "agent_session",
+                    "operation_label": "Hermes Agent",
+                    "visit_index": 1,
+                    "session_id": session_id,
+                }, continuation=continuation))
                 sequence += 1
                 async with client.stream("GET", upstream_url() + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
                     events_response.raise_for_status()
@@ -375,7 +401,9 @@ def create_app() -> FastAPI:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
                             if data:
-                                event, result = process_frame(event_name, data)
+                                event, result, operation_event = process_frame(event_name, data)
+                                if operation_event is not None:
+                                    yield _sse(operation_event)
                                 yield _sse(event, result)
                                 if terminal_seen:
                                     return
@@ -386,7 +414,9 @@ def create_app() -> FastAPI:
                         elif line.startswith("data:"):
                             data.append(line[5:].lstrip())
                     if data and not terminal_seen:
-                        event, result = process_frame(event_name, data)
+                        event, result, operation_event = process_frame(event_name, data)
+                        if operation_event is not None:
+                            yield _sse(operation_event)
                         yield _sse(event, result)
                         if terminal_seen:
                             return

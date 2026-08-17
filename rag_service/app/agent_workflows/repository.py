@@ -32,12 +32,14 @@ from app.agent_workflows.run_cleanup import (
     prune_runs_before as cleanup_prune_runs_before,
 )
 from app.agent_workflows.run_store import (
+    append_run_event as run_store_append_run_event,
     complete_run as run_store_complete_run,
     create_run as run_store_create_run,
     delete_run as run_store_delete_run,
     get_run as run_store_get_run,
     list_chat_turns_for_run as run_store_list_chat_turns_for_run,
     list_runs_for_thread as run_store_list_runs_for_thread,
+    list_run_events as run_store_list_run_events,
     set_run_debug_trace as run_store_set_run_debug_trace,
 )
 from app.agent_workflows.workflow_store import (
@@ -655,6 +657,24 @@ class AgentWorkflowRepository:
     ) -> Optional[AgentRun]:
         session = await self._get_session()
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
+
+    async def append_run_event(self, run_id: str, event: Any) -> bool:
+        session = await self._get_session()
+        return await run_store_append_run_event(
+            session,
+            run_id=run_id,
+            event_id=str(getattr(event, "event_id", None) or ""),
+            sequence=int(getattr(event, "sequence", 0) or 0),
+            attempt=int(getattr(event, "attempt", 1) or 1),
+            kind=str(getattr(event, "kind", None) or "runtime.event"),
+            payload_json=dict(getattr(event, "payload", None) or {}),
+            occurred_at=getattr(event, "occurred_at", None),
+            trace_id=getattr(event, "trace_id", None),
+        )
+
+    async def list_run_events(self, run_id: str) -> list[Any]:
+        session = await self._get_session()
+        return await run_store_list_run_events(session, run_id)
 
     async def update_runtime_projection(
         self,
