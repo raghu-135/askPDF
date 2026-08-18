@@ -18,7 +18,10 @@ services:
       dockerfile: Dockerfile.test
     entrypoint: ["python", "scripts/run_tests.py"]
     env_file:
-      - .env
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
