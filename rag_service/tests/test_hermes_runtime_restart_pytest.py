@@ -42,6 +42,44 @@ def test_hermes_store_preserves_sequence_and_terminal_result_across_reload(tmp_p
     assert reloaded.append("run-sequence", _gateway_frame("run-sequence", 4, "run.completed", source_event_id="upstream-3", terminal=True, result={"status": "completed", "output": "ok"})) is False
 
 
+def test_hermes_store_finalizes_terminal_frame_and_status_in_one_save(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run-terminal", {"request": {"run_id": "run-terminal"}})
+    store.update("run-terminal", status="running")
+    saves = 0
+    original_save = store._save
+
+    def counted_save() -> None:
+        nonlocal saves
+        saves += 1
+        original_save()
+
+    monkeypatch.setattr(store, "_save", counted_save)
+    frame = _gateway_frame("run-terminal", 1, "run.failed", terminal=True, result={"status": "failed"})
+    assert store.finalize("run-terminal", frame, status="failed") is True
+    assert saves == 1
+    reloaded = HermesExecutionStore(str(path))
+    assert reloaded.records["run-terminal"]["status"] == "failed"
+    assert reloaded.records["run-terminal"]["terminal_event_id"] == "run-terminal:1"
+
+
+def test_hermes_store_failed_finalize_rolls_back_to_nonterminal_record(tmp_path: Path, monkeypatch) -> None:
+    store = HermesExecutionStore(str(tmp_path / "hermes.json"))
+    store.create("run-write-failure", {"request": {"run_id": "run-write-failure"}})
+    store.update("run-write-failure", status="running")
+
+    def fail_save() -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    frame = _gateway_frame("run-write-failure", 1, "run.failed", terminal=True, result={"status": "failed"})
+    with pytest.raises(OSError, match="disk unavailable"):
+        store.finalize("run-write-failure", frame, status="failed")
+    assert store.records["run-write-failure"]["status"] == "running"
+    assert store.records["run-write-failure"].get("terminal_event_id") is None
+
+
 @pytest.mark.asyncio
 async def test_seed_restart_recovery_record() -> None:
     fake_payload = _payload(RECOVERY_RUN_ID)

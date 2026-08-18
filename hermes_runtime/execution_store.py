@@ -10,6 +10,7 @@ multiple workers or replicas.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,10 @@ class HermesExecutionStoreProtocol(Protocol):
 
     def create(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]: ...
     def update(self, run_id: str, **values: Any) -> None: ...
-    def append(self, run_id: str, frame: str) -> None: ...
+    def append(self, run_id: str, frame: str) -> bool: ...
+    def finalize(self, run_id: str, frame: str, *, status: str) -> bool: ...
+    def fail_in_memory(self, run_id: str, *, status: str = "failed") -> None: ...
+    def probe(self) -> bool: ...
     def frames_after(self, run_id: str, after_event_id: str | None = None) -> list[str]: ...
 
 
@@ -89,7 +93,7 @@ class HermesExecutionStore:
         record["next_sequence"] = value
         return value
 
-    def append(self, run_id: str, frame: str) -> bool:
+    def _append_frame(self, run_id: str, frame: str) -> bool:
         record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
         events = record.setdefault("events", [])
         event_id = next((line[3:].strip() for line in frame.splitlines() if line.startswith("id:")), f"{run_id}:{len(events) + 1}")
@@ -131,8 +135,43 @@ class HermesExecutionStore:
                     record["terminal_result"] = payload.get("result")
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
-        self._save()
         return True
+
+    def append(self, run_id: str, frame: str) -> bool:
+        appended = self._append_frame(run_id, frame)
+        if appended:
+            self._save()
+        return appended
+
+    def finalize(self, run_id: str, frame: str, *, status: str) -> bool:
+        """Persist one terminal frame and status with a single durable save."""
+        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        if record.get("status") in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
+            return False
+        snapshot = copy.deepcopy(record)
+        appended = self._append_frame(run_id, frame)
+        record["status"] = status
+        try:
+            self._save()
+        except Exception:
+            self.records[run_id] = snapshot
+            raise
+        return appended
+
+    def fail_in_memory(self, run_id: str, frame: str) -> None:
+        """Terminate live subscribers when durable storage is unavailable."""
+        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        if not record.get("terminal_event_id"):
+            self._append_frame(run_id, frame)
+        record["status"] = "failed"
+
+    def probe(self) -> bool:
+        """Verify that the current journal can be durably written."""
+        try:
+            self._save()
+            return True
+        except Exception:
+            return False
 
     def frames_after(self, run_id: str, after_event_id: str | None = None) -> list[str]:
         events = self.records.get(run_id, {}).get("events", [])

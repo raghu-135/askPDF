@@ -96,6 +96,22 @@ async def test_missing_upstream_terminal_becomes_protocol_failure() -> None:
     assert terminals[0]["result"]["error"]["code"] == "hermes_upstream_protocol_error"
 
 
+@pytest.mark.parametrize("mode", ["malformed_json", "invalid_shape"])
+async def test_invalid_upstream_events_become_replayable_protocol_failures(mode: str) -> None:
+    await _set_mode(mode)
+    run_id = f"phase7-{mode}-{uuid.uuid4().hex}"
+    async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
+        events = await _sse(client, "POST", "/v1/runs/start", json=_payload(run_id))
+        replay = await _sse(client, "GET", f"/v1/runs/{run_id}/events")
+    terminals = [item for item in events if item["event"].get("terminal")]
+    replay_terminals = [item for item in replay if item["event"].get("terminal")]
+    assert len(terminals) == 1
+    assert len(replay_terminals) == 1
+    assert terminals[0]["event"]["kind"] == "run.failed"
+    assert terminals[0]["result"]["error"]["code"] == "hermes_upstream_protocol_error"
+    assert replay_terminals[0]["event"]["event_id"] == terminals[0]["event"]["event_id"]
+
+
 @pytest.mark.asyncio
 async def test_mcp_configuration_and_session_run_headers_reach_upstream() -> None:
     await _set_mode("normal")

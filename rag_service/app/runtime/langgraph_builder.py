@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import os
 from typing import Any, Mapping
 
 from app.runtime.builder import (
@@ -18,6 +17,7 @@ from app.runtime.contracts import (
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
+from app.runtime.mode import external_runtime_enabled
 
 
 class LangGraphBuilderProvider:
@@ -49,9 +49,7 @@ class LangGraphBuilderProvider:
 
     @staticmethod
     def _external_runtime_enabled() -> bool:
-        return os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
+        return external_runtime_enabled()
 
     @staticmethod
     def _normalize_external_hitl_policy(policy: Any, thread_settings: Mapping[str, Any]) -> dict[str, Any]:

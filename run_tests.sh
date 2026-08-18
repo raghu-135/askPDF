@@ -101,7 +101,18 @@ if [ "${RUN_PHASE5:-0}" = "1" ]; then
         export PHASE5_RUNTIME_LLM_API_URL="http://fake-llm:9000/v1"
     fi
     echo "Starting isolated Phase 5 Compose environment '$PHASE5_PROJECT_NAME'..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" build rag-service
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
+    echo "Verifying the immutable production control-plane image..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
+        'import importlib.util, os; from app.runtime.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert os.getenv("AGENT_RUNTIME_MODE") is None; assert os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED") is None; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpRuntimeAdapter" and adapter.framework == "langgraph"'
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
+        'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)); assert health["status"] == "ok"'
+    if "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm --no-deps -e AGENT_RUNTIME_MODE=in_process rag-service python -c \
+        'from app.runtime.registry import RuntimeRegistry; RuntimeRegistry().initialize()'; then
+        echo "Production control plane unexpectedly initialized in-process LangGraph" >&2
+        exit 1
+    fi
     phase5_test test-runner --file test_runtime_contracts_pytest.py
     phase5_test test-runner --file test_runtime_http_adapter_pytest.py
     if [ "${RUN_PHASE5_REAL:-0}" = "1" ]; then
@@ -176,6 +187,7 @@ if [ "${RUN_PHASE7:-0}" = "1" ]; then
     PHASE7_RECOVERY_RUN_ID="${PHASE7_RECOVERY_RUN_ID:-phase7-recovery-$$}"
     export PHASE7_RECOVERY_RUN_ID
     echo "Starting deterministic Phase 7 Hermes runtime proof..."
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" build rag-service
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate rag-service hermes-fake hermes-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py

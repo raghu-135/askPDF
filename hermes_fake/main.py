@@ -59,6 +59,12 @@ async def _events(run_id: str) -> AsyncIterator[str]:
     counters["event_streams"] += 1
     if mode == "delayed":
         await asyncio.sleep(1)
+    if mode == "malformed_json":
+        yield "event: message.delta\ndata: {not-json}\n\n"
+        return
+    if mode == "invalid_shape":
+        yield "event: message.delta\ndata: [1,2,3]\n\n"
+        return
     yield _frame("message.delta", {"event_id": f"{run_id}:progress-1", "delta": "deterministic "})
     if mode == "missing_terminal":
         return

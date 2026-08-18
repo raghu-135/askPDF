@@ -49,9 +49,12 @@ services:
       - runtime_integration_weaviate_data:/var/lib/weaviate
 
   rag-service:
+    image: askpdf-runtime-control-plane
     build:
       context: ./rag_service
-      dockerfile: Dockerfile.test
+      dockerfile: Dockerfile
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       LOG_LEVEL: INFO
@@ -60,7 +63,6 @@ services:
       POSTGRES_POOL_SIZE: "5"
       POSTGRES_MAX_OVERFLOW: "5"
       ASKPDF_AGENT_CHECKPOINTER: postgres
-      AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
@@ -83,8 +85,6 @@ services:
       weaviate:
         condition: service_healthy
     volumes:
-      - ./rag_service:/app
-      - .:/workspace:ro
       - runtime_integration_product_data:/static
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -95,9 +95,7 @@ services:
       retries: 12
 
   db-migrate:
-    build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+    image: askpdf-runtime-control-plane
     command: ["python", "-m", "app.db.migrate"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -110,13 +108,9 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
-    volumes:
-      - ./rag_service:/app
 
   runtime-db-migrate:
-    build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+    image: askpdf-runtime-control-plane
     command: ["python", "-m", "app.db.migrate_runtime"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
@@ -128,8 +122,6 @@ services:
     depends_on:
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
-    volumes:
-      - ./rag_service:/app
 
   langgraph-runtime:
     build:
@@ -147,7 +139,7 @@ services:
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: "120"
       LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
+      AGENT_RUNTIME_MODE: external
       AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS: "90"
       AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: "5"
       AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: "3"
@@ -232,7 +224,7 @@ services:
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       POSTGRES_POOL_SIZE: "5"
       POSTGRES_MAX_OVERFLOW: "5"
-      AGENT_RUNTIME_EXTERNAL_ENABLED: "true"
+      AGENT_RUNTIME_MODE: external
       AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS: "90"
       PHASE5_SMOKE_TIMEOUT_SECONDS: "120"
       PHASE5_EXTERNAL_EMBEDDING_MODEL: phase5-deterministic-embedding

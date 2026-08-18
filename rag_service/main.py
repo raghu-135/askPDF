@@ -58,6 +58,7 @@ from app.services.embedding_materialization_service import embedding_job_worker
 from app.services.agent_task_runtime import run_task_worker
 from app.mcp.server import get_http_app
 from app.http_clients import close_http_clients, init_http_clients
+from app.runtime.registry import get_runtime_registry
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
     agent_task_worker = None
     mcp_lifespan = None
     try:
+        get_runtime_registry().initialize()
         # Keep cleanup active from the first allocation onward.  In
         # particular, database or MCP startup failures must not strand the
         # application-scoped HTTP clients initialized above them.

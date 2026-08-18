@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import os
 from typing import Dict
 
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.contracts import AgentDefinition
+from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
 
 
 def _default_langgraph_adapter() -> AgentRuntimeAdapter:
     """Select transport at process startup while retaining an emergency fallback."""
 
-    if os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if agent_runtime_mode() is AgentRuntimeMode.EXTERNAL:
         from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 
         return HttpLangGraphRuntimeAdapter()
@@ -44,6 +44,10 @@ class RuntimeRegistry:
         self._initialized = True
         self.register(_default_langgraph_adapter())
         self.register(_default_hermes_adapter())
+
+    def initialize(self) -> None:
+        """Resolve and import the configured adapters during application startup."""
+        self._ensure_defaults()
 
     def register(self, adapter: AgentRuntimeAdapter) -> None:
         self._adapters[(adapter.framework, adapter.builder_id)] = adapter

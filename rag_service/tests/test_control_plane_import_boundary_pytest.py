@@ -63,7 +63,7 @@ def test_langgraph_package_init_does_not_eagerly_import_framework_modules():
 
 def test_external_runtime_maintenance_does_not_import_local_checkpointing():
     source = (ROOT / "app/services/agent_task_maintenance.py").read_text()
-    assert "if not _external_runtime_enabled():" in source
+    assert "if not external_runtime_enabled():" in source
 
 
 def test_external_langgraph_resolution_does_not_import_local_graph():

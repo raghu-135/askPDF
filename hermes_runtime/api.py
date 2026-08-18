@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from hermes_runtime.execution_store import HermesExecutionStore
 
 
 WIRE_VERSION = 1
+logger = logging.getLogger(__name__)
 
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
@@ -119,7 +121,14 @@ def create_app() -> FastAPI:
     if worker_count > 1:
         raise RuntimeError("Hermes file execution storage supports one worker only")
     store = HermesExecutionStore()
-    state: dict[str, Any] = {"active": {}, "draining": False, "store": store, "storage_backend": storage_backend, "worker_count": worker_count}
+    state: dict[str, Any] = {
+        "active": {},
+        "draining": False,
+        "store": store,
+        "storage_backend": storage_backend,
+        "worker_count": worker_count,
+        "storage_healthy": True,
+    }
     start_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -172,7 +181,10 @@ def create_app() -> FastAPI:
                         mcp_ready = 200 <= mcp_response.status_code < 400
         except Exception:
             pass
-        ready = hermes_ready and mcp_ready
+        if not state["storage_healthy"]:
+            state["storage_healthy"] = store.probe()
+        storage_ready = bool(state["storage_healthy"])
+        ready = hermes_ready and mcp_ready and storage_ready
         return JSONResponse(
             {
                 "status": "ok" if ready else "not_ready",
@@ -185,6 +197,10 @@ def create_app() -> FastAPI:
                     "mcp": {
                         "status": "ok" if mcp_ready else ("failed" if mcp_checked else "not_checked"),
                         "required": mcp_required,
+                    },
+                    "storage": {
+                        "status": "ok" if storage_ready else "failed",
+                        "backend": state["storage_backend"],
                     },
                 },
             },
@@ -255,6 +271,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="runtime is draining")
         options = dict(neutral_request.get("options") or {})
         input_data = dict(neutral_request.get("input") or {})
+        continuation = neutral_request.get("continuation") if isinstance(neutral_request.get("continuation"), Mapping) else None
         context = dict(payload.get("context") or {})
         question = str(input_data.get("question") or context.get("request_payload", {}).get("question") or "")
         config = dict(context.get("resolved_spec") or {}).get("config") or {}
@@ -303,8 +320,19 @@ def create_app() -> FastAPI:
 
         def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal output_chars, sequence, terminal_seen, session_id
-            raw = json.loads("\n".join(frame_data))
-            event_payload = raw if isinstance(raw, Mapping) else {"value": raw}
+            try:
+                raw = json.loads("\n".join(frame_data))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=_error("hermes_upstream_protocol_error", "Hermes emitted malformed event JSON"),
+                ) from exc
+            if not isinstance(raw, Mapping):
+                raise HTTPException(
+                    status_code=502,
+                    detail=_error("hermes_upstream_protocol_error", "Hermes emitted an invalid event envelope"),
+                )
+            event_payload = raw
             source_event_id = event_payload.get("event_id") or event_payload.get("id") or event_payload.get("sequence")
             if source_event_id is not None:
                 source_event_id = f"{frame_event_name}:{source_event_id}"
@@ -430,26 +458,61 @@ def create_app() -> FastAPI:
                 return
             detail = exc.detail if isinstance(exc.detail, Mapping) else _error("hermes_runtime_error", str(exc.detail))
             error = detail if isinstance(detail, Mapping) and detail.get("code") else _error("hermes_runtime_error", str(exc.detail))
-            event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True)
+            event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
-            yield _sse(event, {"status": "failed", "error": error})
+            yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
         except httpx.HTTPError as exc:
             if terminal_seen:
                 return
-            event = _neutral_event(run_id, sequence, "run.failed", {"error": _error("hermes_upstream_error", "Hermes runtime is unavailable", retryable=True)}, terminal=True)
+            event = _neutral_event(run_id, sequence, "run.failed", {"error": _error("hermes_upstream_error", "Hermes runtime is unavailable", retryable=True)}, terminal=True, continuation=continuation)
             terminal_seen = True
-            yield _sse(event, {"status": "failed", "error": _error("hermes_upstream_error", str(exc), retryable=True)})
+            yield _sse(event, {"status": "failed", "error": _error("hermes_upstream_error", str(exc), retryable=True), "continuation": continuation})
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         try:
             async for frame in stream_run(payload, request):
-                state["store"].append(run_id, frame)
+                terminal_status = None
                 if "event: run.completed" in frame:
-                    state["store"].update(run_id, status="completed")
+                    terminal_status = "completed"
                 elif "event: run.failed" in frame:
-                    state["store"].update(run_id, status="failed")
+                    terminal_status = "failed"
                 elif "event: run.cancelled" in frame:
-                    state["store"].update(run_id, status="cancelled")
+                    terminal_status = "cancelled"
+                if terminal_status:
+                    state["store"].finalize(run_id, frame, status=terminal_status)
+                else:
+                    state["store"].append(run_id, frame)
+        except Exception:
+            logger.exception("Hermes background execution failed | run_id=%s", run_id)
+            record = state["store"].records.setdefault(run_id, {"run_id": run_id, "events": []})
+            if record.get("status") not in {"completed", "failed", "cancelled"} and not record.get("terminal_event_id"):
+                sequence = state["store"].next_sequence(run_id)
+                continuation = record.get("continuation")
+                error = _error(
+                    "hermes_gateway_internal_error",
+                    "Hermes gateway failed while processing the run",
+                    retryable=True,
+                )
+                event = _neutral_event(
+                    run_id,
+                    sequence,
+                    "run.failed",
+                    {"error": error},
+                    terminal=True,
+                    continuation=continuation if isinstance(continuation, Mapping) else None,
+                )
+                frame = _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+                try:
+                    state["store"].finalize(run_id, frame, status="failed")
+                except Exception:
+                    state["storage_healthy"] = False
+                    logger.critical("Hermes terminal failure could not be persisted | run_id=%s", run_id, exc_info=True)
+                    # Keep current subscribers finite even though durability is unavailable.
+                    try:
+                        state["store"].fail_in_memory(run_id, frame)
+                    except Exception:
+                        record["status"] = "failed"
+                        logger.critical("Hermes in-memory terminal frame could not be recorded | run_id=%s", run_id, exc_info=True)
         finally:
             state["active"].pop(run_id, None)
 
@@ -467,6 +530,25 @@ def create_app() -> FastAPI:
             if record is None:
                 return
             if record.get("status") in {"completed", "failed", "cancelled"}:
+                return
+            task = state["active"].get(run_id)
+            if task is None and record.get("status") in {"queued", "running"}:
+                error = _error(
+                    "hermes_gateway_internal_error",
+                    "Hermes gateway execution stopped unexpectedly",
+                    retryable=True,
+                )
+                sequence = state["store"].next_sequence(run_id)
+                frame = _sse(
+                    _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True),
+                    {"status": "failed", "error": error},
+                )
+                try:
+                    state["store"].finalize(run_id, frame, status="failed")
+                except Exception:
+                    state["storage_healthy"] = False
+                    state["store"].fail_in_memory(run_id, frame)
+                yield frame
                 return
             yield ": keep-alive\n\n"
             await asyncio.sleep(0.1)

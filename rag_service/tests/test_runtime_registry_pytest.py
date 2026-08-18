@@ -6,11 +6,77 @@ from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
+from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
 
 
 class FakeAdapter:
     framework = "fake"
     builder_id = "fake_builder"
+
+
+def test_runtime_mode_defaults_to_external(monkeypatch):
+    monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_EXTERNAL_ENABLED", raising=False)
+    assert agent_runtime_mode() is AgentRuntimeMode.EXTERNAL
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("external", AgentRuntimeMode.EXTERNAL), ("in_process", AgentRuntimeMode.IN_PROCESS)],
+)
+def test_runtime_mode_accepts_explicit_values(monkeypatch, value, expected):
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", value)
+    assert agent_runtime_mode() is expected
+
+
+def test_runtime_mode_takes_precedence_over_legacy_boolean(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
+    monkeypatch.setenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false")
+    assert agent_runtime_mode() is AgentRuntimeMode.EXTERNAL
+
+
+@pytest.mark.parametrize(
+    ("legacy", "expected"),
+    [("true", AgentRuntimeMode.EXTERNAL), ("false", AgentRuntimeMode.IN_PROCESS)],
+)
+def test_runtime_mode_preserves_legacy_boolean_with_warning(monkeypatch, caplog, legacy, expected):
+    monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_EXTERNAL_ENABLED", legacy)
+    assert agent_runtime_mode() is expected
+    assert "deprecated" in caplog.text
+
+
+def test_runtime_mode_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", "automatic")
+    with pytest.raises(RuntimeError, match="external.*in_process"):
+        agent_runtime_mode()
+
+
+def test_default_registry_uses_external_adapter_without_importing_in_process(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
+    registry = RuntimeRegistry()
+    registry.initialize()
+    definition = AgentDefinition(
+        definition_id="router_rag_agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+    )
+    adapter = registry.get(definition)
+    assert adapter.__class__.__name__ == "HttpRuntimeAdapter"
+    assert adapter.framework == "langgraph"
+
+
+def test_explicit_in_process_initialization_imports_adapter_immediately(monkeypatch):
+    import app.runtime.registry as module
+
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", "in_process")
+
+    def missing_adapter():
+        raise ModuleNotFoundError("No module named 'langgraph'")
+
+    monkeypatch.setattr(module, "_default_langgraph_adapter", missing_adapter)
+    with pytest.raises(ModuleNotFoundError, match="langgraph"):
+        RuntimeRegistry().initialize()
 
 
 def test_registry_requires_concrete_framework_and_builder_identity():
@@ -123,6 +189,8 @@ async def test_langgraph_adapter_validates_and_projects_neutral_events():
 async def test_projection_is_idempotent_for_existing_chat_turn(monkeypatch):
     from app.services.agent_runtime_projection import AgentRuntimeProjection
 
+    monkeypatch.setenv("AGENT_RUNTIME_MODE", "in_process")
+
     class Turn:
         id = "turn-1"
         agent_run_turn_kind = "assistant_final"
@@ -131,6 +199,9 @@ async def test_projection_is_idempotent_for_existing_chat_turn(monkeypatch):
         created_at = None
 
     class Repository:
+        async def get_run(self, _run_id):
+            return None
+
         async def list_chat_turns_for_run(self, _run_id):
             return [Turn()]
 

@@ -336,6 +336,8 @@ Environment variables are now managed using a `.env` file for better security an
 | `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
 | `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
 | `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
+| `AGENT_RUNTIME_MODE` | `external` | LangGraph execution transport: `external` for the runtime service or explicit `in_process` for development images that install LangGraph |
+| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Internal URL used when `AGENT_RUNTIME_MODE=external` |
 | `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
 
 **Agent Runtime Operations**

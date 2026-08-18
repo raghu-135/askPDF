@@ -9,6 +9,7 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
@@ -114,3 +115,54 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
         assert result.status in {"completed", "clarification", "awaiting_human"}
     finally:
         await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_production_control_plane_executes_external_runtime_via_product_api():
+    base_url = os.getenv("PHASE5_CONTROL_PLANE_URL", "http://rag-service:8000")
+    unique = uuid.uuid4().hex
+    timeout = httpx.Timeout(float(os.getenv("PHASE5_SMOKE_TIMEOUT_SECONDS", "120")))
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+        project_response = await client.post(
+            "/api/projects",
+            json={
+                "name": f"Phase 5 production smoke {unique}",
+                "embedding_model": os.getenv(
+                    "PHASE5_EXTERNAL_EMBEDDING_MODEL",
+                    "phase5-deterministic-embedding",
+                ),
+            },
+        )
+        project_response.raise_for_status()
+        project_id = project_response.json()["id"]
+
+        thread_response = await client.post(
+            f"/api/projects/{project_id}/threads",
+            json={"name": "Production artifact external-runtime smoke"},
+        )
+        thread_response.raise_for_status()
+        thread_id = thread_response.json()["id"]
+
+        chat_response = await client.post(
+            f"/api/threads/{thread_id}/chat",
+            json={
+                "thread_id": thread_id,
+                "question": "Summarize the available evidence.",
+                "llm_model": os.environ["PHASE5_EXTERNAL_LLM_MODEL"],
+                "bypass_clarification": True,
+            },
+        )
+        chat_response.raise_for_status()
+        chat_result = chat_response.json()
+        assert chat_result["status"] in {"completed", "clarification", "awaiting_human"}
+        assert chat_result["agent_run_id"]
+
+        runs_response = await client.get(f"/api/threads/{thread_id}/agent-runs")
+        runs_response.raise_for_status()
+        runs = runs_response.json()["agent_runs"]
+        persisted = next(run for run in runs if run["id"] == chat_result["agent_run_id"])
+        assert persisted["status"] in {"completed", "clarification", "awaiting_human"}
+
+        health_response = await client.get("/health")
+        health_response.raise_for_status()
+        assert health_response.json()["status"] == "ok"
