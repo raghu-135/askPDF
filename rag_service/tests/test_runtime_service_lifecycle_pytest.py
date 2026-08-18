@@ -116,7 +116,9 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
     with TestClient(create_app()) as client:
         assert client.get("/readyz").status_code == 200
         response = client.post("/v1/runs/start", json=payload)
-        assert client.post("/v1/runs/dependency-blocked/cancel", json={"request": payload["request"]}).status_code == 200
+        cancel_response = client.post("/v1/runs/dependency-blocked/cancel", json={"request": payload["request"]})
+        assert cancel_response.status_code == 404
+        assert cancel_response.json()["detail"]["code"] == "runtime_run_not_found"
     assert response.status_code == 503
     error = response.json()["error"]
     assert error["code"] == "runtime_dependency_unavailable"
