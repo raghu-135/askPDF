@@ -8,7 +8,9 @@ from typing import Any, Dict, List
 from sqlalchemy.future import select
 
 from app.db import (
+    ChatTurnStatus,
     ProcessStatus,
+    ThreadCloneMode,
     get_scoped_indexing_status,
     get_thread_shape,
     remove_document_from_stats,
@@ -16,7 +18,17 @@ from app.db import (
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, Thread, ThreadFile
+from app.db.project_activity import touch_project_activity
+from app.db.models_sqlmodel import (
+    ChatTurn,
+    Memory,
+    MemoryEvent,
+    MemoryOverride,
+    Project,
+    Thread,
+    ThreadDocumentAnnotation,
+    ThreadFile,
+)
 from app.db.repositories.message_repo_sqlmodel import turn_id_from_message_id
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z, utc_now
@@ -36,15 +48,23 @@ class ForkMessageNotFoundError(ThreadForkError):
     """Raised when the requested fork message is not in the source thread."""
 
 
+class TargetProjectEmbeddingModelMismatchError(ThreadForkError):
+    """Raised when a cross-project fork would change embedding spaces."""
+
+
 async def fork_thread(
     source_thread_id: str,
     message_id: str | None = None,
     name: str | None = None,
+    target_project_id: str | None = None,
+    memory_copy_mode: str | None = None,
 ) -> Dict[str, Any]:
     """Create an independent fork of a thread with soft lineage metadata."""
     forked_at = utc_now()
     forked_at_iso = iso_utc_z(forked_at)
     new_thread_id = str(uuid.uuid4())
+    copied_memory_index_jobs: list[Memory] = []
+    embedding_model_for_memory_index: str | None = None
 
     async with async_session_maker() as session:
         async with session.begin():
@@ -54,19 +74,31 @@ async def fork_thread(
             source_thread = source_result.scalar_one_or_none()
             if not source_thread:
                 raise SourceThreadNotFoundError("Source thread not found")
+            embedding_model_for_memory_index = source_thread.embedding_model
+            if target_project_id:
+                target_project = await session.get(Project, target_project_id)
+                if target_project is None:
+                    raise SourceThreadNotFoundError("Target project not found")
+                if (
+                    target_project.id != source_thread.project_id
+                    and target_project.embedding_model != source_thread.embedding_model
+                ):
+                    raise TargetProjectEmbeddingModelMismatchError(
+                        "Thread cannot fork to a project with a different embedding model"
+                    )
 
             turns_result = await session.execute(
                 select(ChatTurn)
-                .where(ChatTurn.thread_id == source_thread_id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == source_thread_id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
             )
             source_turns = list(turns_result.scalars().all())
 
             source_turn = None
             turns_to_copy = source_turns
-            mode = "full_thread"
+            mode = ThreadCloneMode.FULL_THREAD.value
             if message_id:
-                mode = "from_message"
+                mode = ThreadCloneMode.FROM_MESSAGE.value
                 target_turn_id = turn_id_from_message_id(message_id)
                 for index, turn in enumerate(source_turns):
                     if turn.id == target_turn_id:
@@ -84,21 +116,50 @@ async def fork_thread(
                     "source_message_id": message_id if source_turn else None,
                     "source_message_created_at": iso_utc_z(source_turn.created_at) if source_turn else None,
                     "mode": mode,
+                    "memory_copy_mode": memory_copy_mode,
                 }
             }
+            target_project = target_project_id or source_thread.project_id
+            resolved_memory_copy_mode = memory_copy_mode
+            if not resolved_memory_copy_mode:
+                resolved_memory_copy_mode = (
+                    "project_snapshot"
+                    if target_project and target_project != source_thread.project_id
+                    else "thread_snapshot"
+                )
+            fork_metadata["fork"]["memory_copy_mode"] = resolved_memory_copy_mode
             source_metadata = copy.deepcopy(source_thread.thread_metadata or {})
             source_metadata.pop("fork_children", None)
             source_metadata.update(fork_metadata)
+            turn_map = {turn.id: str(uuid.uuid4()) for turn in turns_to_copy}
+            curator_metadata = source_metadata.get("memory_curator")
+            if isinstance(curator_metadata, dict):
+                source_cursor_id = str(curator_metadata.get("reviewed_through_turn_id") or "")
+                mapped_cursor_id = turn_map.get(source_cursor_id)
+                if mapped_cursor_id:
+                    source_metadata["memory_curator"] = {
+                        **curator_metadata,
+                        "reviewed_through_turn_id": mapped_cursor_id,
+                    }
+                else:
+                    source_metadata.pop("memory_curator", None)
 
             forked_thread = Thread(
                 id=new_thread_id,
+                project_id=target_project,
                 name=(name or "").strip() or f"{source_thread.name} (Fork)",
-                embed_model=source_thread.embed_model,
+                embedding_model=source_thread.embedding_model,
                 settings=copy.deepcopy(source_thread.settings or {}),
                 thread_metadata=source_metadata,
                 created_at=forked_at,
             )
             session.add(forked_thread)
+            await session.flush()
+            await touch_project_activity(
+                session,
+                target_project,
+                occurred_at=forked_at,
+            )
 
             parent_metadata = copy.deepcopy(source_thread.thread_metadata or {})
             fork_children = parent_metadata.get("fork_children")
@@ -112,7 +173,7 @@ async def fork_thread(
             for turn in turns_to_copy:
                 session.add(
                     ChatTurn(
-                        id=str(uuid.uuid4()),
+                        id=turn_map[turn.id],
                         thread_id=new_thread_id,
                         status=turn.status,
                         payload=copy.deepcopy(turn.payload or {}),
@@ -136,6 +197,161 @@ async def fork_thread(
                     )
                 )
 
+            annotations_result = await session.execute(
+                select(ThreadDocumentAnnotation).where(
+                    ThreadDocumentAnnotation.thread_id == source_thread_id
+                )
+            )
+            for annotation_row in annotations_result.scalars().all():
+                session.add(
+                    ThreadDocumentAnnotation(
+                        thread_id=new_thread_id,
+                        file_hash=annotation_row.file_hash,
+                        annotations=copy.deepcopy(annotation_row.annotations or []),
+                        created_at=annotation_row.created_at,
+                        updated_at=annotation_row.updated_at,
+                    )
+                )
+
+            memory_cutoff = source_turn.created_at if source_turn else forked_at
+            copied_memory_ids: list[str] = []
+            memory_id_map: dict[str, str] = {}
+
+            if resolved_memory_copy_mode in {"thread_snapshot", "all"}:
+                thread_memories_result = await session.execute(
+                    select(Memory).where(
+                        Memory.scope_type == "thread",
+                        Memory.scope_id == source_thread_id,
+                        Memory.created_at <= memory_cutoff,
+                    )
+                )
+                for memory in thread_memories_result.scalars().all():
+                    copied_id = str(uuid.uuid4())
+                    fork_origin = {
+                        "source_memory_id": memory.id,
+                        "source_thread_id": source_thread_id,
+                        "forked_thread_id": new_thread_id,
+                        "forked_at": forked_at_iso,
+                        "copy_mode": resolved_memory_copy_mode,
+                    }
+                    copied_memory = Memory(
+                        id=copied_id,
+                        scope_type="thread",
+                        scope_id=new_thread_id,
+                        content=memory.content,
+                        embedding_model=source_thread.embedding_model,
+                        content_hash=memory.content_hash,
+                        index_status="pending",
+                        source_refs_json={
+                            **copy.deepcopy(memory.source_refs_json or {}),
+                            "fork_origin": fork_origin,
+                        },
+                        attributes_json=copy.deepcopy(memory.attributes_json or {}),
+                        created_at=forked_at,
+                        updated_at=forked_at,
+                    )
+                    session.add(copied_memory)
+                    copied_memory_index_jobs.append(copied_memory)
+                    session.add(
+                        MemoryEvent(
+                            memory_id=copied_id,
+                            event_type="fork_snapshot",
+                            actor_id=None,
+                            payload_json=copy.deepcopy(fork_origin),
+                            created_at=forked_at,
+                        )
+                    )
+                    copied_memory_ids.append(copied_id)
+                    memory_id_map[memory.id] = copied_id
+
+            if (
+                resolved_memory_copy_mode in {"project_snapshot", "all"}
+                and target_project
+                and source_thread.project_id
+                and target_project != source_thread.project_id
+            ):
+                project_memories_result = await session.execute(
+                    select(Memory).where(
+                        Memory.scope_type == "project",
+                        Memory.scope_id == source_thread.project_id,
+                    )
+                )
+                for memory in project_memories_result.scalars().all():
+                    copied_id = str(uuid.uuid4())
+                    fork_origin = {
+                        "source_memory_id": memory.id,
+                        "source_project_id": source_thread.project_id,
+                        "target_project_id": target_project,
+                        "forked_thread_id": new_thread_id,
+                        "forked_at": forked_at_iso,
+                        "copy_mode": resolved_memory_copy_mode,
+                    }
+                    copied_memory = Memory(
+                        id=copied_id,
+                        scope_type="project",
+                        scope_id=target_project,
+                        content=memory.content,
+                        embedding_model=source_thread.embedding_model,
+                        content_hash=memory.content_hash,
+                        index_status="pending",
+                        source_refs_json={
+                            **copy.deepcopy(memory.source_refs_json or {}),
+                            "fork_origin": fork_origin,
+                        },
+                        attributes_json=copy.deepcopy(memory.attributes_json or {}),
+                        created_at=forked_at,
+                        updated_at=forked_at,
+                    )
+                    session.add(copied_memory)
+                    copied_memory_index_jobs.append(copied_memory)
+                    session.add(
+                        MemoryEvent(
+                            memory_id=copied_id,
+                            event_type="fork_snapshot",
+                            actor_id=None,
+                            payload_json=copy.deepcopy(fork_origin),
+                            created_at=forked_at,
+                        )
+                    )
+                    copied_memory_ids.append(copied_id)
+                    memory_id_map[memory.id] = copied_id
+
+            if memory_id_map:
+                override_rows = list((await session.execute(
+                    select(MemoryOverride).where(
+                        MemoryOverride.overriding_memory_id.in_(list(memory_id_map))
+                    )
+                )).scalars().all())
+                target_rows = list((await session.execute(
+                    select(Memory).where(
+                        Memory.id.in_([row.overridden_memory_id for row in override_rows])
+                    )
+                )).scalars().all()) if override_rows else []
+                target_by_id = {memory.id: memory for memory in target_rows}
+                for row in override_rows:
+                    target_id = memory_id_map.get(row.overridden_memory_id)
+                    if target_id is None:
+                        target_memory = target_by_id.get(row.overridden_memory_id)
+                        if target_memory and target_memory.scope_type == "user":
+                            target_id = target_memory.id
+                        elif (
+                            target_memory
+                            and target_memory.scope_type == "project"
+                            and target_memory.scope_id == target_project
+                        ):
+                            target_id = target_memory.id
+                    if target_id:
+                        session.add(MemoryOverride(
+                            overriding_memory_id=memory_id_map[row.overriding_memory_id],
+                            overridden_memory_id=target_id,
+                            created_at=forked_at,
+                        ))
+
+            if copied_memory_ids:
+                child_metadata = copy.deepcopy(forked_thread.thread_metadata or {})
+                child_metadata.setdefault("fork", {})["copied_memory_ids"] = copied_memory_ids
+                replace_jsonb_field(forked_thread, "thread_metadata", child_metadata)
+
             await session.flush()
             await session.refresh(forked_thread)
 
@@ -151,6 +367,14 @@ async def fork_thread(
     except Exception as files_err:
         logger.warning("forked thread file reload skipped: %s", files_err)
         files = []
+    if copied_memory_index_jobs and embedding_model_for_memory_index:
+        from app.services.memory_service import index_memory_record
+
+        for memory in copied_memory_index_jobs:
+            try:
+                await index_memory_record(memory)
+            except Exception as memory_index_err:
+                logger.warning("forked memory indexing skipped for %s: %s", memory.id, memory_index_err)
     return {"thread": forked_thread, "files": files}
 
 
@@ -171,7 +395,7 @@ async def repair_thread_documents_meta(thread_id: str, embedding_model: str, fil
         scoped_status = get_scoped_indexing_status(
             file_status,
             embedding_model=embedding_model,
-            thread_id=thread_id,
+            thread_id=thread_id if getattr(file, "association_scope", "thread") == "thread" else None,
         )
         chunk_count = await vector_db.get_file_chunk_count(file.file_hash, embedding_model)
         is_ready = ProcessStatus.is_completed(scoped_status.get("status", ProcessStatus.UNKNOWN.value)) or chunk_count > 0
@@ -190,6 +414,13 @@ async def repair_thread_documents_meta(thread_id: str, embedding_model: str, fil
                 "total_chars": total_chars,
                 "indexing_status": ProcessStatus.COMPLETED.value,
                 "indexed_at": scoped_status.get("finished_at"),
+                "association_scope": getattr(file, "association_scope", "thread"),
+                "is_project_knowledge": getattr(file, "is_project_knowledge", False),
+                "document_available_in_project_at": (
+                    iso_utc_z(file.added_at)
+                    if getattr(file, "association_scope", "thread") == "project"
+                    else None
+                ),
             },
         )
 

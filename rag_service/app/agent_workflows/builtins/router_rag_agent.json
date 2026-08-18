@@ -1,0 +1,184 @@
+{
+  "builtin_key": "router_rag_agent",
+  "description": "A fast routing workflow that uses one retrieval task when possible and escalates compound requests to a bounded serial plan.",
+  "is_builtin": true,
+  "name": "Router Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
+        "document_evidence",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {
+            "from": "START",
+            "to": "context_loader"
+          },
+          {
+            "from": "context_loader",
+            "to": "router"
+          },
+          {
+            "conditional": true,
+            "from": "router",
+            "route_fn": "router_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "document": "serial_dispatch",
+              "durable_memory": "serial_dispatch",
+              "thread_conversation_history": "serial_dispatch",
+              "thread_events": "serial_dispatch",
+              "web": "serial_dispatch",
+              "compound": "planner"
+            }
+          },
+          {
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {"clarify": "finalizer", "direct": "direct_answer", "execute": "serial_dispatch"}
+          },
+          {
+            "conditional": true,
+            "from": "serial_dispatch",
+            "route_fn": "serial_dispatch_route",
+            "routes": {"dispatch": "aggregator"}
+          },
+          {"dynamic": true, "from": "serial_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "serial_dispatch"},
+          {"from": "thread_conversation_history_worker", "to": "serial_dispatch"},
+          {"from": "durable_memory_worker", "to": "serial_dispatch"},
+          {"from": "thread_events_worker", "to": "serial_dispatch"},
+          {"from": "web_worker", "to": "serial_dispatch"},
+          {"from": "aggregator", "to": "synthesizer"},
+          {
+            "from": "direct_answer",
+            "to": "answer_evaluator"
+          },
+          {
+            "from": "synthesizer",
+            "to": "answer_evaluator"
+          },
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
+          {
+            "from": "finalizer",
+            "to": "END"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "context_loader",
+            "type": "context_loader"
+          },
+          {
+            "id": "router",
+            "type": "router"
+          },
+          {"id": "planner", "type": "planner"},
+          {"id": "serial_dispatch", "type": "serial_dispatch"},
+          {
+            "id": "retrieval_worker",
+            "type": "retrieval_worker"
+          },
+          {
+            "id": "thread_conversation_history_worker",
+            "type": "thread_conversation_history_worker"
+          },
+          {
+            "id": "durable_memory_worker",
+            "type": "durable_memory_worker"
+          },
+          {
+            "id": "thread_events_worker",
+            "type": "thread_events_worker"
+          },
+          {
+            "id": "web_worker",
+            "type": "web_worker"
+          },
+          {
+            "id": "direct_answer",
+            "type": "direct_answer"
+          },
+          {
+            "id": "synthesizer",
+            "type": "synthesizer"
+          },
+          {"id": "aggregator", "type": "aggregator"},
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
+          {
+            "id": "finalizer",
+            "type": "finalizer"
+          }
+        ]
+      },
+      "hitl_policy": {
+        "enabled": false,
+        "gates": {}
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 26,
+        "node_visit_limits": {
+          "durable_memory_worker": 2,
+          "thread_conversation_history_worker": 2,
+          "retrieval_worker": 2,
+          "thread_events_worker": 2,
+          "web_worker": 2,
+          "serial_dispatch": 10,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
+        }
+      },
+      "prefetch_policy": {
+        "enabled": true,
+        "mode": "evidence"
+      },
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "workflow_id": "router_rag_agent",
+    "runtime": {
+      "failure_code": "router_rag_execution_failed",
+      "failure_context": "Router Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Router Agent execution",
+      "features": {
+        "supports_replans": false,
+        "supports_serial_dispatch": true,
+        "supports_answer_quality": true
+      },
+      "kind": "compiled_rag",
+      "label": "Router Agent",
+      "prompt_preview": "router",
+      "success_context": "Context retrieved by the Router Agent workflow."
+    },
+    "schema_version": 2,
+    "version": 4
+  },
+  "visibility": "builtin"
+}

@@ -8,6 +8,7 @@ class CollectionNames:
     DOCUMENT = "DocumentChunk"
     CHAT_MEMORY = "ChatMemoryChunk"
     WEB_SEARCH = "WebSearchChunk"
+    MEMORY = "MemoryChunk"
 
 
 class VectorDBError(Exception):

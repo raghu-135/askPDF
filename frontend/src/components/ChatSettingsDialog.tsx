@@ -13,23 +13,32 @@ import {
     Switch,
     Tooltip,
     IconButton,
+    MenuItem,
+    Chip,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
-import { PromptToolDefinition } from '../lib/api';
+import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
 
 interface ChatSettingsDialogProps {
     open: boolean;
     onClose: () => void;
     onSave: () => void;
     saving: boolean;
+    description?: string;
+    saveLabel?: string;
     
     // Settings values
-    maxIterations: number;
-    minMaxIterations: number | null;
-    maxMaxIterations: number | null;
-    reasoningMode: boolean;
-    useIntentAgent: boolean;
+    replans: number;
+    replansLimit: number | null;
     useReranker: boolean;
+    useMemory: boolean;
+    useThreadMemory: boolean;
+    useProjectMemory: boolean;
+    useGlobalMemory: boolean;
+    projectAllowsGlobalMemory: boolean;
+    agentWorkflowId: string;
+    agentWorkflowIsCustom?: boolean;
+    agentWorkflows: AgentWorkflow[];
     systemRole: string;
     toolInstructions: Record<string, string>;
     customInstructions: string;
@@ -38,10 +47,15 @@ interface ChatSettingsDialogProps {
     promptPreview: string;
     
     // Change handlers
-    onMaxIterationsChange: (value: number) => void;
-    onReasoningModeChange: (checked: boolean) => void;
-    onIntentAgentChange: (checked: boolean) => void;
+    onReplansChange: (value: number) => void;
     onRerankerChange: (checked: boolean) => void;
+    onMemoryChange: (checked: boolean) => void;
+    onThreadMemoryChange: (checked: boolean) => void;
+    onProjectMemoryChange: (checked: boolean) => void;
+    onGlobalMemoryChange: (checked: boolean) => void;
+    onAgentWorkflowChange: (value: string) => void;
+    onLongRunningWorkflowSelect?: (workflow: AgentWorkflow) => void;
+    onAgentWorkflowMenuOpen?: () => void | Promise<void>;
     onSystemRoleChange: (value: string) => void;
     onToolInstructionChange: (toolId: string, value: string) => void;
     onCustomInstructionsChange: (value: string) => void;
@@ -58,22 +72,34 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onClose,
     onSave,
     saving,
-    maxIterations,
-    minMaxIterations,
-    maxMaxIterations,
-    reasoningMode,
-    useIntentAgent,
+    description = 'These settings are saved per thread and used by default for every message. Agent workflows are globally available.',
+    saveLabel = 'Save',
+    replans,
+    replansLimit,
     useReranker,
+    useMemory,
+    useThreadMemory,
+    useProjectMemory,
+    useGlobalMemory,
+    projectAllowsGlobalMemory,
+    agentWorkflowId,
+    agentWorkflowIsCustom = false,
+    agentWorkflows,
     systemRole,
     toolInstructions,
     customInstructions,
     toolCatalog,
     effectiveToolInstructions,
     promptPreview,
-    onMaxIterationsChange,
-    onReasoningModeChange,
-    onIntentAgentChange,
+    onReplansChange,
     onRerankerChange,
+    onMemoryChange,
+    onThreadMemoryChange,
+    onProjectMemoryChange,
+    onGlobalMemoryChange,
+    onAgentWorkflowChange,
+    onLongRunningWorkflowSelect,
+    onAgentWorkflowMenuOpen,
     onSystemRoleChange,
     onToolInstructionChange,
     onCustomInstructionsChange,
@@ -82,6 +108,9 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onResetToolInstruction,
     onResetCustomInstructions,
 }) => {
+    const replansEnabled = Boolean(agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.supports_replans);
+    const selectedWorkflowListed = agentWorkflows.some((pattern) => pattern.id === agentWorkflowId);
+
     return (
         <Dialog
             open={open}
@@ -93,7 +122,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="text.secondary">
-                        These settings are saved per thread and used by default for every message.
+                        {description}
                     </Typography>
                     <Tooltip title="Reset all settings to default">
                         <IconButton
@@ -110,71 +139,112 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         </IconButton>
                     </Tooltip>
                 </Box>
-                {minMaxIterations !== null && maxMaxIterations !== null ? (
-                    <TextField
-                        label="Max tool iterations"
-                        type="number"
-                        value={maxIterations}
-                        onChange={(e) => onMaxIterationsChange(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                        slotProps={{ htmlInput: { min: minMaxIterations, max: maxMaxIterations } }}
-                        helperText="Lower is faster; higher allows deeper research."
-                    />
-                ) : (
-                    <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
-                )}
+                <TextField
+                    select
+                    label="Agent workflow"
+                    value={agentWorkflowId}
+                    onChange={(e) => {
+                        const workflow = agentWorkflows.find((pattern) => pattern.id === e.target.value);
+                        if (workflow?.supports_long_running_tasks) {
+                            onLongRunningWorkflowSelect?.(workflow);
+                            return;
+                        }
+                        onAgentWorkflowChange(e.target.value);
+                    }}
+                    helperText="Chat workflows become the thread default. Selecting a task workflow opens its dedicated workspace."
+                    SelectProps={{ onOpen: onAgentWorkflowMenuOpen }}
+                >
+                    {agentWorkflows.map((pattern) => (
+                        <MenuItem key={pattern.id} value={pattern.id}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, width: '100%', minWidth: 0 }}>
+                                <Typography variant="body2" noWrap>
+                                    {pattern.name || pattern.id}
+                                </Typography>
+                                <Chip
+                                    size="small"
+                                    variant={pattern.is_builtin ? 'outlined' : 'filled'}
+                                    color={pattern.is_builtin ? 'default' : 'primary'}
+                                    label={pattern.supports_long_running_tasks ? 'Task' : pattern.is_builtin ? 'Built-in' : 'Custom'}
+                                    sx={{ flex: '0 0 auto' }}
+                                />
+                            </Box>
+                        </MenuItem>
+                    ))}
+                    {agentWorkflowIsCustom && !selectedWorkflowListed ? (
+                        <MenuItem value={agentWorkflowId}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, width: '100%', minWidth: 0 }}>
+                                <Typography variant="body2" noWrap>
+                                    {agentWorkflowId}
+                                </Typography>
+                                <Chip size="small" color="primary" label="Custom" sx={{ flex: '0 0 auto' }} />
+                            </Box>
+                        </MenuItem>
+                    ) : null}
+                </TextField>
+                {replansEnabled ? (
+                    replansLimit !== null ? (
+                        <TextField
+                            label="Replans"
+                            type="number"
+                            value={replans}
+                            onChange={(e) => {
+                                const parsed = parseInt(e.target.value, 10);
+                                onReplansChange(Math.max(1, Math.min(replansLimit, Number.isNaN(parsed) ? 1 : parsed)));
+                            }}
+                            slotProps={{ htmlInput: { min: 1, max: replansLimit } }}
+                            helperText="Allows at least one evaluator-triggered replan, capped by the server limit."
+                        />
+                    ) : (
+                        <Typography variant="caption" color="error">Replan limit not loaded from server.</Typography>
+                    )
+                ) : null}
                 <Divider />
                 <Box>
+                    <Typography variant="subtitle2">Memory</Typography>
+                    <FormControlLabel
+                        control={<Switch checked={useMemory} onChange={(event) => onMemoryChange(event.target.checked)} />}
+                        label="Use memories"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall durable memories for answers in this thread. Turning this off does not delete or stop memory management.
+                    </Typography>
+                    <FormControlLabel
+                        control={<Switch checked={useThreadMemory} disabled={!useMemory} onChange={(event) => onThreadMemoryChange(event.target.checked)} />}
+                        label="Use thread memory"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall memories saved specifically for this thread.
+                    </Typography>
                     <FormControlLabel
                         control={
                             <Switch
-                                checked={reasoningMode}
-                                onChange={(e) => {
-                                    const isChecked = e.target.checked;
-                                    onReasoningModeChange(isChecked);
-                                    // If reasoning mode is disabled, also disable the intent agent
-                                    if (!isChecked) {
-                                        onIntentAgentChange(false);
-                                    }
-                                }}
+                                checked={useProjectMemory}
+                                disabled={!useMemory}
+                                onChange={(event) => onProjectMemoryChange(event.target.checked)}
                             />
                         }
-                        label={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Reasoning mode</Typography>
-                            </Box>
-                        }
+                        label="Use project memory"
                     />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                        Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
-                        perform better on non-reasoning models.
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall shared memories from this project.
                     </Typography>
-                </Box>
-                <Box>
                     <FormControlLabel
                         control={
                             <Switch
-                                checked={useIntentAgent}
-                                disabled={!reasoningMode}
-                                onChange={(e) => onIntentAgentChange(e.target.checked)}
+                                checked={useGlobalMemory}
+                                disabled={!useMemory || !projectAllowsGlobalMemory}
+                                onChange={(event) => onGlobalMemoryChange(event.target.checked)}
                             />
                         }
-                        label={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500, color: (!reasoningMode ? "text.disabled" : "text.primary") }}>Intent Agent</Typography>
-                            </Box>
-                        }
+                        label="Use global memory"
                     />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25, opacity: !reasoningMode ? 0.6 : 1 }}>
-                        Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
-                        into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
-                        unnecessary tool calls.
-                        {!reasoningMode && (
-                            <Box component="span" sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 500 }}>
-                                Requires Reasoning mode to be enabled.
-                            </Box>
-                        )}
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        {projectAllowsGlobalMemory
+                            ? 'Recall memories saved for you across projects.'
+                            : 'Enable global memory in project settings before this thread can use it.'}
                     </Typography>
                 </Box>
+                <Divider />
                 <Box>
                     <FormControlLabel
                         control={
@@ -264,7 +334,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     </Tooltip>
                 </Box>
                 <TextField
-                    label="Full Prompt Preview"
+                    label="Runtime Prompt Preview"
                     value={promptPreview}
                     multiline
                     minRows={14}
@@ -277,7 +347,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     Cancel
                 </Button>
                 <Button onClick={onSave} variant="contained" disabled={saving}>
-                    {saving ? 'Saving...' : 'Save'}
+                    {saving ? 'Saving...' : saveLabel}
                 </Button>
             </DialogActions>
         </Dialog>

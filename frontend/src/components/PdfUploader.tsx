@@ -1,12 +1,12 @@
 import { Button, Tooltip } from "@mui/material";
 import React from "react";
-import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
+import { getTargetFileStatus, getParsedSentencesForTarget, FileStatus, ProcessStatusHelper, uploadPdfToTarget, type KnowledgeTarget } from "../lib/api";
+import { ProcessStatus } from "../lib/enums";
 import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
 type Props = {
-  threadId?: string | null;
-  embeddingModel?: string | null;
-  onUploaded: (data: { sentences: any[] | null; pdfUrl: string; fileHash: string; fileName?: string }) => void;
+  target?: KnowledgeTarget | null;
+  onUploaded: (data: { sentences: any[] | null; downloadUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
@@ -14,8 +14,7 @@ type Props = {
 };
 
 const PdfUploader = React.memo(function PdfUploader({
-  threadId,
-  embeddingModel,
+  target,
   onUploaded,
   onIndexingComplete,
   onParsingComplete,
@@ -27,6 +26,7 @@ const PdfUploader = React.memo(function PdfUploader({
   const [fileStatus, setFileStatus] = React.useState<{
     fileHash: string;
     status: FileStatus;
+    target: KnowledgeTarget;
   } | null>(null);
   const indexingNotifiedRef = React.useRef<string | null>(null);
   const parsingNotifiedRef = React.useRef<string | null>(null);
@@ -58,26 +58,21 @@ const PdfUploader = React.memo(function PdfUploader({
 
     const pollInterval = setInterval(async () => {
       try {
-        if (!threadId) {
-          console.error("Thread ID is required for file status polling");
-          return;
-        }
-        const status = await getFileStatus(fileStatus.fileHash, threadId, {
-          embeddingModel: embeddingModel || undefined,
-        });
+        const status = await getTargetFileStatus(fileStatus.fileHash, fileStatus.target);
         // Ensure we have a full FileStatus object
         const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
           ? status as FileStatus
           : {
-              parsing: { status: 'unknown' },
-              indexing: { status: 'unknown' },
-              indexing_status: { summary: { status: 'unknown' }, models: {} },
+              parsing: { status: ProcessStatus.Unknown },
+              indexing: { status: ProcessStatus.Unknown },
+              indexing_status: { summary: { status: ProcessStatus.Unknown }, models: {} },
               updated_at: new Date().toISOString(),
             };
 
         setFileStatus({
           fileHash: fileStatus.fileHash,
-          status: fullStatus
+          status: fullStatus,
+          target: fileStatus.target,
         });
 
         if (
@@ -95,11 +90,10 @@ const PdfUploader = React.memo(function PdfUploader({
           onParsingComplete
         ) {
           try {
-            if (!threadId) {
-              console.error("Thread ID is required for fetching parsed sentences");
+            if (!target) {
               return;
             }
-            const parsedData = await getParsedSentences(fileStatus.fileHash, threadId);
+            const parsedData = await getParsedSentencesForTarget(fileStatus.fileHash, target);
             parsingNotifiedRef.current = fileStatus.fileHash;
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {
@@ -107,12 +101,7 @@ const PdfUploader = React.memo(function PdfUploader({
             
             // Check if error should stop retrying
             if (!isRetryableError(error)) {
-              if (isNotFoundError(error)) {
-                console.log('File or thread no longer exists, stopping sentences fetch');
-              } else {
-                console.log('Permanent error in sentences fetch:', error?.message);
-              }
-              // Don't retry for permanent errors
+              // Don't retry for permanent errors.
             }
           }
         }
@@ -128,18 +117,13 @@ const PdfUploader = React.memo(function PdfUploader({
         
         // Check if error should stop polling
         if (!isRetryableError(error)) {
-          if (isNotFoundError(error)) {
-            console.log('File or thread no longer exists, stopping polling');
-          } else {
-            console.log('Permanent error in file status polling:', error?.message);
-          }
           clearInterval(pollInterval);
         }
       }
     }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [embeddingModel, fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, threadId]);
+  }, [fileStatus?.fileHash, fileStatus?.status, fileStatus?.target, onIndexingComplete, onParsingComplete]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -151,18 +135,19 @@ const PdfUploader = React.memo(function PdfUploader({
     parsingNotifiedRef.current = null;
 
     try {
-      if (!threadId) {
-        throw new Error("A thread must be selected before uploading.");
+      if (!target) {
+        throw new Error("A thread or project must be selected before uploading.");
       }
-      const data = await apiUploadPdf(file, threadId);
+      const data = await uploadPdfToTarget(file, target);
 
       // Set initial file status - will be updated by polling
       setFileStatus({
         fileHash: data.fileHash,
+        target,
         status: {
-          parsing: { status: 'pending' },
-          indexing: { status: 'pending' },
-          indexing_status: { summary: { status: 'pending' }, models: {} },
+          parsing: { status: ProcessStatus.Pending },
+          indexing: { status: ProcessStatus.Pending },
+          indexing_status: { summary: { status: ProcessStatus.Pending }, models: {} },
           updated_at: new Date().toISOString()
         }
       });

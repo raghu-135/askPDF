@@ -1,10 +1,10 @@
 import pytest
 
-from app.agent import agent as agent_module
+from app.models import retry as retry_module
 
 
 def test_retry_classifier_does_not_retry_generic_bad_request_or_vendor_400():
-    is_retryable, reason = agent_module._is_retryable_model_error(
+    is_retryable, reason = retry_module.is_retryable_model_error(
         "Error code: 400 - {'error': 'Model was unloaded while the request was still in queue..'}".lower()
     )
 
@@ -14,7 +14,7 @@ def test_retry_classifier_does_not_retry_generic_bad_request_or_vendor_400():
 
 @pytest.mark.parametrize("status_code", [408, 409, 429, 500, 502, 503, 504])
 def test_retry_classifier_follows_openai_compatible_retry_status_codes(status_code):
-    is_retryable, reason = agent_module._is_retryable_model_error(f"Error code: {status_code} - transient")
+    is_retryable, reason = retry_module.is_retryable_model_error(f"Error code: {status_code} - transient")
 
     assert is_retryable is True
     assert reason == f"Retryable OpenAI-compatible API error ({status_code})"
@@ -35,9 +35,9 @@ async def test_invoke_with_retry_retries_openai_compatible_status(monkeypatch):
     async def fake_sleep(delay):
         sleeps.append(delay)
 
-    monkeypatch.setattr(agent_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(retry_module.asyncio, "sleep", fake_sleep)
 
-    result = await agent_module.invoke_with_retry(flaky_call)
+    result = await retry_module.invoke_with_retry(flaky_call)
 
     assert result == "ok"
     assert calls == 2

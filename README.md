@@ -147,11 +147,17 @@ docker compose up --build
 | Service | Port | Description |
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
-| **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
+| **RAG Service** | 8000 | FastAPI server for PDF processing, indexing, chat, and the integrated durable agent-task worker |
 | **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
+
+The current deployment runs `rag-service` as one Uvicorn process. Its integrated
+agent-task worker shares the service's PostgreSQL pool and uses database leases
+and checkpoints for restart recovery. Do not enable multiple Uvicorn/Gunicorn
+worker processes until agent execution is extracted into its planned dedicated
+service; each server process would otherwise start another task worker.
 
 </details>
 
@@ -159,10 +165,10 @@ docker compose up --build
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Orchestrator Agent**: LangGraph-powered agent that plans, selects tools, and synthesizes answers
-- **Intent Agent** (optional): Pre-processes questions to improve query clarity and search precision
-- **Tool-Calling**: Dynamic tool selection including document search, memory recall, web search, and clarification
-- **Configurable Iterations**: Control tool-call rounds with forced final answer to prevent infinite loops
+- **Agent Workflow Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with persisted run metadata
+- **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
+- **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
+- **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
 
 ### Reasoning & Thinking Support
 - **Multi-Provider Extraction**: Supports reasoning traces from Claude, OpenAI o-series, DeepSeek, QwQ, Qwen3-Thinking
@@ -278,6 +284,7 @@ Environment variables are now managed using a `.env` file for better security an
 |----------|---------|-------------|
 | `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-m3` | Single local embedding model to use |
 | `LOCAL_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Single local reranker model to use |
+| `HF_TOKEN` | (optional) | Hugging Face token for higher model-download rate limits |
 | `EMBEDDING_DEVICE` | `cpu` | Device for embedding models (cpu/cuda/mps) |
 | `RERANKER_DEVICE` | `cpu` | Device for reranker models (cpu/cuda/mps) |
 
@@ -285,16 +292,14 @@ Environment variables are now managed using a `.env` file for better security an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEFAULT_TOKEN_BUDGET` | `8192` | Context window size for AI responses |
-| `DEFAULT_MAX_ITERATIONS` | `10` | Maximum tool-call rounds for AI reasoning |
-| `MIN_MAX_ITERATIONS` | `1` | Minimum allowed iterations |
-| `MAX_MAX_ITERATIONS` | `30` | Maximum allowed iterations |
+| `REPLANS_LIMIT` | `3` | Maximum allowed replans |
 | `MAX_CUSTOM_INSTRUCTIONS_CHARS` | `2000` | Maximum custom instruction length |
 | `MAX_SYSTEM_ROLE_CHARS` | `500` | Maximum system role description length |
 | `MAX_TOOL_INSTRUCTION_CHARS` | `500` | Maximum tool instruction length |
-| `INTENT_AGENT_MAX_ITERATIONS` | `1` | Maximum iterations for intent agent |
+| `INTENT_AGENT_MAX_ITERATIONS` | `1` | Maximum replans for intent agent |
 | `MAX_ITERATIONS_SUFFICIENT_COVERAGE` | `2` | Iteration bonus for sufficient coverage |
 | `MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE` | `4` | Iteration bonus for probable sufficient coverage |
-| `WEB_SEARCH_ITERATION_BONUS` | `2` | Extra iterations when web search is enabled |
+| `WEB_SEARCH_ITERATION_BONUS` | `2` | Extra replans when web search is enabled |
 
 **Document Processing (Docling)**
 | Variable | Default | Description |
@@ -318,7 +323,7 @@ Environment variables are now managed using a `.env` file for better security an
 **Frontend Service**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | RAG service API URL for frontend communication |
+| `NEXT_PUBLIC_API_URL` | Required | Public RAG service URL baked into the frontend at build time; the frontend refuses to start or build when it is missing or blank |
 
 **RAG Service - Core Configuration**
 | Variable | Default | Description |
@@ -327,6 +332,33 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
+| `ASKPDF_AGENT_CHECKPOINTER` | `memory` (`postgres` in Docker/CI) | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
+| `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
+| `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
+| `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
+| `AGENT_RUNTIME_MODE` | `external` | LangGraph execution transport: `external` for the runtime service or explicit `in_process` for development images that install LangGraph |
+| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Internal URL used when `AGENT_RUNTIME_MODE=external` |
+| `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
+
+**Agent Runtime Operations**
+- Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
+- Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
+- Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
+- The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
+- Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
+- Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
+- Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
+- The Hermes Phase 7 gateway is an opt-in development proof, not a production runtime. Its file journal rewrites the entire journal on every update, retains events indefinitely, and is restricted to one worker and one replica. Do not deploy it to production until it uses PostgreSQL or another shared transactional journal with a retention policy.
+
+Start the Hermes proof only when a separate Hermes API is reachable:
+
+```bash
+HERMES_API_URL=http://host.docker.internal:<port> \
+docker compose --profile second-runtime-proof up
+```
+
+The Hermes container uses `/readyz` for deployment health; `/healthz` is
+liveness-only and does not prove that Hermes can execute requests.
 
 ### Setup Instructions
 
@@ -423,6 +455,7 @@ run for debugging.
 - `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
 - `--integration` - Run integration tests
+- `--agent-checkpoint` - Run the Postgres checkpoint/resume hardening test
 - `--schema` - Run schema guardrail tests
 - `--standalone` - Run standalone verification scripts
 - `--all` / `--all-tests` - Run the full pytest suite plus standalone checks
@@ -434,7 +467,8 @@ run for debugging.
 
 ### CI and Merge Gates
 
-GitHub Actions runs Docker build and test jobs on pull requests and pushes to
+GitHub Actions runs Docker build, the default Docker test runner, and a focused
+Postgres checkpoint/resume hardening lane on pull requests and pushes to
 `main`. To block merges unless CI passes, configure a branch ruleset in GitHub:
 
 1. Go to **Settings → Rules → Rulesets**.

@@ -63,11 +63,11 @@ async def test_collection_manager():
         print("\n🧪 Testing ensure_collections_for_thread...")
         await manager.ensure_collections_for_thread("test-model")
         
-        # Verify all three collections were checked and created. The manager may
+        # Verify all four collections were checked and created. The manager may
         # check existence more than once while creating a missing collection.
         assert mock_client.collections.exists_call_count >= 3, f"Expected at least 3 exists calls, got {mock_client.collections.exists_call_count}"
-        assert mock_client.collections.create_call_count == 3, f"Expected 3 create calls, got {mock_client.collections.create_call_count}"
-        assert mock_client.collections.use_call_count == 3, f"Expected 3 use calls, got {mock_client.collections.use_call_count}"
+        assert mock_client.collections.create_call_count == 4, f"Expected 4 create calls, got {mock_client.collections.create_call_count}"
+        assert mock_client.collections.use_call_count == 4, f"Expected 4 use calls, got {mock_client.collections.use_call_count}"
         
         print("✅ Collection manager test passed!")
         return True

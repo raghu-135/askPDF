@@ -29,19 +29,20 @@ class TestJSONBOperations:
     """Test PostgreSQL JSONB field operations."""
 
     @pytest.mark.asyncio
-    async def test_jsonb_insert_query(self, session):
+    async def test_jsonb_insert_query(self, session, test_model_project):
         """Test JSONB insert operations."""
         import uuid
         settings = {
-            "max_iterations": 10,
+            "replans": 10,
             "token_budget": 8192,
             "nested": {"key": "value"}
         }
         
         thread = Thread(
             id=str(uuid.uuid4()),
+            project_id=test_model_project.id,
             name="JSONB Insert Test",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings=settings,
             created_at=datetime.utcnow()
         )
@@ -56,7 +57,7 @@ class TestJSONBOperations:
     async def test_jsonb_update_merge(self, session, sample_thread):
         """Test JSONB merge updates."""
         # Initial settings
-        initial = {"max_iterations": 10}
+        initial = {"replans": 10}
         result = await session.execute(
             select(Thread).where(Thread.id == sample_thread.id)
         )
@@ -72,7 +73,7 @@ class TestJSONBOperations:
         await session.commit()
         await session.refresh(thread)
         
-        assert "max_iterations" in thread.settings
+        assert "replans" in thread.settings
         assert "token_budget" in thread.settings
         assert thread.settings["token_budget"] == 8192
 
@@ -169,7 +170,7 @@ class TestJSONBOperations:
         assert isinstance(thread.settings, dict)
 
     @pytest.mark.asyncio
-    async def test_jsonb_index_performance(self, session):
+    async def test_jsonb_index_performance(self, session, test_model_project):
         """Basic performance test for JSONB queries."""
         import time
         import uuid
@@ -179,8 +180,9 @@ class TestJSONBOperations:
         for i in range(100):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Perf Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={"index": i, "data": f"value-{i}"},
                 created_at=datetime.utcnow()
             )

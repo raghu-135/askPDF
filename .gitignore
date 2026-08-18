@@ -55,7 +55,6 @@ yarn-error.log*
 .next/
 out/
 .vercel
-.DS_Store
 *.pem
 .pnp
 .pnp.js
@@ -72,6 +71,18 @@ out/
 *.sublime-workspace
 .history/
 *.code-workspace
+
+# Local AI coding-assistant instructions
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursorrules
+.windsurfrules
+.clinerules
+.cursor/rules/
+.cline/rules/
+.roo/rules/
+.github/copilot-instructions.md
 
 # OS Files
 .DS_Store

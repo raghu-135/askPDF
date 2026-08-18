@@ -2,36 +2,26 @@
 chat_service.py - Business logic for chat endpoints in RAG Service
 
 This module provides:
-- Thread-based chat with semantic memory (handle_thread_chat)
+- Shared retrieval prefetching for agent-workflow chat runtimes.
 """
 
 import asyncio
 import logging
 import os
-import time
 from typing import List, Dict, Any, cast
 
-from langchain_core.messages import AIMessage, HumanMessage
-
-from app.rag.indexer import index_chat_memory_for_thread
 from app.models.llm_server_client import (
     get_embedding_model,
     DEFAULT_TOKEN_BUDGET,
-    DEFAULT_MAX_ITERATIONS,
     RATIO_SEMANTIC_MEMORY,
     CHARS_PER_TOKEN,
     compute_prefetch_budget,
-    INTENT_AGENT_MAX_ITERATIONS,
 )
 from app.db import (
-    create_chat_turn,
     get_recent_messages,
-    update_message_context_compact,
     MessageRole,
     get_thread_shape,
-    increment_qa_stats,
 )
-from app.agent.reasoning import normalize_ai_response
 from app.rag.retrieval import (
     fetch_semantic_history,
     get_document_metadata_lookup,
@@ -39,6 +29,7 @@ from app.rag.retrieval import (
     rerank_document_chunks,
 )
 from app.time_utils import maybe_iso_utc_z
+from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
 
 logger = logging.getLogger(__name__)
 
@@ -46,20 +37,21 @@ logger = logging.getLogger(__name__)
 async def prefetch_context(
     thread_id: str,
     raw_question: str,
-    embed_model_name: str,
+    embedding_model: str,
     context_window: int,
     use_web_search: bool,
-    reasoning_mode: bool,
     use_reranker: bool,
+    prefetch_mode: str = DEFAULT_PREFETCH_MODE,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
 
-    Runs four async tasks concurrently:
+    Runs five async tasks concurrently:
       1. Recent verbatim conversation turns (DB, position-based)
       2. Semantic chat-memory recall (vector search, raw question)
       3. Document evidence (vector search, raw question)
       4. Conversation stats + uploaded document list (DB metadata)
+      5. Policy-scoped durable memory using the shared query embedding
 
     Returns a bundle dict with text strings ready for injection into LLM
     system prompts, plus structured metadata (document_sources, used_chat_ids,
@@ -73,17 +65,31 @@ async def prefetch_context(
       Orchestrator for the same raw question.
     """
     from app.db.vector import get_vector_db
-    from app.agent.agent import invoke_with_retry
+    from app.models.retry import invoke_with_retry
 
     budget = compute_prefetch_budget(context_window)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
-    embed_model = get_embedding_model(embed_model_name)
-    shared_query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
+    embedding_client = get_embedding_model(embedding_model)
+    shared_query_vector = await invoke_with_retry(embedding_client.aembed_query, raw_question)
 
-    async def _fetch_recent() -> str:
+    def _message_ref(msg: Any) -> Dict[str, Any]:
+        text = (getattr(msg, "context_compact", None) or getattr(msg, "content", None) or "").strip()
+        preview = " ".join(text.split())
+        if len(preview) > 260:
+            preview = preview[:260].rstrip() + "..."
+        return {
+            "message_id": getattr(msg, "id", None),
+            "turn_id": getattr(msg, "turn_id", None),
+            "role": getattr(getattr(msg, "role", None), "value", None) or str(getattr(msg, "role", "")),
+            "created_at": maybe_iso_utc_z(getattr(msg, "created_at", None)),
+            "preview": preview,
+        }
+
+    async def _fetch_recent() -> tuple:
         msgs = await get_recent_messages(thread_id, limit=budget["recent_turn_limit"] * 2)
         lines: List[str] = []
+        refs: List[Dict[str, Any]] = []
         used_chars = 0
         budget_chars = budget["recent_history_chars"]
         for msg in reversed(msgs):
@@ -96,9 +102,11 @@ async def prefetch_context(
             if used_chars + len(entry) > budget_chars:
                 break
             lines.append(entry)
+            refs.append(_message_ref(msg))
             used_chars += len(entry)
         lines.reverse()
-        return "\n\n".join(lines)
+        refs.reverse()
+        return "\n\n".join(lines), refs
 
     async def _fetch_stats_and_docs() -> Dict[str, Any]:
         """
@@ -131,6 +139,8 @@ async def prefetch_context(
         return {"stats": stats, "documents": documents}
 
     async def _fetch_semantic() -> tuple:
+        if prefetch_mode != PREFETCH_MODE_EVIDENCE:
+            return "", [], []
         try:
             return await fetch_semantic_history(
                 thread_id=thread_id,
@@ -139,13 +149,16 @@ async def prefetch_context(
                 limit=budget["semantic_limit"],
                 char_budget=budget["semantic_history_chars"],
                 use_reranker=use_reranker,
-                embedding_model_name=embed_model_name,
+                embedding_model=embedding_model,
+                include_refs=True,
             )
         except Exception as exc:
             logger.warning(f"Prefetch semantic history failed: {exc}")
-            return "", []
+            return "", [], []
 
     async def _fetch_documents() -> tuple:
+        if prefetch_mode != PREFETCH_MODE_EVIDENCE:
+            return "", []
         try:
             db = get_vector_db()
             limit = budget["document_limit"]
@@ -157,18 +170,18 @@ async def prefetch_context(
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
-                embedding_model_name=embed_model_name,
+                embedding_model=embedding_model,
                 limit=rerank_fetch_k,
                 file_hashes=thread_file_hashes,
                 query_text=raw_question,
             )
             if not raw_chunks:
                 logger.error(
-                    "Missing document vectors for thread %s (files=%d, embed_model=%s). "
+                    "Missing document vectors for thread %s (files=%d, embedding_model=%s). "
                     "Recovery is only triggered on thread open.",
                     thread_id,
                     len(thread_file_hashes),
-                    embed_model_name,
+                    embedding_model,
                 )
                 return "", []
             document_lookup = await get_document_metadata_lookup(thread_id)
@@ -183,28 +196,87 @@ async def prefetch_context(
             logger.warning(f"Prefetch document evidence failed: {exc}")
             return "", []
 
+    async def _fetch_durable_memory() -> Dict[str, Any]:
+        try:
+            from app.services.memory_service import search_thread_memory
+
+            return await search_thread_memory(
+                thread_id=thread_id,
+                query=raw_question,
+                max_results=budget["durable_memory_limit"],
+                query_vector=shared_query_vector,
+                char_budget=budget["durable_memory_chars"],
+            )
+        except Exception as exc:
+            logger.warning("Prefetch durable memory failed: %s", exc)
+            return {
+                "memories": [],
+                "scopes": [],
+                "scope_policy": {},
+                "retrieval_debug": {"error": str(exc)[:300]},
+            }
+
     # Run all fetches in parallel
     results = await asyncio.gather(
         _fetch_recent(),
         _fetch_stats_and_docs(),
         _fetch_semantic(),
         _fetch_documents(),
+        _fetch_durable_memory(),
         return_exceptions=True,
     )
 
-    recent_text = cast(str, results[0]) if not isinstance(results[0], Exception) else ""
+    recent_result = results[0] if not isinstance(results[0], Exception) else ("", [])
+    recent_text, recent_message_refs = recent_result if isinstance(recent_result, tuple) else ("", [])
     meta = cast(Dict[str, Any], results[1]) if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
+    durable_result = results[4] if not isinstance(results[4], Exception) and isinstance(results[4], dict) else {}
     web_result = ("", [])
 
-    semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
+    if isinstance(semantic_result, tuple) and len(semantic_result) >= 3:
+        semantic_text, used_chat_ids, semantic_memory_refs = semantic_result[:3]
+    elif isinstance(semantic_result, tuple):
+        semantic_text, used_chat_ids = semantic_result
+        semantic_memory_refs = []
+    else:
+        semantic_text, used_chat_ids, semantic_memory_refs = "", [], []
     document_text, document_sources = document_result if isinstance(document_result, tuple) else ("", [])
     web_text, web_sources = web_result if isinstance(web_result, tuple) else ("", [])
+    durable_memories = durable_result.get("memories", [])
+    durable_lines = [
+        "[DURABLE MEMORY DEFAULTS]",
+        "Apply these only when they do not conflict with the current user request.",
+        *[
+            f"{index}. {item.get('scope_type')} ({(item.get('attributes') or {}).get('kind', 'fact')}): {item.get('excerpt') or item.get('content') or ''}"
+            for index, item in enumerate(durable_memories, start=1)
+        ],
+    ] if durable_memories else []
 
     return {
         "recent_history_text":   recent_text,
+        "recent_message_refs":   recent_message_refs,
         "semantic_history_text": semantic_text,
+        "semantic_memory_refs":  semantic_memory_refs,
+        "durable_memory_text":   "\n".join(durable_lines),
+        "durable_memories":      durable_memories,
+        "durable_memory_refs":   [
+            {
+                "memory_id": item.get("id"),
+                "scope_type": item.get("scope_type"),
+                "scope_id": item.get("scope_id"),
+                "score": item.get("score"),
+                "score_type": item.get("score_type"),
+                "attributes": item.get("attributes"),
+            }
+            for item in durable_memories
+        ],
+        "durable_memory_scopes": durable_result.get("scopes", []),
+        "durable_memory_scope_policy": durable_result.get("scope_policy", {}),
+        "durable_memory_retrieval_debug": durable_result.get("retrieval_debug", {}),
+        # Internal-only reuse for the sole allowed expanded durable-memory query.
+        # Prompt formatters and trace refs intentionally do not expose this vector.
+        "_shared_query_vector": shared_query_vector,
         "document_evidence_text":     document_text,
         "web_evidence_text":     web_text,
         "stats":                 meta.get("stats", {}),
@@ -214,371 +286,3 @@ async def prefetch_context(
         "used_chat_ids":         used_chat_ids,
         "budget":                budget,
     }
-
-
-async def handle_thread_chat(
-    thread_id: str,
-    req,  # ThreadChatRequest
-    embed_model: str
-) -> Dict[str, Any]:
-    """
-    Thread-based chat using Orchestrator Agent with dynamic memory, document search, and web tools.
-    """
-    question = req.question
-    llm_model = req.llm_model
-    use_web_search = getattr(req, 'use_web_search', False)
-    use_reranker = getattr(req, 'use_reranker', None)
-    if use_reranker is None:
-        use_reranker = True
-    context_window = getattr(req, 'context_window', DEFAULT_TOKEN_BUDGET)
-    max_iterations = getattr(req, 'max_iterations', None) or DEFAULT_MAX_ITERATIONS
-    system_role = getattr(req, 'system_role_override', "") or ""
-    tool_instructions = getattr(req, 'tool_instructions_override', None) or {}
-    custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
-    use_intent_agent = getattr(req, 'use_intent_agent', True)
-    intent_agent_skip_clarify = bool(getattr(req, 'intent_agent_skip_clarify', False))
-    reasoning_mode = getattr(req, 'reasoning_mode', True)
-    client_timezone = getattr(req, 'client_timezone', None)
-    client_locale = getattr(req, 'client_locale', None)
-    client_now_iso = getattr(req, 'client_now_iso', None)
-    if use_intent_agent is None:
-        use_intent_agent = True
-    # NOTE: intent_agent_max_iterations is passed to the LangGraph Intent Agent State. 
-    # It is currently not exposed in the UI (hardcoded to single-pass logic); 
-    # it can be re-exposed when the Intent Agent is upgraded with tools or multi-step reasoning.
-    intent_agent_max_iterations = getattr(req, 'intent_agent_max_iterations', None) or INTENT_AGENT_MAX_ITERATIONS
-    
-    start_total = time.perf_counter()
-    intent_duration = 0.0
-    orchestrator_duration = 0.0
-    intent_iterations = 0
-    
-    try:
-        from app.agent.agent import app as agent_app, intent_app, AgentState
-        
-        # 1. Run context pre-fetch (no LLM cost)
-        prefetch_bundle = await prefetch_context(
-            thread_id=thread_id,
-            raw_question=question,
-            embed_model_name=embed_model,
-            context_window=context_window,
-            use_web_search=use_web_search,
-            reasoning_mode=reasoning_mode,
-            use_reranker=use_reranker,
-        )
-
-        # 2. Analyze intent using the Intent Agent (optional)
-        intent = {
-            "route": "ANSWER",
-            "rewritten_query": question,
-            "clarification_options": None,
-            "context_coverage": "INSUFFICIENT",
-            "reference_type": "NONE",
-        }
-
-        if use_intent_agent:
-            intent_state = {
-                "messages": [HumanMessage(content=question)],
-                "thread_id": thread_id,
-                "llm_model": llm_model,
-                "context_window": context_window,
-                "iteration_count": 0,
-                "max_iterations": intent_agent_max_iterations,
-                "intent_result": None,
-                "pre_fetch_bundle": prefetch_bundle,
-                "reasoning_mode": reasoning_mode,
-                "intent_tools_used": False,
-                "use_web_search": use_web_search,
-                "client_timezone": client_timezone,
-                "client_locale": client_locale,
-                "client_now_iso": client_now_iso,
-            }
-            
-            logger.info(f"Invoking Intent Agent for thread {thread_id}")
-            intent_start = time.perf_counter()
-            intent_result_state = await intent_app.ainvoke(
-                intent_state,
-                config={
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "embedding_model": embed_model,
-                        "context_window": context_window,
-                        "use_web_search": use_web_search,
-                        "use_reranker": use_reranker,
-                        "web_search_index": False,
-                    }
-                },
-            )
-            intent_duration = time.perf_counter() - intent_start
-            
-            intent_iterations = intent_result_state.get("iteration_count", 0)
-            if intent_result_state.get("intent_result"):
-                intent = intent_result_state["intent_result"]
-            if intent_agent_skip_clarify and intent.get("route") == "CLARIFY":
-                logger.info(f"Intent Agent clarification suppressed for thread {thread_id}")
-                intent["route"] = "ANSWER"
-                intent["clarification_options"] = None
-        else:
-            logger.info(f"Intent Agent disabled for thread {thread_id}, skipping")
-        
-        # If ambiguous, return early with clarification options
-        if intent.get("route") == "CLARIFY" and intent.get("clarification_options"):
-            clarification_options = intent["clarification_options"]
-            clarification_answer = (
-                "I need a bit more clarification. Did you mean:\n"
-                + "\n".join([f"- {opt}" for opt in clarification_options])
-            )
-            user_message_id = None
-            assistant_message_id = None
-
-            try:
-                turn = await create_chat_turn(
-                    thread_id=thread_id,
-                    question=req.question,
-                    answer=clarification_answer,
-                    rewritten_question=None,
-                    status="clarification",
-                    reasoning="",
-                    reasoning_available=False,
-                    reasoning_format="none",
-                    clarification_options=clarification_options,
-                )
-                user_message_id = f"{turn.id}:user"
-                assistant_message_id = f"{turn.id}:assistant"
-                try:
-                    qa_chars = len(req.question) + len(clarification_answer)
-                    await increment_qa_stats(thread_id, qa_chars)
-                except Exception as stats_err:
-                    logger.warning(f"thread stats QA increment skipped (clarification): {stats_err}")
-            except Exception as msg_err:
-                logger.warning(f"Failed to persist clarification turn for thread {thread_id}: {msg_err}")
-
-            return {
-                "answer": clarification_answer,
-                "clarification_options": clarification_options,
-                "rewritten_query": intent.get("rewritten_query") or question,
-                "user_message_id": user_message_id,
-                "assistant_message_id": assistant_message_id,
-                "used_chat_ids": [],
-                "document_sources": [],
-                "web_sources": [],
-                "reasoning": "",
-                "reasoning_available": False,
-                "reasoning_format": "none",
-                "context": "Needs human-in-the-loop clarification."
-            }
-         
-        # Normalize question from intent results
-        question = intent.get("rewritten_query") or question
-        reference_type = intent.get("reference_type", "NONE")
-
-        logger.info(
-            f"Intent analysis done for thread {thread_id} | "
-            f"rewritten_query: {question} | "
-            f"reference_type: {intent.get('reference_type', 'NONE')} | "
-            f"context_coverage: {intent.get('context_coverage', 'PARTIAL')}"
-        )
-
-        # Use max_iterations as a ceiling only; the Orchestrator will stop early
-        # when it can answer without further tool calls.
-        effective_max_iterations = max_iterations
-
-        initial_state = {
-            "messages": [HumanMessage(content=question)],
-            "thread_id": thread_id,
-            "llm_model": llm_model,
-            "embedding_model": embed_model,
-            "context_window": context_window,
-            "use_web_search": use_web_search,
-            # Pre-seed sources from the prefetch pass; tool calls will extend these lists
-            "document_sources": list(prefetch_bundle.get("document_sources", [])),
-            "web_sources": list(prefetch_bundle.get("web_sources", [])),
-            "used_chat_ids": list(prefetch_bundle.get("used_chat_ids", [])),
-            "clarification_options": None,
-            "iteration_count": 0,
-            "max_iterations": effective_max_iterations,
-            "system_role": system_role,
-            "tool_instructions": tool_instructions,
-            "custom_instructions": custom_instructions,
-            "pre_fetch_bundle": prefetch_bundle,
-            # Signal whether the Intent Agent ran; Orchestrator adapts its prompting strategy
-            "intent_agent_ran": use_intent_agent,
-            "reasoning_mode": reasoning_mode,
-            "working_query": question,
-            "intent_reference_type": reference_type,
-            "client_timezone": client_timezone,
-            "client_locale": client_locale,
-            "client_now_iso": client_now_iso,
-        }
-        
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "embedding_model": embed_model,
-                "context_window": context_window,
-                "use_web_search": use_web_search,
-                "use_reranker": use_reranker,
-            }
-        }
-        
-        logger.info(f"Invoking Orchestrator Agent for thread {thread_id}")
-        orchestrator_start = time.perf_counter()
-        result = await agent_app.ainvoke(initial_state, config=config)
-        orchestrator_duration = time.perf_counter() - orchestrator_start
-        total_duration = time.perf_counter() - start_total
-        
-        logger.info(
-            f"CHAT COMPLETED [thread {thread_id}] | "
-            f"Intent: {intent_duration:.2f}s | "
-            f"Intent_Iterations: {intent_iterations} | "
-            f"Orchestrator: {orchestrator_duration:.2f}s | "
-            f"Total: {total_duration:.2f}s | "
-            f"LLM: {llm_model} | "
-            f"Agent_Iterations: {result.get('iteration_count', 0)}"
-        )
-        
-        final_messages = result.get("messages", [])
-        normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
-        empty_model_answer = not normalized["answer"]
-        if empty_model_answer:
-            last_msg = final_messages[-1] if final_messages else None
-            logger.warning(
-                f"Empty answer from agent for thread {thread_id}. "
-                f"Last message type={type(last_msg).__name__}, "
-                f"content={repr(getattr(last_msg, 'content', None))!r}, "
-                f"tool_calls={getattr(last_msg, 'tool_calls', None)}"
-            )
-        answer = normalized["answer"] or "I was unable to compose an answer. Please try rephrasing your question."
-        document_sources = result.get("document_sources", [])
-        web_sources = result.get("web_sources", [])
-        used_chat_ids = result.get("used_chat_ids", [])
-        clarification_options = result.get("clarification_options", None)
-        
-        if clarification_options:
-            answer = f"I need a bit more clarification. Did you mean:\n" + "\n".join([f"- {opt}" for opt in clarification_options])
-            normalized = {
-                "reasoning": "",
-                "reasoning_available": False,
-                "reasoning_format": "none",
-            }
-        
-        metadata = {}
-        if empty_model_answer:
-            metadata["empty_model_answer"] = True
-
-        # Store the full interaction as one JSONB chat turn.
-        turn = await create_chat_turn(
-            thread_id=thread_id,
-            question=req.question,
-            answer=answer,
-            rewritten_question=question if question != req.question else None,
-            status="clarification" if clarification_options else "completed",
-            reasoning=normalized["reasoning"],
-            reasoning_available=normalized["reasoning_available"],
-            reasoning_format=normalized["reasoning_format"],
-            web_sources=web_sources if web_sources else None,
-            document_sources=document_sources,
-            used_chat_ids=used_chat_ids,
-            clarification_options=clarification_options,
-            metadata=metadata,
-        )
-        user_message_id = f"{turn.id}:user"
-        assistant_message_id = f"{turn.id}:assistant"
-        
-        # Index in semantic memory if not a clarification
-        if not clarification_options:
-            indexing_result = await index_chat_memory_for_thread(
-                thread_id=thread_id,
-                message_id=turn.id,
-                question=question,
-                answer=answer,
-                embedding_model_name=embed_model,
-                llm_name=llm_model,
-                context_window=context_window,
-                message_created_at=turn.completed_at or turn.created_at,
-            )
-            compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
-            if compact_text:
-                await update_message_context_compact(turn.id, compact_text)
-
-        # Update thread stats: increment QA pair counter
-        try:
-            qa_chars = len(req.question) + len(answer)
-            await increment_qa_stats(thread_id, qa_chars)
-        except Exception as stats_err:
-            logger.warning(f"thread stats QA increment skipped: {stats_err}")
-
-        return {
-            "answer": answer,
-            "rewritten_query": question, # Return rewritten version for UI
-            "user_message_id": user_message_id,
-            "assistant_message_id": assistant_message_id,
-            "used_chat_ids": used_chat_ids,
-            "document_sources": document_sources,
-            "web_sources": web_sources,
-            "clarification_options": clarification_options,
-            "reasoning": normalized["reasoning"],
-            "reasoning_available": normalized["reasoning_available"],
-            "reasoning_format": normalized["reasoning_format"],
-            "context": "Context retrieved dynamically by LangGraph Orchestrator tool calls."
-        }
-        
-    except Exception as e:
-        logger.error(f"CRITICAL: Agent execution failed for thread {thread_id}", exc_info=True)
-        # Return a graceful fallback instead of raising, ensuring the user always gets an answer.
-        # Use simple default values for IDs and sources to keep the UI from crashing.
-        fallback_answer = (
-            "I'm sorry, I encountered a technical error while processing your request. "
-            "Please try again in a moment or try rephrasing your question."
-        )
-        if "503" in str(e) or "loading" in str(e).lower():
-            fallback_answer = "The LLM server is currently busy loading the model. Please try again in 10-20 seconds."
-        elif "429" in str(e) or "rate limit" in str(e).lower():
-            fallback_answer = "The LLM server is currently rate-limited. Please wait a moment before trying again."
-        elif "timeout" in str(e).lower():
-            fallback_answer = "The request timed out. The LLM server might be under heavy load. Please try again."
-
-        error_payload = {
-            "code": "llm_unavailable" if "503" in str(e) or "loading" in str(e).lower() else
-                    "rate_limited" if "429" in str(e) or "rate limit" in str(e).lower() else
-                    "timeout" if "timeout" in str(e).lower() else
-                    "agent_execution_failed",
-            "raw_message": str(e),
-            "retryable": True,
-        }
-        user_message_id = None
-        assistant_message_id = None
-        try:
-            turn = await create_chat_turn(
-                thread_id=thread_id,
-                question=req.question,
-                answer=fallback_answer,
-                rewritten_question=question if question != req.question else None,
-                status="failed",
-                reasoning=f"Exception during execution: {str(e)}",
-                reasoning_available=True,
-                reasoning_format="markdown",
-                web_sources=[],
-                document_sources=[],
-                used_chat_ids=[],
-                error=error_payload,
-            )
-            user_message_id = f"{turn.id}:user"
-            assistant_message_id = f"{turn.id}:assistant"
-        except Exception as persist_err:
-            logger.warning(f"Failed to persist failed chat turn for thread {thread_id}: {persist_err}")
-
-        return {
-            "answer": fallback_answer,
-            "rewritten_query": question,
-            "user_message_id": user_message_id,
-            "assistant_message_id": assistant_message_id,
-            "used_chat_ids": [],
-            "document_sources": [],
-            "web_sources": [],
-            "clarification_options": None,
-            "reasoning": f"Exception during execution: {str(e)}",
-            "reasoning_available": True,
-            "reasoning_format": "markdown",
-            "context": "Agent execution failed gracefully."
-        }

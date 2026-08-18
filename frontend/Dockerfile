@@ -34,7 +34,7 @@ FROM deps AS builder
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
-COPY next.config.js ./
+COPY next.config.mjs ./
 COPY next-env.d.ts ./
 COPY tsconfig.json ./
 COPY src ./src

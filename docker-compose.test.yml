@@ -15,14 +15,20 @@ services:
   test-runner:
     build:
       context: ./rag_service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.test
     entrypoint: ["python", "scripts/run_tests.py"]
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
       - POSTGRES_POOL_SIZE=10
       - POSTGRES_MAX_OVERFLOW=20
+      - AGENT_RUNTIME_MODE=in_process
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=0.7
       - QUERY_DEFAULTS_LIMIT=20
@@ -33,9 +39,6 @@ services:
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
       - DEFAULT_TOKEN_BUDGET=8192
-      - DEFAULT_MAX_ITERATIONS=10
-      - MIN_MAX_ITERATIONS=1
-      - MAX_MAX_ITERATIONS=30
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
       - MAX_SYSTEM_ROLE_CHARS=500
       - MAX_TOOL_INSTRUCTION_CHARS=500
@@ -58,6 +61,7 @@ services:
       - ./rag_service:/app
       - .:/workspace:ro
       - test_data:/data
+      - content_test_data:/static
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -96,3 +100,4 @@ volumes:
   postgres_test_data:
   test_data:
   weaviate_test_data:
+  content_test_data:

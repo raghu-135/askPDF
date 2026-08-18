@@ -1,0 +1,910 @@
+import type {
+  AgentWorkflow,
+  AgentWorkflowBuilderSpec,
+  AgentWorkflowCatalogResponse,
+  AgentWorkflowGraphSpec,
+  AgentWorkflowNodeCatalogEntry,
+  AgentWorkflowRouteFunctionMetadata,
+  AgentWorkflowToolContract,
+} from './api';
+import {
+  AgentRunResumeAction,
+  BuiltinAgentNodeType,
+  GraphSentinel,
+  HitlMode,
+  HitlPhase,
+  RouteFunctionId,
+} from './enums.ts';
+
+export const getAgentWorkflowSourceKey = (workflow: AgentWorkflow): string => (
+  workflow.builtin_key?.trim() || workflow.id
+);
+
+export interface BuilderNodeState {
+  id: string;
+  type: string;
+  label?: string;
+  description?: string;
+  tool_contract_ids?: string[];
+  hitl?: {
+    title?: string;
+    body?: string;
+    prompt?: string;
+    phase?: string;
+    mode?: string;
+    allowed_actions?: string[];
+    default_action?: string;
+    routes?: Record<string, string>;
+  };
+  [key: string]: any;
+}
+
+export interface BuilderEdgeState {
+  from: string;
+  to?: string;
+  conditional?: boolean;
+  route_fn?: string;
+  routes?: Record<string, string>;
+  [key: string]: any;
+}
+
+export interface AgentWorkflowBuilderState {
+  name?: string;
+  description?: string;
+  workflowId?: string;
+  workflowType: string;
+  nodes: BuilderNodeState[];
+  edges: BuilderEdgeState[];
+  allowed_tool_ids: string[];
+  context_policy?: Record<string, any>;
+  loop_policy?: Record<string, any>;
+  hitl_policy?: Record<string, any>;
+  parallel_policy?: Record<string, boolean | number>;
+  corrective_policy?: Record<string, boolean | number | string>;
+  runtime?: Record<string, any>;
+  extraConfig?: Record<string, any>;
+  builder_ui?: {
+    notes?: { id: string; text: string; position: { x: number; y: number } }[];
+    groups?: { id: string; label: string; node_ids: string[]; position?: { x: number; y: number } }[];
+  };
+}
+
+export interface CompatibilityResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface BuilderIncomingPath {
+  id: string;
+  edgeIndex: number;
+  source: string;
+  target: string;
+  route?: string;
+  conditional: boolean;
+}
+
+const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
+  [BuiltinAgentNodeType.Router]: RouteFunctionId.Router,
+  [BuiltinAgentNodeType.Planner]: RouteFunctionId.Planner,
+  [BuiltinAgentNodeType.EvidenceEvaluator]: RouteFunctionId.Evaluator,
+  [BuiltinAgentNodeType.HitlGate]: RouteFunctionId.HitlGate,
+  [BuiltinAgentNodeType.ParallelDispatch]: RouteFunctionId.ParallelDispatch,
+  [BuiltinAgentNodeType.SerialDispatch]: RouteFunctionId.SerialDispatch,
+  [BuiltinAgentNodeType.AnswerEvaluator]: RouteFunctionId.AnswerQuality,
+  [BuiltinAgentNodeType.RetrievalQualityGrader]: RouteFunctionId.CorrectiveRetrieval,
+  [BuiltinAgentNodeType.GroundedAnswerVerifier]: RouteFunctionId.GroundedAnswer,
+};
+
+const REPEATABLE_NODE_TYPES = new Set([
+  'retrieval_worker',
+  'thread_conversation_history_worker',
+  'durable_memory_worker',
+  'thread_events_worker',
+  'web_worker',
+  'evidence_evaluator',
+  'retrieval_quality_grader',
+]);
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
+const defaultRuntime = (supportsReplans = false, promptPreview = 'router') => ({
+  kind: 'compiled_rag',
+  label: 'Compiled RAG',
+  failure_code: 'compiled_rag_execution_failed',
+  failure_reason_prefix: 'Exception during compiled RAG execution',
+  success_context: 'Context retrieved by compiled RAG workflow.',
+  failure_context: 'Compiled RAG workflow execution failed gracefully.',
+  features: { supports_replans: supportsReplans },
+  prompt_preview: promptPreview,
+});
+
+const nodeTypeById = (nodes: BuilderNodeState[]) => (
+  new Map(nodes.map((node) => [node.id, node.type]))
+);
+
+const getNode = (state: AgentWorkflowBuilderState, nodeId: string) => (
+  state.nodes.find((node) => node.id === nodeId)
+);
+
+const catalogEntry = (
+  catalog: AgentWorkflowCatalogResponse,
+  nodeType?: string,
+): AgentWorkflowNodeCatalogEntry | undefined => (
+  nodeType ? catalog.node_catalog[nodeType] : undefined
+);
+
+const isParallelWorkerType = (catalog: AgentWorkflowCatalogResponse, nodeType?: string) => (
+  Boolean(nodeType && catalogEntry(catalog, nodeType)?.parallel_state_writes?.includes('worker_result_packets'))
+);
+
+export const normalizeParallelPolicy = (
+  catalog: AgentWorkflowCatalogResponse,
+  value?: Record<string, any>,
+): Record<string, boolean | number> => {
+  const contract = catalog.defaults?.parallel_policy;
+  const normalized: Record<string, boolean | number> = { ...(contract?.defaults || {}) };
+  Object.entries(contract?.fields || {}).forEach(([key, field]) => {
+    const candidate = value?.[key];
+    if (field.type === 'boolean') {
+      normalized[key] = typeof candidate === 'boolean' ? candidate : Boolean(field.default);
+      return;
+    }
+    const parsed = Number(candidate ?? field.default);
+    const minimum = Number(field.minimum ?? 1);
+    const maximum = Number(field.maximum ?? Number.MAX_SAFE_INTEGER);
+    normalized[key] = Math.max(minimum, Math.min(maximum, Number.isFinite(parsed) ? Math.round(parsed) : Number(field.default)));
+  });
+  if (typeof normalized.minimum_successes === 'number' && typeof normalized.max_work_items === 'number') {
+    normalized.minimum_successes = Math.min(normalized.minimum_successes, normalized.max_work_items);
+  }
+  normalized.enabled = true;
+  return normalized;
+};
+
+export const normalizeCorrectivePolicy = (
+  catalog: AgentWorkflowCatalogResponse,
+  value?: Record<string, any>,
+): Record<string, boolean | number | string> => {
+  const contract = catalog.defaults?.corrective_policy;
+  const normalized: Record<string, boolean | number | string> = { ...(contract?.defaults || {}) };
+  Object.entries(contract?.fields || {}).forEach(([key, field]) => {
+    const candidate = value?.[key];
+    if (field.type === 'boolean') normalized[key] = typeof candidate === 'boolean' ? candidate : Boolean(field.default);
+    else if (field.type === 'enum') normalized[key] = field.values?.includes(String(candidate)) ? String(candidate) : String(field.default);
+    else {
+      const parsed = Number(candidate ?? field.default);
+      const bounded = Math.max(Number(field.minimum), Math.min(Number(field.maximum), Number.isFinite(parsed) ? parsed : Number(field.default)));
+      normalized[key] = field.type === 'integer' ? Math.round(bounded) : bounded;
+    }
+  });
+  return normalized;
+};
+
+const routeMetadata = (
+  catalog: AgentWorkflowCatalogResponse,
+  routeFn?: string,
+): AgentWorkflowRouteFunctionMetadata | undefined => (
+  routeFn ? catalog.route_functions[routeFn] : undefined
+);
+
+export function getCanonicalNodeId(nodeType: string, existingIds: Iterable<string> = []): string {
+  const existing = new Set(existingIds);
+  if (!existing.has(nodeType)) return nodeType;
+  for (let index = 2; index < 100; index += 1) {
+    const candidate = `${nodeType}_${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${nodeType}_${Date.now()}`;
+}
+
+export function getAllowedToolContractsForNode(
+  catalog: AgentWorkflowCatalogResponse,
+  nodeType: string,
+): AgentWorkflowToolContract[] {
+  const allowedIds = new Set(catalogEntry(catalog, nodeType)?.allowed_tool_contract_ids || []);
+  return Object.values(catalog.tool_contracts || {})
+    .filter((contract) => allowedIds.has(contract.id))
+    .sort((a, b) => (a.display_name || a.id).localeCompare(b.display_name || b.id));
+}
+
+export function getAllowedRouteFunctionsForNode(
+  catalog: AgentWorkflowCatalogResponse,
+  nodeType: string,
+): string[] {
+  const entry = catalogEntry(catalog, nodeType);
+  const allowed = entry?.allowed_route_functions || [];
+  return allowed.filter((routeFn) => {
+    const metadata = routeMetadata(catalog, routeFn);
+    const sourceTypes = metadata?.allowed_source_types || metadata?.allowed_source_node_types || [];
+    return sourceTypes.length === 0 || sourceTypes.includes(nodeType);
+  });
+}
+
+export function getRouteLabelsForFunction(
+  catalog: AgentWorkflowCatalogResponse,
+  routeFn: string,
+): string[] | null {
+  const metadata = routeMetadata(catalog, routeFn);
+  const labels = metadata?.route_labels ?? metadata?.routes;
+  return Array.isArray(labels) ? labels.filter((label): label is string => typeof label === 'string' && label.length > 0) : null;
+}
+
+export function getDefaultRouteFunctionForNode(
+  catalog: AgentWorkflowCatalogResponse,
+  nodeType: string,
+): string | undefined {
+  const preferred = ROUTE_FUNCTION_BY_NODE_TYPE[nodeType];
+  const allowed = getAllowedRouteFunctionsForNode(catalog, nodeType);
+  return preferred && allowed.includes(preferred) ? preferred : allowed[0];
+}
+
+export function canConnectNodeTypes(
+  catalog: AgentWorkflowCatalogResponse,
+  sourceType: string | undefined,
+  targetType: string | undefined,
+): CompatibilityResult {
+  if (!sourceType || !targetType) return { ok: false, reason: 'Unknown source or target node type.' };
+  const source = catalogEntry(catalog, sourceType);
+  if (!source) return { ok: false, reason: `Unknown source node type: ${sourceType}` };
+  const target = catalogEntry(catalog, targetType);
+  if (!target) return { ok: false, reason: `Unknown target node type: ${targetType}` };
+  if (!(source.allowed_child_types || []).includes(targetType)) {
+    return { ok: false, reason: `${sourceType} cannot connect to ${targetType}.` };
+  }
+  if (!(target.allowed_parent_types || []).includes(sourceType)) {
+    return { ok: false, reason: `${targetType} cannot accept ${sourceType} as a parent.` };
+  }
+  return { ok: true };
+}
+
+export function canConnectNodes(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+  targetId: string,
+): CompatibilityResult {
+  if (sourceId === 'START') {
+    const target = getNode(state, targetId);
+    const allowedParents = catalogEntry(catalog, target?.type)?.allowed_parent_types || [];
+    return allowedParents.includes('START')
+      ? { ok: true }
+      : { ok: false, reason: `${target?.type || targetId} cannot start the graph.` };
+  }
+  if (targetId === 'END') {
+    const source = getNode(state, sourceId);
+    const allowedChildren = catalogEntry(catalog, source?.type)?.allowed_child_types || [];
+    return allowedChildren.includes('END')
+      ? { ok: true }
+      : { ok: false, reason: `${source?.type || sourceId} cannot end the graph.` };
+  }
+  const types = nodeTypeById(state.nodes);
+  const sourceType = types.get(sourceId);
+  const targetType = types.get(targetId);
+  const hasParallelRegion = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
+  if (hasParallelRegion && isParallelWorkerType(catalog, targetType) && sourceType !== BuiltinAgentNodeType.ParallelDispatch) {
+    return { ok: false, reason: 'Parallel workers can only accept their dispatcher as a parent.' };
+  }
+  if (hasParallelRegion && isParallelWorkerType(catalog, sourceType) && targetType !== BuiltinAgentNodeType.Aggregator) {
+    return { ok: false, reason: 'Parallel workers must join the graph aggregator directly.' };
+  }
+  return canConnectNodeTypes(catalog, types.get(sourceId), types.get(targetId));
+}
+
+export function canAddNodeType(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  nodeType: string,
+): CompatibilityResult {
+  const entry = catalogEntry(catalog, nodeType);
+  if (!entry) return { ok: false, reason: `Unknown node type: ${nodeType}` };
+  const count = state.nodes.filter((node) => node.type === nodeType).length;
+  if (count >= entry.max_instances) {
+    return { ok: false, reason: `${nodeType} allows at most ${entry.max_instances} instance(s).` };
+  }
+  return { ok: true };
+}
+
+export function getCompatibleTargetNodes(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+): BuilderNodeState[] {
+  return state.nodes.filter((node) => canConnectNodes(catalog, state, sourceId, node.id).ok);
+}
+
+export function getCompatibleSourceNodes(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+): BuilderNodeState[] {
+  return state.nodes.filter((node) => canConnectNodes(catalog, state, node.id, targetId).ok);
+}
+
+export function getIncomingPaths(
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+): BuilderIncomingPath[] {
+  return state.edges.flatMap((edge, edgeIndex): BuilderIncomingPath[] => {
+    if (edge.conditional) {
+      return Object.entries(edge.routes || {})
+        .filter(([, target]) => target === targetId)
+        .map(([route]) => ({
+          id: `${edgeIndex}:${edge.from}:${route}:${targetId}`,
+          edgeIndex,
+          source: edge.from,
+          target: targetId,
+          route,
+          conditional: true,
+        }));
+    }
+    return edge.to === targetId ? [{
+      id: `${edgeIndex}:${edge.from}:${targetId}`,
+      edgeIndex,
+      source: edge.from,
+      target: targetId,
+      conditional: false,
+    }] : [];
+  });
+}
+
+export function isIsolatedBuilderNode(state: AgentWorkflowBuilderState, nodeId: string): boolean {
+  return !state.edges.some((edge) => (
+    edge.from === nodeId
+    || edge.to === nodeId
+    || Object.values(edge.routes || {}).includes(nodeId)
+  ));
+}
+
+export function wouldCreateBuilderCycle(
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+  targetId: string,
+): boolean {
+  const adjacency = new Map<string, Set<string>>();
+  state.edges.forEach((edge) => {
+    const targets = edge.conditional ? Object.values(edge.routes || {}) : edge.to ? [edge.to] : [];
+    targets.forEach((target) => {
+      adjacency.set(edge.from, new Set([...(adjacency.get(edge.from) || []), target]));
+    });
+  });
+  const pending = [targetId];
+  const seen = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current === sourceId) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    pending.push(...(adjacency.get(current) || []));
+  }
+  return false;
+}
+
+export const canConnectNodeTypeToTarget = (
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceType: string,
+  targetId: string,
+): CompatibilityResult => {
+  if (targetId === 'END') {
+    return (catalogEntry(catalog, sourceType)?.allowed_child_types || []).includes('END')
+      ? { ok: true }
+      : { ok: false, reason: `${sourceType} cannot end the graph.` };
+  }
+  return canConnectNodeTypes(catalog, sourceType, getNode(state, targetId)?.type);
+};
+
+export const canConnectSourceToType = (
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+  targetType: string,
+): CompatibilityResult => {
+  if (sourceId === 'START') {
+    return (catalogEntry(catalog, targetType)?.allowed_parent_types || []).includes('START')
+      ? { ok: true }
+      : { ok: false, reason: `${targetType} cannot start the graph.` };
+  }
+  return canConnectNodeTypes(catalog, getNode(state, sourceId)?.type, targetType);
+};
+
+export function canInsertNodeTypeBefore(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  nodeType: string,
+  incomingPath?: BuilderIncomingPath,
+): CompatibilityResult {
+  const available = canAddNodeType(catalog, state, nodeType);
+  if (!available.ok) return available;
+  if (getAllowedRouteFunctionsForNode(catalog, nodeType).length > 0) {
+    return { ok: false, reason: `${nodeType} needs named outgoing routes and cannot be inserted as a simple previous step.` };
+  }
+  if (incomingPath) {
+    const before = canConnectSourceToType(catalog, state, incomingPath.source, nodeType);
+    if (!before.ok) return before;
+  }
+  return canConnectNodeTypeToTarget(catalog, state, nodeType, targetId);
+}
+
+export function canInsertExistingNodeBefore(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  nodeId: string,
+  incomingPath?: BuilderIncomingPath,
+): CompatibilityResult {
+  const node = getNode(state, nodeId);
+  if (!node) return { ok: false, reason: `Unknown node: ${nodeId}` };
+  if (!isIsolatedBuilderNode(state, nodeId)) {
+    return { ok: false, reason: 'Only unconnected nodes can be inserted without changing other paths.' };
+  }
+  if (nodeId === targetId || nodeId === incomingPath?.source) {
+    return { ok: false, reason: 'A path cannot be inserted through itself.' };
+  }
+  if (wouldCreateBuilderCycle(state, nodeId, targetId)) {
+    return { ok: false, reason: 'This insertion would create a cycle.' };
+  }
+  if (getAllowedRouteFunctionsForNode(catalog, node.type).length > 0) {
+    return { ok: false, reason: `${node.type} needs named outgoing routes and cannot be inserted as a simple previous step.` };
+  }
+  if (incomingPath) {
+    const before = canConnectNodes(catalog, state, incomingPath.source, nodeId);
+    if (!before.ok) return before;
+  }
+  return canConnectNodes(catalog, state, nodeId, targetId);
+}
+
+export function insertNodeBefore(
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  node: BuilderNodeState,
+  incomingPath?: BuilderIncomingPath,
+  addNode = true,
+): AgentWorkflowBuilderState {
+  const edges = state.edges.map((edge, edgeIndex) => {
+    if (!incomingPath || edgeIndex !== incomingPath.edgeIndex) return edge;
+    if (incomingPath.conditional && incomingPath.route) {
+      return {
+        ...edge,
+        routes: { ...(edge.routes || {}), [incomingPath.route]: node.id },
+      };
+    }
+    return { ...edge, to: node.id };
+  });
+  const hasTail = edges.some((edge) => !edge.conditional && edge.from === node.id && edge.to === targetId);
+  return {
+    ...state,
+    nodes: addNode ? [...state.nodes, node] : state.nodes,
+    edges: hasTail ? edges : [...edges, { from: node.id, to: targetId }],
+  };
+}
+
+const nodeWithDefaultTools = (
+  catalog: AgentWorkflowCatalogResponse,
+  id: string,
+  type: string,
+  preferredToolIds?: string[],
+): BuilderNodeState => {
+  const allowed = getAllowedToolContractsForNode(catalog, type).map((contract) => contract.id);
+  const selected = preferredToolIds
+    ? preferredToolIds.filter((toolId) => allowed.includes(toolId))
+    : allowed.slice(0, 1);
+  return selected.length > 0 ? { id, type, tool_contract_ids: selected } : { id, type };
+};
+
+const defaultContextPolicy = (catalog: AgentWorkflowCatalogResponse) => ({
+  ...(catalog.defaults?.context_policy || {}),
+  evidence_dedupe: true,
+  evidence_compression: 'compact',
+  final_context_char_limit: 25536,
+});
+
+const createLoopPolicy = (nodes: BuilderNodeState[]) => {
+  const repeatableIds = nodes
+    .filter((node) => REPEATABLE_NODE_TYPES.has(node.type))
+    .map((node) => node.id)
+    .sort();
+  const effectiveTotal = Math.max(nodes.length + repeatableIds.length, nodes.length);
+  return {
+    max_total_visits: effectiveTotal,
+    default_max_node_visits: 1,
+    node_visit_limits: Object.fromEntries(repeatableIds.map((nodeId) => [nodeId, 2])),
+  };
+};
+
+const normalizeLoopPolicy = (
+  nodes: BuilderNodeState[],
+  policy?: Record<string, any>,
+): Record<string, any> | undefined => {
+  if (!policy) return undefined;
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const parsedDefault = Number(policy.default_max_node_visits);
+  const defaultMax = Number.isInteger(parsedDefault) && parsedDefault > 0 ? parsedDefault : 1;
+  const nodeVisitLimits = Object.fromEntries(
+    Object.entries(
+      policy.node_visit_limits && typeof policy.node_visit_limits === 'object'
+        ? policy.node_visit_limits
+        : {},
+    ).flatMap(([nodeId, rawLimit]) => {
+      const limit = Number(rawLimit);
+      return nodeIds.has(nodeId) && Number.isInteger(limit) && limit > 0
+        ? [[nodeId, limit]]
+        : [];
+    }),
+  );
+  const effectiveTotal = nodes.reduce(
+    (total, node) => total + Number(nodeVisitLimits[node.id] || defaultMax),
+    0,
+  );
+  const parsedTotal = Number(policy.max_total_visits);
+  const requestedTotal = Number.isInteger(parsedTotal) && parsedTotal > 0
+    ? parsedTotal
+    : effectiveTotal;
+  return {
+    ...policy,
+    max_total_visits: Math.max(nodes.length, Math.min(requestedTotal, effectiveTotal)),
+    default_max_node_visits: defaultMax,
+    node_visit_limits: nodeVisitLimits,
+  };
+};
+
+const collectAllowedToolIds = (nodes: BuilderNodeState[]) => (
+  Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
+);
+
+const findPrimaryRouteTarget = (edge?: BuilderEdgeState): string | undefined => {
+  if (!edge?.routes) return undefined;
+  return edge.routes.approve
+    || edge.routes.approve_selected
+    || edge.routes.continue_without
+    || Object.values(edge.routes).find((target) => target !== 'END')
+    || Object.values(edge.routes)[0];
+};
+
+const materializeHitlPolicy = (state: AgentWorkflowBuilderState) => {
+  const hitlNodes = state.nodes.filter((node) => node.type === BuiltinAgentNodeType.HitlGate && node.hitl);
+  if (hitlNodes.length === 0) return state.hitl_policy ? clone(state.hitl_policy) : undefined;
+  const base = state.hitl_policy ? clone(state.hitl_policy) : {};
+  const gates = { ...(base.gates || {}) };
+  hitlNodes.forEach((node) => {
+    const routeEdge = state.edges.find((edge) => edge.from === node.id && edge.conditional);
+    const targetNodeId = findPrimaryRouteTarget(routeEdge);
+    gates[node.id] = {
+      enabled: true,
+      mode: node.hitl?.mode || HitlMode.Approval,
+      phase: node.hitl?.phase || HitlPhase.Before,
+      target: targetNodeId && targetNodeId !== 'END' ? { node_id: targetNodeId } : { node_type: 'finalizer' },
+      title: node.hitl?.title || `Review ${targetNodeId || node.id}`,
+      body: node.hitl?.body || '',
+      prompt: node.hitl?.prompt || node.hitl?.body || '',
+      allowed_actions: node.hitl?.allowed_actions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout],
+      default_action: node.hitl?.default_action || AgentRunResumeAction.ContinueWithout,
+      routes: routeEdge?.routes ? clone(routeEdge.routes) : clone(node.hitl?.routes || {}),
+    };
+  });
+  return {
+    ...base,
+    enabled: true,
+    gates,
+  };
+};
+
+export function assembleAgentWorkflowSpec(
+  state: AgentWorkflowBuilderState,
+  overrides: Record<string, any> = {},
+): AgentWorkflowBuilderSpec {
+  const hitlPolicy = materializeHitlPolicy(state);
+  const hasParallel = state.nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
+  const hasCorrective = state.nodes.some((node) => node.type === BuiltinAgentNodeType.RetrievalQualityGrader || node.type === BuiltinAgentNodeType.GroundedAnswerVerifier);
+  const runtime = clone(state.runtime || defaultRuntime(false));
+  if (hasParallel) {
+    runtime.features = { ...(runtime.features || {}), supports_parallel_dispatch: true };
+  }
+  const config = {
+    ...(state.extraConfig || {}),
+    ...(state.context_policy ? { context_policy: clone(state.context_policy) } : {}),
+    ...(state.loop_policy ? { loop_policy: clone(state.loop_policy) } : {}),
+    ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
+    ...(hasParallel && state.parallel_policy ? { parallel_policy: clone(state.parallel_policy) } : {}),
+    ...(hasCorrective && state.corrective_policy ? { corrective_policy: clone(state.corrective_policy) } : {}),
+    allowed_tool_ids: [...(state.allowed_tool_ids?.length ? state.allowed_tool_ids : collectAllowedToolIds(state.nodes))],
+    builder_ui: {
+      ...(state.builder_ui || {}),
+      positions: Object.fromEntries(state.nodes.filter((node) => node.position).map((node) => [node.id, node.position])),
+    },
+    graph: {
+      nodes: state.nodes.map((node) => {
+        const { hitl, position, ...rest } = node;
+        return clone(rest);
+      }),
+      edges: clone(state.edges),
+    },
+    ...overrides,
+  };
+  return {
+    schema_version: 2,
+    workflow_id: state.workflowId || 'custom_rag_agent',
+    workflow_type: state.workflowType || 'custom_rag_agent',
+    runtime,
+    config,
+  };
+}
+
+export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record<string, any>): AgentWorkflowBuilderState {
+  const config = spec?.config && typeof spec.config === 'object' ? spec.config : {};
+  const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentWorkflowGraphSpec : {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes.map((node) => clone(node) as BuilderNodeState) : [];
+  const edges = Array.isArray(graph.edges) ? graph.edges.map((edge) => clone(edge) as BuilderEdgeState) : [];
+  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'parallel_policy', 'corrective_policy', 'builder_ui']);
+  const extraConfig = Object.fromEntries(
+    Object.entries(config).filter(([key]) => !knownConfigKeys.has(key)),
+  );
+  const builderUi = config.builder_ui && typeof config.builder_ui === 'object' ? clone(config.builder_ui) : {};
+  const positions = builderUi.positions && typeof builderUi.positions === 'object' ? builderUi.positions : {};
+  return {
+    workflowId: typeof spec.workflow_id === 'string' && spec.workflow_id
+      ? spec.workflow_id
+      : 'custom_rag_agent',
+    workflowType: typeof spec.workflow_type === 'string' ? spec.workflow_type : 'custom_rag_agent',
+    nodes: nodes.map((node) => positions[node.id] ? { ...node, position: clone(positions[node.id]) } : node),
+    edges,
+    allowed_tool_ids: Array.isArray(config.allowed_tool_ids) ? [...config.allowed_tool_ids] : collectAllowedToolIds(nodes),
+    context_policy: config.context_policy ? clone(config.context_policy) : undefined,
+    loop_policy: config.loop_policy ? clone(config.loop_policy) : undefined,
+    hitl_policy: config.hitl_policy ? clone(config.hitl_policy) : undefined,
+    parallel_policy: config.parallel_policy ? clone(config.parallel_policy) : undefined,
+    corrective_policy: config.corrective_policy ? clone(config.corrective_policy) : undefined,
+    runtime: spec.runtime && typeof spec.runtime === 'object' ? clone(spec.runtime) : defaultRuntime(false),
+    extraConfig,
+    builder_ui: {
+      notes: Array.isArray(builderUi.notes) ? builderUi.notes : [],
+      groups: Array.isArray(builderUi.groups) ? builderUi.groups : [],
+    },
+  };
+}
+
+export function normalizeBuilderState(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+): AgentWorkflowBuilderState {
+  const seenTypeCounts = new Map<string, number>();
+  const globallyAllowedTools = new Set(state.allowed_tool_ids || []);
+  const nodes = state.nodes.filter((node) => {
+    const entry = catalogEntry(catalog, node.type);
+    if (!entry) return false;
+    const count = seenTypeCounts.get(node.type) || 0;
+    if (count >= entry.max_instances) return false;
+    seenTypeCounts.set(node.type, count + 1);
+    const allowedTools = new Set(entry.allowed_tool_contract_ids || []);
+    const requestedTools = Array.isArray(node.tool_contract_ids)
+      ? node.tool_contract_ids
+      : Array.from(globallyAllowedTools).filter((toolId) => allowedTools.has(toolId));
+    const selectedTools = requestedTools.filter((toolId) => allowedTools.has(toolId));
+    return Object.assign(node, selectedTools.length > 0 ? { tool_contract_ids: selectedTools } : { tool_contract_ids: undefined });
+  }).map((node) => {
+    const { tool_contract_ids, ...rest } = node;
+    return tool_contract_ids?.length ? { ...rest, tool_contract_ids } : rest;
+  });
+  const normalized: AgentWorkflowBuilderState = {
+    ...state,
+    nodes,
+    loop_policy: normalizeLoopPolicy(nodes, state.loop_policy),
+    edges: state.edges.filter((edge) => {
+      if (edge.conditional) {
+        return Boolean(edge.from && edge.route_fn && edge.routes && Object.keys(edge.routes).length > 0);
+      }
+      return Boolean(edge.from && edge.to);
+    }),
+  };
+  const hasParallelRegion = nodes.some((node) => node.type === BuiltinAgentNodeType.ParallelDispatch);
+  if (hasParallelRegion) {
+    normalized.parallel_policy = normalizeParallelPolicy(catalog, state.parallel_policy);
+  } else {
+    delete normalized.parallel_policy;
+    const runtime = clone(normalized.runtime || {});
+    if (runtime.features && typeof runtime.features === 'object') {
+      delete runtime.features.supports_parallel_dispatch;
+    }
+    normalized.runtime = runtime;
+  }
+  const hasCorrective = nodes.some((node) => node.type === BuiltinAgentNodeType.RetrievalQualityGrader || node.type === BuiltinAgentNodeType.GroundedAnswerVerifier);
+  if (hasCorrective) {
+    normalized.corrective_policy = normalizeCorrectivePolicy(catalog, state.corrective_policy);
+    const runtime = clone(normalized.runtime || defaultRuntime(true, 'corrective_self_rag'));
+    runtime.features = { ...(runtime.features || {}), supports_replans: true, supports_parallel_dispatch: true, supports_answer_quality: true, supports_corrective_retrieval: true };
+    normalized.runtime = runtime;
+  } else {
+    delete normalized.corrective_policy;
+  }
+  const selectedToolIds = collectAllowedToolIds(normalized.nodes);
+  const selectedToolSet = new Set(selectedToolIds);
+  normalized.allowed_tool_ids = [
+    ...(state.allowed_tool_ids || []).filter((toolId) => selectedToolSet.has(toolId)),
+    ...selectedToolIds.filter((toolId) => !globallyAllowedTools.has(toolId)),
+  ];
+  return normalized;
+}
+
+export function getImmediateSuccessorIds(
+  state: AgentWorkflowBuilderState,
+  nodeId: string,
+): string[] {
+  const successors = new Set<string>();
+  state.edges.forEach((edge) => {
+    if (edge.from !== nodeId) return;
+    const targets = edge.conditional
+      ? Object.values(edge.routes || {})
+      : edge.to
+        ? [edge.to]
+        : [];
+    targets.forEach((target) => {
+      if (target && target !== nodeId) successors.add(target);
+    });
+  });
+  return Array.from(successors);
+}
+
+export function resolveAutomaticHitlBypassTarget(
+  state: AgentWorkflowBuilderState,
+  targetNodeId: string,
+): string | undefined {
+  const successors = getImmediateSuccessorIds(state, targetNodeId);
+  return successors.length === 1 ? successors[0] : undefined;
+}
+
+export function setHitlContinueWithoutTarget(
+  state: AgentWorkflowBuilderState,
+  gateNodeId: string,
+  targetId?: string,
+): AgentWorkflowBuilderState {
+  const gateNode = getNode(state, gateNodeId);
+  if (!gateNode || gateNode.type !== BuiltinAgentNodeType.HitlGate) return state;
+  const gateEdge = state.edges.find((edge) => edge.from === gateNodeId && edge.conditional);
+  const currentRoutes = { ...(gateEdge?.routes || gateNode.hitl?.routes || {}) };
+  const approvedTarget = currentRoutes[AgentRunResumeAction.Approve];
+  if (
+    targetId
+    && (
+      !approvedTarget
+      || !getImmediateSuccessorIds(state, approvedTarget).includes(targetId)
+    )
+  ) {
+    return state;
+  }
+
+  const routes = { ...currentRoutes };
+  if (targetId) {
+    routes[AgentRunResumeAction.ContinueWithout] = targetId;
+  } else {
+    delete routes[AgentRunResumeAction.ContinueWithout];
+  }
+  const existingActions = gateNode.hitl?.allowed_actions || [];
+  const actionsWithoutContinue = existingActions.filter(
+    (action) => action !== AgentRunResumeAction.ContinueWithout,
+  );
+  const allowedActions = targetId
+    ? [...actionsWithoutContinue, AgentRunResumeAction.ContinueWithout]
+    : actionsWithoutContinue;
+  const currentDefault = gateNode.hitl?.default_action;
+  const defaultAction = (
+    currentDefault === AgentRunResumeAction.ContinueWithout && !targetId
+  )
+    ? AgentRunResumeAction.Approve
+    : currentDefault || AgentRunResumeAction.Approve;
+
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => node.id === gateNodeId
+      ? {
+        ...node,
+        hitl: {
+          ...(node.hitl || {}),
+          routes,
+          allowed_actions: allowedActions,
+          default_action: defaultAction,
+        },
+      }
+      : node),
+    edges: state.edges.map((edge) => (
+      edge.from === gateNodeId && edge.conditional
+        ? { ...edge, routes }
+        : edge
+    )),
+  };
+}
+
+export function createHitlGateForTarget(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetNodeId: string,
+  options: {
+    id?: string;
+    sourceNodeId?: string;
+    incomingPath?: BuilderIncomingPath;
+    position?: { x: number; y: number };
+    title?: string;
+    body?: string;
+    mode?: string;
+    allowedActions?: string[];
+    defaultAction?: string;
+  } = {},
+): AgentWorkflowBuilderState {
+  const target = getNode(state, targetNodeId);
+  if (!target) return state;
+  const gateId = options.id || getCanonicalNodeId(`hitl_${targetNodeId}`, state.nodes.map((node) => node.id));
+  const bypassTarget = resolveAutomaticHitlBypassTarget(state, targetNodeId);
+  const routes = {
+    [AgentRunResumeAction.Approve]: target.id,
+    [AgentRunResumeAction.Reject]: GraphSentinel.End,
+    ...(bypassTarget
+      ? { [AgentRunResumeAction.ContinueWithout]: bypassTarget }
+      : {}),
+  };
+  const allowedActions = [
+    AgentRunResumeAction.Approve,
+    AgentRunResumeAction.Reject,
+    ...(bypassTarget ? [AgentRunResumeAction.ContinueWithout] : []),
+  ];
+  const gate: BuilderNodeState = {
+    id: gateId,
+    type: BuiltinAgentNodeType.HitlGate,
+    ...(options.position ? { position: options.position } : {}),
+    hitl: {
+      title: options.title || `Review ${target.id}`,
+      body: options.body || '',
+      mode: options.mode || HitlMode.Approval,
+      allowed_actions: options.allowedActions || allowedActions,
+      default_action: options.defaultAction
+        || (bypassTarget ? AgentRunResumeAction.ContinueWithout : AgentRunResumeAction.Approve),
+      routes,
+    },
+  };
+  const sourceEdgeIndex = options.incomingPath
+    ? options.incomingPath.edgeIndex
+    : state.edges.findIndex((edge) => (
+      (!options.sourceNodeId || edge.from === options.sourceNodeId)
+      && (
+        edge.to === targetNodeId
+        || Object.values(edge.routes || {}).includes(targetNodeId)
+      )
+    ));
+  const edges = state.edges.map((edge, edgeIndex) => {
+    if (edgeIndex !== sourceEdgeIndex) return edge;
+    if (
+      edge.conditional
+      && options.incomingPath?.route
+      && edge.routes?.[options.incomingPath.route] === targetNodeId
+    ) {
+      return {
+        ...edge,
+        routes: { ...edge.routes, [options.incomingPath.route]: gateId },
+      };
+    }
+    if (edge.conditional && edge.routes) {
+      return {
+        ...edge,
+        routes: Object.fromEntries(
+          Object.entries(edge.routes).map(([route, target]) => [
+            route,
+            target === targetNodeId ? gateId : target,
+          ]),
+        ),
+      };
+    }
+    return edge.to === targetNodeId ? { ...edge, to: gateId } : edge;
+  });
+  if (sourceEdgeIndex < 0) {
+    edges.push({ from: 'START', to: gateId });
+  }
+  edges.push({
+    from: gateId,
+    conditional: true,
+    route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.HitlGate) || RouteFunctionId.HitlGate,
+    routes,
+  });
+  return {
+    ...state,
+    nodes: [...state.nodes, gate],
+    edges,
+  };
+}

@@ -7,12 +7,19 @@ Endpoints:
 - POST /api/threads/{thread_id}/chat - Thread chat
 """
 
+import asyncio
+import json
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
-from app.agent.agent import normalize_tool_instructions
+from app.agent.prompting import normalize_tool_instructions
+from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
+from app.agent_workflows.workflow_runtime import workflow_supports_replans
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -24,14 +31,37 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
-from app.models.llm_server_client import (
-    INTENT_AGENT_MAX_ITERATIONS,
-    merge_thread_settings,
-)
+from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
-from app.rag.chat_service import handle_thread_chat
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
 
 router = APIRouter(tags=["messages"])
+
+
+async def _settings_workflow_supports_replans(settings: dict) -> bool:
+    agent_workflow = settings.get("agent_workflow")
+    workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
+    if not isinstance(workflow_id, str) or not workflow_id:
+        return False
+    workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
+    spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
+    return workflow_supports_replans(spec)
+
+
+def _agent_message_metadata(message) -> dict:
+    metadata = getattr(message, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    allowed_keys = {
+        "agent_workflow_id",
+        "agent_route",
+        "agent_route_reason",
+    }
+    return {key: metadata[key] for key in allowed_keys if key in metadata}
 
 
 @router.get("/threads/{thread_id}/messages")
@@ -57,6 +87,11 @@ async def get_thread_messages_endpoint(
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
+                    "metadata": _agent_message_metadata(m),
+                    "agent_run_id": getattr(m, "agent_run_id", None),
+                    "agent_run_turn_kind": getattr(m, "agent_run_turn_kind", None),
+                    "agent_run_sequence": getattr(m, "agent_run_sequence", None),
+                    "agent_trace_refs": getattr(m, "agent_trace_refs", None),
                     "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages
@@ -127,7 +162,7 @@ async def delete_message_endpoint(message_id: str):
         vector_message_id = getattr(message, "turn_id", None) or (
             (assistant_msg_id or message_id).split(":")[0]
         )
-        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embed_model)
+        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embedding_model)
 
         # Delete orphaned web_search chunks
         if urls_to_check:
@@ -141,7 +176,7 @@ async def delete_message_endpoint(message_id: str):
                             still_needed.add(url)
             orphaned = urls_to_check - still_needed
             if orphaned:
-                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned), thread.embed_model)
+                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned), thread.embedding_model)
 
         # Delete from database (pair-aware)
         deleted_ids = await delete_message_pair(message_id)
@@ -162,22 +197,32 @@ async def delete_message_endpoint(message_id: str):
 
 
 @router.post("/threads/{thread_id}/chat")
-async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
+async def thread_chat_endpoint(
+    thread_id: str,
+    req: ThreadChatRequest,
+    accept: Optional[str] = Header(default=None),
+):
     """
     Thread-based chat with semantic memory.
     Returns answer, used_chat_ids (recollected messages), and document_sources.
     """
     try:
-        # Verify thread exists
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        try:
+            embedding_context = await require_thread_embedding_ready(thread_id)
+        except EmbeddingModelResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EmbeddingModelUnavailableError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "embedding_model_unavailable", "message": str(exc)},
+            ) from exc
+        thread = embedding_context.thread
 
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
-        if req.max_iterations is None:
-            req.max_iterations = thread_settings["max_iterations"]
+        if req.replans is None and await _settings_workflow_supports_replans(thread_settings):
+            req.replans = thread_settings["replans"]
         if req.system_role_override is None:
             req.system_role_override = thread_settings["system_role"]
         if req.tool_instructions_override is None:
@@ -186,19 +231,78 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
-        if req.use_intent_agent is None:
-            req.use_intent_agent = thread_settings.get("use_intent_agent", True)
-        if req.intent_agent_max_iterations is None:
-            req.intent_agent_max_iterations = thread_settings.get(
-                "intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS
-            )
-        if req.reasoning_mode is None:
-            req.reasoning_mode = thread_settings.get("reasoning_mode", True)
+        service = AgentRunService()
+        if "text/event-stream" not in str(accept or "").lower():
+            return await service.run_thread_chat(thread_id, req, embedding_context.embedding_model)
 
-        result = await handle_thread_chat(thread_id, req, thread.embed_model)
-        return result
+        sink = AgentExecutionEventSink(include_details=False)
+
+        async def run_chat() -> None:
+            try:
+                result = await service.run_thread_chat(
+                    thread_id,
+                    req,
+                    embedding_context.embedding_model,
+                    execution_event_sink=sink,
+                )
+                await sink.queue.put({"event": "__result__", "data": result})
+            except Exception as exc:
+                traceback.print_exc()
+                await sink.queue.put({
+                    "event": "__error__",
+                    "data": {"error": {"code": "chat_stream_failed", "raw_message": str(exc), "retryable": True}},
+                })
+
+        async def events():
+            sequence = 0
+            task = asyncio.create_task(run_chat())
+            retain_background_task(task)
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                    except asyncio.TimeoutError:
+                        sequence += 1
+                        yield _chat_sse({"event": "heartbeat", "data": {}}, sequence)
+                        continue
+                    event = str(item.get("event") or "message")
+                    data = item.get("data") or {}
+                    if event == "__result__":
+                        status = str(data.get("status") or "completed")
+                        terminal_event = (
+                            "interrupt.created"
+                            if status == "awaiting_human"
+                            else "run.canceled"
+                            if status == "cancelled"
+                            else "run.failed"
+                            if status in {"failed", "error"} or data.get("agent_error")
+                            else "run.completed"
+                        )
+                        sequence += 1
+                        yield _chat_sse({"event": terminal_event, "data": {"run_id": data.get("agent_run_id"), "status": status, "response": data}}, sequence)
+                        break
+                    if event == "__error__":
+                        sequence += 1
+                        yield _chat_sse({"event": "run.failed", "data": data}, sequence)
+                        break
+                    sequence += 1
+                    yield _chat_sse(item, sequence)
+            finally:
+                sink.close()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _chat_sse(event: dict[str, Any], sequence: int) -> str:
+    name = str(event.get("event") or "message")
+    payload = {"id": sequence, "event": name, "data": event.get("data") or {}}
+    return f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, default=str)}\n\n"

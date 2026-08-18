@@ -74,10 +74,6 @@ export function useTtsPrefetchCache({
     cacheRef.current.clear();
   }, []);
 
-  useEffect(() => {
-    clearCache();
-  }, [sentences, clearCache]);
-
   useEffect(() => clearCache, [clearCache]);
 
   return {

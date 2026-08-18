@@ -3,10 +3,17 @@
 
 
 from app.agent.reasoning import normalize_ai_response
-from app.models.llm_server_client import ReasoningChatOpenAI
+import pytest
+
+from app.models.llm_server_client import (
+    ReasoningChatOpenAI,
+    close_model_client,
+    get_llm,
+)
 
 
-def test_reasoning_chat_openai_preserves_lm_studio_reasoning_content():
+@pytest.mark.asyncio
+async def test_reasoning_chat_openai_preserves_lm_studio_reasoning_content():
     llm = ReasoningChatOpenAI(
         model="deepseek/deepseek-r1-0528-qwen3-8b",
         base_url="http://localhost:1234/v1",
@@ -45,3 +52,32 @@ def test_reasoning_chat_openai_preserves_lm_studio_reasoning_content():
     assert normalized["reasoning"] == "LM Studio reasoning trace"
     assert normalized["reasoning_available"] is True
     assert normalized["reasoning_format"] == "structured"
+    await close_model_client(llm)
+
+
+@pytest.mark.asyncio
+async def test_closing_owned_llm_transport_does_not_close_another_wrapper():
+    first = get_llm("test-model", own_async_transport=True)
+    second = get_llm("test-model", own_async_transport=True)
+
+    assert first.http_async_client is not second.http_async_client
+    assert not first.http_async_client.is_closed
+    assert not second.http_async_client.is_closed
+
+    await close_model_client(first)
+
+    assert first.http_async_client.is_closed
+    assert not second.http_async_client.is_closed
+    await close_model_client(second)
+
+
+@pytest.mark.asyncio
+async def test_closing_implicit_llm_wrapper_does_not_close_shared_transport():
+    first = get_llm("test-model")
+    second = get_llm("test-model")
+    shared_transport = first.root_async_client._client
+
+    assert shared_transport is second.root_async_client._client
+    await close_model_client(first)
+
+    assert not shared_transport.is_closed

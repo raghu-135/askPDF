@@ -1,4 +1,7 @@
+# Production images omit tests; Dockerfile.test opts the test tree back in.
 tests/
+!tests/
+!tests/**
 __pycache__/
 *.py[cod]
 .pytest_cache/

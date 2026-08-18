@@ -39,6 +39,9 @@ jobs:
       - name: Build Docker images
         run: docker compose build
 
+      - name: Check diff hygiene
+        run: git diff --check
+
   tests:
     name: Test suite
     runs-on: ubuntu-latest
@@ -50,6 +53,31 @@ jobs:
       - name: Run Docker test runner
         run: ./run_tests.sh
 
+      - name: Run Postgres checkpoint/resume test
+        run: ./run_tests.sh --agent-checkpoint
+
+      - name: Run mandatory external LangGraph phase
+        timeout-minutes: 15
+        run: ./run_tests.sh --phase5
+
       - name: Stop test services
         if: always()
         run: docker compose -p askpdf-test -f docker-compose.test.yml down --volumes --remove-orphans
+
+  phase7-hermes-proof:
+    name: Phase 7 Hermes proof
+    runs-on: ubuntu-latest
+    needs: docker-build
+    timeout-minutes: 20
+    env:
+      ASKPDF_RUNTIME_TEST_PROJECT_NAME: askpdf-phase7-ci
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run deterministic Hermes proof
+        run: ./run_tests.sh --phase7
+
+      - name: Stop Phase 7 services
+        if: always()
+        run: docker compose -p askpdf-phase7-ci -f docker-compose.runtime-integration.yml down --volumes --remove-orphans

@@ -6,9 +6,12 @@ import json
 import pytest
 
 from app.agent import external_research_tools
-from app.agent import agent as agent_module
-from app.agent.agent_helpers import collect_tool_sources
+from app.agent.tool_contract import collect_tool_sources, normalize_tool_result
 from app.db.vector.adapter import WeaviateAdapter
+from app.rag import agent_tools
+from app.tools.context import ToolInvocationContext
+from app.tools.contracts import TimelineRequest
+from app.tools.retrieval_timeline import search_thread_events as neutral_search_thread_events
 from app.rag import indexer
 from app.rag.retrieval import fetch_semantic_history, group_document_chunks
 
@@ -31,7 +34,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
 
     count = await adapter.index_pdf_chunks(
         thread_id="thread-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         file_hash="file-1",
         texts=["benefits text"],
         embeddings=[[0.1, 0.2]],
@@ -74,7 +77,7 @@ async def test_chat_and_web_vectors_store_event_specific_timestamp_only():
         answer="A.",
         texts=["Q: Q?\nA: A."],
         embeddings=[[0.1, 0.2]],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         message_created_at="2026-06-25T19:10:00Z",
     )
     chat_props = adapter.points[0]["properties"]
@@ -87,7 +90,7 @@ async def test_chat_and_web_vectors_store_event_specific_timestamp_only():
         query="query",
         texts=["snippet"],
         embeddings=[[0.1, 0.2]],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         urls=["https://example.com"],
         titles=["Example"],
         web_search_performed_at="2026-06-25T19:15:00Z",
@@ -119,7 +122,7 @@ async def test_chat_and_web_search_results_derive_timeline_metadata():
     chat_results = await adapter.search_chat_memory(
         thread_id="thread-1",
         query_vector=[0.1, 0.2],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
     assert chat_results[0]["message_created_at"] == "2026-06-25T19:10:00Z"
     assert chat_results[0]["timeline_event_at"] == "2026-06-25T19:10:00Z"
@@ -140,7 +143,7 @@ async def test_chat_and_web_search_results_derive_timeline_metadata():
     web_results = await adapter.search_web_chunks(
         thread_id="thread-1",
         query_vector=[0.1, 0.2],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
     assert web_results[0]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
     assert web_results[0]["timeline_event_at"] == "2026-06-25T19:15:00Z"
@@ -402,7 +405,7 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
     result = await indexer.index_document_for_thread(
         thread_id="thread-1",
         file_hash="file-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert result["status"] == "success"
@@ -442,7 +445,7 @@ async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(mon
     result = await indexer.index_document_for_thread(
         thread_id="thread-1",
         file_hash="file-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert result["status"] == "success"
@@ -500,7 +503,7 @@ async def test_semantic_history_includes_message_time_when_present(monkeypatch):
         query_vector=[0.1],
         query_text=None,
         limit=5,
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert "Earlier exchange at 2026-06-25T19:10:00Z:" in history
@@ -521,12 +524,17 @@ def test_web_context_exposes_search_performed_time():
     assert payload["__web_sources__"][0]["timeline_event_type"] == "web_search_performed"
 
 
-def test_thread_timeline_tool_replaces_topic_anchor():
-    tool_names = {tool.name for tool in agent_module.core_tools_list}
-    assert "search_thread_timeline" in tool_names
+def test_thread_events_tool_replaces_topic_anchor():
+    tool_names = {
+        agent_tools.get_thread_shape.name,
+        agent_tools.search_documents.name,
+        agent_tools.search_thread_conversation_history.name,
+        agent_tools.search_thread_events.name,
+    }
+    assert "search_thread_events" in tool_names
     assert "find_topic_anchor_in_history" not in tool_names
 
-    schema = agent_module.search_thread_timeline.args_schema.model_json_schema()
+    schema = agent_tools.search_thread_events.args_schema.model_json_schema()
     assert schema["properties"]["sources"]["enum"] == ["all", "conversation", "documents", "web_cache"]
     assert schema["properties"]["order"]["enum"] == ["relevance", "oldest", "newest"]
 
@@ -584,6 +592,110 @@ def test_collect_tool_sources_preserves_timeline_events():
     assert web_sources[0]["timeline_event_type"] == "web_search_performed"
 
 
+def test_collect_tool_sources_accepts_tool_contract_envelope():
+    document_sources = []
+    web_sources = []
+    used_chat_ids = []
+
+    collect_tool_sources(
+        json.dumps(
+            {
+                "ok": True,
+                "content": "Evidence",
+                "artifacts": {
+                    "document_sources": [{"file_hash": "file-1"}],
+                    "web_sources": [{"url": "https://example.com"}],
+                    "used_chat_ids": ["msg-1"],
+                },
+                "trace": {"tool_name": "search_documents"},
+            }
+        ),
+        document_sources,
+        web_sources,
+        used_chat_ids,
+    )
+
+    assert document_sources == [{"file_hash": "file-1"}]
+    assert web_sources == [{"url": "https://example.com"}]
+    assert used_chat_ids == ["msg-1"]
+
+
+def test_collect_tool_sources_uses_artifact_timeline_events_without_legacy_aliases():
+    document_sources = []
+    web_sources = []
+    used_chat_ids = []
+
+    collect_tool_sources(
+        json.dumps(
+            {
+                "ok": True,
+                "content": "Timeline evidence",
+                "artifacts": {
+                    "timeline_events": [
+                        {
+                            "source_type": "conversation",
+                            "message_id": "msg-1",
+                            "timeline_event_at": "2026-06-25T19:10:00Z",
+                            "timeline_event_type": "message_created",
+                        },
+                        {
+                            "source_type": "document",
+                            "file_hash": "file-1",
+                            "file_name": "benefits.pdf",
+                            "document_source_type": "pdf",
+                            "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+                            "timeline_event_at": "2026-06-25T19:00:00Z",
+                            "timeline_event_type": "document_added_to_thread",
+                        },
+                        {
+                            "source_type": "web_cache",
+                            "url": "https://example.com",
+                            "title": "Example",
+                            "web_search_performed_at": "2026-06-25T19:15:00Z",
+                            "timeline_event_at": "2026-06-25T19:15:00Z",
+                            "timeline_event_type": "web_search_performed",
+                        },
+                    ],
+                },
+                "trace": {"tool_name": "search_thread_events"},
+            }
+        ),
+        document_sources,
+        web_sources,
+        used_chat_ids,
+    )
+
+    assert used_chat_ids == ["msg-1"]
+    assert document_sources == [
+        {
+            "text": "",
+            "file_hash": "file-1",
+            "file_name": "benefits.pdf",
+            "source_type": "pdf",
+            "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+            "timeline_event_at": "2026-06-25T19:00:00Z",
+            "timeline_event_type": "document_added_to_thread",
+            "page_count": None,
+            "word_count": None,
+            "sentence_count": None,
+            "languages": None,
+            "filetype": None,
+            "element_types": None,
+        }
+    ]
+    assert web_sources == [
+        {
+            "text": "",
+            "url": "https://example.com",
+            "title": "Example",
+            "web_search_performed_at": "2026-06-25T19:15:00Z",
+            "timeline_event_at": "2026-06-25T19:15:00Z",
+            "timeline_event_type": "web_search_performed",
+            "score": None,
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
     import app.db as db_module
@@ -612,18 +724,21 @@ async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
         ),
     )
 
-    output = await agent_module.get_thread_shape.ainvoke(
+    output = await agent_tools.get_thread_shape.ainvoke(
         {},
         config={"configurable": {"thread_id": "thread-1"}},
     )
+    payload = normalize_tool_result(output, tool_name="get_thread_shape")
 
-    assert "4 pages" in output
-    assert "123 words" in output
-    assert "12 sentences" in output
+    assert payload["ok"] is True
+    assert payload["trace"]["tool_name"] == "get_thread_shape"
+    assert "4 pages" in payload["content"]
+    assert "123 words" in payload["content"]
+    assert "12 sentences" in payload["content"]
 
 
 @pytest.mark.asyncio
-async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeypatch):
+async def test_search_thread_events_returns_sorted_mixed_source_events(monkeypatch):
     fake_db = SimpleNamespace(
         search_chat_memory=AsyncMock(
             return_value=[
@@ -648,34 +763,35 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
         ),
     )
 
-    class FakeEmbeddingModel:
-        async def aembed_query(self, query):
+    class FakeServices:
+        def vector_db(self):
+            return fake_db
+
+        async def embed(self, _model, _query):
             return [0.1, 0.2]
 
-    monkeypatch.setattr(agent_module, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_module, "get_embedding_model", lambda _name: FakeEmbeddingModel())
-    monkeypatch.setattr(
-        agent_module,
-        "get_document_metadata_lookup",
-        AsyncMock(
-            return_value={
+        async def document_lookup(self, _thread_id):
+            return {
                 "file-1": {
                     "file_name": "benefits.pdf",
                     "source_type": "pdf",
                     "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 }
             }
-        ),
-    )
-    monkeypatch.setattr(agent_module, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
 
-    raw = await agent_module.search_thread_timeline.ainvoke(
-        {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
-        config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
+        async def rerank(self, _query, chunks):
+            return chunks
+
+    raw = await neutral_search_thread_events(
+        TimelineRequest(query="benefits timeline", sources="all", order="oldest", max_results=10),
+        ToolInvocationContext(thread_id="thread-1", embedding_model="embed-1"),
+        services=FakeServices(),
     )
-    payload = json.loads(raw)
+    payload = normalize_tool_result(raw, tool_name="search_thread_events")
     events = payload["__timeline_events__"]
 
+    assert payload["ok"] is True
+    assert payload["trace"]["tool_name"] == "search_thread_events"
     assert [event["timeline_event_type"] for event in events] == [
         "document_added_to_thread",
         "message_created",

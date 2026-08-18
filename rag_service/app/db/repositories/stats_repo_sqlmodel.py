@@ -13,7 +13,14 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.db.models_sqlmodel import Thread, ChatTurn, File, ThreadFile
+from app.db.models_sqlmodel import (
+    Thread,
+    ChatTurn,
+    ChatTurnStatus,
+    File,
+    ProjectFile,
+    ThreadFile,
+)
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import maybe_iso_utc_z
 from app.time_utils import utc_now
@@ -182,7 +189,7 @@ class StatsRepository:
                 )
                 .where(
                     ChatTurn.thread_id == thread_id,
-                    ChatTurn.status.in_(["completed", "clarification"]),
+                    ChatTurn.status.in_([ChatTurnStatus.COMPLETED.value, ChatTurnStatus.CLARIFICATION.value]),
                     ChatTurn.payload["answer"].astext.isnot(None),
                     ChatTurn.payload["answer"].astext != "",
                 )
@@ -248,13 +255,20 @@ class StatsRepository:
             )
             thread = result.scalar_one_or_none()
 
-            files_result = await session.execute(
+            direct_result = await session.execute(
                 select(File, ThreadFile.added_at)
                 .join(ThreadFile, File.file_hash == ThreadFile.file_hash)
                 .where(ThreadFile.thread_id == thread_id)
                 .order_by(ThreadFile.added_at.asc())
             )
-            attached_files = list(files_result.all())
+            direct_files = list(direct_result.all())
+            project_result = await session.execute(
+                select(File, ProjectFile.added_at)
+                .join(ProjectFile, File.file_hash == ProjectFile.file_hash)
+                .where(ProjectFile.project_id == thread.project_id)
+                .order_by(ProjectFile.added_at.asc())
+            ) if thread else None
+            project_files = list(project_result.all()) if project_result else []
 
         if thread:
             documents_cache = self._load_documents_meta(thread.documents_meta)
@@ -270,7 +284,9 @@ class StatsRepository:
             last_qa_at = None
 
         documents: Dict[str, Any] = {}
-        for file, added_at in attached_files:
+        direct_hashes = {file.file_hash for file, _added_at in direct_files}
+        project_hashes = {file.file_hash for file, _added_at in project_files}
+        for file, added_at in direct_files:
             cached = documents_cache.get(file.file_hash, {})
             cached = cached if isinstance(cached, dict) else {}
             documents[file.file_hash] = {
@@ -280,6 +296,24 @@ class StatsRepository:
                 "source_type": file.source_type,
                 "file_path": file.file_path,
                 "document_available_in_thread_at": maybe_iso_utc_z(added_at),
+                "association_scope": "thread",
+                "is_project_knowledge": file.file_hash in project_hashes,
+            }
+        for file, added_at in project_files:
+            if file.file_hash in direct_hashes:
+                continue
+            cached = documents_cache.get(file.file_hash, {})
+            cached = cached if isinstance(cached, dict) else {}
+            documents[file.file_hash] = {
+                **cached,
+                "file_name": file.file_name,
+                "file_hash": file.file_hash,
+                "source_type": file.source_type,
+                "file_path": file.file_path,
+                "document_available_in_thread_at": None,
+                "document_available_in_project_at": maybe_iso_utc_z(added_at),
+                "association_scope": "project",
+                "is_project_knowledge": True,
             }
 
         return {

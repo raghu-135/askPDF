@@ -2,6 +2,8 @@ services:
   frontend:
     build:
       target: dev
+    command: >
+      sh -lc "if [ ! -x node_modules/.bin/next ] || [ package-lock.json -nt node_modules/.package-lock.json ] || [ ! -d node_modules/@tanstack/react-virtual ]; then npm ci --no-audit --no-fund; fi; npm run dev"
     volumes:
       - ./frontend:/app
       - /app/node_modules

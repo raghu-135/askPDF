@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.models.llm_server_client import (
     check_chat_model_ready,
-    check_embed_model_ready,
+    check_embedding_model_ready,
     check_model_supports_tools,
     fetch_available_models,
 )
@@ -49,11 +49,11 @@ async def is_chat_model_ready_endpoint(model: str):
 
 
 @router.get("/health/embed-model/{model:path}")
-async def is_embed_model_ready_endpoint(model: str):
+async def is_embedding_model_ready_endpoint(model: str):
     """Check if an embedding model is ready."""
     try:
-        ready = await check_embed_model_ready(model)
-        return {"model": model, "embed_model_ready": ready}
+        ready = await check_embedding_model_ready(model)
+        return {"model": model, "embedding_model_ready": ready}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

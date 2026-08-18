@@ -1,0 +1,133 @@
+{
+  "builtin_key": "orchestrator_worker_rag_agent",
+  "description": "A bounded orchestrator-worker workflow that plans typed retrieval work, executes read-only workers concurrently, deterministically aggregates evidence, and synthesizes a final response.",
+  "is_builtin": true,
+  "name": "Orchestrator-Worker Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
+        "document_evidence",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {"from": "START", "to": "context_loader"},
+          {"from": "context_loader", "to": "planner"},
+          {
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "execute": "parallel_dispatch"
+            }
+          },
+          {"from": "direct_answer", "to": "answer_evaluator"},
+          {
+            "conditional": true,
+            "from": "parallel_dispatch",
+            "route_fn": "parallel_dispatch_route",
+            "routes": {"dispatch": "aggregator"}
+          },
+          {"dynamic": true, "from": "parallel_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "parallel_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "aggregator"},
+          {"from": "thread_conversation_history_worker", "to": "aggregator"},
+          {"from": "durable_memory_worker", "to": "aggregator"},
+          {"from": "thread_events_worker", "to": "aggregator"},
+          {"from": "web_worker", "to": "aggregator"},
+          {"from": "aggregator", "to": "synthesizer"},
+          {"from": "synthesizer", "to": "answer_evaluator"},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
+          {"from": "finalizer", "to": "END"}
+        ],
+        "nodes": [
+          {"id": "context_loader", "type": "context_loader"},
+          {"id": "planner", "type": "planner"},
+          {"id": "parallel_dispatch", "type": "parallel_dispatch"},
+          {"id": "retrieval_worker", "type": "retrieval_worker"},
+          {"id": "thread_conversation_history_worker", "type": "thread_conversation_history_worker"},
+          {"id": "durable_memory_worker", "type": "durable_memory_worker"},
+          {"id": "thread_events_worker", "type": "thread_events_worker"},
+          {"id": "web_worker", "type": "web_worker"},
+          {"id": "aggregator", "type": "aggregator"},
+          {"id": "direct_answer", "type": "direct_answer"},
+          {"id": "synthesizer", "type": "synthesizer"},
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
+          {"id": "finalizer", "type": "finalizer"}
+        ]
+      },
+      "hitl_policy": {"enabled": false, "gates": {}},
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 17,
+        "node_visit_limits": {
+          "parallel_dispatch": 1,
+          "aggregator": 1,
+          "retrieval_worker": 1,
+          "thread_conversation_history_worker": 1,
+          "durable_memory_worker": 1,
+          "thread_events_worker": 1,
+          "web_worker": 1,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
+        }
+      },
+      "parallel_policy": {
+        "enabled": true,
+        "max_concurrency": 4,
+        "max_work_items": 8,
+        "dispatch_timeout_ms": 60000,
+        "default_worker_timeout_ms": 30000,
+        "web_worker_timeout_ms": 45000,
+        "max_attempts": 2,
+        "minimum_successes": 1,
+        "continue_on_partial_failure": true
+      },
+      "prefetch_policy": {"enabled": true, "mode": "routing"},
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "workflow_id": "orchestrator_worker_rag_agent",
+    "runtime": {
+      "failure_code": "orchestrator_worker_rag_execution_failed",
+      "failure_context": "Orchestrator-Worker Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Orchestrator-Worker Agent execution",
+      "features": {
+        "supports_replans": false,
+        "supports_parallel_dispatch": true,
+        "supports_answer_quality": true
+      },
+      "kind": "compiled_rag",
+      "label": "Orchestrator-Worker Agent",
+      "prompt_preview": "planner",
+      "success_context": "Context retrieved by the Orchestrator-Worker Agent workflow."
+    },
+    "schema_version": 2,
+    "version": 2
+  },
+  "visibility": "builtin"
+}

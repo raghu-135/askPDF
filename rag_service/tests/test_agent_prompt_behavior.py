@@ -1,38 +1,15 @@
-"""Regression tests for orchestrator prompt/tool exposure behavior."""
+"""Regression tests for graph runtime prompt behavior."""
 
 from datetime import datetime, timezone
 
 
-from app.agent.agent import build_system_prompt, _format_prefetch_for_prompt
-from app.agent.agent_helpers import format_runtime_datetime_context
-
-
-def test_compact_prompt_does_not_advertise_callable_tools():
-    """Compact mode should not tell the model that disabled tools are callable."""
-    prompt = build_system_prompt(
-        context_window=8192,
-        use_web_search=True,
-        reasoning_mode=False,
-    )
-
-    assert "TOOL REGISTRY" not in prompt
-    assert "TOOL PLAYBOOK" not in prompt
-    assert "tool name: `get_thread_shape`" not in prompt
-    assert "WEB SEARCH MANDATE" not in prompt
-    assert "Tool calls are disabled in compact mode" in prompt
-
-
-def test_reasoning_prompt_keeps_tool_registry():
-    """Reasoning mode should continue to expose real bound tools."""
-    prompt = build_system_prompt(
-        context_window=8192,
-        reasoning_mode=True,
-    )
-
-    assert "TOOL REGISTRY" in prompt
-    assert "tool name: `get_thread_shape`" in prompt
-    assert "tool name: `search_thread_timeline`" in prompt
-    assert "find_topic_anchor_in_history" not in prompt
+from app.agent.prompting import get_tool_catalog, normalize_tool_instructions, format_runtime_datetime_context
+from app.agent_workflows.prompting import (
+    build_agent_workflow_prompt_preview,
+    build_planner_prompt,
+    build_replanner_prompt,
+    build_router_prompt,
+)
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -51,49 +28,100 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
     assert "Server current UTC datetime: 2026-06-25T19:00:00Z" in context
 
 
-def test_system_prompt_includes_runtime_datetime_context():
-    prompt = build_system_prompt(
+def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
+    prompt = build_agent_workflow_prompt_preview(
+        workflow_id="router_rag_agent",
         context_window=8192,
+        system_role="Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
+        use_web_search=True,
         client_timezone="America/Chicago",
         client_locale="en-US",
-        client_now_iso="2026-06-25T19:00:00.000Z",
     )
 
-    assert "RUNTIME DATE/TIME CONTEXT" in prompt
-    assert "User timezone: America/Chicago" in prompt
+    assert "# Router Node Prompt" in prompt
+    assert "# Final Answer Prompt" in prompt
+    assert "Temporal Metadata Contract" in prompt
+    assert "Tool Playbook" in prompt
+    assert "Web Search Mandate" in prompt
+    assert "{{QUESTION}}" in prompt
+    assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
+    assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
+    assert "Document retrieval should preserve named files, pages, sections, citations, or quoted text" in prompt
+    assert "`thread_events_worker` should preserve temporal anchor words" in prompt
+    assert "Assistant role:" in prompt
+    assert "Expert AI Research Assistant specializing in analyzing uploaded documents" in prompt
+    assert "Planner Node Prompt" not in prompt
 
 
-def test_system_prompt_includes_temporal_metadata_contract():
-    prompt = build_system_prompt(context_window=8192, reasoning_mode=True)
+def test_plan_execute_agent_prompt_preview_uses_planner_prompt():
+    prompt = build_agent_workflow_prompt_preview(
+        workflow_id="plan_execute_rag_agent",
+        context_window=8192,
+    )
 
-    assert "TEMPORAL METADATA CONTRACT" in prompt
-    assert "message_created_at" in prompt
-    assert "document_available_in_thread_at" in prompt
-    assert "web_search_performed_at" in prompt
-    assert "timeline_event_at" in prompt
-    assert "search_thread_timeline" in prompt
+    assert "# Planner Node Prompt" in prompt
+    assert "# Final Answer Prompt" in prompt
+    assert "worker_decisions" in prompt
+    assert "exactly one object for every available worker" in prompt
+    assert "Do not select workers by keyword matching alone" in prompt
+    assert "Clarification options must contain 2-4 complete, self-contained questions" in prompt
+    assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
+    assert "Include every available worker that has a reasonable chance" in prompt
+    assert "do not minimize the worker count merely to reduce retrieval calls" in prompt
 
 
-def test_prefetch_document_inventory_includes_document_level_counts():
-    prompt = _format_prefetch_for_prompt(
+def test_planner_and_replanner_prefer_comprehensive_relevant_worker_coverage():
+    state = {
+        "question": "Compare all relevant sources",
+        "use_web_search": True,
+        "pre_fetch_bundle": {},
+        "available_worker_nodes": [
+            {"id": "retrieval_worker", "type": "retrieval_worker"},
+            {"id": "web_worker", "type": "web_worker"},
+        ],
+    }
+
+    planner_prompt = build_planner_prompt(state)
+    replanner_prompt = build_replanner_prompt(state)
+
+    assert "Build a comprehensive retrieval plan" in planner_prompt
+    assert "When uncertain whether a relevant worker could help, include it" in planner_prompt
+    assert "worker_decisions" in planner_prompt
+    assert "exactly one object for every available worker" in planner_prompt
+    assert "Use as many relevant workers as needed to address the gaps comprehensively" in replanner_prompt
+    assert "worker_decisions" in replanner_prompt
+    assert "Prefer the smallest plan" not in replanner_prompt
+
+
+def test_runtime_graph_prompt_builders_include_datetime_context():
+    state = {
+        "question": "What is the latest document?",
+        "use_web_search": False,
+        "client_timezone": "America/Chicago",
+        "client_locale": "en-US",
+        "pre_fetch_bundle": {},
+    }
+
+    assert "RUNTIME DATE/TIME CONTEXT" in build_router_prompt(state)
+    assert "RUNTIME DATE/TIME CONTEXT" in build_planner_prompt(state)
+
+
+def test_tool_catalog_and_legacy_instruction_keys_use_canonical_retrieval_names():
+    catalog = {item["tool_name"]: item for item in get_tool_catalog()}
+
+    assert catalog["search_thread_conversation_history"]["id"] == "thread_conversation_history"
+    assert catalog["search_durable_memory"]["id"] == "durable_memory"
+    assert catalog["search_thread_events"]["id"] == "thread_events"
+
+    normalized = normalize_tool_instructions(
         {
-            "documents": [
-                {
-                    "index": 1,
-                    "file_name": "report.pdf",
-                    "file_hash": "file-1",
-                    "source_type": "pdf",
-                    "document_available_in_thread_at": "2026-06-26T00:00:00Z",
-                    "page_count": 4,
-                    "word_count": 123,
-                    "sentence_count": 12,
-                    "chunk_count": 5,
-                }
-            ]
+            "deep_memory": "legacy instruction",
+            "thread_conversation_history": "canonical instruction",
+            "memory_recall": "durable instruction",
+            "thread_timeline": "events instruction",
         }
     )
 
-    assert "pages: 4" in prompt
-    assert "words: 123" in prompt
-    assert "sentences: 12" in prompt
-    assert "chunks: 5" in prompt
+    assert normalized["thread_conversation_history"] == "canonical instruction"
+    assert normalized["durable_memory"] == "durable instruction"
+    assert normalized["thread_events"] == "events instruction"

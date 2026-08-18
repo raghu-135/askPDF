@@ -34,9 +34,9 @@ class EmbeddingModelRegistry:
     async def _probe_model_dimensions(self, model_name: str) -> int:
         """Probe embedding model to determine vector dimensions."""
         try:
-            embed_model = get_embedding_model(model_name)
+            embedding_model = get_embedding_model(model_name)
             # Use a simple test text to get dimensions
-            test_embedding = await embed_model.aembed_query("test")
+            test_embedding = await embedding_model.aembed_query("test")
             dimensions = len(test_embedding)
             logger.info(f"Detected {dimensions} dimensions for model '{model_name}'")
             return dimensions

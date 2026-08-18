@@ -12,7 +12,7 @@ try:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from sqlmodel import select
 
-    from app.db.models_sqlmodel import ChatTurn, ThreadFile
+    from app.db.models_sqlmodel import ChatTurn, ProjectFile, ThreadFile
     from app.db.repositories.stats_repo_sqlmodel import StatsRepository
 
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -104,7 +104,7 @@ class TestStatsRepository:
         assert sample_thread.avg_qa_chars == 6
 
     @pytest.mark.asyncio
-    async def test_thread_shape_uses_thread_files_as_source_of_truth(
+    async def test_thread_shape_uses_effective_files_as_source_of_truth(
         self,
         repo,
         session,
@@ -132,3 +132,36 @@ class TestStatsRepository:
         assert set(shape["documents"].keys()) == {sample_file.file_hash}
         assert shape["documents"][sample_file.file_hash]["chunk_count"] == 4
         assert shape["documents"][sample_file.file_hash]["file_name"] == sample_file.file_name
+        assert shape["documents"][sample_file.file_hash]["association_scope"] == "thread"
+
+    @pytest.mark.asyncio
+    async def test_thread_shape_includes_project_only_knowledge(
+        self,
+        repo,
+        session,
+        sample_thread,
+        sample_file,
+    ):
+        sample_thread.documents_meta = {
+            sample_file.file_hash: {
+                "chunk_count": 7,
+                "indexing_status": "completed",
+            },
+        }
+        session.add(
+            ProjectFile(
+                project_id=sample_thread.project_id,
+                file_hash=sample_file.file_hash,
+            )
+        )
+        await session.commit()
+
+        shape = await repo.get_thread_shape(sample_thread.id)
+        project_doc = shape["documents"][sample_file.file_hash]
+
+        assert project_doc["file_name"] == sample_file.file_name
+        assert project_doc["chunk_count"] == 7
+        assert project_doc["association_scope"] == "project"
+        assert project_doc["is_project_knowledge"] is True
+        assert project_doc["document_available_in_thread_at"] is None
+        assert project_doc["document_available_in_project_at"] is not None

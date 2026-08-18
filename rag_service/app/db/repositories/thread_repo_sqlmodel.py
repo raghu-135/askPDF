@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import Thread, ChatTurn, ThreadFile
+from app.db.models_sqlmodel import Project, ProjectFile, Thread, ChatTurn, ChatTurnStatus, ThreadFile
+from app.db.project_activity import touch_project_activity
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -31,24 +32,32 @@ class ThreadRepository:
             return self._session
         return async_session_maker()
 
-    async def create(self, name: str, embed_model: str) -> Thread:
+    async def create(self, name: str, project_id: str) -> Thread:
         """Create a new thread with default settings."""
         thread_id = str(uuid.uuid4())
         created_at = utc_now()
 
-        thread = Thread(
-            id=thread_id,
-            name=name,
-            embed_model=embed_model,
-            settings={},
-            thread_metadata={},
-            created_at=created_at
-        )
-
         session = await self._get_session()
         async with session.begin():
+            project = await session.get(Project, project_id)
+            if project is None:
+                raise ValueError("Project not found")
+            thread = Thread(
+                id=thread_id,
+                project_id=project.id,
+                name=name,
+                embedding_model=project.embedding_model,
+                settings={},
+                thread_metadata={},
+                created_at=created_at
+            )
             session.add(thread)
             await session.flush()
+            await touch_project_activity(
+                session,
+                project.id,
+                occurred_at=created_at,
+            )
             await session.refresh(thread)
         return thread
 
@@ -99,7 +108,7 @@ class ThreadRepository:
                 select(func.count(ChatTurn.id))
                 .where(
                     ChatTurn.thread_id == Thread.id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                     ChatTurn.payload["question"].astext.isnot(None),
                     ChatTurn.payload["question"].astext != "",
                 )
@@ -110,22 +119,37 @@ class ThreadRepository:
                 select(func.count(ChatTurn.id))
                 .where(
                     ChatTurn.thread_id == Thread.id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                     ChatTurn.payload["answer"].astext.isnot(None),
                     ChatTurn.payload["answer"].astext != "",
                 )
                 .correlate(Thread)
                 .scalar_subquery()
             )
-            file_count = (
+            direct_file_count = (
                 select(func.count(ThreadFile.file_hash))
                 .where(ThreadFile.thread_id == Thread.id)
                 .correlate(Thread)
                 .scalar_subquery()
             )
+            inherited_file_count = (
+                select(func.count(ProjectFile.file_hash))
+                .where(
+                    ProjectFile.project_id == Thread.project_id,
+                    ~select(ThreadFile.file_hash)
+                    .where(
+                        ThreadFile.thread_id == Thread.id,
+                        ThreadFile.file_hash == ProjectFile.file_hash,
+                    )
+                    .exists(),
+                )
+                .correlate(Thread)
+                .scalar_subquery()
+            )
+            file_count = direct_file_count + inherited_file_count
             last_message_at = (
                 select(func.max(ChatTurn.created_at))
-                .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .correlate(Thread)
                 .scalar_subquery()
             )
@@ -144,8 +168,9 @@ class ThreadRepository:
                 thread = row[0]
                 threads.append({
                     "id": thread.id,
+                    "project_id": thread.project_id,
                     "name": thread.name,
-                    "embed_model": thread.embed_model,
+                    "embedding_model": thread.embedding_model,
                     "settings": thread.settings if thread.settings else {},
                     "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "documents_meta": thread.documents_meta if thread.documents_meta else {},
@@ -168,6 +193,21 @@ class ThreadRepository:
                 return None
 
             thread.name = name
+            await session.flush()
+            await session.refresh(thread)
+        return thread
+
+    async def update_project(self, thread_id: str, project_id: str) -> Optional[Thread]:
+        """Move a thread into a project."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Thread).where(Thread.id == thread_id)
+            )
+            thread = result.scalar_one_or_none()
+            if not thread:
+                return None
+            thread.project_id = project_id
             await session.flush()
             await session.refresh(thread)
         return thread

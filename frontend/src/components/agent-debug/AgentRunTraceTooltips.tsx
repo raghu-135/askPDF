@@ -1,0 +1,157 @@
+import React from 'react';
+import { Box, Typography } from '@mui/material';
+import { formatSkipReason } from '../../lib/agentDebugLabels';
+import { formatDurationMs } from '../../lib/formatDuration';
+import { formatNodeInstanceLabel } from '../agent-graph/agent-graph-mapper';
+import { formatTraceError } from './agent-debug-utils';
+import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
+import { compactExecutionText } from '../agent-graph/agent-execution-display';
+
+const visitSuffix = (visitIndex?: number) => (
+  Number.isFinite(Number(visitIndex)) ? ` · visit ${Number(visitIndex)}` : ''
+);
+
+const TraceTooltipList = ({
+  title,
+  emptyText,
+  children,
+}: {
+  title: string;
+  emptyText: string;
+  children: React.ReactNode;
+}) => (
+  <Box sx={{ maxWidth: 560, maxHeight: 340, overflow: 'auto', overflowWrap: 'anywhere', wordBreak: 'break-word', p: 0.25 }}>
+    <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5 }}>
+      {title}
+    </Typography>
+    {children || (
+      <Typography variant="caption" sx={{ display: 'block', opacity: 0.8 }}>
+        {emptyText}
+      </Typography>
+    )}
+  </Box>
+);
+
+export const TraceNodesTooltip = ({
+  nodes,
+  usedCount,
+  availableCount,
+}: {
+  nodes: TraceNodeView[];
+  usedCount: number;
+  availableCount?: number;
+}) => {
+  const skippedCount = nodes.filter((node) => node.skipped).length;
+  const title = [
+    `Node spans: ${nodes.length}`,
+    `used: ${usedCount}${availableCount ? `/${availableCount}` : ''}`,
+    skippedCount ? `skipped: ${skippedCount}` : null,
+  ].filter(Boolean).join(' · ');
+
+  return (
+    <TraceTooltipList title={title} emptyText="No node spans recorded.">
+      {nodes.map((node, index) => {
+        const elapsed = formatDurationMs(node.durationMs);
+        const status = node.status || (node.skipped ? 'skipped' : 'completed');
+        const skipReason = formatSkipReason(node.raw?.skip_reason);
+        const error = formatTraceError(node.error);
+        const instanceLabel = node.instanceLabel || formatNodeInstanceLabel(node.id, node.type);
+        return (
+          <Box key={`${node.id}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
+            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+              {index + 1}. {node.label}{visitSuffix(node.visitIndex)}
+            </Typography>
+            {instanceLabel !== node.label && (
+              <Typography variant="caption" sx={{ display: 'block', opacity: 0.78 }}>
+                {instanceLabel}
+              </Typography>
+            )}
+            <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
+              {[status, elapsed, node.route ? `route ${node.route}` : null, skipReason].filter(Boolean).join(' · ')}
+            </Typography>
+            {node.routeReason && (
+              <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
+                {compactExecutionText(node.routeReason, 320)}
+              </Typography>
+            )}
+            {error && (
+              <Typography variant="caption" sx={{ display: 'block', color: 'error.light' }}>
+                {error}
+              </Typography>
+            )}
+          </Box>
+        );
+      })}
+    </TraceTooltipList>
+  );
+};
+
+export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
+  <TraceTooltipList title="Tool spans" emptyText="No tool calls recorded.">
+    {tools.map((tool, index) => {
+      const elapsed = formatDurationMs(tool.durationMs);
+      const raw = tool.raw || {};
+      const artifactCount = Array.isArray(raw.artifact_keys)
+        ? raw.artifact_keys.length
+        : raw.artifact_summary && typeof raw.artifact_summary === 'object'
+          ? Object.keys(raw.artifact_summary).length
+          : 0;
+      const warningCount = tool.warningCodes.length;
+      const error = formatTraceError(raw.error);
+      const callerLabel = tool.callerNode
+        ? formatNodeInstanceLabel(tool.callerNode, tool.callerNodeType)
+        : undefined;
+      const callerVisitLabel = callerLabel ? `${callerLabel}${visitSuffix(tool.callerVisitIndex)}` : undefined;
+      return (
+        <Box key={`${tool.name}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+            {index + 1}. {tool.displayName || tool.name}
+          </Typography>
+          <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
+            {[
+              callerVisitLabel ? `from ${callerVisitLabel}` : null,
+              tool.ok ? 'ok' : 'failed',
+              elapsed,
+              Number.isFinite(Number(tool.sourceCount)) ? `${Number(tool.sourceCount)} sources` : null,
+              artifactCount ? `${artifactCount} artifacts` : null,
+              warningCount ? `${warningCount} warnings` : null,
+            ].filter(Boolean).join(' · ')}
+          </Typography>
+          {raw.result_preview && (
+            <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
+              {String(raw.result_preview)}
+            </Typography>
+          )}
+          {error && (
+            <Typography variant="caption" sx={{ display: 'block', color: 'error.light' }}>
+              {error}
+            </Typography>
+          )}
+        </Box>
+      );
+    })}
+  </TraceTooltipList>
+);
+
+export const TraceLlmUsageTooltip = ({ metrics }: { metrics: Record<string, any> }) => {
+  const rows = [
+    ['LLM spans', metrics.llm_span_count],
+    ['Prompt tokens', metrics.llm_token_count_prompt],
+    ['Completion tokens', metrics.llm_token_count_completion],
+    ['Reasoning tokens', metrics.llm_token_count_reasoning],
+    ['Cached tokens', metrics.llm_token_count_cached],
+    ['Total tokens', metrics.llm_token_count_total],
+    ['Retries', metrics.llm_retry_count],
+  ].filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0);
+
+  return (
+    <TraceTooltipList title="LLM token usage" emptyText="No LLM token usage recorded.">
+      {rows.map(([label, value]) => (
+        <Typography key={String(label)} variant="caption" sx={{ display: 'block', opacity: 0.9 }}>
+          <Box component="span" sx={{ fontWeight: 700 }}>{label}: </Box>
+          {Number(value).toLocaleString()}
+        </Typography>
+      ))}
+    </TraceTooltipList>
+  );
+};

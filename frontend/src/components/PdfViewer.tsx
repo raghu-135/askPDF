@@ -123,7 +123,7 @@ type PageSentence = Sentence & SentenceWithPageBBoxes<BBox>;
 type SentencesByPage = { [key: number]: PageSentence[] };
 
 type Props = {
-  pdfUrl: string;
+  downloadUrl: string;
   sentences: Sentence[] | null;
   currentId: number | null;
   onJump: (id: number) => void;
@@ -133,6 +133,7 @@ type Props = {
   darkMode?: boolean;
   threadId?: string | null;
   fileHash?: string | null;
+  mode?: "thread-editable" | "source-readonly";
 };
 
 // Memoize tool configuration outside buildPlugins to prevent recreation
@@ -212,10 +213,10 @@ const ANNOTATION_TOOLS = [
   },
 ];
 
-function buildPlugins(pdfUrl: string) {
+function buildPlugins(downloadUrl: string) {
   return [
     createPluginRegistration(DocumentManagerPluginPackage, {
-      initialDocuments: [{ url: pdfUrl, autoActivate: true }],
+      initialDocuments: [{ url: downloadUrl, autoActivate: true }],
     }),
     createPluginRegistration(ViewportPluginPackage, {
       viewportGap: 0,
@@ -334,7 +335,7 @@ function DocumentLoadedSync({
 function EmbedPdfDocumentBody({
   documentId,
   pdfEngine,
-  pdfUrl: _pdfUrl,
+  downloadUrl: _downloadUrl,
   sentences,
   currentId,
   onJump,
@@ -344,6 +345,7 @@ function EmbedPdfDocumentBody({
   darkMode,
   threadId,
   fileHash,
+  mode = "thread-editable",
   pdfLoaded,
   setPdfLoaded,
   isHistoryProcessingRef,
@@ -389,8 +391,9 @@ function EmbedPdfDocumentBody({
     schedulePersistAnnotations,
   } = usePersistAnnotations({
     annotationApi,
-    threadId,
-    fileHash,
+    historyApi,
+    threadId: mode === "thread-editable" ? threadId : null,
+    fileHash: mode === "thread-editable" ? fileHash : null,
     pdfLoaded,
   });
 
@@ -483,7 +486,7 @@ function EmbedPdfDocumentBody({
 
   // Persistence / DB Sync & Auto-scroll on all committed changes (Undo/Redo/etc)
   useEffect(() => {
-    if (!annotationApi) return;
+    if (!annotationApi || mode !== "thread-editable") return;
     const sub = annotationApi.onAnnotationEvent((event) => {
       if (event.type === "loaded") return;
 
@@ -507,6 +510,7 @@ function EmbedPdfDocumentBody({
     annotationApi,
     documentId,
     isCommittedMutationEvent,
+    mode,
     schedulePersistAnnotations,
     scrollToAnnotation,
   ]);
@@ -528,7 +532,7 @@ function EmbedPdfDocumentBody({
       }
 
       // Handle Delete/Backspace
-      if (e.key === "Delete" || e.key === "Backspace") {
+      if (mode === "thread-editable" && (e.key === "Delete" || e.key === "Backspace")) {
         const target = e.target as HTMLElement;
         if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) {
           return;
@@ -547,7 +551,7 @@ function EmbedPdfDocumentBody({
       }
 
       // Handle Undo/Redo shortcuts (Cmd+Z / Cmd+Shift+Z)
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+      if (mode === "thread-editable" && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         const { provides: history } = historyRef.current;
         if (!history) return;
 
@@ -568,7 +572,7 @@ function EmbedPdfDocumentBody({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [annotationApi, documentId, selectionCapability]);
+  }, [annotationApi, documentId, mode, selectionCapability]);
 
   const handlePageContextMenuCapture = useCallback(
     (e: React.MouseEvent) => {
@@ -715,7 +719,7 @@ function EmbedPdfDocumentBody({
                   />
                 )}
               />
-              <AnnotationLayer
+              {mode === "thread-editable" && <AnnotationLayer
                 documentId={documentId}
                 pageIndex={pageIndex}
                 scale={scale}
@@ -726,7 +730,7 @@ function EmbedPdfDocumentBody({
                     onOpenComments={openCommentsPane}
                   />
                 )}
-              />
+              />}
               {searchHighlightLayer}
             </PagePointerProvider>
           </div>
@@ -769,7 +773,7 @@ function EmbedPdfDocumentBody({
                 />
               )}
             />
-            <AnnotationLayer
+            {mode === "thread-editable" && <AnnotationLayer
               documentId={documentId}
               pageIndex={pageIndex}
               scale={scale}
@@ -780,7 +784,7 @@ function EmbedPdfDocumentBody({
                   onOpenComments={openCommentsPane}
                 />
               )}
-            />
+            />}
             {searchHighlightLayer}
             {activeSentence ? (
               <div
@@ -847,13 +851,19 @@ function EmbedPdfDocumentBody({
               setPdfLoaded={setPdfLoaded}
             />
 
-            <AnnotationToolbar
-              documentId={documentId}
-              showSidebar={showSidebar}
-              onToggleSidebar={() => setShowSidebar((value) => !value)}
-              isHistoryProcessingRef={isHistoryProcessingRef}
-              searchControls={<PdfSearchControls search={pdfSearch} />}
-            />
+            {mode === "thread-editable" ? (
+              <AnnotationToolbar
+                documentId={documentId}
+                showSidebar={showSidebar}
+                onToggleSidebar={() => setShowSidebar((value) => !value)}
+                isHistoryProcessingRef={isHistoryProcessingRef}
+                searchControls={<PdfSearchControls search={pdfSearch} />}
+              />
+            ) : (
+              <Box sx={{ minHeight: 42, px: 1, display: "flex", alignItems: "center", borderBottom: 1, borderColor: "divider" }}>
+                <PdfSearchControls search={pdfSearch} />
+              </Box>
+            )}
 
             <Box
               sx={{
@@ -864,7 +874,7 @@ function EmbedPdfDocumentBody({
                 overflow: "hidden",
               }}
             >
-              {showSidebar && (
+              {mode === "thread-editable" && showSidebar && (
                 <PdfSidebar
                   documentId={documentId}
                   widthRatio={sidebarWidthRatio}
@@ -949,7 +959,7 @@ function EmbedPdfDocumentBody({
 }
 
 const PdfViewer = React.memo(function PdfViewer({
-  pdfUrl,
+  downloadUrl,
   sentences,
   currentId,
   onJump,
@@ -959,10 +969,11 @@ const PdfViewer = React.memo(function PdfViewer({
   darkMode = false,
   threadId = null,
   fileHash = null,
+  mode = "thread-editable",
 }: Props) {
   const theme = useTheme();
   const { engine, isLoading, error } = usePdfiumEngine();
-  const plugins = useMemo(() => buildPlugins(pdfUrl), [fileHash]);
+  const plugins = useMemo(() => buildPlugins(downloadUrl), [fileHash]);
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const isHistoryProcessingRef = useRef(false);
 
@@ -1016,7 +1027,7 @@ const PdfViewer = React.memo(function PdfViewer({
             <EmbedPdfDocumentBody
               documentId={ctx.activeDocumentId}
               pdfEngine={engine}
-              pdfUrl={pdfUrl}
+              downloadUrl={downloadUrl}
               sentences={sentences}
               currentId={currentId}
               onJump={onJump}
@@ -1026,6 +1037,7 @@ const PdfViewer = React.memo(function PdfViewer({
               darkMode={darkMode}
               threadId={threadId}
               fileHash={fileHash}
+              mode={mode}
               pdfLoaded={pdfLoaded}
               setPdfLoaded={setPdfLoaded}
               isHistoryProcessingRef={isHistoryProcessingRef}

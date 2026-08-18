@@ -2,35 +2,30 @@ import pytest
 from langchain_core.tools import tool
 
 from app.agent import external_research_tools
-from app.agent.agent import OrchestratorToolNode, format_intent_tool_context
-from app.prompts.loaders import get_web_search_mandate, load_prompt
+from app.agent.tool_contract import normalize_tool_result
+from app.agent.tool_node import RecoverableToolNode
+from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
 
 TOOL_PACKAGE_PINS = {
     "langgraph": "1.2.6",
     "langchain-core": "1.4.8",
-    "langchain-community": "0.4.2",
     "ddgs": "9.14.4",
-    "wikipedia": "1.4.0",
-    "mediawikiapi": "1.3",
-    "wikibase-rest-api-client": "0.2.5",
-    "arxiv": "2.4.1",
-    "xmltodict": "1.0.4",
-    "yfinance": "1.4.1",
-    "stackapi": "0.3.1",
-    "semanticscholar": "0.12.0",
 }
 
 
 def _requirements_lines() -> set[str]:
     requirements_path = external_research_tools.__file__.split("/app/agent/")[0]
-    with open(f"{requirements_path}/requirements.txt", encoding="utf-8") as req_file:
-        return {
-            line.strip()
-            for line in req_file
-            if line.strip() and not line.lstrip().startswith("#")
-        }
+    lines: set[str] = set()
+    for filename in ("requirements-control-plane.txt", "requirements-langgraph-runtime.txt"):
+        with open(f"{requirements_path}/{filename}", encoding="utf-8") as req_file:
+            lines.update(
+                line.strip()
+                for line in req_file
+                if line.strip() and not line.lstrip().startswith("#") and not line.startswith("-r ")
+            )
+    return lines
 
 
 def test_tool_dependencies_are_exactly_pinned():
@@ -45,28 +40,13 @@ def test_tool_dependencies_are_exactly_pinned():
 
 
 def test_external_research_tool_candidates_exclude_searxng(monkeypatch):
-    """SearXNG-backed tools should not be registered in this lightweight expansion."""
-    seen = []
-
-    def fake_build_tool(display_name, tool_path, class_name, factory=None):
-        seen.append((display_name, tool_path, class_name))
-        return None
-
-    monkeypatch.setattr(external_research_tools, "_build_tool", fake_build_tool)
-
-    assert external_research_tools.get_external_research_tools() == []
-
-    display_names = {item[0] for item in seen}
-    assert display_names == {
-        "Wikipedia",
-        "Wikidata",
-        "arXiv",
-        "PubMed",
-        "Semantic Scholar",
-        "StackExchange",
-        "Yahoo Finance News",
+    """External provider discovery returns MCP adapters, never provider tools."""
+    tools = external_research_tools.get_external_research_tools()
+    assert {item.name for item in tools} >= {
+        "wikipedia", "wikidata", "arxiv", "pub_med", "semanticscholar",
+        "stack_exchange", "yahoo_finance_news",
     }
-    assert all("searx" not in tool_path.lower() for _, tool_path, _ in seen)
+    assert all(not hasattr(item, "provider") for item in tools)
 
 
 def test_external_research_tools_have_prompt_metadata():
@@ -80,8 +60,7 @@ def test_external_research_tools_have_prompt_metadata():
         "semantic_scholar",
         "stack_exchange",
         "yahoo_finance_news",
-        "search_web_intent",
-        "search_thread_timeline",
+        "search_thread_events",
     }
 
     missing = expected_tool_names - set(TOOL_FRIENDLY_CONFIG)
@@ -116,38 +95,6 @@ def test_web_search_mandate_allows_source_specific_tools():
     assert "instead of substituting search_web" not in mandate
 
 
-def test_intent_prompt_preserves_explicit_source_requests():
-    prompt = load_prompt("intent_agent/system.md").lower()
-
-    assert "orchestrator has its own tool catalog" in prompt
-    assert "{intent_tool_context}" in prompt
-    role_section = prompt.split("## output contract", 1)[0]
-    assert "{intent_tool_context}" not in role_section
-    assert "{orchestrator_tool_context}" not in role_section
-    assert "there are two separate tool scopes" in prompt
-    assert "intent agent tool catalog (callable by you now)" in prompt
-    assert "downstream orchestrator tool catalog (not callable by you)" in prompt
-    assert "preserve explicit source, connector, or tool constraints" in prompt
-    assert "handoff constraints for the orchestrator's tool selection" in prompt
-
-
-def test_intent_tool_context_lists_bound_tools_when_enabled():
-    context = format_intent_tool_context([external_research_tools.search_web_intent]).lower()
-
-    assert "intent agent tool catalog (callable by you now)" in context
-    assert "only the tools in this section are callable by you" in context
-    assert "`search_web_intent`" in context
-    assert "intent web search" in context
-    assert "do not use results as answer evidence" in context
-
-
-def test_intent_tool_context_reports_no_active_tools_when_disabled():
-    context = format_intent_tool_context([]).lower()
-
-    assert "intent agent tool catalog (callable by you now)" in context
-    assert "no intent-stage tools are active" in context
-
-
 def test_arxiv_guidance_omits_dependency_version_detail():
     prompt = TOOL_FRIENDLY_CONFIG["arxiv"]["default_prompt"].lower()
 
@@ -168,7 +115,7 @@ def test_orchestrator_tool_node_configures_recoverable_tool_errors():
         """Test tool that always fails."""
         raise RuntimeError("simulated tool outage")
 
-    node = OrchestratorToolNode([failing_tool])
+    node = RecoverableToolNode([failing_tool])
     message = node._handle_tool_errors(RuntimeError("simulated tool outage"))
 
     assert "Tool execution failed: RuntimeError: simulated tool outage" in message

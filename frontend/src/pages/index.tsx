@@ -1,128 +1,171 @@
-import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Typography, Box, CssBaseline, IconButton, Tooltip, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
-import EditNoteIcon from '@mui/icons-material/EditNote';
-import ForumIcon from '@mui/icons-material/Forum';
-import AddIcon from '@mui/icons-material/Add';
+import { useAppThemeMode } from '../hooks/useAppThemeMode';
 import DeleteIcon from '@mui/icons-material/Delete';
-import ClearIcon from '@mui/icons-material/Clear';
+import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
+import HomeIcon from '@mui/icons-material/Home';
 
 declare const process: {
   env: Record<string, string | undefined>;
 };
-import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 
-const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
-import ChatInterface from "../components/ChatInterface";
-import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
-import PdfTabs, { PdfTab } from "../components/PdfTabs";
+import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
+import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
+import MemoryManagerPanel from "../components/MemoryManagerPanel";
+import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
+import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
+import DockMenuButton from '../components/workbench/DockMenuButton';
+import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
+import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
+import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
+import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
-import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
+import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
+import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
-import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
+import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
+import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
+import { checkEmbeddingModelReady } from '../lib/models-api';
+import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
+import { defaultMemoryManagerIntent, reviewManagerIntent, type MemoryManagerIntent } from '../lib/memory-manager';
+import type { ConversationSentence } from '../lib/chat-sentence-cache';
 
 export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [activeTabId, setActiveTabId] = useState<string | null>('home-tab');
   const [isPdfLoading, setIsPdfLoading] = useState(false);
 
   // Get active tab and its data using utility
   const activeTab = getActiveTab(pdfTabs, activeTabId);
-  const { pdfSentences, pdfUrl, fileHash, fileName } = getActiveTabData(activeTab);
+  const { pdfSentences, downloadUrl, fileHash, fileName } = getActiveTabData(activeTab);
 
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [chatSentences, setChatSentences] = useState<any[]>([]);
+  const [chatSentences, setChatSentences] = useState<ConversationSentence[]>([]);
+  const [chatPlaybackSourceKey, setChatPlaybackSourceKey] = useState('chat:none');
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
-  // PDF dark mode toggle, SSR-safe: initialize as undefined, set after mount
-  const [pdfDarkMode, setPdfDarkMode] = useState<boolean | undefined>(undefined);
-
-  // On mount, set dark mode from browser preference
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      setPdfDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches);
-    } else {
-      setPdfDarkMode(false);
-    }
-  }, []);
-
-  // Listen for browser color scheme changes
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (e: MediaQueryListEvent) => {
-      setPdfDarkMode(e.matches);
-    };
-    media.addEventListener('change', handler);
-    return () => media.removeEventListener('change', handler);
-  }, []);
+  const { darkMode: pdfDarkMode, toggleDarkMode, hydrated: themeHydrated } = useAppThemeMode();
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
-
-  // Right panel tab state (0 = Threads, 1 = Chat)
-  const [rightPanelTab, setRightPanelTab] = useState(0);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [threadProject, setThreadProject] = useState<Project | null>(null);
+  const [projectModelReady, setProjectModelReady] = useState<boolean | null>(null);
 
   // Sidebar refresh trigger
   const [sidebarVersion, setSidebarVersion] = useState(0);
-  const [threadListHeaderState, setThreadListHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
   const [isDeletingActiveThread, setIsDeletingActiveThread] = useState(false);
   const [rightPanelLineageThreads, setRightPanelLineageThreads] = useState<Thread[]>([]);
+  const [memoryManagerIntent, setMemoryManagerIntent] = useState<MemoryManagerIntent | null>(null);
+  const [memoryManagerDirty, setMemoryCuratorDirty] = useState(false);
+  const memoryManagerDirtyRef = useRef(false);
+  memoryManagerDirtyRef.current = memoryManagerDirty;
+  const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
+  const [lastNonMemoryTabByContext, setLastNonMemoryTabByContext] = useState<Record<string, string>>({});
 
   // Browser tab state
   const [showBrowserTab, setShowBrowserTab] = useState(false);
   const [isBrowserActive, setIsBrowserActive] = useState(false);
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
-  // Resizable chat panel
-  const [chatWidthRatio, setChatWidthRatio] = useState(PANEL_RATIOS.chat.default);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [workbenchLayout, setWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.normal');
+  const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRatioRef = useRef(PANEL_RATIOS.chat.default);
-  const rafIdRef = useRef<number | null>(null);
+  const {
+    traceTabs,
+    activeTraceId,
+    setActiveTraceId,
+    openTrace,
+    closeTrace,
+    clearTraces,
+  } = useTraceTabs();
 
+  const confirmDiscardMemoryCurator = useCallback(() => (
+    !memoryManagerDirtyRef.current
+    || window.confirm('Discard the unconfirmed memory proposal?')
+  ), []);
+
+  const workspaceContextKey = activeThread
+    ? `thread:${activeThread.id}`
+    : activeProject
+      ? `project:${activeProject.id}`
+      : 'home';
+
+  const rememberNonMemoryTab = useCallback((tabId: string | null, contextKey = workspaceContextKey) => {
+    if (!tabId || tabId === 'memory-tab') return;
+    setLastNonMemoryTabByContext((current) => ({ ...current, [contextKey]: tabId }));
+  }, [workspaceContextKey]);
+
+  const fallbackNonMemoryTab = useCallback(() => {
+    const firstDocument = pdfTabs[0]?.id;
+    if (firstDocument) return firstDocument;
+    if (activeThread || activeProject) return 'browser-tab';
+    return 'home-tab';
+  }, [activeProject, activeThread, pdfTabs]);
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
+    setMemoryCuratorDirty(false);
     // Clear current state
     setPdfTabs([]);
-    setActiveTabId(null);
+    setActiveTabId(thread ? 'browser-tab' : 'home-tab');
     setCurrentPdfId(null);
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
+    setActiveProject(null);
+    setThreadProject(null);
+    clearTraces();
     
     // Reset browser state when leaving thread context
     setIsBrowserActive(false);
 
     if (thread) {
+      setActiveProject(null);
       try {
         setIsPdfLoading(true);
         // Always fetch the latest thread data to ensure we have current files and stats
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
         setActiveThread(detailedThread);
 
-        const loadedTabs = await loadThreadTabs(detailedThread);
+        const [loadedTabs, parentProject] = await Promise.all([
+          loadThreadTabs(detailedThread),
+          detailedThread.project_id
+            ? getProject(detailedThread.project_id).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        setThreadProject(parentProject);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
+          window.setTimeout(() => {
+            detailedThread.files.slice(1).forEach(async (threadFile) => {
+              try {
+                const hydrated = await hydrateThreadPdfTab(detailedThread.id, threadFile);
+                setPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
+              } catch (error) {
+                console.warn(`Failed to hydrate background PDF tab ${threadFile.fileHash}:`, error);
+              }
+            });
+          }, 0);
+        } else {
+          setActiveTabId('browser-tab');
         }
       } catch (err) {
         console.error('Failed to load thread files:', err);
@@ -131,25 +174,58 @@ export default function Home() {
       }
     } else {
       setActiveThread(null);
+      setActiveTabId('home-tab');
     }
-  }, []);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
+
+  const handleProjectSelect = useCallback(async (project: Project) => {
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
+    setMemoryCuratorDirty(false);
+    setActiveThread(null);
+    setThreadProject(null);
+    setActiveProject(project);
+    setPdfTabs([]);
+    clearTraces();
+    setIsBrowserActive(false);
+    setActiveTabId('browser-tab');
+    setIsPdfLoading(true);
+    setProjectModelReady(null);
+    try {
+      const tabs = await loadProjectTabs(project);
+      setPdfTabs(tabs);
+      setActiveTabId(tabs[0]?.id || 'browser-tab');
+      setIsBrowserActive(false);
+    } catch (error) {
+      console.error('Failed to open project knowledge:', error);
+      setProjectModelReady(false);
+    } finally {
+      setIsPdfLoading(false);
+    }
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
     await handleThreadSelect(thread);
-    setRightPanelTab(1);
   }, [handleThreadSelect]);
+
+  const handleProjectCloned = useCallback(async (project: Project) => {
+    setSidebarVersion(v => v + 1);
+    await handleProjectSelect(project);
+  }, [handleProjectSelect]);
+
+  const handleProjectUpdated = useCallback((project: Project) => {
+    setSidebarVersion((version) => version + 1);
+    setActiveProject((current) => current?.id === project.id ? project : current);
+    setThreadProject((current) => current?.id === project.id ? project : current);
+  }, []);
 
   const handleThreadSelectFromList = useCallback((thread: Thread | null) => {
     handleThreadSelect(thread);
-    if (thread) {
-      setRightPanelTab(1);
-    }
   }, [handleThreadSelect]);
 
   const handleOpenThreadInChat = useCallback((thread: Thread) => {
     handleThreadSelect(thread);
-    setRightPanelTab(1);
   }, [handleThreadSelect]);
 
   const handleThreadUpdated = async () => {
@@ -164,10 +240,49 @@ export default function Home() {
     }
   };
 
-  const handleShowAllThreads = useCallback(async () => {
-    setRightPanelTab(0);
-    await handleThreadSelect(null);
-  }, [handleThreadSelect]);
+  const handleOpenHome = useCallback(() => {
+    if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryManagerIntent(null);
+    setMemoryCuratorDirty(false);
+    setActiveThread(null);
+    setActiveProject(null);
+    setThreadProject(null);
+    setProjectModelReady(null);
+    setPdfTabs([]);
+    setActiveTabId('home-tab');
+    setIsBrowserActive(false);
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+    setChatSentences([]);
+    clearTraces();
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
+
+  const handleBackToProject = useCallback(async () => {
+    try {
+      const project = threadProject || (
+        activeThread?.project_id ? await getProject(activeThread.project_id) : null
+      );
+      if (project) {
+        await handleProjectSelect(project);
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to open thread project:', error);
+    }
+    handleOpenHome();
+  }, [activeThread?.project_id, handleOpenHome, handleProjectSelect, threadProject]);
+
+  const handleProjectDeleted = useCallback((projectId: string) => {
+    setSidebarVersion(v => v + 1);
+    if (
+      activeProject?.id === projectId
+      || activeThread?.project_id === projectId
+    ) {
+      handleOpenHome();
+    }
+  }, [activeProject?.id, activeThread?.project_id, handleOpenHome]);
 
   const handleDeleteActiveThread = useCallback(async () => {
     if (!activeThread || isDeletingActiveThread) return;
@@ -178,7 +293,6 @@ export default function Home() {
       await deleteThread(activeThread.id);
       setSidebarVersion(v => v + 1);
       await handleThreadSelect(null);
-      setRightPanelTab(0);
     } catch (error) {
       console.error('Failed to delete active thread:', error);
       alert('Failed to delete thread.');
@@ -205,10 +319,17 @@ export default function Home() {
       return;
     }
 
-    const newTab = createPdfTabFromUpload(data);
+    // Upload responses intentionally contain only file data. Add the local
+    // association metadata immediately so actions work before the next reload.
+    const newTab = {
+      ...createPdfTabFromUpload(data),
+      associationScope: activeThread ? 'thread' as const : 'project' as const,
+      isProjectKnowledge: Boolean(activeProject),
+    };
 
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
+    setIsBrowserActive(false);
 
     if (activeThread && fileHash) {
       try {
@@ -218,6 +339,8 @@ export default function Home() {
       } catch (error) {
         console.error('Failed to refresh thread after upload:', error);
       }
+    } else if (activeProject && fileHash) {
+      setPdfTabs(await loadProjectTabs(activeProject));
     }
 
     setCurrentPdfId(null);
@@ -235,7 +358,7 @@ export default function Home() {
           ...tab,
           sentences: transformedSentences,
           text: extractTextFromSentences(transformedSentences),
-          parsingStatus: 'completed',
+          parsingStatus: ProcessStatus.Completed,
         };
       }
       return tab;
@@ -243,8 +366,12 @@ export default function Home() {
   };
 
   const handleIndexingComplete = async (_fileHash: string) => {
-    if (!activeThread) return;
+    if (!activeThread && !activeProject) return;
     try {
+      if (activeProject) {
+        setPdfTabs(await loadProjectTabs(activeProject));
+        return;
+      }
       const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
       setActiveThread(updatedThread);
       setSidebarVersion(v => v + 1);
@@ -255,7 +382,7 @@ export default function Home() {
 
   // Poll for parsing status when active tab is pending
   useEffect(() => {
-    if (!activeTab || activeTab.parsingStatus !== 'pending' || !activeThread) {
+    if (!activeTab || activeTab.parsingStatus !== ProcessStatus.Pending || (!activeThread && !activeProject)) {
       return;
     }
 
@@ -264,7 +391,10 @@ export default function Home() {
     const pollSentences = async () => {
       try {
         // Single endpoint returns both status and sentences
-        const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
+        const target: KnowledgeTarget = activeThread
+          ? { scope: 'thread', id: activeThread.id }
+          : { scope: 'project', id: activeProject!.id };
+        const parsedData = await getParsedSentencesForTarget(activeTab.fileHash, target);
         if (parsedData?.sentences !== null && Array.isArray(parsedData.sentences) && parsedData.sentences.length > 0) {
           // Parsing complete - sentences is an array
           handleParsingComplete(activeTab.fileHash, parsedData.sentences);
@@ -275,10 +405,8 @@ export default function Home() {
         }
         // If sentences is null, undefined, not an array, or empty, parsing is still pending - continue polling
       } catch (error: any) {
-        // Log error but don't crash - file may not be ready yet
-        if (error?.message?.includes('not attached')) {
-          console.log(`File ${activeTab.fileHash} not yet attached to thread, will retry...`);
-        } else {
+        // Don't crash while a newly attached file is still becoming visible.
+        if (!error?.message?.includes('not attached')) {
           console.error("Failed to fetch parsed sentences:", error);
         }
         // Continue polling - don't throw
@@ -296,16 +424,22 @@ export default function Home() {
         clearInterval(pollInterval);
       }
     };
-  }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id]);
+  }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id, activeProject?.id]);
 
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
   const handleTabRemove = async (tabId: string) => {
-    if (!activeThread) return;
     const tab = pdfTabs.find(t => t.id === tabId);
     if (!tab) return;
 
     try {
-      await removeSourceFromThread(activeThread.id, tab.fileHash);
+      if (activeThread) {
+        if (tab.associationScope !== 'thread') return;
+        await removeSourceFromThread(activeThread.id, tab.fileHash);
+      } else if (activeProject) {
+        await removeSourceFromProject(activeProject.id, tab.fileHash);
+      } else {
+        return;
+      }
     } catch (error) {
       console.error('Failed to remove source from thread:', error);
     }
@@ -313,6 +447,11 @@ export default function Home() {
     // Close the tab and refresh sidebar
     handleTabClose(tabId);
     try {
+      if (activeProject) {
+        setPdfTabs(await loadProjectTabs(activeProject));
+        return;
+      }
+      if (!activeThread) return;
       const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
       setActiveThread(updatedThread);
       setSidebarVersion(v => v + 1);
@@ -321,10 +460,65 @@ export default function Home() {
     }
   };
 
+  const handlePromoteDocument = async (tabId: string) => {
+    if (!activeThread) return;
+    const tab = pdfTabs.find((item) => item.id === tabId);
+    if (!tab || tab.associationScope !== 'thread' || tab.isProjectKnowledge || !activeThread.project_id) return;
+    try {
+      if (!await checkEmbeddingModelReady(activeThread.embeddingModel)) return;
+      await promoteFileToProject(activeThread.project_id, {
+        fileHash: tab.fileHash,
+        fileName: tab.fileName,
+        filePath: tab.sourceUrl,
+      });
+      const updated = await getThread(activeThread.id);
+      setActiveThread(updated);
+      setPdfTabs(await loadThreadTabs(updated));
+    } catch (error) {
+      console.error('Failed to promote source:', error);
+    }
+  };
+
+  const handleRetryDocument = async (tabId: string) => {
+    const tab = pdfTabs.find((item) => item.id === tabId);
+    const target: KnowledgeTarget | null = activeThread
+      ? { scope: 'thread', id: activeThread.id }
+      : activeProject ? { scope: 'project', id: activeProject.id } : null;
+    if (!tab || !target) return;
+    try {
+      await retryTargetFile(target, tab.fileHash);
+      setPdfTabs((current) => current.map((item) => (
+        item.id === tabId ? { ...item, parsingStatus: ProcessStatus.Pending, processingError: undefined } : item
+      )));
+    } catch (error) {
+      console.error('Failed to retry document processing:', error);
+    }
+  };
+
   // Handle tab change
   const handleTabChange = (tabId: string) => {
     setActiveTabId(tabId);
     setIsBrowserActive(tabId === 'browser-tab');
+    const tab = pdfTabs.find(item => item.id === tabId);
+    if (!tab || tabId === 'browser-tab' || tab.sentences) return;
+    if (activeProject) {
+      void loadProjectTabs(activeProject).then((tabs) => {
+        setPdfTabs(tabs);
+      });
+      return;
+    }
+    if (!activeThread) return;
+    void hydrateThreadPdfTab(activeThread.id, {
+      fileHash: tab.fileHash,
+      fileName: tab.fileName,
+      sourceType: tab.sourceType,
+      associationScope: tab.associationScope,
+      isProjectKnowledge: tab.isProjectKnowledge,
+    }).then((hydrated) => {
+      setPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
+    }).catch((error) => {
+      console.warn(`Failed to hydrate selected PDF tab ${tab.fileHash}:`, error);
+    });
   };
 
   // Handle tab close
@@ -342,14 +536,17 @@ export default function Home() {
 
   // Handle adding browser page to thread
   const handleAddBrowserToThread = async () => {
-    if (!activeThread || isBrowserCapturing) return;
+    const target: KnowledgeTarget | null = activeThread
+      ? { scope: 'thread', id: activeThread.id }
+      : activeProject ? { scope: 'project', id: activeProject.id } : null;
+    if (!target || isBrowserCapturing || (target.scope === 'project' && projectModelReady !== true)) return;
 
     setIsBrowserCapturing(true);
     try {
-      const result = await captureBrowserPage(activeThread.id);
+      const result = await captureBrowserPageForTarget(target);
 
       // Pre-verify file is accessible before creating tab
-      const isReady = await pollForFileReady(activeThread.id, result.file_hash, {
+      const isReady = await pollForTargetFileReady(target, result.fileHash, {
         maxAttempts: 10,
         intervalMs: 500,
         timeoutMs: 5000,
@@ -368,10 +565,16 @@ export default function Home() {
 
       // Transform to match PDF upload format and reuse handler for consistent behavior
       const uploadData = {
-        fileHash: result.file_hash,
+        fileHash: result.fileHash,
         fileName: displayTitle,
-        pdfUrl: `/threads/${activeThread.id}/files/${result.file_hash}/download`,
+        downloadUrl: `/${target.scope}s/${target.id}/files/${result.fileHash}/download`,
         sentences: null,
+        sourceType: ThreadFileSourceType.Browser,
+        sourceUrl: result.url,
+        filePath: result.url,
+        addedAt: new Date().toISOString(),
+        associationScope: target.scope === 'thread' ? 'thread' : 'project',
+        isProjectKnowledge: target.scope === 'project',
       };
 
       await handlePdfUploaded(uploadData);
@@ -384,55 +587,6 @@ export default function Home() {
       setIsBrowserCapturing(false);
     }
   };
-
-  // Handle resize with optimized performance
-  const handleMouseDown = useCallback(() => {
-    setIsResizing(true);
-    chatWidthRatioRef.current = chatWidthRatio;
-  }, [chatWidthRatio]);
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-    }
-
-    rafIdRef.current = requestAnimationFrame(() => {
-      const nextRatio = (window.innerWidth - e.clientX) / window.innerWidth;
-      const constrainedRatio = clampPanelRatio(nextRatio, PANEL_RATIOS.chat);
-      chatWidthRatioRef.current = constrainedRatio;
-      document.documentElement.style.setProperty('--chat-width-ratio', `${constrainedRatio}`);
-    });
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    setIsResizing(false);
-    setChatWidthRatio(chatWidthRatioRef.current);
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    } else {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-    };
-  }, [isResizing, handleMouseMove, handleMouseUp]);
-
-  const canDisplayRightPanel = true; // Always show right panel for threads
-  const rightPanelWidth = isRightPanelOpen
-    ? (isResizing ? `calc(100vw * var(--chat-width-ratio, ${chatWidthRatio}))` : `calc(100vw * ${chatWidthRatio})`)
-    : 0;
 
   useEffect(() => {
     if (!activeThread) {
@@ -466,507 +620,315 @@ export default function Home() {
     ? rightPanelLineageThreadsById.get(activeThread.id) || activeThread
     : null;
 
-  const renderAllThreadsHeaderActions = () => {
-    if (!threadListHeaderState) return null;
+  const workspaceTabs = useMemo(
+    () => activeThread
+      ? buildDocumentWorkspaceTabs({
+          enabled: true,
+          documents: pdfTabs,
+          traces: traceTabs,
+        })
+      : activeProject ? buildProjectWorkspaceTabs(pdfTabs) : buildHomeWorkspaceTabs(),
+    [activeThread, activeProject, pdfTabs, traceTabs],
+  );
 
-    if (threadListHeaderState.isSelectionMode) {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Tooltip title={threadListHeaderState.allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
-            <Checkbox
-              size="small"
-              checked={threadListHeaderState.allThreadsSelected}
-              indeterminate={threadListHeaderState.someThreadsSelected}
-              onChange={(event) => threadListHeaderState.toggleAllThreads(event.target.checked)}
-              disabled={threadListHeaderState.isBulkDeleting}
-              sx={{ p: 0.5 }}
-            />
-          </Tooltip>
-          <Tooltip title="Shift-click threads to select a range">
-            <Chip label={`${threadListHeaderState.selectedCount} selected`} size="small" color="primary" />
-          </Tooltip>
-          <Tooltip title="Clear selection">
-            <IconButton size="small" onClick={threadListHeaderState.clearSelection} disabled={threadListHeaderState.isBulkDeleting}>
-              <ClearIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Delete selected threads">
-            <span>
-              <IconButton
-                size="small"
-                color="error"
-                onClick={threadListHeaderState.deleteSelectedThreads}
-                disabled={threadListHeaderState.isBulkDeleting || threadListHeaderState.selectedCount === 0}
-              >
-                {threadListHeaderState.isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
-        </Box>
-      );
+  const handleWorkspaceTabChange = useCallback((tabId: string) => {
+    if (memoryManagerIntent && tabId !== 'memory-tab') {
+      if (!confirmDiscardMemoryCurator()) return;
+      setMemoryManagerIntent(null);
+      setMemoryCuratorDirty(false);
     }
+    if (tabId !== 'memory-tab') {
+      rememberNonMemoryTab(tabId);
+    }
+    setActiveTabId(tabId);
+    setIsBrowserActive(tabId === 'browser-tab');
+    if (tabId === 'memory-tab') {
+      const memoryProject = activeProject || threadProject;
+      if (!memoryManagerIntent) {
+        setMemoryCuratorDirty(false);
+        setMemoryManagerIntent(defaultMemoryManagerIntent({
+          thread: activeThread,
+          project: memoryProject,
+        }));
+      }
+    }
+  }, [activeProject, activeThread, confirmDiscardMemoryCurator, memoryManagerIntent, rememberNonMemoryTab, threadProject]);
 
-    return (
-      <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
-        <span>
-          <IconButton
-            size="small"
-            color="error"
-            onClick={threadListHeaderState.enterSelectionMode}
-            disabled={!threadListHeaderState.hasThreads}
-          >
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </span>
-      </Tooltip>
-    );
-  };
+  const handleOpenMemoryCurator = useCallback((intent: MemoryManagerIntent) => {
+    if (memoryManagerIntent && memoryManagerDirtyRef.current && !confirmDiscardMemoryCurator()) return;
+    rememberNonMemoryTab(activeTabId);
+    setActiveTabId('memory-tab');
+    setIsBrowserActive(false);
+    setMemoryCuratorDirty(false);
+    setMemoryManagerIntent(intent);
+  }, [activeTabId, confirmDiscardMemoryCurator, memoryManagerIntent, rememberNonMemoryTab]);
 
-  const renderRightPanelHeader = () => {
-    const isThreadMode = rightPanelTab === 1 && activeThread;
+  const handleMemoryBack = useCallback(() => {
+    if (!confirmDiscardMemoryCurator()) return;
+    setMemoryCuratorDirty(false);
+    setMemoryManagerIntent(null);
+    const target = lastNonMemoryTabByContext[workspaceContextKey] || fallbackNonMemoryTab();
+    if (target === 'home-tab') {
+      handleOpenHome();
+      return;
+    }
+    setActiveTabId(target);
+    setIsBrowserActive(target === 'browser-tab');
+  }, [confirmDiscardMemoryCurator, fallbackNonMemoryTab, handleOpenHome, lastNonMemoryTabByContext, workspaceContextKey]);
 
-    return (
-      <Box
-        sx={{
-          minHeight: 49,
-          borderBottom: 1,
-          borderColor: 'divider',
-          bgcolor: 'background.paper',
-          display: 'flex',
-          alignItems: 'stretch',
-          flexShrink: 0,
-        }}
-      >
-        {isThreadMode ? (
-          <>
-            <Box
-              sx={{
-                width: 132,
-                flex: '0 0 132px',
-                px: 1,
-                display: 'flex',
-                alignItems: 'center',
-                minWidth: 0,
-              }}
-            >
-              <Button
-                size="small"
-                startIcon={<ForumIcon fontSize="small" />}
-                onClick={handleShowAllThreads}
-                sx={{ textTransform: 'none', minWidth: 0 }}
-              >
-                All threads
-              </Button>
-            </Box>
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                px: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 1,
-              }}
-            >
-              <Tooltip
-                title={
-                  <ThreadLineageTooltipContent
-                    thread={activeThreadForTooltip || activeThread}
-                    threadsById={rightPanelLineageThreadsById}
-                    onOpenThread={handleOpenThreadInChat}
-                  />
-                }
-                arrow
-                enterDelay={300}
-                leaveDelay={150}
-                disableInteractive={false}
-              >
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    alignSelf: 'stretch',
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: 'default',
-                  }}
-                >
-                  <Typography
-                    variant="subtitle2"
-                    fontWeight={700}
-                    noWrap
-                    sx={{ minWidth: 0 }}
-                  >
-                    {activeThread.name}
-                  </Typography>
-                </Box>
-              </Tooltip>
-              <Tooltip title="Delete current thread">
-                <span>
-                  <IconButton
-                    size="small"
-                    color="error"
-                    onClick={handleDeleteActiveThread}
-                    disabled={isDeletingActiveThread}
-                  >
-                    {isDeletingActiveThread ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-          </>
-        ) : (
-          <>
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                px: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-              }}
-            >
-              <ForumIcon fontSize="small" color="primary" />
-              <Typography variant="subtitle1" fontWeight={700} noWrap>
-                Threads
-              </Typography>
-              <Chip label={threadListHeaderState?.threadCount ?? 0} size="small" />
-              <Tooltip title="Create new thread">
-                <span>
-                  <IconButton
-                    size="small"
-                    color="primary"
-                    onClick={threadListHeaderState?.openCreateDialog}
-                    disabled={!threadListHeaderState}
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-            <Box
-              sx={{
-                flex: '0 0 auto',
-                px: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-              }}
-            >
-              {renderAllThreadsHeaderActions()}
-            </Box>
-          </>
-        )}
-      </Box>
-    );
-  };
+  const handleOpenConversationReview = useCallback((draftContent?: string) => {
+    if (!activeThread) return;
+    if (draftContent) {
+      handleOpenMemoryCurator({
+        ...defaultMemoryManagerIntent({ thread: activeThread, project: activeProject || threadProject }),
+        draftContent,
+      });
+      return;
+    }
+    handleOpenMemoryCurator(reviewManagerIntent(activeThread));
+  }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
+
+  const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
+    rememberNonMemoryTab('trace-tab');
+    openTrace(trace);
+    setActiveTabId('trace-tab');
+    setIsBrowserActive(false);
+  }, [openTrace, rememberNonMemoryTab]);
+
+  const isMemoryWorkspaceActive = activeTabId === 'memory-tab';
+  const activeMemoryIntent = isMemoryWorkspaceActive
+    ? memoryManagerIntent || defaultMemoryManagerIntent({
+      thread: activeThread,
+      project: activeProject || threadProject,
+    })
+    : null;
+  const memoryContextSubtitle = activeMemoryIntent
+    ? activeMemoryIntent.scopeType === 'thread'
+      ? activeThread?.name || 'Thread'
+      : activeMemoryIntent.scopeType === 'project'
+        ? (activeProject || threadProject)?.name || 'Project'
+        : 'Home'
+    : undefined;
+  const memoryBackLabel = activeMemoryIntent
+    ? activeMemoryIntent.scopeType === 'user'
+      ? 'Back to Home'
+      : activeMemoryIntent.scopeType === 'thread'
+        ? 'Back to Thread'
+        : 'Back to Project'
+    : 'Back';
 
   // Memoize theme to prevent recreation on every render
   const theme = useMemo(() => getTheme(pdfDarkMode), [pdfDarkMode]);
 
-  // Don't render until pdfDarkMode is determined (prevents hydration mismatch)
-  if (pdfDarkMode === undefined) return null;
+  // Don't render until theme mode is determined (prevents hydration mismatch)
+  if (!themeHydrated) return null;
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
-
-        {/* Left Column: PDF Content & Controls */}
-        <Box sx={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
-          borderRight: 1,
-          borderColor: 'divider'
-        }}>
-          {/* Top Controls Bar */}
-          <Box sx={{
-            px: 1.5,
-            py: 0.75,
-            minHeight: 49,
-            borderBottom: 1,
-            borderColor: 'divider',
-            bgcolor: pdfDarkMode ? '#222' : 'background.paper',
-            color: pdfDarkMode ? '#eee' : 'inherit',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 1,
-            flexWrap: 'wrap',
-            overflow: 'visible'
-          }}>
-            {/* Left side controls */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
-              {/* PDF Uploader */}
-              <PdfUploader
-                threadId={activeThread?.id ?? null}
-                embeddingModel={activeThread?.embed_model ?? null}
-                onUploaded={handlePdfUploaded}
-                onIndexingComplete={handleIndexingComplete}
-                onParsingComplete={handleParsingComplete}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-              />
-
-              {/* Player Controls */}
-              {activeThread && rightPanelTab === 1 && (
-                <PlayerControls
-                  sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
-                  currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
-                  onCurrentChange={(id) => {
-                    if (activeSource === 'pdf') {
-                      setCurrentPdfId(id);
-                    } else {
-                      setCurrentChatId(id);
-                    }
-                    setPlayRequestId(null);
-                  }}
-                  playRequestId={playRequestId}
-                  autoScroll={autoScroll}
-                  onAutoScrollChange={setAutoScroll}
-                  highlightEnabled={highlightEnabled}
-                  onHighlightEnabledChange={setHighlightEnabled}
+      <Box sx={{ height: '100vh', overflow: 'hidden', bgcolor: 'background.default' }}>
+        <WorkbenchShell
+          layout={workbenchLayout}
+          onLayoutChange={setWorkbenchLayout}
+          onResolvedPlacementChange={setResolvedPlacement}
+          onResizingChange={setIsResizing}
+          secondaryLabel={isMemoryWorkspaceActive ? 'Memory curator' : 'Threads and chat'}
+          primaryToolbar={
+            <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
+                <Tooltip title="Home">
+                  <IconButton
+                    color="default"
+                    size="small"
+                    aria-label="Home"
+                    onClick={handleOpenHome}
+                  >
+                    <HomeIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <PdfUploader
+                  target={activeThread
+                    ? { scope: 'thread', id: activeThread.id }
+                    : activeProject ? { scope: 'project', id: activeProject.id } : null}
+                  onUploaded={handlePdfUploaded}
+                  onIndexingComplete={handleIndexingComplete}
+                  onParsingComplete={handleParsingComplete}
+                  disabled={!activeThread && (!activeProject || projectModelReady !== true)}
+                  tooltipText={!activeThread && !activeProject
+                    ? 'Select a thread or project first'
+                    : activeProject && projectModelReady !== true ? 'Project embedding model is unavailable' : undefined}
                 />
-              )}
-            </Box>
-
-            {/* Right side icons */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: '0 0 auto', ml: 'auto' }}>
-              {/* PDF Dark Mode Toggle */}
-              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-                <IconButton
-                  color={pdfDarkMode ? "primary" : "default"}
-                  onClick={() => setPdfDarkMode(d => !d)}
-                  size="small"
-                >
-                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-
-              {/* Right Panel Toggle - Always visible on extreme right */}
-              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
-                <IconButton
-                  color="primary"
-                  size="small"
-                  onClick={() => setIsRightPanelOpen(open => !open)}
-                >
-                  {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-            </Box>
-          </Box>
-
-          {/* PDF Tabs */}
-          {(pdfTabs.length > 0 || activeThread) && (
-            <PdfTabs
-              tabs={pdfTabs}
-              activeTabId={activeTabId}
-              onTabChange={handleTabChange}
-              onTabClose={handleTabClose}
-              onTabRemove={activeThread ? handleTabRemove : undefined}
-              darkMode={pdfDarkMode}
-              showBrowserTab={!!activeThread}
-              onBrowserTabClick={() => {
-                setIsBrowserActive(true);
-                setActiveTabId('browser-tab');
-              }}
-              onAddBrowserToThread={activeThread ? handleAddBrowserToThread : undefined}
-              isBrowserCapturing={isBrowserCapturing}
-            />
-          )}
-
-          {/* PDF Viewer Area - unified for both PDFs and web-converted PDFs */}
-          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {isBrowserActive ? (
-              <iframe
-                src="http://localhost:8090"
-                style={{ width: '100%', height: '100%', border: 'none' }}
-                title="Browser"
-                allow="camera; microphone; clipboard-read; clipboard-write"
-              />
-            ) : isPdfLoading ? (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-                <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
-                <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
-              </Box>
-            ) : pdfUrl ? (
-              <PdfViewer
-                pdfUrl={pdfUrl}
-                sentences={pdfSentences}
-                currentId={activeSource === 'pdf' ? currentPdfId : null}
-                onJump={(id) => {
-                  setActiveSource('pdf');
-                  setCurrentPdfId(id);
-                  setPlayRequestId(id);
-                }}
-                autoScroll={autoScroll}
-                isResizing={isResizing}
-                highlightEnabled={highlightEnabled}
-                darkMode={pdfDarkMode}
-                threadId={activeThread?.id ?? null}
-                fileHash={activeTab?.fileHash ?? null}
-              />
-            ) : (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
-                <Box>
-                  <Typography variant="h5" sx={{ color: pdfDarkMode ? '#eee' : 'textSecondary' }} gutterBottom>
-                    Welcome to AskPDF
-                  </Typography>
-                  <Typography sx={{ mb: 2, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
-                    To get started:
-                  </Typography>
-                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
-                    <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
-                    <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
-                    <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
-                    <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
-                    <li>Select text and click the read-aloud icon to start audio playback from that point.</li>
-                  </ul>
-                  <Typography sx={{ mt: 2, mb: 1, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
-                    Settings tips:
-                  </Typography>
-                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
-                    <li>Open the <b>Chat</b> tab and click the <b>gear icon</b> to configure AI prompt settings for the current thread.</li>
-                    <li>Toggle <b>Reasoning mode</b> for deeper multi-step answers on reasoning-capable models.</li>
-                    <li>Use <b>Intent Agent</b> (requires Reasoning mode) to rewrite follow-up questions into standalone queries.</li>
-                    <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
-                    <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
-                    <li>Edit the <b>System role</b> to change the assistant's behavior and tone.</li>
-                    <li>Use <b>Prompt preview</b> to see the exact prompt that will be sent to the model.</li>
-                  </ul>
-                  <Typography sx={{ mt: 2, fontSize: 14, color: pdfDarkMode ? '#aaa' : 'textSecondary' }}>
-                    <b>Note:</b> The embedding model is locked once a thread is created. Create a new thread to use a different model.
-                  </Typography>
-                </Box>
-              </Box>
-            )}
-          </Box>
-        </Box>
-
-        {/* Resizable Divider */}
-        {canDisplayRightPanel && isRightPanelOpen && (
-          <Box
-            onMouseDown={handleMouseDown}
-            sx={{
-              width: '12px',
-              mx: '-6px',
-              cursor: 'col-resize',
-              position: 'relative',
-              zIndex: 10,
-              display: 'flex',
-              justifyContent: 'center',
-              '&:hover .divider-line, &:active .divider-line': {
-                backgroundColor: 'primary.main',
-                width: '4px',
-              },
-            }}
-          >
-            <Box className="divider-line" sx={{
-              width: '2px',
-              height: '100%',
-              backgroundColor: isResizing ? 'primary.main' : 'divider',
-              transition: 'all 0.2s',
-            }} />
-          </Box>
-        )}
-
-        {/* Right Column: Threads & Chat Interface */}
-        {canDisplayRightPanel && (
-          <Box sx={{
-            width: rightPanelWidth,
-            minWidth: 0,
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            transition: isResizing || !isRightPanelOpen ? 'none' : 'width 0.1s ease-out',
-            bgcolor: 'background.paper',
-            visibility: isRightPanelOpen ? 'visible' : 'hidden',
-            pointerEvents: isRightPanelOpen ? 'auto' : 'none',
-            overflow: 'hidden'
-          }}>
-            {renderRightPanelHeader()}
-
-            {/* Tab Content */}
-            <Box sx={{ flex: 1, overflow: 'hidden' }}>
-              {/* Threads Tab */}
-              <Box sx={{
-                height: '100%',
-                display: rightPanelTab === 0 ? 'block' : 'none',
-                overflow: 'auto'
-              }}>
-                <ThreadSidebar
-                  key={sidebarVersion}
-                  activeThreadId={activeThread?.id || null}
-                  onThreadSelect={handleThreadSelectFromList}
-                  onThreadForked={handleThreadForked}
-                  hideHeader
-                  onHeaderStateChange={setThreadListHeaderState}
-                  darkMode={pdfDarkMode}
-                />
-              </Box>
-
-              {/* Chat Tab */}
-              <Box sx={{
-                height: '100%',
-                display: rightPanelTab === 1 ? 'flex' : 'none',
-                flexDirection: 'column'
-              }}>
-                {activeThread ? (
-                  <ChatInterface
-                    activeThread={activeThread}
-                    chatSentences={chatSentences}
-                    setChatSentences={setChatSentences}
-                    currentChatId={currentChatId}
-                    activeSource={activeSource}
-                    onJump={(id) => {
-                      setActiveSource('chat');
-                      setCurrentChatId(id);
-                      setPlayRequestId(id);
-                    }}
-                    onResetChatId={() => {
-                      setCurrentChatId(null);
+                <Tooltip title="Agent workflow builder">
+                  <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
+                    <AutoAwesomeSharpIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                {activeThread && (
+                  <PlayerControls
+                    sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
+                    sourceKey={activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey}
+                    currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
+                    onCurrentChange={(id) => {
+                      if (activeSource === 'pdf') setCurrentPdfId(id);
+                      else setCurrentChatId(id);
                       setPlayRequestId(null);
                     }}
-                    onThreadForked={handleThreadForked}
-                    onThreadUpdate={handleThreadUpdated}
-                    onOpenThread={handleOpenThreadInChat}
-                    hideInlineLineage
-                    darkMode={pdfDarkMode}
+                    playRequestId={playRequestId}
                     autoScroll={autoScroll}
+                    onAutoScrollChange={setAutoScroll}
+                    highlightEnabled={highlightEnabled}
+                    onHighlightEnabledChange={setHighlightEnabled}
                   />
-                ) : (
-                  <Box sx={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    p: 3
-                  }}>
-                    <Typography color="text.secondary" textAlign="center">
-                      Select or create a thread to start chatting
-                    </Typography>
-                  </Box>
                 )}
               </Box>
+              <WorkbenchToolbarTrailingActions>
+                <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+                  <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={toggleDarkMode} size="small">
+                    {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+                <DockMenuButton value={workbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setWorkbenchLayout} label="Threads and chat layout" />
+              </WorkbenchToolbarTrailingActions>
             </Box>
-          </Box>
-        )}
-
-        {/* Global Drag Mask */}
-        {isResizing && (
-          <Box sx={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            cursor: 'col-resize',
-            userSelect: 'none',
-            backgroundColor: 'transparent',
-          }} />
-        )}
+          }
+          primaryTabs={
+            <WorkspaceTabs
+              tabs={workspaceTabs}
+              activeTabId={activeTabId}
+              onTabChange={handleWorkspaceTabChange}
+              onTabClose={handleTabClose}
+              onDocumentRemove={handleTabRemove}
+              onDocumentPromote={handlePromoteDocument}
+              onDocumentRetry={handleRetryDocument}
+              documentContext={activeProject ? 'project' : 'thread'}
+              onAddBrowserToThread={handleAddBrowserToThread}
+              isBrowserCapturing={isBrowserCapturing}
+            />
+          }
+          primaryContent={
+            <ThreadWorkspaceContent
+              activeTabId={activeTabId}
+              activeDocument={activeTab}
+              documentSentences={pdfSentences}
+              documentDownloadUrl={downloadUrl}
+              traceTabs={traceTabs}
+              activeTraceId={activeTraceId}
+              onActiveTraceChange={setActiveTraceId}
+              onCloseTrace={closeTrace}
+              isBrowserActive={isBrowserActive}
+              isLoading={isPdfLoading}
+              isResizing={isResizing}
+              darkMode={pdfDarkMode}
+              currentDocumentSentenceId={activeSource === 'pdf' ? currentPdfId : null}
+              onDocumentJump={(id) => { setActiveSource('pdf'); setCurrentPdfId(id); setPlayRequestId(id); }}
+              autoScroll={autoScroll}
+              highlightEnabled={highlightEnabled}
+              threadId={activeThread?.id ?? null}
+              activeThread={activeThread}
+              activeProject={activeProject}
+              projectInventoryVersion={sidebarVersion}
+              curatorRefreshVersion={memoryRefreshVersion}
+              onOpenMemoryCurator={handleOpenMemoryCurator}
+              emptyTitle="Welcome to AskPDF"
+              emptyDescription="Select or create a thread, then upload a PDF or open the browser."
+            />
+          }
+          secondaryContent={
+            activeMemoryIntent ? (
+              <MemoryManagerPanel
+                key={`${activeMemoryIntent.mode}:${activeMemoryIntent.memory?.id || activeMemoryIntent.scopeType}:${activeMemoryIntent.scopeId}`}
+                intent={activeMemoryIntent}
+                onBack={handleMemoryBack}
+                backLabel={memoryBackLabel}
+                contextSubtitle={memoryContextSubtitle}
+                onDirtyChange={setMemoryCuratorDirty}
+                onApplied={() => setMemoryRefreshVersion((version) => version + 1)}
+              />
+            ) : (
+            <ThreadSecondaryPanel
+              activeThread={activeThread}
+              activeProject={activeProject}
+              threadProject={threadProject}
+              activeProjectId={activeProject?.id ?? null}
+              sidebarKey={sidebarVersion}
+              onThreadSelect={handleThreadSelectFromList}
+              onProjectSelect={handleProjectSelect}
+              onProjectReadinessChange={(_projectId, ready) => setProjectModelReady(ready)}
+              onProjectUpdated={handleProjectUpdated}
+              onProjectCloned={handleProjectCloned}
+              onProjectDeleted={handleProjectDeleted}
+              onThreadForked={handleThreadForked}
+              onBackToProject={handleBackToProject}
+              darkMode={pdfDarkMode}
+              renderSelectedTitle={(thread) => (
+                <Tooltip
+                  title={
+                    <ThreadLineageTooltipContent
+                      thread={activeThreadForTooltip || thread}
+                      threadsById={rightPanelLineageThreadsById}
+                      onOpenThread={handleOpenThreadInChat}
+                    />
+                  }
+                  arrow
+                  enterDelay={300}
+                  leaveDelay={150}
+                  disableInteractive={false}
+                >
+                  <Box
+                    sx={{
+                      flex: 1,
+                      ...flexTruncateSx,
+                      alignSelf: 'stretch',
+                      display: 'flex',
+                      alignItems: 'center',
+                      cursor: 'default',
+                    }}
+                  >
+                    <Typography variant="subtitle2" fontWeight={700} noWrap sx={singleLineTruncateSx}>
+                      {thread.name}
+                    </Typography>
+                  </Box>
+                </Tooltip>
+              )}
+              selectedActions={(
+                <Tooltip title="Delete current thread">
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={handleDeleteActiveThread}
+                      disabled={isDeletingActiveThread}
+                    >
+                      {isDeletingActiveThread ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              renderConversation={(thread) => (
+                <ChatInterface
+                  activeThread={thread}
+                  chatSentences={chatSentences}
+                  setChatSentences={setChatSentences}
+                  setChatPlaybackSourceKey={setChatPlaybackSourceKey}
+                  currentChatId={currentChatId}
+                  activeSource={activeSource}
+                  onJump={(id) => { setActiveSource('chat'); setCurrentChatId(id); setPlayRequestId(id); }}
+                  onResetChatId={() => { setCurrentChatId(null); setPlayRequestId(null); }}
+                  onThreadForked={handleThreadForked}
+                  onThreadUpdate={handleThreadUpdated}
+                  onOpenThread={handleOpenThreadInChat}
+                  onOpenTrace={handleOpenTrace}
+                  onOpenMemoryReview={handleOpenConversationReview}
+                  hideInlineLineage
+                  darkMode={pdfDarkMode}
+                  autoScroll={autoScroll}
+                  isPanelResizing={isResizing}
+                />
+              )}
+            />
+            )
+          }
+        />
       </Box>
     </ThemeProvider>
   );

@@ -12,11 +12,75 @@ This test suite validates:
 import pytest
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 from app.db.vector.model_registry import EmbeddingModelRegistry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
 from app.db.vector.adapter import WeaviateAdapter
 from app.db.vector.config import VectorDBError, VectorDBInsertError
+
+
+class TestModelAwareBatchAcknowledgement:
+    """Verify that queued objects are not mistaken for accepted objects."""
+
+    @pytest.mark.asyncio
+    async def test_successful_batch_returns_full_inserted_count(self):
+        collection = MagicMock()
+        batch_context = MagicMock()
+        collection.batch.dynamic.return_value.__enter__.return_value = batch_context
+        collection.batch.dynamic.return_value.__exit__.return_value = None
+        collection.batch.failed_objects = []
+        adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+
+        inserted = await adapter._insert_many_model_aware(
+            collection=collection,
+            points=[
+                {"uuid": "memory-1", "properties": {"content": "one"}, "vector": [0.1]},
+                {"uuid": "memory-2", "properties": {"content": "two"}, "vector": [0.2]},
+            ],
+        )
+
+        assert inserted == 2
+        assert batch_context.add_object.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_objects_raise_without_logging_payloads(self, caplog):
+        collection = MagicMock()
+        batch_context = MagicMock()
+        collection.batch.dynamic.return_value.__enter__.return_value = batch_context
+        collection.batch.dynamic.return_value.__exit__.return_value = None
+        collection.batch.failed_objects = [
+            SimpleNamespace(
+                message="Rejected secret launch content and vector [0.123]",
+                original_uuid="memory-rejected",
+                object_=SimpleNamespace(
+                    uuid="memory-rejected",
+                    properties={"content": "secret launch content"},
+                    vector=[0.123],
+                ),
+            )
+        ]
+        adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+
+        with pytest.raises(
+            VectorDBInsertError,
+            match=r"Weaviate rejected 1 of 1 model-aware batch objects",
+        ) as exc_info:
+            await adapter._insert_many_model_aware(
+                collection=collection,
+                points=[
+                    {
+                        "uuid": "memory-rejected",
+                        "properties": {"content": "secret launch content"},
+                        "vector": [0.123],
+                    }
+                ],
+            )
+
+        diagnostics = f"{exc_info.value}\n{caplog.text}"
+        assert "memory-rejected" in diagnostics
+        assert "secret launch content" not in diagnostics
+        assert "[0.123]" not in diagnostics
 
 
 class TestResourceExhaustionScenarios:

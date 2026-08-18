@@ -6,6 +6,13 @@ import json
 import re
 from typing import Any, Dict, Optional, Tuple
 
+
+
+class ReasoningFormat:
+    NONE = type("Value", (), {"value": "none"})
+    STRUCTURED = type("Value", (), {"value": "structured"})
+    TAGGED_TEXT = type("Value", (), {"value": "tagged_text"})
+
 _THINK_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 
 
@@ -133,7 +140,7 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
             "answer": "",
             "reasoning": "",
             "reasoning_available": False,
-            "reasoning_format": "none",
+            "reasoning_format": ReasoningFormat.NONE.value,
         }
 
     content = getattr(message, "content", "")
@@ -151,7 +158,7 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
             "answer": raw_answer.strip(),
             "reasoning": structured_reasoning,
             "reasoning_available": True,
-            "reasoning_format": "structured",
+            "reasoning_format": ReasoningFormat.STRUCTURED.value,
         }
 
     tag_reasoning, cleaned_answer = _extract_from_think_tags(raw_answer)
@@ -169,12 +176,12 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
             "answer": cleaned_answer,
             "reasoning": tag_reasoning,
             "reasoning_available": True,
-            "reasoning_format": "tagged_text",
+            "reasoning_format": ReasoningFormat.TAGGED_TEXT.value,
         }
 
     return {
         "answer": cleaned_answer,
         "reasoning": "",
         "reasoning_available": False,
-        "reasoning_format": "none",
+        "reasoning_format": ReasoningFormat.NONE.value,
     }

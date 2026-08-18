@@ -64,7 +64,7 @@ const ThreadLineageTooltipContent: React.FC<ThreadLineageTooltipContentProps> = 
           Embedding model
         </Typography>
         <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-          {thread.embed_model}
+          {thread.embeddingModel}
         </Typography>
       </Box>
       {(forkInfo || childThreadIds.length > 0) && (
@@ -85,6 +85,17 @@ const ThreadLineageTooltipContent: React.FC<ThreadLineageTooltipContentProps> = 
             threadsById={threadsById}
             onOpenThread={onOpenThread}
           />
+        </Box>
+      )}
+      {forkInfo?.memory_copy_mode && (
+        <Box sx={sectionSx}>
+          <Typography variant="caption" color="text.secondary" component="div">
+            Memory copy
+          </Typography>
+          <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
+            {forkInfo.memory_copy_mode.replace(/_/g, ' ')}
+            {Array.isArray(forkInfo.copied_memory_ids) ? ` (${forkInfo.copied_memory_ids.length})` : ''}
+          </Typography>
         </Box>
       )}
       <Box sx={sectionSx}>

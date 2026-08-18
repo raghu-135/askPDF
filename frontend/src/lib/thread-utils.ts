@@ -1,48 +1,116 @@
-import { PdfTab } from "../components/PdfTabs";
-import { Thread, getThread, getPdfByHash, API_BASE } from "./api";
-import { transformSentences } from "./bbox-derivation";
+import type { PdfTab } from "./document-tabs.ts";
+import type { Project, Thread, ThreadFile } from "./api.ts";
+import { getThread, getPdfByHash, getPdfForTarget, getProjectFiles, API_BASE } from "./api.ts";
+import { transformSentences } from "./bbox-derivation.ts";
+import { ProcessStatus, ThreadFileSourceType } from "./enums.ts";
+
+export type DetailedThread = Thread & { files?: ThreadFile[] };
+
+const createPendingThreadPdfTab = (threadId: string, threadFile: ThreadFile): PdfTab => ({
+  id: threadFile.fileHash,
+  fileName: threadFile.fileName,
+  fileHash: threadFile.fileHash,
+  downloadUrl: `${API_BASE}/api/threads/${threadId}/files/${threadFile.fileHash}/download?t=${Date.now()}`,
+  sentences: null,
+  text: '',
+  sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+  sourceUrl: threadFile.filePath,
+  addedAt: threadFile.addedAt,
+  parsingStatus: threadFile.processingStatus || ProcessStatus.Pending,
+  processingError: threadFile.processingError,
+  associationScope: threadFile.associationScope,
+  isProjectKnowledge: threadFile.isProjectKnowledge,
+});
+
+export async function hydrateThreadPdfTab(threadId: string, threadFile: ThreadFile): Promise<PdfTab> {
+  const pdfData = await getPdfByHash(threadFile.fileHash, threadId);
+  const transformedSentences = transformSentences(pdfData.sentences);
+  return {
+    id: threadFile.fileHash,
+    fileName: threadFile.fileName,
+    fileHash: threadFile.fileHash,
+    downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
+    sentences: transformedSentences,
+    text: extractTextFromSentences(transformedSentences),
+    sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+    sourceUrl: threadFile.filePath,
+    addedAt: threadFile.addedAt,
+    parsingStatus: threadFile.processingStatus || ProcessStatus.Completed,
+    processingError: threadFile.processingError,
+    associationScope: threadFile.associationScope,
+    isProjectKnowledge: threadFile.isProjectKnowledge,
+  };
+}
+
+const sortTabsByAddedAt = (tabs: PdfTab[]): PdfTab[] => (
+  [...tabs].sort((a, b) => {
+    const aTime = a.addedAt ? Date.parse(a.addedAt) : Number.MAX_SAFE_INTEGER;
+    const bTime = b.addedAt ? Date.parse(b.addedAt) : Number.MAX_SAFE_INTEGER;
+    if (aTime !== bTime) return aTime - bTime;
+    return a.fileName.localeCompare(b.fileName);
+  })
+);
+
+export async function loadProjectTabs(project: Project, options?: { eagerCount?: number }): Promise<PdfTab[]> {
+  const { files } = await getProjectFiles(project.id);
+  const eagerCount = Math.max(0, options?.eagerCount ?? 1);
+  return Promise.all(files.map(async (file, index) => {
+    const pending: PdfTab = {
+      id: file.fileHash,
+      fileName: file.fileName,
+      fileHash: file.fileHash,
+      downloadUrl: `${API_BASE}/api/projects/${project.id}/files/${file.fileHash}/download?t=${Date.now()}`,
+      sentences: null,
+      text: '',
+      sourceType: file.sourceType || ThreadFileSourceType.Pdf,
+      sourceUrl: file.filePath,
+      addedAt: file.addedAt,
+      parsingStatus: file.processingStatus || ProcessStatus.Pending,
+      processingError: file.processingError,
+      associationScope: 'project',
+      isProjectKnowledge: true,
+    };
+    if (index >= eagerCount) return pending;
+    try {
+      const pdfData = await getPdfForTarget(file.fileHash, { scope: 'project', id: project.id });
+      const sentences = transformSentences(pdfData.sentences);
+      return {
+        ...pending,
+        downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
+        sentences,
+        text: extractTextFromSentences(sentences),
+        parsingStatus: ProcessStatus.Completed,
+      };
+    } catch {
+      return pending;
+    }
+  })).then(sortTabsByAddedAt);
+}
 
 /**
- * Loads all PDF sources for a thread and returns PdfTabs.
+ * Loads PDF sources for a thread and returns PdfTabs. The first tab is hydrated
+ * eagerly; later tabs are lightweight placeholders so selecting a thread is fast.
  */
-export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
-  const threadData = await getThread(thread.id);
+export async function loadThreadTabs(thread: DetailedThread, options?: { eagerCount?: number }): Promise<PdfTab[]> {
+  const threadData = Array.isArray(thread.files) ? thread : await getThread(thread.id);
   if (!threadData.files || threadData.files.length === 0) return [];
   const loadedTabs: PdfTab[] = [];
+  const eagerCount = Math.max(0, options?.eagerCount ?? 1);
   
-  // Process files in the order returned by backend (already ordered by added_at DESC)
-  for (const file of threadData.files) {
+  for (const [index, threadFile] of threadData.files.entries()) {
+    if (index >= eagerCount) {
+      loadedTabs.push(createPendingThreadPdfTab(threadData.id, threadFile));
+      continue;
+    }
     try {
-      const pdfData = await getPdfByHash(file.file_hash, thread.id);
-      const transformedSentences = transformSentences(pdfData.sentences);
-      loadedTabs.push({
-        id: file.file_hash,
-        fileName: file.file_name,
-        fileHash: file.file_hash,
-        pdfUrl: `${API_BASE}/api${pdfData.pdfUrl}?t=${Date.now()}`,
-        sentences: transformedSentences,
-        text: extractTextFromSentences(transformedSentences),
-        sourceType: 'pdf',
-        parsingStatus: 'completed',
-      });
+      loadedTabs.push(await hydrateThreadPdfTab(threadData.id, threadFile));
     } catch (err) {
-      console.warn(`Failed to load file ${file.file_hash}, creating tab with pending status:`, err);
-      // Create tab with basic info even if API call fails
-      loadedTabs.push({
-        id: file.file_hash,
-        fileName: file.file_name,
-        fileHash: file.file_hash,
-        pdfUrl: `${API_BASE}/api/threads/${thread.id}/files/${file.file_hash}/download?t=${Date.now()}`,
-        sentences: null,
-        text: '',
-        sourceType: 'pdf',
-        parsingStatus: 'pending',
-      });
+      console.warn(`Failed to load file ${threadFile.fileHash}, creating tab with pending status:`, err);
+      loadedTabs.push(createPendingThreadPdfTab(threadData.id, threadFile));
     }
   }
   
-  // Return tabs in the same order as backend (most recent first)
-  return loadedTabs;
+  return sortTabsByAddedAt(loadedTabs);
 }
 
 /**
@@ -55,11 +123,15 @@ export function createPdfTabFromUpload(data: any): PdfTab {
     id: data?.fileHash || `tab-${Date.now()}`,
     fileName: data?.fileName || 'Untitled.pdf',
     fileHash: data?.fileHash || '',
-    pdfUrl: data?.pdfUrl ? `${API_BASE}/api${data.pdfUrl}?t=${Date.now()}` : '',
+    downloadUrl: data?.downloadUrl ? `${API_BASE}/api${data.downloadUrl}?t=${Date.now()}` : '',
     sentences: sentences ? transformedSentences : null,
     text: sentences ? extractTextFromSentences(transformedSentences) : '',
-    sourceType: 'pdf',
-    parsingStatus: sentences ? 'completed' : 'pending',
+    sourceType: data?.sourceType || ThreadFileSourceType.Pdf,
+    sourceUrl: data?.sourceUrl || data?.filePath,
+    addedAt: data?.addedAt,
+    associationScope: data?.associationScope,
+    isProjectKnowledge: data?.isProjectKnowledge,
+    parsingStatus: sentences ? ProcessStatus.Completed : ProcessStatus.Pending,
   };
 }
 

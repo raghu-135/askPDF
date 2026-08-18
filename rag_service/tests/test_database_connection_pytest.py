@@ -15,7 +15,7 @@ try:
     from sqlalchemy import text
     from sqlmodel import SQLModel, select
     from app.db.connection_sqlmodel import get_session, init_db
-    from app.db.models_sqlmodel import Thread
+    from app.db.models_sqlmodel import Project, Thread
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
@@ -92,10 +92,17 @@ class TestPostgreSQLConnection:
             # Create a thread
             import uuid
             from datetime import datetime
+            project = Project(
+                id=str(uuid.uuid4()),
+                name="Connection Test Project",
+                embedding_model="test-model",
+            )
+            session.add(project)
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=project.id,
                 name="Test Thread",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -144,7 +151,7 @@ class TestPostgreSQLConnection:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name="Rollback Test",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -174,12 +181,19 @@ class TestPostgreSQLConnection:
         
         async with async_session() as session:
             # Create multiple threads
+            project = Project(
+                id=str(uuid.uuid4()),
+                name="Transaction Test Project",
+                embedding_model="test-model",
+            )
+            session.add(project)
             thread_ids = []
             for i in range(5):
                 thread = Thread(
                     id=str(uuid.uuid4()),
+                    project_id=project.id,
                     name=f"Thread {i}",
-                    embed_model="test-model",
+                    embedding_model="test-model",
                     settings={},
                     created_at=datetime.utcnow()
                 )

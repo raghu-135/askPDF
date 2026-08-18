@@ -4,17 +4,16 @@ export type PanelRatioConfig = {
   max: number;
 };
 
+export const STANDARD_PANEL_RATIO = {
+  default: 0.32,
+  min: 0.2,
+  max: 0.8,
+} satisfies PanelRatioConfig;
+
 export const PANEL_RATIOS = {
-  chat: {
-    default: 0.32,
-    min: 0.2,
-    max: 0.8,
-  },
-  pdfSidebar: {
-    default: 0.32,
-    min: 0.2,
-    max: 0.8,
-  },
+  chat: STANDARD_PANEL_RATIO,
+  pdfSidebar: STANDARD_PANEL_RATIO,
+  graphElements: STANDARD_PANEL_RATIO,
 } satisfies Record<string, PanelRatioConfig>;
 
 export const clampPanelRatio = (ratio: number, config: PanelRatioConfig) => (

@@ -91,7 +91,12 @@ def _score(obj: Any) -> float:
         return 0.0
     score = getattr(meta, "score", None)
     if score is None:
-        score = getattr(meta, "distance", None)
+        distance = getattr(meta, "distance", None)
+        if distance is not None:
+            try:
+                return 1.0 / (1.0 + max(0.0, float(distance)))
+            except (TypeError, ValueError):
+                return 0.0
     if score is None:
         return 0.0
     try:
@@ -99,3 +104,12 @@ def _score(obj: Any) -> float:
     except (TypeError, ValueError) as e:
         logger.warning(f"Failed to convert score to float: {e}")
         return 0.0
+
+
+def _score_type(obj: Any) -> str:
+    meta = getattr(obj, "metadata", None)
+    if meta is not None and getattr(meta, "score", None) is not None:
+        return "hybrid_score"
+    if meta is not None and getattr(meta, "distance", None) is not None:
+        return "distance_similarity"
+    return "unknown"

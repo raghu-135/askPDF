@@ -13,7 +13,7 @@ import json
 
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
-from app.db.models_sqlmodel import ThreadFile, Thread, File
+from app.db.models_sqlmodel import Project, ThreadFile, Thread, File
 from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
 
@@ -118,15 +118,16 @@ class TestThreadFileRepository:
         assert result.scalar_one_or_none() is not None
 
     @pytest.mark.asyncio
-    async def test_count_threads_with_file(self, repo, sample_file):
+    async def test_count_threads_with_file(self, repo, sample_file, test_model_project):
         """Count thread references."""
         # Create multiple threads with the same file
         import uuid
         for i in range(3):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -157,14 +158,22 @@ class TestThreadFileRepository:
         models = ["BAAI/bge-m3", "openai/text-embedding-3-small"]
         
         for model in models:
+            project = Project(
+                id=str(uuid.uuid4()),
+                name=f"Project for {model}",
+                embedding_model=model,
+            )
+            repo.add(project)
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=project.id,
                 name=f"Thread for {model}",
-                embed_model=model,
+                embedding_model=model,
                 settings={},
                 created_at=datetime.utcnow()
             )
             repo.add(thread)
+            await repo.flush()
             
             thread_file = ThreadFile(
                 thread_id=thread.id,
@@ -181,7 +190,7 @@ class TestThreadFileRepository:
             .join(Thread, Thread.id == ThreadFile.thread_id)
             .where(
                 ThreadFile.file_hash == sample_file.file_hash,
-                Thread.embed_model == "BAAI/bge-m3"
+                Thread.embedding_model == "BAAI/bge-m3"
             )
         )
         count = len(result.scalars().all())
@@ -189,15 +198,22 @@ class TestThreadFileRepository:
         assert count >= 1
 
     @pytest.mark.asyncio
-    async def test_count_threads_exclude_thread(self, repo, sample_file, sample_thread):
+    async def test_count_threads_exclude_thread(
+        self,
+        repo,
+        sample_file,
+        sample_thread,
+        test_model_project,
+    ):
         """Test exclude_thread_id parameter."""
         import uuid
         # Create additional threads with the file
         for i in range(2):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )

@@ -92,7 +92,7 @@ class ModelAwareCollectionManager:
             return [
                 wvc.config.Property(name="thread_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="type", data_type=wvc.config.DataType.TEXT),
-                wvc.config.Property(name="embed_model", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="embedding_model", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="source_kind", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="file_hash", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="chunk_id", data_type=wvc.config.DataType.INT),
@@ -108,7 +108,7 @@ class ModelAwareCollectionManager:
             return [
                 wvc.config.Property(name="thread_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="type", data_type=wvc.config.DataType.TEXT),
-                wvc.config.Property(name="embed_model", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="embedding_model", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="message_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="chunk_id", data_type=wvc.config.DataType.INT),
                 wvc.config.Property(name="question", data_type=wvc.config.DataType.TEXT),
@@ -126,6 +126,16 @@ class ModelAwareCollectionManager:
                 wvc.config.Property(name="url", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="title", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="web_search_performed_at", data_type=wvc.config.DataType.TEXT),
+            ]
+        elif base_name == CollectionNames.MEMORY:
+            return [
+                wvc.config.Property(name="memory_id", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="scope_type", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="scope_id", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="content", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="metadata_json", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="created_at", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="updated_at", data_type=wvc.config.DataType.TEXT),
             ]
         else:
             raise ValueError(f"Unknown base collection type: {base_name}")
@@ -177,7 +187,7 @@ class ModelAwareCollectionManager:
             'is_local': model_info.get('is_local', False)
         }
     
-    async def ensure_collections_for_thread(self, embedding_model_name: str):
+    async def ensure_collections_for_thread(self, embedding_model: str):
         """Ensure all collections exist and are ready for vector embeddings for thread's embedding model.
         
         Creates DocumentChunk, ChatMemory, and WebSearch collections for the given model.
@@ -186,18 +196,19 @@ class ModelAwareCollectionManager:
         """
         from app.db.vector.config import CollectionNames
         
-        logger.info(f"Proactively ensuring vector collections for thread embedding model '{embedding_model_name}'")
+        logger.info(f"Proactively ensuring vector collections for thread embedding model '{embedding_model}'")
         
         collection_types = {
             CollectionNames.DOCUMENT: "document chunks",
             CollectionNames.CHAT_MEMORY: "chat memory", 
-            CollectionNames.WEB_SEARCH: "web search results"
+            CollectionNames.WEB_SEARCH: "web search results",
+            CollectionNames.MEMORY: "durable memory",
         }
         
         tasks = []
         for base_name, description in collection_types.items():
             task = asyncio.create_task(
-                self._ensure_collection_for_vectors(base_name, embedding_model_name, description)
+                self._ensure_collection_for_vectors(base_name, embedding_model, description)
             )
             tasks.append(task)
         
@@ -210,16 +221,16 @@ class ModelAwareCollectionManager:
                 else:
                     successful_count += 1
             
-            logger.info(f"Successfully prepared {successful_count}/{len(tasks)} vector collections for embeddings with model '{embedding_model_name}'")
+            logger.info(f"Successfully prepared {successful_count}/{len(tasks)} vector collections for embeddings with model '{embedding_model}'")
             
             if successful_count < len(tasks):
-                logger.warning(f"Some vector collections failed to initialize for model '{embedding_model_name}' - embeddings may be delayed until first use")
+                logger.warning(f"Some vector collections failed to initialize for model '{embedding_model}' - embeddings may be delayed until first use")
     
-    async def _ensure_collection_for_vectors(self, base_name: str, embedding_model_name: str, description: str):
+    async def _ensure_collection_for_vectors(self, base_name: str, embedding_model: str, description: str):
         """Ensure a specific collection exists and is ready for vector embeddings."""
         try:
             # Get collection name for this model
-            collection_name = self.registry.get_collection_name(base_name, embedding_model_name)
+            collection_name = self.registry.get_collection_name(base_name, embedding_model)
             
             # Check if collection already exists before creating
             if self.client.collections.exists(collection_name):
@@ -227,25 +238,25 @@ class ModelAwareCollectionManager:
                 collection = self.client.collections.use(collection_name)
             else:
                 logger.info(f"Creating new model-aware collection '{collection_name}' for {description}")
-                collection = await self.get_collection(base_name, embedding_model_name)
+                collection = await self.get_collection(base_name, embedding_model)
             
             # Validate that the collection can accept vectors for this model
             try:
                 # Get the expected dimensions for this model
-                expected_dimensions = await self.registry.get_dimensions(embedding_model_name)
+                expected_dimensions = await self.registry.get_dimensions(embedding_model)
                 # Test with a properly sized vector
-                if await self.validate_vectors_for_model([[0.1] * expected_dimensions], embedding_model_name):
-                    logger.info(f"✅ {description.capitalize()} collection ready for {embedding_model_name} embeddings ({expected_dimensions}D)")
+                if await self.validate_vectors_for_model([[0.1] * expected_dimensions], embedding_model):
+                    logger.info(f"✅ {description.capitalize()} collection ready for {embedding_model} embeddings ({expected_dimensions}D)")
                     return collection
                 else:
-                    logger.warning(f"⚠️ {description.capitalize()} collection exists but vector validation failed for {embedding_model_name}")
+                    logger.warning(f"⚠️ {description.capitalize()} collection exists but vector validation failed for {embedding_model}")
                     return collection
             except Exception as validation_error:
-                logger.warning(f"⚠️ Could not validate {description} collection for {embedding_model_name}: {validation_error}")
+                logger.warning(f"⚠️ Could not validate {description} collection for {embedding_model}: {validation_error}")
                 return collection
                 
         except Exception as e:
-            logger.error(f"❌ Failed to prepare {description} collection for {embedding_model_name}: {e}")
+            logger.error(f"❌ Failed to prepare {description} collection for {embedding_model}: {e}")
             raise
     
     def clear_cache(self):

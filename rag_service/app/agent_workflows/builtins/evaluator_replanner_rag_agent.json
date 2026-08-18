@@ -1,0 +1,187 @@
+{
+  "builtin_key": "evaluator_replanner_rag_agent",
+  "description": "A bounded compiled RAG workflow that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
+  "is_builtin": true,
+  "name": "Evaluator/Replanner Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
+        "document_evidence",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {
+            "from": "START",
+            "to": "context_loader"
+          },
+          {
+            "from": "context_loader",
+            "to": "planner"
+          },
+          {
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "execute": "serial_dispatch"
+            }
+          },
+          {"conditional": true, "from": "serial_dispatch", "route_fn": "serial_dispatch_route", "routes": {"dispatch": "aggregator"}},
+          {"dynamic": true, "from": "serial_dispatch", "to": "retrieval_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_conversation_history_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "durable_memory_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "thread_events_worker"},
+          {"dynamic": true, "from": "serial_dispatch", "to": "web_worker"},
+          {"from": "retrieval_worker", "to": "serial_dispatch"},
+          {"from": "thread_conversation_history_worker", "to": "serial_dispatch"},
+          {"from": "durable_memory_worker", "to": "serial_dispatch"},
+          {"from": "thread_events_worker", "to": "serial_dispatch"},
+          {"from": "web_worker", "to": "serial_dispatch"},
+          {"from": "aggregator", "to": "evidence_evaluator"},
+          {
+            "conditional": true,
+            "from": "evidence_evaluator",
+            "route_fn": "evaluator_route",
+            "routes": {
+              "answer": "synthesizer",
+              "answer_budget_exhausted": "synthesizer",
+              "replan": "replanner"
+            }
+          },
+          {
+            "from": "replanner",
+            "to": "serial_dispatch"
+          },
+          {"from": "direct_answer", "to": "answer_evaluator"},
+          {"from": "synthesizer", "to": "answer_evaluator"},
+          {"conditional": true, "from": "answer_evaluator", "route_fn": "answer_quality_route", "routes": {"pass": "finalizer", "revise": "answer_reviser", "finalize_cautious": "finalizer"}},
+          {"from": "answer_reviser", "to": "answer_evaluator"},
+          {
+            "from": "finalizer",
+            "to": "END"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "context_loader",
+            "type": "context_loader"
+          },
+          {
+            "id": "planner",
+            "type": "planner"
+          },
+          {
+            "id": "direct_answer",
+            "type": "direct_answer"
+          },
+          {"id": "serial_dispatch", "type": "serial_dispatch"},
+          {
+            "id": "retrieval_worker",
+            "type": "retrieval_worker"
+          },
+          {
+            "id": "thread_conversation_history_worker",
+            "type": "thread_conversation_history_worker"
+          },
+          {
+            "id": "durable_memory_worker",
+            "type": "durable_memory_worker"
+          },
+          {
+            "id": "thread_events_worker",
+            "type": "thread_events_worker"
+          },
+          {
+            "id": "web_worker",
+            "type": "web_worker"
+          },
+          {"id": "aggregator", "type": "aggregator"},
+          {
+            "id": "evidence_evaluator",
+            "type": "evidence_evaluator"
+          },
+          {
+            "id": "replanner",
+            "type": "replanner"
+          },
+          {
+            "id": "synthesizer",
+            "type": "synthesizer"
+          },
+          {"id": "answer_evaluator", "type": "answer_evaluator"},
+          {"id": "answer_reviser", "type": "answer_reviser"},
+          {
+            "id": "finalizer",
+            "type": "finalizer"
+          }
+        ]
+      },
+      "hitl_policy": {
+        "enabled": false,
+        "gates": {}
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 33,
+        "node_visit_limits": {
+          "evidence_evaluator": 2,
+          "thread_conversation_history_worker": 2,
+          "durable_memory_worker": 2,
+          "replanner": 1,
+          "retrieval_worker": 2,
+          "thread_events_worker": 2,
+          "web_worker": 2,
+          "serial_dispatch": 10,
+          "aggregator": 2,
+          "answer_evaluator": 2,
+          "answer_reviser": 1
+        }
+      },
+      "prefetch_policy": {
+        "enabled": true,
+        "mode": "routing"
+      },
+      "replans": 1,
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "workflow_id": "evaluator_replanner_rag_agent",
+    "runtime": {
+      "failure_code": "evaluator_replanner_rag_execution_failed",
+      "failure_context": "Evaluator/Replanner Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Evaluator/Replanner Agent execution",
+      "features": {
+        "supports_replans": true,
+        "supports_serial_dispatch": true,
+        "supports_answer_quality": true
+      },
+      "kind": "compiled_rag",
+      "label": "Evaluator/Replanner Agent",
+      "prompt_preview": "evaluator_replanner",
+      "success_context": "Context retrieved by the Evaluator/Replanner Agent workflow."
+    },
+    "schema_version": 2,
+    "version": 5
+  },
+  "visibility": "builtin"
+}

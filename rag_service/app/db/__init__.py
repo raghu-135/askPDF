@@ -9,10 +9,43 @@ using SQLModel with PostgreSQL as the primary database.
 from app.db.models_sqlmodel import (
     ProcessStatus,
     MessageRole,
+    FileSourceType,
+    ChatTurnStatus,
+    WorkflowVisibility,
+    AgentRunStatus,
+    MemoryScopeType,
+    Project,
     Thread,
     File,
     ThreadFile,
+    ProjectFile,
+    ThreadDocumentAnnotation,
     ChatTurn,
+    AgentWorkflow,
+    AgentRun,
+    AgentRunEvent,
+    AgentTask,
+    AgentTaskPlanRevision,
+    AgentTaskTodo,
+    AgentTaskSubagentRun,
+    AgentTaskArtifact,
+    AgentTaskEvent,
+    AgentTaskCommand,
+    Memory,
+    MemoryEvent,
+    MemoryOverride,
+    GlobalMemoryRepresentation,
+    MemoryScopeActivity,
+    MemoryReviewState,
+    MemoryManagerIdempotency,
+    EmbeddingJob,
+)
+from app.db.enums import (
+    EmbeddingReadinessStatus,
+    FileStatusSection,
+    OperationResultStatus,
+    ReasoningFormat,
+    ThreadCloneMode,
 )
 
 # Connection management (SQLModel/PostgreSQL)
@@ -43,6 +76,10 @@ _file_repo = None
 _message_repo = None
 _thread_file_repo = None
 _stats_repo = None
+_agent_workflow_repo = None
+_project_repo = None
+_project_file_repo = None
+_memory_repo = None
 
 
 def get_thread_repo():
@@ -90,10 +127,87 @@ def get_stats_repo():
     return _stats_repo
 
 
+def get_agent_workflow_repo():
+    """Get the agent workflow repository instance."""
+    global _agent_workflow_repo
+    if _agent_workflow_repo is None:
+        from app.agent_workflows.repository import AgentWorkflowRepository
+        _agent_workflow_repo = AgentWorkflowRepository()
+    return _agent_workflow_repo
+
+
+def get_project_repo():
+    """Get the project repository instance."""
+    global _project_repo
+    if _project_repo is None:
+        from app.db.repositories.project_repo_sqlmodel import ProjectRepository
+        _project_repo = ProjectRepository()
+    return _project_repo
+
+
+def get_project_file_repo():
+    """Get the project-file repository instance."""
+    global _project_file_repo
+    if _project_file_repo is None:
+        from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
+        _project_file_repo = ProjectFileRepository()
+    return _project_file_repo
+
+
+def get_memory_repo():
+    """Get the memory repository instance."""
+    global _memory_repo
+    if _memory_repo is None:
+        from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
+        _memory_repo = MemoryRepository()
+    return _memory_repo
+
+
+# Project operations
+async def ensure_default_project():
+    """Create the default project and attach orphan threads."""
+    return await get_project_repo().ensure_default_project()
+
+
+async def create_project(name: str, embedding_model: str, description: str = "", settings_json: dict = None):
+    """Create a project."""
+    return await get_project_repo().create(
+        name=name,
+        embedding_model=embedding_model,
+        description=description,
+        settings_json=settings_json,
+    )
+
+
+async def get_project(project_id: str):
+    """Get a project by ID."""
+    return await get_project_repo().get(project_id)
+
+
+async def list_projects():
+    """List projects."""
+    return await get_project_repo().list_all()
+
+
+async def update_project(project_id: str, name: str = None, description: str = None, settings_json: dict = None):
+    """Update a project."""
+    return await get_project_repo().update(
+        project_id,
+        name=name,
+        description=description,
+        settings_json=settings_json,
+    )
+
+
+async def assign_thread_to_project(thread_id: str, project_id: str):
+    """Move a thread into a project."""
+    return await get_project_repo().assign_thread(thread_id, project_id)
+
+
 # Thread operations
-async def create_thread(name: str, embed_model: str):
+async def create_thread(name: str, project_id: str):
     """Create a new thread."""
-    return await get_thread_repo().create(name, embed_model)
+    return await get_thread_repo().create(name, project_id)
 
 
 async def get_thread(thread_id: str):
@@ -121,13 +235,23 @@ async def update_thread(thread_id: str, name: str):
     return await get_thread_repo().update(thread_id, name)
 
 
+async def update_thread_project(thread_id: str, project_id: str):
+    """Update a thread's project."""
+    return await get_thread_repo().update_project(thread_id, project_id)
+
+
 async def delete_thread(thread_id: str):
     """Delete a thread and all associated data."""
     return await get_thread_repo().delete(thread_id)
 
 
 # File operations
-async def create_or_get_file(file_hash: str, file_name: str, file_path: str = None, source_type: str = "pdf"):
+async def create_or_get_file(
+    file_hash: str,
+    file_name: str,
+    file_path: str = None,
+    source_type: str = FileSourceType.PDF.value,
+):
     """Create a new file record or return existing one."""
     return await get_file_repo().create_or_get(file_hash, file_name, file_path, source_type)
 
@@ -189,9 +313,16 @@ async def update_indexing_status(
     )
 
 
-async def remove_thread_indexing_status(file_hash: str, embedding_model: str, thread_id: str):
+async def remove_thread_indexing_status(
+    file_hash: str,
+    embedding_model: str,
+    thread_id: str,
+    preserve_model_status: bool = False,
+):
     """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
-    return await get_file_repo().remove_thread_indexing_status(file_hash, embedding_model, thread_id)
+    return await get_file_repo().remove_thread_indexing_status(
+        file_hash, embedding_model, thread_id, preserve_model_status
+    )
 
 
 async def delete_file_record(file_hash: str):
@@ -220,9 +351,9 @@ async def is_file_in_thread(thread_id: str, file_hash: str):
     return await get_thread_file_repo().is_file_in_thread(thread_id, file_hash)
 
 
-async def count_threads_with_file_for_model(file_hash: str, embed_model: str, exclude_thread_id: str = None):
+async def count_threads_with_file_for_model(file_hash: str, embedding_model: str, exclude_thread_id: str = None):
     """Count thread associations for a file restricted to a specific embedding model."""
-    return await get_thread_file_repo().count_threads_with_file_for_model(file_hash, embed_model, exclude_thread_id)
+    return await get_thread_file_repo().count_threads_with_file_for_model(file_hash, embedding_model, exclude_thread_id)
 
 
 async def count_threads_with_file(file_hash: str):
@@ -233,6 +364,42 @@ async def count_threads_with_file(file_hash: str):
 async def get_thread_file_association(thread_id: str, file_hash: str):
     """Get the thread-file association row for a single document."""
     return await get_thread_file_repo().get_association(thread_id, file_hash)
+
+
+async def add_file_to_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().add(project_id, file_hash)
+
+
+async def get_project_files(project_id: str):
+    return await get_project_file_repo().get_files(project_id)
+
+
+async def get_effective_thread_files(thread_id: str):
+    return await get_project_file_repo().get_effective_thread_files(thread_id)
+
+
+async def remove_file_from_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().remove(project_id, file_hash)
+
+
+async def is_file_in_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_in_project(project_id, file_hash)
+
+
+async def is_file_accessible_to_thread(thread_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_accessible_to_thread(thread_id, file_hash)
+
+
+async def is_file_in_project_thread(project_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_in_project_thread(project_id, file_hash)
+
+
+async def count_projects_with_file(file_hash: str):
+    return await get_project_file_repo().count_projects_with_file(file_hash)
+
+
+async def count_projects_with_file_for_model(file_hash: str, embedding_model: str):
+    return await get_project_file_repo().count_projects_with_file_for_model(file_hash, embedding_model)
 
 
 async def get_thread_file_annotations(thread_id: str, file_hash: str):
@@ -258,7 +425,7 @@ async def create_message(
     context_compact: str = None,
     reasoning: str = None,
     reasoning_available: bool = False,
-    reasoning_format: str = "none",
+    reasoning_format: str = ReasoningFormat.NONE.value,
     web_sources: list = None,
 ):
     """Create a new message in a thread."""
@@ -273,16 +440,20 @@ async def create_chat_turn(
     question: str,
     answer: str = None,
     rewritten_question: str = None,
-    status: str = "completed",
+    status: str = ChatTurnStatus.COMPLETED.value,
     reasoning: str = "",
     reasoning_available: bool = False,
-    reasoning_format: str = "none",
+    reasoning_format: str = ReasoningFormat.NONE.value,
     web_sources: list = None,
     document_sources: list = None,
     used_chat_ids: list = None,
     clarification_options: list = None,
     error: dict = None,
     metadata: dict = None,
+    agent_run_id: str = None,
+    agent_run_turn_kind: str = None,
+    agent_run_sequence: int = None,
+    agent_trace_refs_json: dict = None,
 ):
     """Create one JSONB-backed chat turn."""
     return await get_message_repo().create_turn(
@@ -300,6 +471,10 @@ async def create_chat_turn(
         clarification_options=clarification_options,
         error=error,
         metadata=metadata,
+        agent_run_id=agent_run_id,
+        agent_run_turn_kind=agent_run_turn_kind,
+        agent_run_sequence=agent_run_sequence,
+        agent_trace_refs_json=agent_trace_refs_json,
     )
 
 
@@ -374,14 +549,74 @@ async def get_thread_shape(thread_id: str):
     return await get_stats_repo().get_thread_shape(thread_id)
 
 
+# Memory operations
+async def create_memory(**kwargs):
+    """Create a canonical durable memory."""
+    return await get_memory_repo().create_memory(**kwargs)
+
+
+async def get_memory(memory_id: str):
+    """Get a memory by ID."""
+    return await get_memory_repo().get_memory(memory_id)
+
+
+async def list_memories(**kwargs):
+    """List memories."""
+    return await get_memory_repo().list_memories(**kwargs)
+
+
+async def delete_memory(memory_id: str):
+    """Hard-delete a durable memory and its audit events."""
+    return await get_memory_repo().delete_memory(memory_id)
+
+
+async def delete_memories_for_scope(**kwargs):
+    """Hard-delete all durable memories in a scope."""
+    return await get_memory_repo().delete_memories_for_scope(**kwargs)
+
+
+async def mark_memory_indexing(memory_id: str):
+    return await get_memory_repo().mark_memory_indexing(memory_id)
+
+
+async def mark_memory_indexed(memory_id: str):
+    return await get_memory_repo().mark_memory_indexed(memory_id)
+
+
+async def mark_memory_index_failed(memory_id: str, error: str):
+    return await get_memory_repo().mark_memory_index_failed(memory_id, error)
+
+
+async def list_memories_for_index_retry(**kwargs):
+    return await get_memory_repo().list_memories_for_index_retry(**kwargs)
+
+
 __all__ = [
     # Models
     "ProcessStatus",
     "MessageRole",
+    "FileSourceType",
+    "ChatTurnStatus",
+    "WorkflowVisibility",
+    "AgentRunStatus",
+    "MemoryScopeType",
+    "EmbeddingReadinessStatus",
+    "FileStatusSection",
+    "OperationResultStatus",
+    "ReasoningFormat",
+    "ThreadCloneMode",
+    "Project",
     "Thread",
     "File",
     "ThreadFile",
+    "ThreadDocumentAnnotation",
     "ChatTurn",
+    "AgentWorkflow",
+    "AgentRun",
+    "AgentRunEvent",
+    "Memory",
+    "MemoryEvent",
+    "MemoryOverride",
     # Config
     "init_db",
     # Status
@@ -431,10 +666,26 @@ __all__ = [
     "delete_message",
     "delete_message_pair",
     "get_message_count",
+    # Agent workflow operations
+    "get_agent_workflow_repo",
+    # Project operations
+    "ensure_default_project",
+    "create_project",
+    "get_project",
+    "list_projects",
+    "update_project",
+    "assign_thread_to_project",
+    "update_thread_project",
     # Stats operations
     "remove_document_from_stats",
     "upsert_document_in_stats",
     "increment_qa_stats",
     "recompute_qa_stats",
     "get_thread_shape",
+    # Memory operations
+    "create_memory",
+    "get_memory",
+    "list_memories",
+    "delete_memory",
+    "delete_memories_for_scope",
 ]

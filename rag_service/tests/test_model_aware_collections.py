@@ -11,7 +11,9 @@ This test suite validates:
 
 import pytest
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+import app.db.vector as vector_module
 from app.db.vector.model_registry import EmbeddingModelRegistry, get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
 from app.db.vector.adapter import WeaviateAdapter
@@ -25,6 +27,18 @@ def seed_model(registry, model_name="test-model", dimensions=384):
         "is_local": False,
     }
     registry._dimension_cache[model_name] = dimensions
+
+
+def test_close_vector_db_closes_and_clears_singleton(monkeypatch):
+    closed = []
+    adapter = SimpleNamespace(close=lambda: closed.append(True))
+
+    monkeypatch.setattr(vector_module, "_singleton_instance", adapter)
+
+    vector_module.close_vector_db()
+
+    assert closed == [True]
+    assert vector_module._singleton_instance is None
 
 
 @pytest.fixture
@@ -201,11 +215,9 @@ class TestWeaviateAdapterIntegration:
                 mock_manager = AsyncMock()
                 
                 # Create a proper mock collection with batch behavior
-                mock_collection = AsyncMock()
-                mock_batch = AsyncMock()
-                mock_batch.__aenter__ = AsyncMock(return_value=mock_batch)
-                mock_batch.__aexit__ = AsyncMock(return_value=None)
-                mock_batch.add_object = AsyncMock()
+                mock_collection = MagicMock()
+                mock_batch = MagicMock()
+                mock_batch.__enter__.return_value = mock_batch
                 mock_collection.batch.dynamic.return_value = mock_batch
                 
                 mock_manager.get_collection.return_value = mock_collection
@@ -221,12 +233,11 @@ class TestWeaviateAdapterIntegration:
     async def test_search_knowledge_sources_uses_model_aware_collection(self, adapter):
         """Test that search uses model-aware collections."""
         # Setup
-        mock_collection = AsyncMock()
+        mock_collection = MagicMock()
         adapter.collection_manager.get_collection.return_value = mock_collection
         
         # Mock of actual query methods used in the code
-        mock_response = AsyncMock()
-        mock_response.objects = []
+        mock_response = SimpleNamespace(objects=[])
         # The asyncio.to_thread will call the mock, so it should return the response directly
         mock_collection.query.near_vector.return_value = mock_response
         mock_collection.query.hybrid.return_value = mock_response
@@ -235,7 +246,7 @@ class TestWeaviateAdapterIntegration:
         result = await adapter.search_knowledge_sources(
             thread_id="test-thread",
             query_vector=[0.1] * 384,
-            embedding_model_name="test-model",
+            embedding_model="test-model",
             limit=5
         )
         
@@ -244,25 +255,24 @@ class TestWeaviateAdapterIntegration:
         
         # Should call near_vector since no query_text provided
         mock_collection.query.near_vector.assert_called_once()
-        # Check that embed_model filter is not in the call
+        # Check that embedding_model filter is not in the call
         call_args = mock_collection.query.near_vector.call_args
         filters = call_args[1].get('filters')
-        assert 'embed_model' not in str(filters)
+        assert 'embedding_model' not in str(filters)
 
     @pytest.mark.asyncio
     async def test_search_knowledge_sources_file_hash_filter_is_not_thread_scoped(self, adapter):
         """File-filtered document search should find shared chunks indexed by another thread."""
-        mock_collection = AsyncMock()
+        mock_collection = MagicMock()
         adapter.collection_manager.get_collection.return_value = mock_collection
 
-        mock_response = AsyncMock()
-        mock_response.objects = []
+        mock_response = SimpleNamespace(objects=[])
         mock_collection.query.near_vector.return_value = mock_response
 
         await adapter.search_knowledge_sources(
             thread_id="second-thread",
             query_vector=[0.1] * 384,
-            embedding_model_name="test-model",
+            embedding_model="test-model",
             limit=5,
             file_hashes=["shared-file-hash"],
         )
@@ -282,7 +292,7 @@ class TestWeaviateAdapterIntegration:
         with pytest.raises(ValueError, match=r"Vector dimensions do not match expected dimensions"):
             await adapter.index_pdf_chunks(
                 thread_id="test-thread",
-                embedding_model_name="test-model",
+                embedding_model="test-model",
                 file_hash="test-file",
                 texts=["test chunk"],
                 embeddings=[[0.1] * 768],  # Wrong dimensions
@@ -300,7 +310,7 @@ class TestProactiveCollectionCreation:
     
     @pytest.mark.asyncio
     async def test_ensure_collections_for_thread_creates_all_types(self, collection_manager, mock_client):
-        """Test that ensure_collections_for_thread creates all three collection types."""
+        """Test that ensure_collections_for_thread creates all collection types."""
         # Mock registry to return dimensions
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
@@ -315,11 +325,12 @@ class TestProactiveCollectionCreation:
             # Call ensure_collections_for_thread
             await collection_manager.ensure_collections_for_thread("test-model")
             
-            # Should attempt to create all three collection types
+            # Should attempt to create every model-aware collection type.
             expected_calls = [
                 "DocumentChunk_test_model_384",
-                "ChatMemoryChunk_test_model_384", 
-                "WebSearchChunk_test_model_384"
+                "ChatMemoryChunk_test_model_384",
+                "WebSearchChunk_test_model_384",
+                "MemoryChunk_test_model_384",
             ]
             
             actual_calls = [call[0][0] for call in mock_client.collections.exists.call_args_list]
@@ -337,12 +348,17 @@ class TestProactiveCollectionCreation:
             
             # Mock one collection to fail creation
             mock_client.collections.exists.return_value = False
-            mock_client.collections.create.side_effect = [None, Exception("Creation failed"), None]
+            mock_client.collections.create.side_effect = [
+                None,
+                Exception("Creation failed"),
+                None,
+                None,
+            ]
             mock_client.collections.use.return_value = AsyncMock()
             
             # Partial failures are logged and deferred until first use.
             await collection_manager.ensure_collections_for_thread("test-model")
-            assert mock_client.collections.create.call_count == 3
+            assert mock_client.collections.create.call_count == 4
     
     @pytest.mark.asyncio
     async def test_ensure_collections_skips_existing(self, collection_manager, mock_client):
@@ -363,31 +379,29 @@ class TestProactiveCollectionCreation:
             mock_client.collections.create.assert_not_called()
             
             # Should still use all collections
-            assert mock_client.collections.use.call_count == 3
+            assert mock_client.collections.use.call_count == 4
 
 
 class TestBackwardCompatibility:
     """Test backward compatibility during migration."""
     
     @pytest.mark.asyncio
-    async def test_legacy_collection_fallback(self, adapter):
-        """Test that legacy collections still work during migration."""
-        # Mock legacy collection access
-        with patch.object(adapter.client.collections, 'use') as mock_use:
-            mock_legacy_collection = AsyncMock()
-            mock_use.return_value = mock_legacy_collection
-            mock_legacy_collection.query.fetch_objects.return_value = AsyncMock()
-            mock_legacy_collection.query.fetch_objects.return_value.objects = []
-            
-            # Test that legacy queries still work
-            result = await adapter.search_knowledge_sources(
-                thread_id="test-thread",
-                query_vector=[0.1] * 384,
-                embedding_model_name="legacy-model",
-                limit=5
-            )
-            
-            adapter.collection_manager.get_collection.assert_called_once_with("DocumentChunk", "legacy-model")
+    async def test_legacy_model_name_uses_model_aware_collection(self, adapter):
+        """Persisted model names still resolve through the current collection manager."""
+        collection = MagicMock()
+        collection.query.near_vector.return_value = SimpleNamespace(objects=[])
+        adapter.collection_manager.get_collection.return_value = collection
+
+        await adapter.search_knowledge_sources(
+            thread_id="test-thread",
+            query_vector=[0.1] * 384,
+            embedding_model="legacy-model",
+            limit=5,
+        )
+
+        adapter.collection_manager.get_collection.assert_called_once_with(
+            "DocumentChunk", "legacy-model"
+        )
 
 
 if __name__ == "__main__":

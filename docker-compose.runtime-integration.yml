@@ -1,0 +1,265 @@
+services:
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: askpdf
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d askpdf"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - runtime_integration_postgres_data:/var/lib/postgresql/data
+
+  runtime-checkpoint-db-init:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        until pg_isready -h postgresql -U postgres -d askpdf; do sleep 1; done;
+        if [ "$$(psql -h postgresql -U postgres -d askpdf -tAc "SELECT 1 FROM pg_database WHERE datname='runtime_checkpoints'")" != "1" ]; then
+          createdb -h postgresql -U postgres runtime_checkpoints;
+        fi
+
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
+    environment:
+      QUERY_DEFAULTS_LIMIT: 20
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      ENABLE_API_BASED_MODULES: "true"
+      CLUSTER_HOSTNAME: runtime-integration-test
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - runtime_integration_weaviate_data:/var/lib/weaviate
+
+  rag-service:
+    image: askpdf-runtime-control-plane
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      POSTGRES_POOL_SIZE: "5"
+      POSTGRES_MAX_OVERFLOW: "5"
+      ASKPDF_AGENT_CHECKPOINTER: postgres
+      LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
+      HERMES_RUNTIME_ENABLED: ${PHASE7_HERMES_RUNTIME_ENABLED:-false}
+      WEAVIATE_URL: http://weaviate:8080
+      MCP_TRANSPORT: in_process
+      MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
+      MCP_REQUEST_TIMEOUT_SECONDS: "120"
+      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      ASKPDF_REPO_DIR: /workspace
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      runtime-checkpoint-db-init:
+        condition: service_completed_successfully
+      weaviate:
+        condition: service_healthy
+    volumes:
+      - runtime_integration_product_data:/static
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  db-migrate:
+    image: askpdf-runtime-control-plane
+    command: ["python", "-m", "app.db.migrate"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      POSTGRES_POOL_SIZE: "5"
+      POSTGRES_MAX_OVERFLOW: "5"
+      RUN_DB_MIGRATIONS: "true"
+      LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
+      LOCAL_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
+    depends_on:
+      postgresql:
+        condition: service_healthy
+
+  runtime-db-migrate:
+    image: askpdf-runtime-control-plane
+    command: ["python", "-m", "app.db.migrate_runtime"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      POSTGRES_POOL_SIZE: "1"
+      POSTGRES_MAX_OVERFLOW: "1"
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      RUN_RUNTIME_DB_MIGRATIONS: "true"
+    depends_on:
+      runtime-checkpoint-db-init:
+        condition: service_completed_successfully
+
+  langgraph-runtime:
+    build:
+      context: ./rag_service
+      dockerfile: runtime_service/Dockerfile
+    environment:
+      LOG_LEVEL: INFO
+      ASKPDF_AGENT_CHECKPOINTER: postgres
+      AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      AGENT_RUNTIME_SCHEMA_AUTO_CREATE: "true"
+      ASKPDF_AGENT_CHECKPOINTER_SETUP: "true"
+      ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK: "false"
+      MCP_TRANSPORT: loopback_http
+      MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
+      MCP_REQUEST_TIMEOUT_SECONDS: "120"
+      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      AGENT_RUNTIME_MODE: external
+      AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS: "90"
+      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: "5"
+      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: "3"
+      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: "15"
+      AGENT_RUNTIME_LEGACY_STRICT_READINESS: "false"
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      rag-service:
+        condition: service_healthy
+      runtime-checkpoint-db-init:
+        condition: service_completed_successfully
+      runtime-db-migrate:
+        condition: service_completed_successfully
+      fake-llm:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  fake-llm:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.fake-llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/v1/models"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hermes-fake:
+    build:
+      context: .
+      dockerfile: hermes_fake/Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hermes-runtime:
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    environment:
+      HERMES_API_URL: http://hermes-fake:8000
+      ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
+      ASKPDF_MCP_REQUIRED: "false"
+      HERMES_MCP_ALLOWED_TOOLS: document_evidence,thread_conversation_history,clarify_intent
+      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
+      HERMES_RUNTIME_STORAGE_BACKEND: file
+      HERMES_RUNTIME_WORKERS: "1"
+      PYTHONPATH: /workspace:/app
+      HERMES_RUNTIME_READ_TIMEOUT_SECONDS: "30"
+    depends_on:
+      hermes-fake:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    volumes:
+      - runtime_integration_hermes_state:/var/lib/hermes
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  test-runner:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.test
+    entrypoint: ["python", "scripts/run_tests.py"]
+    environment:
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      POSTGRES_POOL_SIZE: "5"
+      POSTGRES_MAX_OVERFLOW: "5"
+      AGENT_RUNTIME_MODE: external
+      AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS: "90"
+      PHASE5_SMOKE_TIMEOUT_SECONDS: "120"
+      PHASE5_EXTERNAL_EMBEDDING_MODEL: phase5-deterministic-embedding
+      LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
+      HERMES_RUNTIME_ENABLED: "true"
+      HERMES_RUNTIME_URL: http://hermes-runtime:8200
+      HERMES_FAKE_URL: http://hermes-fake:8000
+      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
+      HERMES_RUNTIME_STORAGE_BACKEND: file
+      HERMES_RUNTIME_WORKERS: "1"
+      AGENT_RUNTIME_SCHEMA_AUTO_CREATE: "true"
+      PYTHONPATH: /workspace:/app
+      WEAVIATE_URL: http://weaviate:8080
+      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      ASKPDF_REPO_DIR: /workspace
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      hermes-runtime:
+        condition: service_healthy
+    volumes:
+      - ./rag_service:/app
+      - .:/workspace:ro
+      - runtime_integration_test_data:/data
+      - runtime_integration_hermes_state:/var/lib/hermes
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+volumes:
+  runtime_integration_postgres_data:
+  runtime_integration_weaviate_data:
+  runtime_integration_product_data:
+  runtime_integration_test_data:
+  runtime_integration_hermes_state:

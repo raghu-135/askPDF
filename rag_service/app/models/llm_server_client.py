@@ -5,12 +5,19 @@ import httpx
 import asyncio
 import logging
 import time
+import math
+from contextlib import asynccontextmanager
 from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
 
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
+from app.services.memory_policy import (
+    DEFAULT_THREAD_MEMORY_SETTINGS,
+    normalize_thread_memory_settings,
+)
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -19,6 +26,14 @@ except Exception:
     CrossEncoder = None
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _managed_http_client(name: str):
+    """Expose an application client without transferring close ownership."""
+    from app.http_clients import get_http_client
+
+    yield get_http_client(name)
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -89,28 +104,17 @@ def get_default_token_budget():
         raise ValueError("DEFAULT_TOKEN_BUDGET environment variable is not set")
     return int(budget)
 
-def get_default_max_iterations():
-    val = os.getenv("DEFAULT_MAX_ITERATIONS")
+def get_replans_limit():
+    val = os.getenv("REPLANS_LIMIT")
     if val is None:
-        raise ValueError("DEFAULT_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_min_max_iterations():
-    val = os.getenv("MIN_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MIN_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_max_max_iterations():
-    val = os.getenv("MAX_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MAX_MAX_ITERATIONS environment variable is not set")
-    return int(val)
+        raise ValueError("REPLANS_LIMIT environment variable is not set")
+    limit = int(val)
+    if limit < 1:
+        raise ValueError("REPLANS_LIMIT must be at least 1")
+    return limit
 
 DEFAULT_TOKEN_BUDGET = get_default_token_budget()
-DEFAULT_MAX_ITERATIONS = get_default_max_iterations()
-MIN_MAX_ITERATIONS = get_min_max_iterations()
-MAX_MAX_ITERATIONS = get_max_max_iterations()
+REPLANS_LIMIT = get_replans_limit()
 
 def get_env_int(name: str, default: int | None = None) -> int:
     val = os.getenv(name)
@@ -124,7 +128,6 @@ MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
 MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
 MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
 
-INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS")
 MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE")
 MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE")
 WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS")
@@ -154,10 +157,11 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 CHARS_PER_TOKEN = 4
 
 # Pre-fetch budget allocation ratios
-# These three sum to 0.68; the remaining 0.32 is reserved for answer generation +
+# These four sum to 0.68; the remaining 0.32 is reserved for answer generation +
 # system prompt overhead (tool schemas, locked sections, etc.)
 RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
-RATIO_PREFETCH_SEMANTIC = 0.18  # Semantic chat-memory recall from all past QA pairs
+RATIO_PREFETCH_SEMANTIC = 0.12  # Semantic chat-memory recall from all past QA pairs
+RATIO_PREFETCH_DURABLE_MEMORY = 0.06  # Durable user/project/thread memory
 RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
 
 # Average char estimates used to derive item-count limits from char budgets
@@ -181,10 +185,12 @@ def compute_prefetch_budget(context_window: int) -> dict:
         # Character budgets
         "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
         "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
+        "durable_memory_chars":   max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))),
         "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
         # Derived item-count limits
         "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
         "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
+        "durable_memory_limit":   max(5, min(20, math.ceil(max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))) / 400) * 2)),
         "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
     }
 
@@ -192,17 +198,16 @@ def compute_prefetch_budget(context_window: int) -> dict:
 def default_thread_settings():
     """Default persisted settings for a thread."""
     return {
-        "max_iterations": DEFAULT_MAX_ITERATIONS,
-        "min_max_iterations": MIN_MAX_ITERATIONS,
-        "max_max_iterations": MAX_MAX_ITERATIONS,
+        "replans": 1,
+        "replans_limit": REPLANS_LIMIT,
         "context_window": DEFAULT_TOKEN_BUDGET,
         "system_role": DEFAULT_SYSTEM_ROLE,
         "tool_instructions": {},
         "custom_instructions": "",
-        "use_intent_agent": True,
-        "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
-        "reasoning_mode": True,
-        "use_reranker": True,
+        "hitl_web_approval": False,
+        "use_reranker": False,
+        "agent_workflow": {"workflow_id": default_agent_workflow_key()},
+        "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),
     }
 
 
@@ -210,7 +215,23 @@ def merge_thread_settings(overrides=None):
     """Merge arbitrary overrides onto defaults while preserving known keys."""
     merged = default_thread_settings()
     if isinstance(overrides, dict):
+        if "replans" not in overrides:
+            if "max_replans" in overrides:
+                overrides = {**overrides, "replans": overrides.get("max_replans")}
+            elif "max_iterations" in overrides:
+                overrides = {**overrides, "replans": overrides.get("max_iterations")}
         merged.update({k: overrides.get(k) for k in merged.keys() if k in overrides})
+    try:
+        merged["replans"] = max(1, min(REPLANS_LIMIT, int(merged.get("replans", 1))))
+    except (TypeError, ValueError):
+        merged["replans"] = 1
+    agent_workflow = merged.get("agent_workflow")
+    if isinstance(agent_workflow, dict):
+        workflow_id = agent_workflow.get("workflow_id") or default_agent_workflow_key()
+        merged["agent_workflow"] = {"workflow_id": str(workflow_id)}
+    else:
+        merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
+    merged["memory"] = normalize_thread_memory_settings(overrides)
     return merged
 
 
@@ -239,7 +260,7 @@ async def fetch_available_models():
         if not llm_api_url.endswith("/v1"):
             llm_api_url = f"{llm_api_url}/v1"
 
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             resp = await client.get(f"{llm_api_url}/models")
             if resp.status_code == 200:
                 data = resp.json()
@@ -305,30 +326,77 @@ def is_llm_model_by_keyword(model_id: str) -> bool:
     keywords = ["chat", "instruct", "completion", "base", "llama", "mistral", "qwen", "deepseek", "vicuna", "falcon", "gpt", "codellama", "phi", "mixtral", "yi", "zephyr", "dbrx", "command", "orca", "hermes", "openchat", "wizard", "llava", "starling", "solar"]
     return any(k in name for k in keywords)
 
-def get_llm(model_name: str, temperature: float = 0.0):
+def get_llm(
+    model_name: str,
+    temperature: float = 0.0,
+    *,
+    own_async_transport: bool = False,
+):
     """
     Return a configured ChatOpenAI client for the given model.
     """
+    from app.http_clients import get_http_client, register_owned_client
+    async_client = (
+        register_owned_client(httpx.AsyncClient())
+        if own_async_transport
+        else get_http_client("llm")
+    )
     return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required"
+        api_key="sk-no-key-required",
+        http_async_client=async_client,
     )
 
-def get_embedding_model(model_name: str):
+def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
     """
     Return a configured OpenAIEmbeddings client for the given model.
     """
     if should_use_local_embeddings(model_name):
         return get_local_embedding_model(model_name)
 
+    from app.http_clients import get_http_client, register_owned_client
     return OpenAIEmbeddings(
         model=model_name,
         base_url=_get_base_url(),
         api_key="sk-no-key-required",
-        check_embedding_ctx_length=False
+        check_embedding_ctx_length=False,
+        http_async_client=(
+            register_owned_client(httpx.AsyncClient())
+            if own_async_transport
+            else get_http_client("embeddings")
+        ),
     )
+
+
+async def close_model_client(model: object) -> None:
+    """Close only an async transport explicitly assigned to this wrapper.
+
+    LangChain may share its implicit OpenAI transport across otherwise distinct
+    wrappers. Closing that implicit client can break a later or concurrent model
+    call, so execution-scoped callers must request ``own_async_transport=True``.
+    """
+    client = getattr(model, "http_async_client", None)
+    if client is None:
+        return
+    from app.http_clients import is_owned_client, release_owned_client
+    if not is_owned_client(client):
+        return
+    release_owned_client(client)
+    close = getattr(client, "aclose", None) or getattr(client, "close", None)
+    if close is not None:
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
+async def embed_query(model_name: str, text: str) -> List[float]:
+    model = get_embedding_model(model_name, own_async_transport=True)
+    try:
+        return await model.aembed_query(text)
+    finally:
+        await close_model_client(model)
 
 
 class LocalEmbeddingWrapper:
@@ -508,7 +576,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 
@@ -570,7 +638,7 @@ async def check_model_supports_tools(model_name: str) -> bool:
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("llm") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 
@@ -626,7 +694,7 @@ async def check_model_supports_tools(model_name: str) -> bool:
         return _update_model_ready_cache(cache_key, False)
 
 
-async def check_embed_model_ready(model_name: str, use_cache: bool = True) -> bool:
+async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
@@ -649,7 +717,7 @@ async def check_embed_model_ready(model_name: str, use_cache: bool = True) -> bo
 
     base_url = _get_base_url()
     try:
-        async with httpx.AsyncClient() as client:
+        async with _managed_http_client("embeddings") as client:
             if not await _check_model_exists(client, base_url, model_name):
                 return _update_model_ready_cache(cache_key, False)
 

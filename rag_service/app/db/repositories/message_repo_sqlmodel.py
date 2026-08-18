@@ -16,14 +16,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
+from app.db.enums import ReasoningFormat
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, MessageRole
+from app.db.models_sqlmodel import ChatTurn, ChatTurnStatus, MessageRole
+from app.db.project_activity import touch_thread_project_activity
 from app.time_utils import utc_now
 
 
 TURN_USER_SUFFIX = ":user"
 TURN_ASSISTANT_SUFFIX = ":assistant"
-VISIBLE_TURN_STATUSES = {"completed", "clarification", "failed"}
+VISIBLE_TURN_STATUSES = {
+    ChatTurnStatus.COMPLETED.value,
+    ChatTurnStatus.CLARIFICATION.value,
+    ChatTurnStatus.FAILED.value,
+}
 
 
 @dataclass
@@ -38,8 +44,13 @@ class ExpandedMessage:
     context_compact: Optional[str] = None
     reasoning: Optional[str] = None
     reasoning_available: bool = False
-    reasoning_format: str = "none"
+    reasoning_format: str = ReasoningFormat.NONE.value
     web_sources: Optional[List[Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    agent_run_id: Optional[str] = None
+    agent_run_turn_kind: Optional[str] = None
+    agent_run_sequence: Optional[int] = None
+    agent_trace_refs: Optional[Dict[str, Any]] = None
     turn_id: Optional[str] = None
     turn_status: Optional[str] = None
 
@@ -76,7 +87,7 @@ def _normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     data.setdefault("answer", None)
     data.setdefault("reasoning", "")
     data.setdefault("reasoning_available", False)
-    data.setdefault("reasoning_format", "none")
+    data.setdefault("reasoning_format", ReasoningFormat.NONE.value)
     data.setdefault("web_sources", [])
     data.setdefault("document_sources", [])
     data.setdefault("used_chat_ids", [])
@@ -87,13 +98,17 @@ def _normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return data
 
 
+def _trace_refs_from_turn(turn: ChatTurn) -> Optional[Dict[str, Any]]:
+    refs = turn.agent_trace_refs_json
+    return refs if isinstance(refs, dict) else None
+
+
 def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
     payload = _normalize_payload(turn.payload)
     messages: List[ExpandedMessage] = []
 
     question = payload.get("question")
     if question not in (None, ""):
-        metadata = payload.get("metadata") or {}
         messages.append(
             ExpandedMessage(
                 id=message_id_for_turn(turn.id, MessageRole.USER.value),
@@ -101,6 +116,11 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 role=MessageRole.USER.value,
                 content=str(question),
                 context_compact=payload.get("rewritten_question"),
+                metadata=payload.get("metadata") or {},
+                agent_run_id=turn.agent_run_id,
+                agent_run_turn_kind=turn.agent_run_turn_kind,
+                agent_run_sequence=turn.agent_run_sequence,
+                agent_trace_refs=_trace_refs_from_turn(turn),
                 created_at=turn.created_at,
                 turn_id=turn.id,
                 turn_status=turn.status,
@@ -119,8 +139,13 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 context_compact=(payload.get("metadata") or {}).get("context_compact"),
                 reasoning=payload.get("reasoning") or "",
                 reasoning_available=bool(payload.get("reasoning_available")),
-                reasoning_format=payload.get("reasoning_format") or "none",
+                reasoning_format=payload.get("reasoning_format") or ReasoningFormat.NONE.value,
                 web_sources=payload.get("web_sources") or None,
+                metadata=payload.get("metadata") or {},
+                agent_run_id=turn.agent_run_id,
+                agent_run_turn_kind=turn.agent_run_turn_kind,
+                agent_run_sequence=turn.agent_run_sequence,
+                agent_trace_refs=_trace_refs_from_turn(turn),
                 created_at=created_at,
                 turn_id=turn.id,
                 turn_status=turn.status,
@@ -147,21 +172,27 @@ class MessageRepository:
         question: str,
         answer: Optional[str] = None,
         rewritten_question: Optional[str] = None,
-        status: str = "completed",
+        status: str = ChatTurnStatus.COMPLETED.value,
         reasoning: Optional[str] = "",
         reasoning_available: bool = False,
-        reasoning_format: str = "none",
+        reasoning_format: str = ReasoningFormat.NONE.value,
         web_sources: Optional[List[Dict[str, Any]]] = None,
         document_sources: Optional[List[Dict[str, Any]]] = None,
         used_chat_ids: Optional[List[str]] = None,
         clarification_options: Optional[List[str]] = None,
         error: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        agent_run_id: Optional[str] = None,
+        agent_run_turn_kind: Optional[str] = None,
+        agent_run_sequence: Optional[int] = None,
+        agent_trace_refs_json: Optional[Dict[str, Any]] = None,
         created_at: Optional[datetime] = None,
         completed_at: Optional[datetime] = None,
     ) -> ChatTurn:
         """Create one persisted chat turn."""
         now = created_at or utc_now()
+        safe_metadata = dict(metadata or {})
+        safe_metadata.pop("agent_run_id", None)
         payload = _normalize_payload(
             {
                 "question": question,
@@ -169,18 +200,22 @@ class MessageRepository:
                 "answer": answer,
                 "reasoning": reasoning or "",
                 "reasoning_available": reasoning_available,
-                "reasoning_format": reasoning_format or "none",
+                "reasoning_format": reasoning_format or ReasoningFormat.NONE.value,
                 "web_sources": web_sources or [],
                 "document_sources": document_sources or [],
                 "used_chat_ids": used_chat_ids or [],
                 "clarification_options": clarification_options,
                 "error": error,
-                "metadata": metadata or {},
+                "metadata": safe_metadata,
             }
         )
         turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id=thread_id,
+            agent_run_id=agent_run_id,
+            agent_run_turn_kind=agent_run_turn_kind,
+            agent_run_sequence=agent_run_sequence,
+            agent_trace_refs_json=agent_trace_refs_json if isinstance(agent_trace_refs_json, dict) else None,
             status=status,
             payload=payload,
             created_at=now,
@@ -191,6 +226,12 @@ class MessageRepository:
         async with session.begin():
             session.add(turn)
             await session.flush()
+            if status != ChatTurnStatus.CANCELLED.value:
+                await touch_thread_project_activity(
+                    session,
+                    thread_id,
+                    occurred_at=now,
+                )
             await session.refresh(turn)
         return turn
 
@@ -202,7 +243,7 @@ class MessageRepository:
         context_compact: Optional[str] = None,
         reasoning: Optional[str] = None,
         reasoning_available: bool = False,
-        reasoning_format: str = "none",
+        reasoning_format: str = ReasoningFormat.NONE.value,
         web_sources: Optional[List[Dict[str, Any]]] = None,
     ) -> ExpandedMessage:
         """
@@ -217,7 +258,7 @@ class MessageRepository:
                 thread_id=thread_id,
                 question=content,
                 rewritten_question=context_compact,
-                status="completed",
+                status=ChatTurnStatus.COMPLETED.value,
                 completed_at=None,
             )
             return _expand_turn(turn)[0]
@@ -226,7 +267,7 @@ class MessageRepository:
             thread_id=thread_id,
             question="",
             answer=content,
-            status="completed",
+            status=ChatTurnStatus.COMPLETED.value,
             reasoning=reasoning,
             reasoning_available=reasoning_available,
             reasoning_format=reasoning_format,
@@ -243,7 +284,7 @@ class MessageRepository:
     async def get(self, message_id: str) -> Optional[ExpandedMessage]:
         """Get a compatibility message by turn-derived message ID."""
         turn = await self.get_turn(turn_id_from_message_id(message_id))
-        if not turn or turn.status == "cancelled":
+        if not turn or turn.status == ChatTurnStatus.CANCELLED.value:
             return None
 
         requested_role = role_from_message_id(message_id)
@@ -263,7 +304,7 @@ class MessageRepository:
         async with session.begin():
             query = select(ChatTurn).where(ChatTurn.thread_id == thread_id)
             if not include_cancelled:
-                query = query.where(ChatTurn.status != "cancelled")
+                query = query.where(ChatTurn.status != ChatTurnStatus.CANCELLED.value)
             result = await session.execute(
                 query.order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
                 .limit(limit)
@@ -292,7 +333,7 @@ class MessageRepository:
         async with session.begin():
             result = await session.execute(
                 select(ChatTurn)
-                .where(ChatTurn.thread_id == thread_id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == thread_id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
                 .limit(10000)
             )
@@ -326,7 +367,7 @@ class MessageRepository:
         self,
         message_id: str,
         reasoning: str,
-        reasoning_format: str = "raw",
+        reasoning_format: str = ReasoningFormat.RAW.value,
     ) -> bool:
         session = await self._get_session()
         async with session.begin():
@@ -398,7 +439,7 @@ class MessageRepository:
             result = await session.execute(
                 select(func.count(ChatTurn.id)).where(
                     ChatTurn.thread_id == thread_id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                 )
             )
             return int(result.scalar() or 0)
