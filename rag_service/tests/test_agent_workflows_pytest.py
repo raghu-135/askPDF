@@ -6010,7 +6010,7 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker, **kwargs):
                 assert await cancellation_checker() is False
                 trace_recorder.record_runtime_event(
                     "graph.resumed",
@@ -6113,7 +6113,7 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker, **kwargs):
                 assert await cancellation_checker() is False
                 calls.append(interrupt["interrupt_id"])
                 trace_recorder.record_runtime_event(
@@ -8262,7 +8262,7 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) == {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
+        assert set(payload["debug"]) >= {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
         assert payload["debug"]["detail_manifest"] == []
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]

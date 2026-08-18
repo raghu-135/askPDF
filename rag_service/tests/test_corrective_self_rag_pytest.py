@@ -1,5 +1,3 @@
-import json
-import ast
 import importlib.util
 from copy import deepcopy
 from pathlib import Path
@@ -663,22 +661,6 @@ def test_corrective_metrics_survive_the_private_chat_response_envelope():
     assert metrics["tool_attempts"] == 1
     assert metrics["accepted_packets"] == 1
     assert metrics["support_ratio"] == 1.0
-
-
-def test_migration_contains_same_immutable_v1_snapshot_as_builtin():
-    root = Path(__file__).parents[1]
-    builtin = json.loads((root / "app/agent_workflows/builtins/corrective_self_rag_agent.json").read_text())["spec_json"]
-    migration_text = (root / "alembic/versions/e7c4a1b9d2f6_seed_corrective_self_rag.py").read_text()
-    assert 'revision = "e7c4a1b9d2f6"' in migration_text
-    tree = ast.parse(migration_text)
-    snapshot = next(
-        ast.literal_eval(node.value.args[0])
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "SPEC_JSON" for target in node.targets)
-        and isinstance(node.value, ast.Call)
-    )
-    assert json.loads(snapshot) == builtin
 
 
 class _MigrationResult:

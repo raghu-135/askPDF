@@ -659,18 +659,25 @@ class AgentWorkflowRepository:
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
 
     async def append_run_event(self, run_id: str, event: Any) -> bool:
-        session = await self._get_session()
-        return await run_store_append_run_event(
-            session,
-            run_id=run_id,
-            event_id=str(getattr(event, "event_id", None) or ""),
-            sequence=int(getattr(event, "sequence", 0) or 0),
-            attempt=int(getattr(event, "attempt", 1) or 1),
-            kind=str(getattr(event, "kind", None) or "runtime.event"),
-            payload_json=dict(getattr(event, "payload", None) or {}),
-            occurred_at=getattr(event, "occurred_at", None),
-            trace_id=getattr(event, "trace_id", None),
-        )
+        # Event sinks may persist asynchronously while the control-plane
+        # request is completing. Never share the request session with those
+        # writes because concurrent transactions on one session can close or
+        # invalidate the transaction finalizing the run.
+        session = async_session_maker()
+        try:
+            return await run_store_append_run_event(
+                session,
+                run_id=run_id,
+                event_id=str(getattr(event, "event_id", None) or ""),
+                sequence=int(getattr(event, "sequence", 0) or 0),
+                attempt=int(getattr(event, "attempt", 1) or 1),
+                kind=str(getattr(event, "kind", None) or "runtime.event"),
+                payload_json=dict(getattr(event, "payload", None) or {}),
+                occurred_at=getattr(event, "occurred_at", None),
+                trace_id=getattr(event, "trace_id", None),
+            )
+        finally:
+            await session.close()
 
     async def list_run_events(self, run_id: str) -> list[Any]:
         session = await self._get_session()
@@ -702,16 +709,19 @@ class AgentWorkflowRepository:
     ) -> Optional[AgentRun]:
         """Persist runtime-owned opaque continuation state idempotently."""
 
-        session = await self._get_session()
-        async with session.begin():
-            run = await session.get(AgentRun, run_id)
-            if run is None:
-                return None
-            value = binding.to_dict() if hasattr(binding, "to_dict") else dict(binding or {})
-            replace_jsonb_field(run, "runtime_binding_json", value)
-            run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
-            run.runtime_binding_status = status
-            return run
+        session = async_session_maker()
+        try:
+            async with session.begin():
+                run = await session.get(AgentRun, run_id)
+                if run is None:
+                    return None
+                value = binding.to_dict() if hasattr(binding, "to_dict") else dict(binding or {})
+                replace_jsonb_field(run, "runtime_binding_json", value)
+                run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
+                run.runtime_binding_status = status
+                return run
+        finally:
+            await session.close()
 
     async def mark_runtime_started(self, run_id: str) -> Optional[AgentRun]:
         """Persist that the initial runtime start has been submitted."""

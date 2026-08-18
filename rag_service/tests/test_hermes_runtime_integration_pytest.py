@@ -14,6 +14,11 @@ from hermes_runtime.api import _recovery_payload, _response_session_id
 
 RUNTIME_URL = os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200")
 FAKE_URL = os.getenv("HERMES_FAKE_URL", "http://hermes-fake:8000")
+_enabled = os.getenv("PHASE7_HERMES_INTEGRATION", "").lower() in {"1", "true", "yes", "on"}
+pytestmark = pytest.mark.skipif(
+    not _enabled,
+    reason="requires the Phase 7 Hermes integration Compose profile",
+)
 
 
 def _payload(run_id: str) -> dict[str, Any]:

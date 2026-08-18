@@ -316,7 +316,10 @@ def test_parallel_contracts_are_canonical_and_builtin_policy_does_not_drift():
 
 @pytest.mark.asyncio
 async def test_catalog_api_exposes_canonical_parallel_policy_descriptors():
-    catalog = await get_internal_agent_workflow_catalog()
+    catalog = await get_internal_agent_workflow_catalog(
+        framework="langgraph",
+        builder_id="langgraph_graph",
+    )
     policy = catalog["defaults"]["parallel_policy"]
     assert policy["defaults"] == DEFAULT_PARALLEL_POLICY
     assert policy["fields"]["max_concurrency"]["maximum"] == 16

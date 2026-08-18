@@ -13,6 +13,12 @@ from hermes_runtime.execution_store import HermesExecutionStore
 from test_hermes_runtime_integration_pytest import _payload, _sse, FAKE_URL, RUNTIME_URL
 
 
+pytestmark = pytest.mark.skipif(
+    os.getenv("PHASE7_HERMES_INTEGRATION", "").lower() not in {"1", "true", "yes", "on"},
+    reason="requires the Phase 7 Hermes integration Compose profile",
+)
+
+
 RECOVERY_RUN_ID = os.getenv("PHASE7_RECOVERY_RUN_ID") or f"phase7-recovery-{uuid.uuid4().hex}"
 
 
