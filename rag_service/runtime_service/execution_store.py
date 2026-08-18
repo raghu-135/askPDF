@@ -12,6 +12,7 @@ import hashlib
 import os
 import uuid
 from dataclasses import dataclass, field
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -105,6 +106,7 @@ class ExecutionRecord:
     request_fingerprint: str | None = None
     last_operation_id: str | None = None
     retry_source_attempt: int | None = None
+    replay_only: bool = False
 
 
 class LeaseLostError(RuntimeError):
@@ -259,7 +261,7 @@ class ExecutionStore:
                         raise ExecutionConflictError("retry requires operation_id")
                     prior = self._operations.get((run_id, operation_id))
                     if prior is not None:
-                        return existing
+                        return replace(existing, attempt=int(prior["attempt"]), replay_only=True)
                     if existing.status not in {"completed", "failed", "cancelled", "no_continuation"}:
                         raise ExecutionConflictError("only terminal executions can be retried")
                     if source_attempt is None or source_attempt != existing.attempt:
@@ -289,6 +291,7 @@ class ExecutionStore:
             self._records[run_id] = record
             self._events.setdefault(run_id, [])
             return record
+        replay_attempt: int | None = None
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 existing = await connection.fetchrow(
@@ -300,7 +303,7 @@ class ExecutionStore:
                         raise ExecutionConflictError("retry requires operation_id")
                     prior = await connection.fetchrow("select attempt from runtime_operations where run_id=$1 and operation_id=$2", run_id, operation_id)
                     if prior is not None:
-                        pass
+                        replay_attempt = int(prior["attempt"])
                     elif existing["status"] not in {"completed", "failed", "cancelled", "no_continuation"}:
                         raise ExecutionConflictError("only terminal executions can be retried")
                     elif source_attempt is None or source_attempt != existing["attempt"]:
@@ -327,7 +330,12 @@ class ExecutionStore:
                            values($1,$2,$3::jsonb,$4::jsonb,'queued',$5,$6,$7)""",
                         run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
                     )
-        return await self.get(run_id)  # type: ignore[return-value]
+        current = await self.get(run_id)
+        if current is None:
+            return current  # type: ignore[return-value]
+        if replay_attempt is not None:
+            return replace(current, attempt=replay_attempt, replay_only=True)
+        return current
 
     async def get(self, run_id: str) -> ExecutionRecord | None:
         if self._pool is None:

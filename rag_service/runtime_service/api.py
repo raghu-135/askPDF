@@ -471,7 +471,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
             task = runtime_state["active"].get(request.run_id)
             terminal_statuses = {"completed", "failed", "cancelled", "no_continuation"}
-            should_start = allow_start and (
+            should_start = allow_start and not record.replay_only and (
                 record.status == "queued"
             )
             if should_start and (task is None or task.done()):

@@ -164,11 +164,21 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
         }
         retried = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
         repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
+        retry_two_payload = {
+            "attempt_id": "retry-operation-2",
+            "source_attempt": 2,
+            "operation": "start",
+            "request": _request("run-explicit-retry"),
+        }
+        second_retry = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_two_payload)
+        delayed_repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
 
-    assert calls == 2
+    assert calls == 3
     assert first[-1]["result"]["output"]["answer"] == "attempt-1"
     assert retried[-1]["result"]["output"]["answer"] == "attempt-2"
     assert repeated[-1]["result"]["output"]["answer"] == "attempt-2"
+    assert second_retry[-1]["result"]["output"]["answer"] == "attempt-3"
+    assert delayed_repeated[-1]["result"]["output"]["answer"] == "attempt-2"
 
 
 @pytest.mark.asyncio
