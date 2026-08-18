@@ -64,6 +64,7 @@ services:
       POSTGRES_MAX_OVERFLOW: "5"
       ASKPDF_AGENT_CHECKPOINTER: postgres
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
+      HERMES_RUNTIME_ENABLED: ${PHASE7_HERMES_RUNTIME_ENABLED:-false}
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/

@@ -22,7 +22,7 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 def agent_runtime_mode() -> AgentRuntimeMode:
     """Resolve runtime mode with external execution as the safe default."""
 
-    configured = os.getenv("ive ")
+    configured = os.getenv("AGENT_RUNTIME_MODE")
     if configured is not None:
         value = configured.strip().lower()
         try:

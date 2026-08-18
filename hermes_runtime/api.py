@@ -291,6 +291,7 @@ def create_app() -> FastAPI:
             "stream": True,
             "metadata": {
                 "askpdf_run_id": run_id,
+                "askpdf_thread_id": neutral_request.get("thread_id"),
                 "askpdf_definition_id": neutral_request.get("definition_id"),
                 "mcp_server": config.get("mcp_server"),
                 "allowed_tool_ids": list(config.get("allowed_tool_ids") or []),
