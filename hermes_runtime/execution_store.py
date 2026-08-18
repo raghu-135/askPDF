@@ -11,6 +11,7 @@ multiple workers or replicas.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,8 +30,37 @@ class HermesExecutionStoreProtocol(Protocol):
     def frames_after(self, run_id: str, after_event_id: str | None = None) -> list[str]: ...
 
 
+class HermesExecutionConflictError(RuntimeError):
+    """Raised when a run ID is reused for different execution semantics."""
+
+
+class HermesStoreLoadError(RuntimeError):
+    """Raised when an existing Hermes journal cannot be loaded safely."""
+
+
+def request_fingerprint(payload: Mapping[str, Any]) -> str:
+    """Fingerprint immutable start semantics while excluding transport metadata."""
+    request = payload.get("request") or {}
+    context = payload.get("context") or {}
+    resolved_spec = context.get("resolved_spec") or {}
+    value = {
+        "operation": "start",
+        "run_id": request.get("run_id"),
+        "definition_id": request.get("definition_id"),
+        "framework": request.get("framework"),
+        "builder_id": request.get("builder_id"),
+        "input": request.get("input") or {},
+        "options": request.get("options") or {},
+        "interrupt": request.get("interrupt") or {},
+        "resolved_config": resolved_spec.get("config") or {},
+    }
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class HermesExecutionStore:
-    SCHEMA_VERSION = 2
+    STORE_SCHEMA_VERSION = 3
+    EVENT_SCHEMA_VERSION = 2
 
     def __init__(self, path: str | None = None) -> None:
         self.path = Path(path or os.getenv("HERMES_RUNTIME_STATE_PATH", "/tmp/askpdf-hermes-runtime.json"))
@@ -39,27 +69,73 @@ class HermesExecutionStore:
 
     def _load(self) -> None:
         try:
-            value = json.loads(self.path.read_text())
-            self.records = dict(value) if isinstance(value, Mapping) else {}
-            for record in self.records.values():
-                if not isinstance(record, Mapping):
-                    continue
-                events = record.get("events") or []
-                sequences = []
-                for item in events:
-                    event_id = str(item.get("event_id") or "") if isinstance(item, Mapping) else ""
-                    try:
-                        sequences.append(int(event_id.rsplit(":", 1)[-1]))
-                    except ValueError:
-                        pass
-                record.setdefault("event_schema_version", self.SCHEMA_VERSION)
-                record.setdefault("next_sequence", max(sequences, default=len(events)) + 1)
-                record.setdefault("last_event_id", events[-1].get("event_id") if events else None)
-                record.setdefault("last_upstream_event_id", None)
-                record.setdefault("terminal_event_id", None)
-                record.setdefault("terminal_result", None)
-        except (FileNotFoundError, OSError, ValueError):
+            exists = self.path.exists()
+        except OSError as exc:
+            raise HermesStoreLoadError(
+                f"existing Hermes execution journal is unreadable: {self.path}"
+            ) from exc
+        if not exists:
             self.records = {}
+            return
+        try:
+            value = json.loads(self.path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise HermesStoreLoadError(
+                f"existing Hermes execution journal is unreadable: {self.path}"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise HermesStoreLoadError("Hermes execution journal root must be an object")
+
+        loaded: dict[str, dict[str, Any]] = {}
+        migrated = False
+        for run_id, raw_record in value.items():
+            if not isinstance(run_id, str) or not isinstance(raw_record, Mapping):
+                raise HermesStoreLoadError("Hermes execution journal contains an invalid record")
+            record = dict(raw_record)
+            if record.get("run_id") != run_id:
+                raise HermesStoreLoadError(
+                    f"Hermes execution journal record identity does not match key: {run_id}"
+                )
+            events = record.get("events", [])
+            if not isinstance(events, list) or any(not isinstance(item, Mapping) for item in events):
+                raise HermesStoreLoadError(
+                    f"Hermes execution journal has invalid events for run: {run_id}"
+                )
+            payload = record.get("payload")
+            if payload is not None and not isinstance(payload, Mapping):
+                raise HermesStoreLoadError(
+                    f"Hermes execution journal has invalid payload for run: {run_id}"
+                )
+            if record.get("request_fingerprint") is None and isinstance(payload, Mapping):
+                record["request_fingerprint"] = request_fingerprint(payload)
+                migrated = True
+            if record.get("store_schema_version") != self.STORE_SCHEMA_VERSION:
+                record["store_schema_version"] = self.STORE_SCHEMA_VERSION
+                migrated = True
+
+            sequences = []
+            for item in events:
+                event_id = str(item.get("event_id") or "")
+                try:
+                    sequences.append(int(event_id.rsplit(":", 1)[-1]))
+                except ValueError:
+                    pass
+            record.setdefault("event_schema_version", self.EVENT_SCHEMA_VERSION)
+            record.setdefault("next_sequence", max(sequences, default=len(events)) + 1)
+            record.setdefault("last_event_id", events[-1].get("event_id") if events else None)
+            record.setdefault("last_upstream_event_id", None)
+            record.setdefault("terminal_event_id", None)
+            record.setdefault("terminal_result", None)
+            loaded[run_id] = record
+
+        self.records = loaded
+        if migrated:
+            try:
+                self._save()
+            except OSError as exc:
+                raise HermesStoreLoadError(
+                    f"existing Hermes execution journal could not be migrated: {self.path}"
+                ) from exc
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,8 +144,34 @@ class HermesExecutionStore:
         temporary.replace(self.path)
 
     def create(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        record = self.records.setdefault(run_id, {"run_id": run_id, "status": "queued", "events": [], "payload": dict(payload)})
-        record.setdefault("event_schema_version", self.SCHEMA_VERSION)
+        fingerprint = request_fingerprint(payload)
+        existing = self.records.get(run_id)
+        if existing is not None:
+            existing_fingerprint = existing.get("request_fingerprint")
+            if existing_fingerprint is None:
+                stored_payload = existing.get("payload")
+                if not isinstance(stored_payload, Mapping):
+                    raise HermesExecutionConflictError(
+                        "existing Hermes execution has no comparable request payload"
+                    )
+                existing_fingerprint = request_fingerprint(stored_payload)
+                existing["request_fingerprint"] = existing_fingerprint
+            if existing_fingerprint != fingerprint:
+                raise HermesExecutionConflictError(
+                    "run_id is already bound to different execution semantics"
+                )
+            return existing
+
+        record = {
+            "run_id": run_id,
+            "status": "queued",
+            "events": [],
+            "payload": dict(payload),
+            "request_fingerprint": fingerprint,
+            "store_schema_version": self.STORE_SCHEMA_VERSION,
+        }
+        self.records[run_id] = record
+        record.setdefault("event_schema_version", self.EVENT_SCHEMA_VERSION)
         record.setdefault("next_sequence", 1)
         record.setdefault("last_event_id", None)
         record.setdefault("last_upstream_event_id", None)

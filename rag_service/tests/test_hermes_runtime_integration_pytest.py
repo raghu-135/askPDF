@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import os
 import uuid
@@ -76,6 +78,91 @@ async def test_normal_completion_has_one_terminal_event_and_persists_session_bin
     assert binding["upstream_run_id"]
     assert binding["session_id"]
     assert len([item for item in replay if item["event"].get("terminal")]) == 1
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_identical_starts_share_one_upstream_execution() -> None:
+    await _set_mode("delayed")
+    run_id = f"phase7-concurrent-{uuid.uuid4().hex}"
+    payload = _payload(run_id)
+    async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
+        first, second = await asyncio.gather(
+            _sse(client, "POST", "/v1/runs/start", json=payload),
+            _sse(client, "POST", "/v1/runs/start", json=payload),
+        )
+
+    assert len([item for item in first if item["event"].get("terminal")]) == 1
+    assert len([item for item in second if item["event"].get("terminal")]) == 1
+    async with httpx.AsyncClient(base_url=FAKE_URL) as fake:
+        state = (await fake.get("/debug/state")).json()
+    matching = [
+        value
+        for value in state["runs"].values()
+        if value["payload"].get("metadata", {}).get("askpdf_run_id") == run_id
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        (("request", "input", "question"), "different question"),
+        (("request", "definition_id"), "different_definition"),
+        (("request", "options", "llm_model"), "different-model"),
+        (("context", "resolved_spec", "config", "system_prompt"), "Different policy."),
+    ],
+)
+async def test_repeated_start_rejects_conflicting_execution_semantics(
+    mutation: tuple[str, ...], value: str
+) -> None:
+    await _set_mode("normal")
+    run_id = f"phase7-conflict-{uuid.uuid4().hex}"
+    original = _payload(run_id)
+    conflicting = copy.deepcopy(original)
+    target: dict[str, Any] = conflicting
+    for key in mutation[:-1]:
+        target = target[key]
+    target[mutation[-1]] = value
+
+    async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
+        await _sse(client, "POST", "/v1/runs/start", json=original)
+        response = await client.post("/v1/runs/start", json=conflicting)
+
+    assert response.status_code == 409
+    error = response.json()["detail"]
+    assert error["code"] == "runtime_operation_conflict"
+    assert error["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_active_run_rejects_conflicting_reuse() -> None:
+    await _set_mode("delayed")
+    run_id = f"phase7-active-conflict-{uuid.uuid4().hex}"
+    original = _payload(run_id)
+    conflicting = copy.deepcopy(original)
+    conflicting["request"]["input"]["question"] = "different while active"
+
+    async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
+        running = asyncio.create_task(
+            _sse(client, "POST", "/v1/runs/start", json=original)
+        )
+        for _ in range(30):
+            async with httpx.AsyncClient(base_url=FAKE_URL) as fake:
+                state = (await fake.get("/debug/state")).json()
+            if any(
+                value["payload"].get("metadata", {}).get("askpdf_run_id") == run_id
+                for value in state["runs"].values()
+            ):
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("Hermes run did not become active")
+        response = await client.post("/v1/runs/start", json=conflicting)
+        await running
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "runtime_operation_conflict"
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,10 @@ from typing import Any, AsyncIterator, Mapping
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from hermes_runtime.execution_store import HermesExecutionStore
+from hermes_runtime.execution_store import (
+    HermesExecutionConflictError,
+    HermesExecutionStore,
+)
 
 
 WIRE_VERSION = 1
@@ -560,7 +563,17 @@ def create_app() -> FastAPI:
         if not run_id:
             raise HTTPException(status_code=400, detail=_error("runtime_protocol_error", "run_id is required"))
         async with start_lock:
-            record = state["store"].create(run_id, payload)
+            try:
+                record = state["store"].create(run_id, payload)
+            except HermesExecutionConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error(
+                        "runtime_operation_conflict",
+                        str(exc),
+                        retryable=False,
+                    ),
+                ) from exc
             task = state["active"].get(run_id)
             if record.get("status") == "queued" and (task is None or task.done()):
                 state["store"].update(run_id, status="running")

@@ -16,4 +16,3 @@ MAX_ANSWER_QUALITY_ISSUES: Final = 8
 WORKER_TERMINAL_STATUSES: Final = frozenset(
     {"completed", "skipped", "failed", "timed_out", "cancelled"}
 )
-

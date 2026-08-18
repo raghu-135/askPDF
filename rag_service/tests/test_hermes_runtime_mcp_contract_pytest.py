@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from hermes_runtime.api import create_app
@@ -34,3 +37,12 @@ def test_hermes_rejects_tool_outside_allowlist(monkeypatch):
     validation = response.json()["result"]["validation"]
     assert validation["valid"] is False
     assert any(issue["code"] == "unsupported_tool_allowlist" for issue in validation["issues"])
+
+
+def test_phase7_runner_enables_and_guards_every_integration_proof_command():
+    repository = Path(os.getenv("ASKPDF_REPO_DIR", "/workspace"))
+    script = (repository / "run_tests.sh").read_text()
+    phase7 = script.split('if [ "${RUN_PHASE7:-0}" = "1" ]; then', 1)[1].split("\nfi", 1)[0]
+
+    assert phase7.count("-e PHASE7_HERMES_INTEGRATION=true") == 3
+    assert phase7.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 3
