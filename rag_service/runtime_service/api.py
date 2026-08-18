@@ -220,7 +220,6 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     adapter: Any = None
-    cancellation_events: dict[str, asyncio.Event] = {}
 
     @app.exception_handler(DependencyUnavailable)
     async def dependency_unavailable_handler(request: Request, exc: DependencyUnavailable) -> JSONResponse:
@@ -569,9 +568,31 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         runtime_request = request_from_dict(payload["request"])
         if runtime_request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
-        await execution_store.request_cancel(runtime_request.run_id)
-        cancellation_events.setdefault(runtime_request.run_id, asyncio.Event()).set()
-        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result={"run_id": runtime_request.run_id, "status": "cancellation_requested"})
+        outcome = await execution_store.request_cancel(runtime_request.run_id)
+        if outcome.is_unknown:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "runtime_run_not_found",
+                    "safe_message": "Runtime run not found",
+                    "retryable": False,
+                },
+            )
+        if outcome.is_terminal:
+            result = {
+                "run_id": runtime_request.run_id,
+                "status": outcome.run_status,
+                "cancellation_requested": False,
+                "no_op": True,
+            }
+        else:
+            result = {
+                "run_id": runtime_request.run_id,
+                "status": "cancellation_requested",
+                "run_status": outcome.run_status,
+                "cancellation_requested": True,
+            }
+        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=result)
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:

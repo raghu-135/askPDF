@@ -74,6 +74,33 @@ def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
     }
 
 
+def _structured_runtime_error(payload: Any) -> tuple[dict[str, Any], Mapping[str, Any]] | None:
+    """Extract a neutral runtime error from either supported HTTP shape."""
+    if not isinstance(payload, Mapping):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        detail = payload.get("detail")
+        error = detail if isinstance(detail, Mapping) else None
+    if not isinstance(error, Mapping) or not error.get("code"):
+        return None
+    return dict(error), payload
+
+
+def _raise_structured_runtime_error(payload: Any) -> None:
+    decoded = _structured_runtime_error(payload)
+    if decoded is None:
+        return
+    error, envelope = decoded
+    raise RuntimeError(
+        code=str(error.get("code") or "runtime_failed"),
+        safe_message=str(error.get("safe_message") or error.get("message") or "Agent runtime failed"),
+        retryable=bool(error.get("retryable")),
+        details=dict(error.get("details") or {}),
+        runtime_metadata=dict(envelope.get("runtime_metadata") or {}),
+    )
+
+
 class HttpRuntimeAdapter:
     framework = "langgraph"
     builder_id = "langgraph_graph"
@@ -130,10 +157,19 @@ class HttpRuntimeAdapter:
     async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:
         try:
             response = await (await self._client_for_request()).request(method, self.base_url + path, headers=self._headers(request), **kwargs)
-            response.raise_for_status()
-            payload = response.json()
         except httpx.TimeoutException as exc:
             raise RuntimeError.from_exception(exc, code="runtime_timeout", retryable=True, safe_message="Agent runtime timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            if response.status_code >= 400:
+                raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned invalid JSON") from exc
+        _raise_structured_runtime_error(payload)
+        try:
+            response.raise_for_status()
         except httpx.HTTPError as exc:
             raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
         if not isinstance(payload, Mapping):
@@ -190,15 +226,7 @@ class HttpRuntimeAdapter:
                         envelope = json.loads(failure)
                     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                         envelope = {}
-                    error = envelope.get("error") if isinstance(envelope, Mapping) else None
-                    if isinstance(error, Mapping) and error.get("code"):
-                        raise RuntimeError(
-                            code=str(error["code"]),
-                            safe_message=str(error.get("safe_message") or "Agent runtime rejected the operation"),
-                            retryable=bool(error.get("retryable")),
-                            details=dict(error.get("details") or {}),
-                            runtime_metadata=dict(envelope.get("runtime_metadata") or {}),
-                        )
+                    _raise_structured_runtime_error(envelope)
                 response.raise_for_status()
                 async for _name, item in iter_sse(response):
                     envelope = item["data"]

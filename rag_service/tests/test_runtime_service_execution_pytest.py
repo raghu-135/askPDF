@@ -169,3 +169,40 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
     assert first[-1]["result"]["output"]["answer"] == "attempt-1"
     assert retried[-1]["result"]["output"]["answer"] == "attempt-2"
     assert repeated[-1]["result"]["output"]["answer"] == "attempt-2"
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_run_returns_404_without_creating_state() -> None:
+    store = ExecutionStore()
+    app = create_app(execution_store=store)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        response = await client.post("/v1/runs/missing/cancel", json={"request": _request("missing")})
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "runtime_run_not_found"
+    assert await store.get("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
+    store = ExecutionStore()
+    await store.create("run-cancel", "start", _request("run-cancel"), _payload("run-cancel"))
+    app = create_app(execution_store=store)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        first = await client.post("/v1/runs/run-cancel/cancel", json={"request": _request("run-cancel")})
+        repeated = await client.post("/v1/runs/run-cancel/cancel", json={"request": _request("run-cancel")})
+        await store.set_status("run-cancel", "cancelled")
+        terminal = await client.post("/v1/runs/run-cancel/cancel", json={"request": _request("run-cancel")})
+
+    assert first.status_code == 200
+    assert first.json()["result"]["status"] == "cancellation_requested"
+    assert repeated.json()["result"]["status"] == "cancellation_requested"
+    assert terminal.status_code == 200
+    assert terminal.json()["result"] == {
+        "run_id": "run-cancel",
+        "status": "cancelled",
+        "cancellation_requested": False,
+        "no_op": True,
+    }

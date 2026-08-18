@@ -16,6 +16,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "no_continuation"})
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -110,6 +113,26 @@ class LeaseLostError(RuntimeError):
 
 class ExecutionConflictError(RuntimeError):
     """Raised when an operation conflicts with an immutable terminal record."""
+
+
+@dataclass(frozen=True)
+class CancellationOutcome:
+    """Atomic result of requesting cancellation for a durable execution."""
+
+    outcome: str
+    run_status: str | None = None
+
+    @property
+    def is_unknown(self) -> bool:
+        return self.outcome == "unknown"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.outcome == "terminal"
+
+    @property
+    def is_requested(self) -> bool:
+        return self.outcome == "requested"
 
 
 class ExecutionStore:
@@ -382,26 +405,45 @@ class ExecutionStore:
             if owner_id is not None and (record.owner_id != owner_id or record.fencing_token != fencing_token):
                 raise LeaseLostError(f"lost runtime lease for {run_id}")
             record.status, record.result, record.error, record.updated_at = status, dict(result) if result else None, dict(error) if error else None, _now()
+            if status in TERMINAL_STATUSES:
+                record.cancel_requested = False
             return
         if owner_id is None or fencing_token is None:
             raise LeaseLostError(f"runtime status mutation requires a lease for {run_id}")
         result_status = await self._pool.execute(
-            """update runtime_executions set status=$2, result=coalesce($3::jsonb,result), error=coalesce($4::jsonb,error), updated_at=now()
+            """update runtime_executions set status=$2, cancel_requested=case when $2 in ('completed','failed','cancelled','no_continuation') then false else cancel_requested end,
+                                                   result=coalesce($3::jsonb,result), error=coalesce($4::jsonb,error), updated_at=now()
                where run_id=$1 and owner_id=$5 and fencing_token=$6 and (lease_expires_at is null or lease_expires_at > now())""",
             run_id, status, json.dumps(_json_safe(dict(result))) if result else None, json.dumps(_json_safe(dict(error))) if error else None, owner_id, fencing_token,
         )
         if not result_status.endswith("1"):
             raise LeaseLostError(f"lost runtime lease for {run_id}")
 
-    async def request_cancel(self, run_id: str) -> bool:
+    async def request_cancel(self, run_id: str) -> CancellationOutcome:
         if self._pool is None:
             record = self._records.get(run_id)
             if record is None:
-                return False
+                return CancellationOutcome("unknown")
+            if record.status in TERMINAL_STATUSES:
+                return CancellationOutcome("terminal", record.status)
             record.cancel_requested = True
-            return True
-        result = await self._pool.execute("update runtime_executions set cancel_requested=true, updated_at=now() where run_id=$1", run_id)
-        return result.endswith("1")
+            return CancellationOutcome("requested", record.status)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                record = await connection.fetchrow(
+                    "select status, cancel_requested from runtime_executions where run_id=$1 for update",
+                    run_id,
+                )
+                if record is None:
+                    return CancellationOutcome("unknown")
+                status = str(record["status"])
+                if status in TERMINAL_STATUSES:
+                    return CancellationOutcome("terminal", status)
+                await connection.execute(
+                    "update runtime_executions set cancel_requested=true, updated_at=now() where run_id=$1 and status not in ('completed','failed','cancelled','no_continuation')",
+                    run_id,
+                )
+                return CancellationOutcome("requested", status)
 
     async def is_cancel_requested(self, run_id: str) -> bool:
         record = await self.get(run_id)

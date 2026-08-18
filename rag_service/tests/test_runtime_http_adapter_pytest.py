@@ -144,6 +144,103 @@ async def test_http_adapter_preserves_dependency_admission_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "payload", "expected_code", "expected_retryable"),
+    [
+        (400, {"contract_version": 1, "error": {"code": "invalid_request", "safe_message": "bad request", "retryable": False}}, "invalid_request", False),
+        (409, {"detail": {"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False}}, "runtime_operation_conflict", False),
+        (503, {"contract_version": 1, "error": {"code": "runtime_dependency_unavailable", "safe_message": "dependency unavailable", "retryable": True}}, "runtime_dependency_unavailable", True),
+    ],
+)
+async def test_http_adapter_preserves_structured_json_http_errors(status, payload, expected_code, expected_retryable):
+    request = _request()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.cancel(request)
+    assert caught.value.code == expected_code
+    assert caught.value.retryable is expected_retryable
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "payload", "expected_code", "expected_retryable"),
+    [
+        (409, {"detail": {"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False}}, "runtime_operation_conflict", False),
+        (503, {"error": {"code": "runtime_dependency_unavailable", "safe_message": "dependency unavailable", "retryable": True}}, "runtime_dependency_unavailable", True),
+    ],
+)
+async def test_http_adapter_preserves_structured_stream_http_errors(status, payload, expected_code, expected_retryable):
+    request = _request()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.start(request, context=RuntimeExecutionContext())
+    assert caught.value.code == expected_code
+    assert caught.value.retryable is expected_retryable
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_maps_network_failure_to_retryable_transport_error():
+    request = _request()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=http_request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.cancel(request)
+    assert caught.value.code == "runtime_transport_error"
+    assert caught.value.retryable is True
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_maps_malformed_http_error_to_retryable_transport_error():
+    request = _request()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, content=b"not-json")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.cancel(request)
+    assert caught.value.code == "runtime_transport_error"
+    assert caught.value.retryable is True
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_does_not_retry_structured_stream_conflict():
+    request = _request()
+    calls: list[str] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method + " " + http_request.url.path)
+        return httpx.Response(409, json={"detail": {"code": "runtime_operation_conflict", "safe_message": "conflict", "retryable": False}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.start(request, context=RuntimeExecutionContext())
+    assert caught.value.code == "runtime_operation_conflict"
+    assert calls == ["POST /v1/runs/start"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_http_adapter_translates_events_for_legacy_two_argument_sink():
     request = _request()
     event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}

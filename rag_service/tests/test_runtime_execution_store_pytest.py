@@ -10,6 +10,40 @@ from runtime_service.execution_store import ExecutionConflictError, ExecutionSto
 
 
 @pytest.mark.asyncio
+async def test_request_cancel_returns_typed_outcomes_and_preserves_terminal_state() -> None:
+    store = ExecutionStore()
+
+    unknown = await store.request_cancel("missing")
+    assert unknown.outcome == "unknown"
+
+    await store.create("run-cancel", "start", {"run_id": "run-cancel"}, {"request": {"run_id": "run-cancel"}})
+    queued = await store.request_cancel("run-cancel")
+    repeated = await store.request_cancel("run-cancel")
+    assert queued.outcome == "requested"
+    assert queued.run_status == "queued"
+    assert repeated.outcome == "requested"
+    assert (await store.get("run-cancel")).cancel_requested is True
+
+    await store.set_status("run-cancel", "cancelled")
+    terminal = await store.request_cancel("run-cancel")
+    assert terminal.outcome == "terminal"
+    assert terminal.run_status == "cancelled"
+    assert (await store.get("run-cancel")).cancel_requested is False
+
+
+@pytest.mark.asyncio
+async def test_request_cancel_active_run_is_visible_to_worker() -> None:
+    store = ExecutionStore()
+    await store.create("run-active-cancel", "start", {"run_id": "run-active-cancel"}, {"request": {"run_id": "run-active-cancel"}})
+    await store.claim("run-active-cancel")
+
+    outcome = await store.request_cancel("run-active-cancel")
+
+    assert outcome.outcome == "requested"
+    assert (await store.is_cancel_requested("run-active-cancel")) is True
+
+
+@pytest.mark.asyncio
 async def test_terminal_continuation_probe_is_immutable_under_repeated_start() -> None:
     store = ExecutionStore()
 
@@ -177,6 +211,35 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
     finally:
         # The Docker test runner drops the isolated database.  Keep direct
         # invocations tidy when they reuse a development test database.
+        if store._pool is not None:
+            await store._pool.execute("delete from runtime_executions where run_id=$1", run_id)
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_postgres_request_cancel_matches_in_memory_outcomes() -> None:
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+
+    store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    os.environ["AGENT_RUNTIME_SCHEMA_AUTO_CREATE"] = "true"
+    await store.initialize()
+    run_id = f"runtime-cancel-{uuid.uuid4().hex}"
+    try:
+        assert (await store.request_cancel(run_id)).outcome == "unknown"
+        await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}})
+        requested = await store.request_cancel(run_id)
+        assert requested.outcome == "requested"
+        assert requested.run_status == "queued"
+        fencing_token = await store.claim(run_id)
+        assert fencing_token is not None
+        await store.set_status(run_id, "cancelled", owner_id=store.owner_id, fencing_token=fencing_token)
+        terminal = await store.request_cancel(run_id)
+        assert terminal.outcome == "terminal"
+        assert terminal.run_status == "cancelled"
+        assert (await store.get(run_id)).cancel_requested is False
+    finally:
         if store._pool is not None:
             await store._pool.execute("delete from runtime_executions where run_id=$1", run_id)
         await store.close()
