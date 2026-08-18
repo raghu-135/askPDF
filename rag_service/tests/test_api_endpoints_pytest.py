@@ -708,7 +708,10 @@ class TestThreadEndpoints:
                 new_callable=AsyncMock,
                 return_value={"thread": forked_thread, "files": [file]},
             ) as fork_thread,
-            patch("app.api.threads.trigger_reembed_for_missing_sources", new_callable=AsyncMock),
+            patch(
+                "app.api.threads.trigger_reembed_for_missing_sources",
+                new_callable=AsyncMock,
+            ) as trigger_reembed,
             patch("app.api.threads.asyncio.create_task", side_effect=_close_scheduled_coroutine) as create_task,
         ):
             response = client.post(
@@ -728,7 +731,12 @@ class TestThreadEndpoints:
             target_project_id=None,
             memory_copy_mode=None,
         )
-        create_task.assert_called_once()
+        trigger_reembed.assert_called_once_with(
+            thread_id="forked-thread",
+            embedding_model="BAAI/bge-m3",
+            file_hashes=["file-1"],
+        )
+        assert create_task.call_count >= 1
 
     def test_fork_thread_endpoint_missing_source(self, client):
         """Forking a missing source thread should return 404."""
