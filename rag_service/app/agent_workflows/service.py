@@ -13,7 +13,10 @@ from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.parallel_observability import project_parallel_events
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows.workflow_runtime import (
+    default_agent_workflow_key,
+    workflow_is_chat_eligible,
+)
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
@@ -172,9 +175,16 @@ class AgentRunService:
                 workflow_id,
             )
             raise RuntimeError(f"Selected agent workflow is unavailable: {workflow_id}")
-        runtime_features = ((workflow.spec_json.get("runtime") or {}).get("features") or {})
-        if runtime_features.get("supports_long_running_tasks"):
-            raise RuntimeError("This workflow must be started through the Deep research task workspace")
+        if not workflow_is_chat_eligible(workflow.spec_json):
+            logger.warning(
+                "Ignoring a task-only workflow stored in chat settings | thread_id=%s workflow=%s fallback=%s",
+                thread_id,
+                workflow.id,
+                default_workflow_key,
+            )
+            workflow = await self.repository.get_workflow(default_workflow_key, include_custom=False)
+            if workflow is None:
+                raise RuntimeError(f"Default agent workflow is unavailable: {default_workflow_key}")
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,

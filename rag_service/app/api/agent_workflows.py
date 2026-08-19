@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from typing import Any, Dict, Literal, Optional
 
@@ -26,6 +25,7 @@ from app.agent_workflows.workflow_requirements import (
 from app.agent_workflows.workflow_runtime import (
     ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
+    workflow_is_chat_eligible,
     with_default_runtime,
     workflow_supports_replans,
 )
@@ -468,10 +468,7 @@ async def list_agent_workflows():
     for workflow in workflows:
         try:
             spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
-            features = ((spec.get("runtime") or {}).get("features") or {})
-            if features.get("supports_long_running_tasks"):
-                continue
-            if getattr(workflow, "framework", "langgraph") == "hermes" and os.getenv("HERMES_RUNTIME_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+            if not workflow_is_chat_eligible(spec):
                 continue
             if _is_valid_workflow_for_service(workflow):
                 valid_workflows.append(workflow)
@@ -685,7 +682,11 @@ async def get_agent_workflow(workflow_id: str):
     await repo.seed_builtin_workflows()
     include_custom = workflow_id not in builtin_workflow_keys()
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
-    if not workflow or not _is_valid_workflow_for_service(workflow):
+    if (
+        not workflow
+        or not workflow_is_chat_eligible(workflow.spec_json)
+        or not _is_valid_workflow_for_service(workflow)
+    ):
         raise HTTPException(status_code=404, detail="Agent workflow not found")
     spec_payload = _workflow_spec_payload(workflow)
     return {
@@ -790,8 +791,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     if not workflow:
         raise HTTPException(status_code=404, detail="Agent workflow not found")
 
-    features = (((workflow.spec_json or {}).get("runtime") or {}).get("features") or {})
-    if features.get("supports_long_running_tasks"):
+    if not workflow_is_chat_eligible(workflow.spec_json or {}):
         default_workflow = await repo.get_workflow(default_agent_workflow_key(), include_custom=False)
         return {
             "valid": False,

@@ -71,6 +71,16 @@ def workflow_supports_replans(spec: Dict[str, Any]) -> bool:
     return bool(workflow_runtime_features(spec).get("supports_replans"))
 
 
+def workflow_supports_long_running_tasks(spec: Dict[str, Any]) -> bool:
+    return bool(workflow_runtime_features(spec).get("supports_long_running_tasks"))
+
+
+def workflow_is_chat_eligible(spec: Dict[str, Any]) -> bool:
+    """Return whether a workflow may be selected for ordinary thread chat."""
+
+    return not workflow_supports_long_running_tasks(spec)
+
+
 def workflow_allows_replans_override(spec: Dict[str, Any]) -> bool:
     """Return whether generic thread/request replan settings apply to this workflow."""
 

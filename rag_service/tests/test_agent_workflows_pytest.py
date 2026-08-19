@@ -53,7 +53,6 @@ from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
-from app.runtime.contracts import AgentRuntimeResult
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -66,7 +65,6 @@ ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 CORRECTIVE_SELF_RAG_AGENT_ID = "corrective_self_rag_agent"
 DEEP_RESEARCH_AGENT_ID = "deep_research_agent"
-HERMES_RAG_AGENT_ID = "hermes_rag_agent"
 ROUTER_RAG_AGENT_VERSION = 4
 PLAN_EXECUTE_RAG_AGENT_VERSION = 5
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
@@ -4114,92 +4112,6 @@ class TestAgentRunService:
         assert runs == []
 
     @pytest.mark.asyncio
-    async def test_hermes_long_running_definition_is_rejected_from_chat(
-        self, engine, sample_thread, monkeypatch
-    ):
-        session_factory = async_sessionmaker(
-            engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-        )
-        captured = {}
-
-        async def fake_get_thread_settings(_thread_id):
-            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
-
-        class FakeHermesAdapter:
-            async def start(self, request, *, context, event_sink=None):
-                captured["runtime_spec"] = dict(context.resolved_spec)
-                captured["request"] = request
-                return AgentRuntimeResult(status="completed", output="Hermes answer")
-
-        async def fake_project_chat_result(**kwargs):
-            return {
-                **kwargs["result"],
-                "chat_turn_id": "turn-hermes",
-                "document_sources": [],
-                "web_sources": [],
-                "used_chat_ids": [],
-            }
-
-        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-        monkeypatch.setattr(
-            "app.agent_workflows.service.adapter_for_definition",
-            lambda _definition: FakeHermesAdapter(),
-        )
-
-        async with session_factory() as repo_session:
-            repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_workflows()
-            service = AgentRunService(repository=repo)
-            service.projection = SimpleNamespace(project_chat_result=fake_project_chat_result)
-            with pytest.raises(RuntimeError, match="Deep research task workspace"):
-                await service.run_thread_chat(
-                    sample_thread.id,
-                    self._agent_req("Use Hermes"),
-                    sample_thread.embedding_model,
-                )
-            assert await repo.list_runs_for_thread(sample_thread.id) == []
-
-    @pytest.mark.asyncio
-    async def test_invalid_custom_hermes_resolver_output_prevents_run_creation(
-        self, engine, sample_thread, monkeypatch
-    ):
-        session_factory = async_sessionmaker(
-            engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-        )
-
-        async def fake_get_thread_settings(_thread_id):
-            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
-
-        class InvalidResolver:
-            def resolve(self, spec, *, thread_settings, request_overrides):
-                candidate = dict(spec)
-                candidate["config"] = {
-                    **dict(candidate.get("config") or {}),
-                    "arbitrary": "must-not-persist",
-                }
-                return candidate
-
-        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-
-        async with session_factory() as repo_session:
-            repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_workflows()
-            with pytest.raises(RuntimeError, match="Deep research task workspace"):
-                await AgentRunService(repository=repo, resolver=InvalidResolver()).run_thread_chat(
-                    sample_thread.id,
-                    self._agent_req("Invalid Hermes spec"),
-                    sample_thread.embedding_model,
-                )
-            runs = await repo.list_runs_for_thread(sample_thread.id)
-
-        assert runs == []
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("run_delete_fails", [False, True])
     async def test_run_thread_chat_discards_clarification_run_and_checkpoint(
@@ -7510,8 +7422,6 @@ class TestAgentWorkflowApi:
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
-            DEEP_RESEARCH_AGENT_ID,
-            HERMES_RAG_AGENT_ID,
         }
         listed_by_id = {item["id"]: item for item in listed.json()["agent_workflows"]}
         assert listed_by_id[ROUTER_RAG_AGENT_ID]["name"] == "Router Agent"
@@ -7547,6 +7457,36 @@ class TestAgentWorkflowApi:
 
         stale_detail = api_client.get("/api/agent-workflows/simple_rag_agent")
         assert stale_detail.status_code == 404
+        assert api_client.get(f"/api/agent-workflows/{DEEP_RESEARCH_AGENT_ID}").status_code == 404
+        assert api_client.get("/api/agent-workflows/hermes_rag_agent").status_code == 404
+
+    def test_chat_settings_reject_task_only_workflow(self, api_client, sample_thread):
+        response = api_client.put(
+            f"/api/threads/{sample_thread.id}/settings",
+            json={"agent_workflow": {"workflow_id": DEEP_RESEARCH_AGENT_ID}},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Agent workflow is not available for chat"
+
+    def test_chat_settings_report_fallback_for_stored_task_workflow(
+        self, api_client, sample_thread, monkeypatch
+    ):
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_workflow": {"workflow_id": DEEP_RESEARCH_AGENT_ID}}
+
+        monkeypatch.setattr("app.api.threads.get_thread_settings", fake_get_thread_settings)
+        response = api_client.get(f"/api/threads/{sample_thread.id}/settings")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["agent_workflow"] == {"workflow_id": ROUTER_RAG_AGENT_ID}
+        assert payload["agent_workflow_validation"] == {
+            "valid": False,
+            "code": "workflow_not_available_for_chat",
+            "requested_workflow_id": DEEP_RESEARCH_AGENT_ID,
+            "fallback_workflow_id": ROUTER_RAG_AGENT_ID,
+        }
 
     def test_internal_custom_agent_workflow_is_globally_listed(self, api_client):
         async def seed_internal_workflow():
@@ -7908,11 +7848,11 @@ class TestAgentWorkflowApi:
         assert payload["validation"]["valid"] is False
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
-    def test_validate_thread_hermes_config_rejects_unsupported_overrides(
+    def test_validate_thread_task_workflow_returns_chat_fallback(
         self, api_client, sample_thread, monkeypatch
     ):
         async def fake_get_thread_settings(_thread_id):
-            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
+            return {"agent_workflow": {"workflow_id": DEEP_RESEARCH_AGENT_ID}}
 
         monkeypatch.setattr("app.api.agent_workflows.get_thread_settings", fake_get_thread_settings)
         response = api_client.post(
@@ -7923,7 +7863,7 @@ class TestAgentWorkflowApi:
         assert response.status_code == 200
         payload = response.json()
         assert payload["valid"] is False
-        assert payload["workflow_id"] == "hermes_rag_agent"
+        assert payload["workflow_id"] == DEEP_RESEARCH_AGENT_ID
         assert payload["validation"]["errors"] == ["long_running_workflow_requires_agent_task"]
         assert payload["fallback_workflow_id"] == ROUTER_RAG_AGENT_ID
         assert "malicious" not in payload["resolved_spec_json"]["config"]

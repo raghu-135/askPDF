@@ -368,6 +368,7 @@ class ThreadSettingsResponse(BaseModel):
     hitl_web_approval: bool = False
     use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
+    agent_workflow_validation: Optional[Dict[str, Any]] = None
     memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
 
 

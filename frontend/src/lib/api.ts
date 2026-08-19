@@ -242,6 +242,12 @@ export interface ThreadSettings {
   agent_workflow?: {
     workflow_id: string;
   };
+  agent_workflow_validation?: {
+    valid: boolean;
+    code: string;
+    requested_workflow_id: string;
+    fallback_workflow_id: string;
+  } | null;
   memory: {
     memory_enabled: boolean;
     thread_reads_thread_memory: boolean;

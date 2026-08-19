@@ -2620,11 +2620,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);
                 }}
-                onLongRunningWorkflowSelect={() => {
-                    setSettingsDialogOpen(false);
-                    setDeepResearchTaskId(null);
-                    setDeepResearchOpen(true);
-                }}
                 onAgentWorkflowMenuOpen={refreshAgentWorkflows}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>
