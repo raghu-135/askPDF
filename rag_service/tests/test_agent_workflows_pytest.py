@@ -66,6 +66,7 @@ ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 CORRECTIVE_SELF_RAG_AGENT_ID = "corrective_self_rag_agent"
 DEEP_RESEARCH_AGENT_ID = "deep_research_agent"
+HERMES_RAG_AGENT_ID = "hermes_rag_agent"
 ROUTER_RAG_AGENT_VERSION = 4
 PLAN_EXECUTE_RAG_AGENT_VERSION = 5
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
@@ -4167,6 +4168,7 @@ class TestAgentRunService:
             "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
             "max_output_chars", "max_duration_seconds", "max_event_count",
             "allow_subagents", "allow_persistent_memory", "cancellation_mode",
+            "skills",
         }
         assert "use_web_search" not in run.resolved_spec_json["config"]
         assert captured["request"].framework == "hermes"
@@ -7520,6 +7522,7 @@ class TestAgentWorkflowApi:
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
             DEEP_RESEARCH_AGENT_ID,
+            HERMES_RAG_AGENT_ID,
         }
         listed_by_id = {item["id"]: item for item in listed.json()["agent_workflows"]}
         assert listed_by_id[ROUTER_RAG_AGENT_ID]["name"] == "Router Agent"

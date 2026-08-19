@@ -23,6 +23,7 @@ from hermes_runtime.execution_store import (
     HermesExecutionConflictError,
     HermesExecutionStore,
 )
+from hermes_runtime.compatibility import HERMES_REVISION, HERMES_TERMINAL_EVENTS
 
 
 WIRE_VERSION = 1
@@ -91,23 +92,29 @@ def _response_session_id(value: Mapping[str, Any]) -> str | None:
 
 
 def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
-    name = event_name.lower()
-    if name in {"message.delta", "message_delta", "content.delta"}:
+    name = str(payload.get("event") or event_name).lower()
+    if name == "message.delta":
         return "output.delta"
-    if name in {"message.complete", "message_complete", "response.completed"}:
-        return "output.completed"
-    if name in {"tool.start", "tool.started", "tool_call.started"}:
+    if name == "tool.started":
         return "tool.started"
-    if name in {"tool.complete", "tool.completed", "tool_call.completed"}:
+    if name == "tool.completed":
         return "tool.completed"
-    if name in {"run.completed", "completed", "done"}:
+    if name == "reasoning.available":
+        return "reasoning.available"
+    if name == "approval.request":
+        return "approval.request"
+    if name == "approval.responded":
+        return "approval.responded"
+    if name == "run.steered":
+        return "run.steered"
+    if name == "run.completed":
         return "run.completed"
-    if name in {"run.failed", "failed", "error"}:
+    if name == "run.failed":
         return "run.failed"
-    if name in {"run.cancelled", "run.canceled", "cancelled", "canceled"}:
+    if name == "run.cancelled":
         return "run.cancelled"
-    if name.startswith("session"):
-        return "runtime.session_started"
+    if name in {"subagent.start", "subagent.complete"}:
+        return name
     return "runtime.event"
 
 
@@ -115,12 +122,12 @@ def create_app() -> FastAPI:
     hermes_api_url = os.getenv("HERMES_API_URL", "").strip()
     if not hermes_api_url:
         raise RuntimeError(
-            "HERMES_API_URL is required for the Hermes Phase 7 proof runtime"
+            "HERMES_API_URL is required for the Hermes runtime"
         )
     storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "file").strip().lower()
     worker_count = int(os.getenv("HERMES_RUNTIME_WORKERS", os.getenv("WEB_CONCURRENCY", "1")))
     if storage_backend != "file":
-        raise RuntimeError("Hermes PostgreSQL execution storage is not enabled in the Phase 7 proof")
+        raise RuntimeError("Hermes PostgreSQL execution storage is not enabled")
     if worker_count > 1:
         raise RuntimeError("Hermes file execution storage supports one worker only")
     store = HermesExecutionStore()
@@ -153,6 +160,15 @@ def create_app() -> FastAPI:
     def upstream_url() -> str:
         return hermes_api_url.rstrip("/")
 
+    def upstream_headers(session_id: str | None = None) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        token = os.getenv("HERMES_API_TOKEN")
+        if token:
+            headers["authorization"] = f"Bearer {token}"
+        if session_id:
+            headers["X-Hermes-Session-Id"] = str(session_id)
+        return headers
+
     def timeout(max_seconds: float | None = None) -> httpx.Timeout:
         read_timeout = float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
         if max_seconds is not None:
@@ -177,8 +193,8 @@ def create_app() -> FastAPI:
                 response = await client.get(upstream_url() + "/health")
                 hermes_ready = 200 <= response.status_code < 400
                 if hermes_ready and mcp_required:
-                    mcp_url = os.getenv("ASKPDF_MCP_HEALTH_URL") or (os.getenv("ASKPDF_MCP_URL", "").rstrip("/") + "/healthz")
-                    if mcp_url and mcp_url != "/healthz":
+                    mcp_url = os.getenv("ASKPDF_MCP_HEALTH_URL", "").strip()
+                    if mcp_url:
                         mcp_checked = True
                         mcp_response = await client.get(mcp_url)
                         mcp_ready = 200 <= mcp_response.status_code < 400
@@ -223,6 +239,8 @@ def create_app() -> FastAPI:
                 "continuation_cleanup": False,
                 "task_execution": False,
                 "native_checkpoints": False,
+                "approval_response": True,
+                "steering": True,
                 "runtime_version": os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"),
                 "contract_version": WIRE_VERSION,
             }},
@@ -237,17 +255,17 @@ def create_app() -> FastAPI:
             issues.append({"code": "invalid_runtime_identity", "message": "Hermes runtime requires framework=hermes and builder_id=hermes_agent"})
         if spec.get("schema_version") != 2:
             issues.append({"code": "unsupported_schema_version", "message": "Hermes definitions must use schema_version 2"})
+        if spec.get("definition_version") != 1:
+            issues.append({"code": "unsupported_definition_version", "message": "Hermes definitions must use definition_version 1"})
         config = spec.get("config")
         if not isinstance(config, Mapping):
             issues.append({"code": "missing_config", "message": "Hermes spec requires config"})
         else:
             if config.get("mcp_server") != "askpdf":
-                issues.append({"code": "unsupported_mcp_server", "message": "Hermes proof runtime requires mcp_server=askpdf"})
+                issues.append({"code": "unsupported_mcp_server", "message": "Hermes runtime requires mcp_server=askpdf"})
             if not set(config.get("allowed_tool_ids") or []).issubset(configured_mcp_tools()):
                 issues.append({"code": "unsupported_tool_allowlist", "message": "Hermes tool allowlist exceeds the configured MCP catalog"})
-            if config.get("allow_subagents") or config.get("allow_persistent_memory"):
-                issues.append({"code": "unsupported_execution_policy", "message": "Hermes proof runtime does not allow subagents or persistent memory"})
-        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": {"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "mcp_server": "askpdf", "allowed_tool_ids": sorted(configured_mcp_tools())}}})
+        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": {"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "hermes_revision": HERMES_REVISION, "mcp_server": "askpdf", "allowed_tool_ids": sorted(configured_mcp_tools())}}})
 
     def _binding(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
         continuation = payload.get("continuation") or (payload.get("request") or {}).get("continuation")
@@ -282,39 +300,21 @@ def create_app() -> FastAPI:
         max_output_chars = max(1, int(config.get("max_output_chars") or 12000))
         max_duration_seconds = max(1, int(config.get("max_duration_seconds") or 300))
         deadline = time.monotonic() + max_duration_seconds
-        messages = []
         system_prompt = str(config.get("system_prompt") or "").strip()
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": question})
         upstream_payload = {
-            "input": {"messages": messages},
-            "model": options.get("llm_model") or config.get("model") or os.getenv("HERMES_MODEL", ""),
-            "provider": options.get("llm_provider") or config.get("provider") or None,
-            "stream": True,
+            "input": question,
+            "instructions": system_prompt or None,
+            "model": options.get("llm_model") or config.get("model") or "",
+            "provider": options.get("llm_provider") or config.get("provider") or "custom",
             "metadata": {
                 "askpdf_run_id": run_id,
                 "askpdf_thread_id": neutral_request.get("thread_id"),
                 "askpdf_definition_id": neutral_request.get("definition_id"),
-                "mcp_server": config.get("mcp_server"),
-                "allowed_tool_ids": list(config.get("allowed_tool_ids") or []),
-                "max_duration_seconds": config.get("max_duration_seconds"),
-                "max_event_count": max_events,
-                "max_output_chars": max_output_chars,
-                "allow_subagents": bool(config.get("allow_subagents", False)),
-                "allow_persistent_memory": bool(config.get("allow_persistent_memory", False)),
-            },
-            "mcp_servers": {
-                "askpdf": {
-                    "url": os.getenv("ASKPDF_MCP_URL", ""),
-                    "tools": {"include": list(config.get("allowed_tool_ids") or [])},
-                }
+                "askpdf_profile_id": (dict(context.get("resolved_spec") or {}).get("managed_profile") or {}).get("profile_id"),
             },
         }
-        headers = {}
-        token = os.getenv("HERMES_API_TOKEN")
-        if token:
-            headers["authorization"] = f"Bearer {token}"
+        upstream_payload = {key: value for key, value in upstream_payload.items() if value not in (None, "")}
+        headers = upstream_headers()
         session_id = (neutral_request.get("continuation") or {}).get("payload", {}).get("session_id")
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
@@ -337,11 +337,14 @@ def create_app() -> FastAPI:
                     detail=_error("hermes_upstream_protocol_error", "Hermes emitted an invalid event envelope"),
                 )
             event_payload = raw
+            upstream_event_name = str(event_payload.get("event") or frame_event_name)
             source_event_id = event_payload.get("event_id") or event_payload.get("id") or event_payload.get("sequence")
             if source_event_id is not None:
-                source_event_id = f"{frame_event_name}:{source_event_id}"
-            kind = _hermes_event_kind(frame_event_name, event_payload)
-            terminal = kind in {"run.completed", "run.failed", "run.cancelled"}
+                source_event_id = f"{upstream_event_name}:{source_event_id}"
+            kind = _hermes_event_kind(upstream_event_name, event_payload)
+            if kind == "runtime.event":
+                event_payload = {"upstream_event": upstream_event_name, "data": dict(event_payload)}
+            terminal = kind in HERMES_TERMINAL_EVENTS
             if kind == "output.delta":
                 output_chars += len(str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or ""))
                 if output_chars > max_output_chars:
@@ -405,13 +408,19 @@ def create_app() -> FastAPI:
                     upstream_run_id = str(start.get("run_id") or start.get("id") or "")
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
+                if not session_id:
+                    status_response = await client.get(upstream_url() + f"/v1/runs/{upstream_run_id}", headers=headers)
+                    status_response.raise_for_status()
+                    status_payload = status_response.json()
+                    if isinstance(status_payload, Mapping):
+                        session_id = _response_session_id(status_payload)
                 if session_id:
                     headers["X-Hermes-Session-Id"] = str(session_id)
                 headers["X-Hermes-Run-Id"] = upstream_run_id
                 continuation = {
                     "binding_type": "hermes_session",
                     "binding_version": 1,
-                    "runtime_version": os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"),
+                    "runtime_version": HERMES_REVISION,
                     "payload": {"session_id": session_id, "upstream_run_id": upstream_run_id},
                 }
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
@@ -600,11 +609,9 @@ def create_app() -> FastAPI:
         try:
             payload = payload or {}
             upstream_run_id = _upstream_run_id(run_id, payload)
-            headers = {}
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
-            if session_id:
-                headers["X-Hermes-Session-Id"] = str(session_id)
+            headers = upstream_headers(session_id)
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.post(upstream_url() + f"/v1/runs/{upstream_run_id}/stop", headers=headers)
                 response.raise_for_status()
@@ -617,17 +624,45 @@ def create_app() -> FastAPI:
         try:
             payload = payload or {}
             upstream_run_id = _upstream_run_id(run_id, payload)
-            headers = {}
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
-            if session_id:
-                headers["X-Hermes-Session-Id"] = str(session_id)
+            headers = upstream_headers(session_id)
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(upstream_url() + f"/v1/runs/{upstream_run_id}", headers=headers)
                 response.raise_for_status()
             return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**dict(response.json()), "run_id": run_id, "upstream_run_id": upstream_run_id})
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_inspect_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
+
+    async def _forward_control(run_id: str, request: Request, payload: Mapping[str, Any], operation: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            upstream_run_id = _upstream_run_id(run_id, payload)
+            binding = _binding(payload)
+            session_id = ((binding or {}).get("payload") or {}).get("session_id")
+            headers = upstream_headers(session_id)
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.post(upstream_url() + f"/v1/runs/{upstream_run_id}/{operation}", headers=headers, json=dict(body))
+                response.raise_for_status()
+            result = response.json()
+            return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**dict(result), "run_id": run_id, "upstream_run_id": upstream_run_id})
+        except httpx.HTTPError as exc:
+            return _envelope(status="failed", error=_error(f"hermes_{operation}_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
+
+    @app.post("/v1/runs/{run_id}/approval")
+    async def approval(run_id: str, request: Request, payload: Mapping[str, Any]) -> dict[str, Any]:
+        response = payload.get("response") or {}
+        choice = str(response.get("choice") or "").strip().lower()
+        if choice not in {"once", "session", "always", "deny"}:
+            raise HTTPException(status_code=400, detail=_error("invalid_approval_choice", "Approval choice must be once, session, always, or deny"))
+        return await _forward_control(run_id, request, payload, "approval", {"choice": choice, "resolve_all": bool(response.get("resolve_all"))})
+
+    @app.post("/v1/runs/{run_id}/steer")
+    async def steer(run_id: str, request: Request, payload: Mapping[str, Any]) -> dict[str, Any]:
+        steering = payload.get("steering") or {}
+        text = str(steering.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail=_error("invalid_steer_input", "Steering text is required"))
+        return await _forward_control(run_id, request, payload, "steer", {"input": text})
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, request: Request) -> dict[str, Any]:

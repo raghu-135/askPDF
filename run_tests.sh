@@ -190,19 +190,19 @@ if [ "${RUN_PHASE7:-0}" = "1" ]; then
     export PHASE7_HERMES_INTEGRATION=true
     echo "Starting deterministic Phase 7 Hermes runtime proof..."
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" build rag-service
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes-fake hermes-runtime
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_execution_store_pytest.py
-    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm \
-        -e PHASE7_HERMES_INTEGRATION=true \
-        -e ASKPDF_FAIL_IF_ALL_SKIPPED=true \
-        test-runner --file test_hermes_runtime_integration_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm \
         -e PHASE7_HERMES_SMOKE=true \
         -e HERMES_MODEL=phase7-deterministic-hermes \
         -e PHASE7_PRODUCT_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/askpdf \
         test-runner --file test_external_hermes_runtime_smoke_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm \
+        -e PHASE7_REAL_HERMES_SMOKE=true \
+        -e HERMES_RUNTIME_URL=http://hermes-runtime:8200 \
+        test-runner --file test_real_hermes_container_smoke_pytest.py
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" run --rm \
         -e PHASE7_HERMES_INTEGRATION=true \
         -e ASKPDF_FAIL_IF_ALL_SKIPPED=true \

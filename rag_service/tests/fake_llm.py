@@ -1,6 +1,10 @@
 """Deterministic OpenAI-compatible provider for external runtime CI."""
 
+import asyncio
+import json
+
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 
 app = FastAPI()
 
@@ -48,10 +52,41 @@ async def completions(payload: dict):
         content = '{"pass":true,"reason":"Deterministic answer accepted.","issues":[]}'
     elif "clarif" in question.lower():
         content = "Deterministic clarification response."
-    return {
+    response = {
         "id": "phase5-deterministic-response",
         "object": "chat.completion",
         "model": payload.get("model") or "phase5-deterministic",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+    if not payload.get("stream"):
+        return response
+
+    async def chunks():
+        words = content.split(" ")
+        slow = "continue until stopped" in question.lower()
+        for index, word in enumerate(words):
+            chunk = {
+                "id": response["id"],
+                "object": "chat.completion.chunk",
+                "model": response["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": (("" if index == 0 else " ") + word)},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            if slow:
+                await asyncio.sleep(1)
+        final = {
+            "id": response["id"],
+            "object": "chat.completion.chunk",
+            "model": response["model"],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(final)}\n\ndata: [DONE]\n\n"
+
+    return StreamingResponse(chunks(), media_type="text/event-stream")

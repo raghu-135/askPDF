@@ -23,6 +23,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeApprovalResponse,
+    RuntimeSteeringInput,
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
@@ -360,6 +362,14 @@ class HttpRuntimeAdapter:
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self._json("POST", "/v1/runs/%s/cancel" % request.run_id, request=request, json={"request": request.to_dict()})
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Mapping[str, Any]:
+        value = await self._json("POST", "/v1/runs/%s/approval" % request.run_id, request=request, json={"request": request.to_dict(), "response": response.to_dict()})
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def steer(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Mapping[str, Any]:
+        value = await self._json("POST", "/v1/runs/%s/steer" % request.run_id, request=request, json={"request": request.to_dict(), "steering": steering.to_dict()})
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
     async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:

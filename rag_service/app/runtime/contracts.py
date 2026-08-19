@@ -108,8 +108,27 @@ class RuntimeCapabilities:
     continuation_cleanup: bool = False
     task_execution: bool = False
     native_checkpoints: bool = False
+    approval_response: bool = False
+    steering: bool = False
     runtime_version: Optional[str] = None
     contract_version: int = CONTRACT_VERSION
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeApprovalResponse:
+    choice: str
+    resolve_all: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeSteeringInput:
+    text: str
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

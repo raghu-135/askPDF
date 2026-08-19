@@ -13,17 +13,22 @@ def _compose(name: str) -> dict:
     return yaml.safe_load((REPOSITORY_ROOT / name).read_text())
 
 
-def test_main_compose_keeps_hermes_in_proof_profile_and_checks_readiness():
-    service = _compose("docker-compose.yml")["services"]["hermes-runtime"]
-    assert service["profiles"] == ["second-runtime-proof"]
-    assert service["healthcheck"]["test"][-1].endswith("/readyz")
-    environment = set(service["environment"])
-    assert "HERMES_API_URL=${HERMES_API_URL:-}" in environment
-    assert not any("http://hermes-agent" in value for value in environment)
+def test_main_compose_runs_the_pinned_real_hermes_by_default():
+    services = _compose("docker-compose.yml")["services"]
+    hermes = services["hermes"]
+    adapter = services["hermes-runtime"]
+    assert "profiles" not in hermes
+    assert "profiles" not in adapter
+    assert hermes["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
+    assert hermes["healthcheck"]["test"][-1].endswith("/health")
+    assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
+    assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
+    assert adapter["depends_on"]["hermes"]["condition"] == "service_healthy"
 
 
-def test_runtime_integration_compose_uses_explicit_fake_hermes_upstream():
+def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     compose = _compose("docker-compose.runtime-integration.yml")
+    assert "hermes-fake" not in compose["services"]
+    assert compose["services"]["hermes"]["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
     service = compose["services"]["hermes-runtime"]
-    assert service["environment"]["HERMES_API_URL"] == "http://hermes-fake:8000"
-    assert "second-runtime-proof" not in service.get("profiles", [])
+    assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"

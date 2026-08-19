@@ -11,7 +11,7 @@ from hermes_runtime.execution_store import (
     HermesStoreLoadError,
     request_fingerprint,
 )
-from test_hermes_runtime_integration_pytest import _payload
+from hermes_test_helpers import runtime_payload
 
 
 def _gateway_frame(
@@ -69,7 +69,7 @@ def test_existing_unreadable_hermes_store_fails_closed(tmp_path: Path, monkeypat
 
 def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
-    payload = _payload("legacy-run")
+    payload = runtime_payload("legacy-run")
     path.write_text(
         json.dumps(
             {
@@ -92,7 +92,7 @@ def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> N
 
 def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
-    original = _payload("fingerprinted-run")
+    original = runtime_payload("fingerprinted-run")
     store = HermesExecutionStore(str(path))
     created = store.create("fingerprinted-run", original)
 

@@ -13,6 +13,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeApprovalResponse,
+    RuntimeSteeringInput,
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
@@ -137,6 +139,8 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
         continuation_cleanup=bool(value.get("continuation_cleanup")),
         task_execution=bool(value.get("task_execution")),
         native_checkpoints=bool(value.get("native_checkpoints")),
+        approval_response=bool(value.get("approval_response")),
+        steering=bool(value.get("steering")),
         runtime_version=value.get("runtime_version"),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )

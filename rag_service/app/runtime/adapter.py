@@ -11,6 +11,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeApprovalResponse,
+    RuntimeSteeringInput,
     RuntimeValidationResult,
 )
 
@@ -74,6 +76,10 @@ class AgentRuntimeAdapter(Protocol):
     ) -> Optional[AgentRuntimeResult]: ...
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any: ...
+
+    async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Any: ...
+
+    async def steer(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Any: ...
 
     async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]: ...
 

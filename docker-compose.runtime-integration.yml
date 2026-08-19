@@ -177,22 +177,39 @@ services:
       timeout: 3s
       retries: 12
 
-  hermes-fake:
+  hermes:
     build:
-      context: .
-      dockerfile: hermes_fake/Dockerfile
+      context: https://github.com/NousResearch/hermes-agent.git#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      OPENAI_API_KEY: askpdf-hermes-integration-local
+    command: ["gateway"]
+    depends_on:
+      fake-llm:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    volumes:
+      - ./rag_service/tests/fixtures/hermes/config.yaml:/opt/data/config.yaml:ro
+    configs:
+      - source: hermes_integration_env
+        target: /opt/data/.env
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
+      test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   hermes-runtime:
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile
     environment:
-      HERMES_API_URL: http://hermes-fake:8000
+      HERMES_API_URL: http://hermes:8642
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_REQUIRED: "false"
       HERMES_MCP_ALLOWED_TOOLS: document_evidence,thread_conversation_history,clarify_intent
@@ -202,7 +219,7 @@ services:
       PYTHONPATH: /workspace:/app
       HERMES_RUNTIME_READ_TIMEOUT_SECONDS: "30"
     depends_on:
-      hermes-fake:
+      hermes:
         condition: service_healthy
       rag-service:
         condition: service_healthy
@@ -232,7 +249,8 @@ services:
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       HERMES_RUNTIME_ENABLED: "true"
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
-      HERMES_FAKE_URL: http://hermes-fake:8000
+      HERMES_API_URL: http://hermes:8642
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"
@@ -263,3 +281,9 @@ volumes:
   runtime_integration_product_data:
   runtime_integration_test_data:
   runtime_integration_hermes_state:
+
+configs:
+  hermes_integration_env:
+    content: |
+      API_SERVER_KEY=7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      OPENAI_API_KEY=askpdf-hermes-integration-local

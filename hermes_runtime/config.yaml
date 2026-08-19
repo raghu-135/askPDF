@@ -1,0 +1,16 @@
+# Hermes configuration pinned to config schema 37 at
+# NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894.
+# Model/provider credentials are supplied through the project .env file.
+_config_version: 37
+
+model:
+  # Product requests always override this with the model selected in askPDF's
+  # thread settings. This value exists only to satisfy Hermes startup config.
+  default: askpdf-runtime-selected
+  provider: custom
+  base_url: ${LLM_API_URL}
+
+mcp_servers:
+  askpdf:
+    url: http://rag-service:8000/internal/mcp/
+    enabled: true

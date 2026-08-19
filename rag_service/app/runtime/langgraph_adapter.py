@@ -15,6 +15,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
+from app.runtime.errors import RuntimeError
 
 # Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
 # while the provider owns builder selection in Phase 6.
@@ -181,6 +182,12 @@ class LangGraphRuntimeAdapter:
         from app.agent_workflows import chat_cancellation
 
         return await chat_cancellation.request_chat_run_cancel(request.run_id, thread_id=request.thread_id)
+
+    async def respond_to_approval(self, request: AgentRuntimeRequest, response: Any) -> Any:
+        raise RuntimeError("runtime_capability_unsupported", "LangGraph approvals are resolved through resume interrupts")
+
+    async def steer(self, request: AgentRuntimeRequest, steering: Any) -> Any:
+        raise RuntimeError("runtime_capability_unsupported", "LangGraph runtime steering is not supported")
 
     async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         continuation = request.continuation

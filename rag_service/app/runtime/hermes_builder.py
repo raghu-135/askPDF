@@ -1,4 +1,4 @@
-"""Framework-specific builder provider for the Hermes proof definition."""
+"""Framework-specific builder provider for versioned Hermes definitions."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
+from app.runtime.hermes_profile import HERMES_DEFINITION_VERSION, resolve_hermes_profile
 
 
 class HermesBuilderProvider:
@@ -26,11 +27,14 @@ class HermesBuilderProvider:
         "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",
         "allow_subagents", "allow_persistent_memory", "cancellation_mode",
+        "skills",
     }
-    _supported_request_override_keys: frozenset[str] = frozenset()
+    _supported_request_override_keys: frozenset[str] = frozenset({"llm_model"})
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
+        if spec.get("definition_version") != HERMES_DEFINITION_VERSION:
+            issues.append(RuntimeValidationIssue("unsupported_definition_version", f"Hermes definitions must use definition_version {HERMES_DEFINITION_VERSION}", "definition_version"))
         if spec.get("schema_version") != 2:
             issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 2", "schema_version"))
         runtime = spec.get("runtime")
@@ -51,10 +55,12 @@ class HermesBuilderProvider:
             for key, minimum in (("max_output_chars", 1), ("max_duration_seconds", 1), ("max_event_count", 1)):
                 if key in config and (not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < minimum):
                     issues.append(RuntimeValidationIssue("invalid_limit", f"{key} must be a positive integer", f"config.{key}"))
-            if config.get("allow_subagents") is True or config.get("allow_persistent_memory") is True:
-                issues.append(RuntimeValidationIssue("unsupported_execution_policy", "Hermes proof definitions cannot enable subagents or persistent memory", "config"))
             if any(key in config for key in ("graph", "nodes", "edges", "route_fn")) or any(key in spec for key in ("graph", "nodes", "edges", "route_fn")):
                 issues.append(RuntimeValidationIssue("graph_fields_not_supported", "Hermes definitions cannot contain graph fields", "config"))
+            try:
+                resolve_hermes_profile(spec)
+            except ValueError as exc:
+                issues.append(RuntimeValidationIssue("invalid_hermes_profile", str(exc), "config"))
         return issues
 
     async def capabilities(self, definition: AgentDefinition) -> BuilderCapabilities:
@@ -121,12 +127,22 @@ class HermesBuilderProvider:
     async def resolve(self, definition: AgentDefinition, spec: Mapping[str, Any], *, thread_settings: Mapping[str, Any] | None = None, request_overrides: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         resolved = dict(await self.normalize(definition, spec))
         config = dict(resolved.get("config") or {})
-        config.update(self.filter_request_overrides(
+        filtered_overrides = dict(self.filter_request_overrides(
             definition,
             request_overrides,
             reject_unsupported=False,
         ))
+        selected_model = str(
+            filtered_overrides.pop("llm_model", None)
+            or (thread_settings or {}).get("llm_model")
+            or ""
+        ).strip()
+        if selected_model:
+            config["model"] = selected_model
+            config["provider"] = "custom"
+        config.update(filtered_overrides)
         resolved["config"] = config
+        resolved["managed_profile"] = resolve_hermes_profile(resolved)
         return await self.normalize(definition, resolved)
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog:

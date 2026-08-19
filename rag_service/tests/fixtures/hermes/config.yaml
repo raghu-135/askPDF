@@ -1,0 +1,11 @@
+_config_version: 37
+
+model:
+  default: phase5-deterministic
+  provider: custom
+  base_url: http://fake-llm:9000/v1
+
+mcp_servers:
+  askpdf:
+    url: http://rag-service:8000/internal/mcp/
+    enabled: true

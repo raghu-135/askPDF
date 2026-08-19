@@ -83,6 +83,35 @@ async def test_hermes_resolution_drops_langgraph_request_overrides():
     assert "arbitrary" not in resolved["config"]
 
 
+@pytest.mark.asyncio
+async def test_hermes_resolution_inherits_thread_model_through_custom_provider():
+    resolved = await HermesBuilderProvider().resolve(
+        _definition(),
+        _spec(),
+        thread_settings={"llm_model": "askpdf-selected-model"},
+    )
+
+    assert resolved["config"]["model"] == "askpdf-selected-model"
+    assert resolved["config"]["provider"] == "custom"
+    assert resolved["managed_profile"]["model_policy"] == {
+        "model": "askpdf-selected-model",
+        "provider": "custom",
+    }
+
+
+@pytest.mark.asyncio
+async def test_hermes_resolution_prefers_request_selected_model():
+    resolved = await HermesBuilderProvider().resolve(
+        _definition(),
+        _spec(),
+        thread_settings={"llm_model": "older-thread-model"},
+        request_overrides={"llm_model": "askpdf-request-model"},
+    )
+
+    assert resolved["config"]["model"] == "askpdf-request-model"
+    assert resolved["config"]["provider"] == "custom"
+
+
 def test_hermes_explicit_unsupported_override_is_rejected():
     provider = HermesBuilderProvider()
     with pytest.raises(UnsupportedRequestOverrideError) as exc_info:

@@ -182,6 +182,7 @@ class AgentRunService:
         )
 
         request_overrides = {
+            "llm_model": getattr(req, "llm_model", None),
             "use_web_search": getattr(req, "use_web_search", None),
             "use_reranker": getattr(req, "use_reranker", None),
             "replans": getattr(req, "replans", None),
