@@ -57,12 +57,19 @@ from app.services.memory_repair_scheduler import shutdown_memory_repairs
 from app.services.embedding_materialization_service import embedding_job_worker
 from app.services.agent_task_runtime import run_task_worker
 from app.mcp.server import get_http_app
+from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOOL_IDS
 from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
 MCP_HTTP_APP = get_http_app()
+HERMES_OFFLINE_MCP_APP = get_http_app(
+    allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
+)
+HERMES_EXTERNAL_MCP_APP = get_http_app(
+    allowed_tools=frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS), require_execution_token=True,
+)
 
 
 def _record_agent_task_worker_completion(app: FastAPI, task: asyncio.Task) -> None:
@@ -112,7 +119,7 @@ async def lifespan(app: FastAPI):
     embedding_job_task = None
     agent_task_worker_stop = None
     agent_task_worker = None
-    mcp_lifespan = None
+    mcp_lifespans = []
     try:
         get_runtime_registry().initialize()
         # Keep cleanup active from the first allocation onward.  In
@@ -150,18 +157,31 @@ async def lifespan(app: FastAPI):
         # The SDK streamable-HTTP session manager is single-use. Rebuild the
         # mounted app for every FastAPI lifespan so TestClient restarts,
         # reloads, and application shutdown/startup cycles get a fresh manager.
-        global MCP_HTTP_APP
+        global MCP_HTTP_APP, HERMES_OFFLINE_MCP_APP, HERMES_EXTERNAL_MCP_APP
         MCP_HTTP_APP = get_http_app()
+        HERMES_OFFLINE_MCP_APP = get_http_app(
+            allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
+        )
+        HERMES_EXTERNAL_MCP_APP = get_http_app(
+            allowed_tools=frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS), require_execution_token=True,
+        )
+        apps_by_route = {
+            "internal-mcp": MCP_HTTP_APP,
+            "internal-hermes-mcp-offline": HERMES_OFFLINE_MCP_APP,
+            "internal-hermes-mcp-external": HERMES_EXTERNAL_MCP_APP,
+        }
         for route in app.router.routes:
-            if getattr(route, "name", None) == "internal-mcp":
-                route.app = MCP_HTTP_APP
-                break
-        mcp_lifespan = MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP)
-        await mcp_lifespan.__aenter__()
+            mounted = apps_by_route.get(getattr(route, "name", None))
+            if mounted is not None:
+                route.app = mounted
+        for mounted in apps_by_route.values():
+            manager = mounted.router.lifespan_context(mounted)
+            await manager.__aenter__()
+            mcp_lifespans.append(manager)
         yield
     finally:
         logger.info("--- RAG Service Shutting Down ---")
-        if mcp_lifespan is not None:
+        for mcp_lifespan in reversed(mcp_lifespans):
             try:
                 await mcp_lifespan.__aexit__(None, None, None)
             except Exception:
@@ -257,6 +277,8 @@ async def health_check():
 
 
 app.mount("/internal/mcp/", MCP_HTTP_APP, name="internal-mcp")
+app.mount("/internal/hermes-mcp/offline/", HERMES_OFFLINE_MCP_APP, name="internal-hermes-mcp-offline")
+app.mount("/internal/hermes-mcp/external/", HERMES_EXTERNAL_MCP_APP, name="internal-hermes-mcp-external")
 
 
 # Mount static files last to avoid shadowing API routes.

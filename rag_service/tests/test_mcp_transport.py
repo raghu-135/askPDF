@@ -17,6 +17,26 @@ async def test_mcp_initialize_and_tools_list():
 
 
 @pytest.mark.asyncio
+async def test_hermes_mcp_catalog_is_filtered_and_requires_context_token():
+    from app.mcp.server import get_http_app
+    from app.mcp.transport import LoopbackHTTPMCPClient
+
+    mcp_app = get_http_app(
+        allowed_tools=frozenset({"get_thread_shape", "search_documents"}),
+        require_execution_token=True,
+    )
+    async with mcp_app.router.lifespan_context(mcp_app):
+        async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
+            client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
+            listed = await client.request("tools/list")
+            assert {tool["name"] for tool in listed["tools"]} == {"get_thread_shape", "search_documents"}
+            assert all("_askpdf_context_token" in tool["inputSchema"]["required"] for tool in listed["tools"])
+            rejected = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
+            assert rejected["isError"] is True
+            assert "_askpdf_context_token' is a required property" in rejected["content"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_rejects_unknown_tool():
     client = InProcessMCPClient()
     with pytest.raises(RuntimeError, match="Unknown tool"):

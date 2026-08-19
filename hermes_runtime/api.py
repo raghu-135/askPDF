@@ -160,6 +160,10 @@ def create_app() -> FastAPI:
     def upstream_url() -> str:
         return hermes_api_url.rstrip("/")
 
+    def profile_upstream_url(profile: str | None = None) -> str:
+        base = upstream_url()
+        return f"{base}/p/{profile}" if profile else base
+
     def upstream_headers(session_id: str | None = None) -> dict[str, str]:
         headers: dict[str, str] = {}
         token = os.getenv("HERMES_API_TOKEN")
@@ -174,9 +178,6 @@ def create_app() -> FastAPI:
         if max_seconds is not None:
             read_timeout = min(read_timeout, max_seconds)
         return httpx.Timeout(read_timeout, connect=5, write=10)
-
-    def configured_mcp_tools() -> set[str]:
-        return {item.strip() for item in os.getenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence,thread_conversation_history,clarify_intent").split(",") if item.strip()}
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -263,9 +264,8 @@ def create_app() -> FastAPI:
         else:
             if config.get("mcp_server") != "askpdf":
                 issues.append({"code": "unsupported_mcp_server", "message": "Hermes runtime requires mcp_server=askpdf"})
-            if not set(config.get("allowed_tool_ids") or []).issubset(configured_mcp_tools()):
-                issues.append({"code": "unsupported_tool_allowlist", "message": "Hermes tool allowlist exceeds the configured MCP catalog"})
-        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": {"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "hermes_revision": HERMES_REVISION, "mcp_server": "askpdf", "allowed_tool_ids": sorted(configured_mcp_tools())}}})
+        allowed_tool_ids = list(config.get("allowed_tool_ids") or []) if isinstance(config, Mapping) else []
+        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": {"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "hermes_revision": HERMES_REVISION, "mcp_server": "askpdf", "allowed_tool_ids": sorted(allowed_tool_ids)}}})
 
     def _binding(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
         continuation = payload.get("continuation") or (payload.get("request") or {}).get("continuation")
@@ -296,6 +296,8 @@ def create_app() -> FastAPI:
         context = dict(payload.get("context") or {})
         question = str(input_data.get("question") or context.get("request_payload", {}).get("question") or "")
         config = dict(context.get("resolved_spec") or {}).get("config") or {}
+        managed_profile = dict(context.get("resolved_spec") or {}).get("managed_profile") or {}
+        runtime_profile = str((managed_profile.get("mcp") or {}).get("runtime_profile") or "").strip()
         max_events = max(1, int(config.get("max_event_count") or 200))
         max_output_chars = max(1, int(config.get("max_output_chars") or 12000))
         max_duration_seconds = max(1, int(config.get("max_duration_seconds") or 300))
@@ -408,7 +410,7 @@ def create_app() -> FastAPI:
                 existing_binding = (neutral_request.get("continuation") or {}).get("payload") or {}
                 upstream_run_id = str(existing_binding.get("upstream_run_id") or "")
                 if not upstream_run_id:
-                    response = await client.post(upstream_url() + "/v1/runs", headers=headers, json=upstream_payload)
+                    response = await client.post(profile_upstream_url(runtime_profile) + "/v1/runs", headers=headers, json=upstream_payload)
                     response.raise_for_status()
                     start = response.json()
                     response_session_id = _response_session_id(start)
@@ -418,7 +420,7 @@ def create_app() -> FastAPI:
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
                 if not session_id:
-                    status_response = await client.get(upstream_url() + f"/v1/runs/{upstream_run_id}", headers=headers)
+                    status_response = await client.get(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}", headers=headers)
                     status_response.raise_for_status()
                     status_payload = status_response.json()
                     if isinstance(status_payload, Mapping):
@@ -430,7 +432,11 @@ def create_app() -> FastAPI:
                     "binding_type": "hermes_session",
                     "binding_version": 1,
                     "runtime_version": HERMES_REVISION,
-                    "payload": {"session_id": session_id, "upstream_run_id": upstream_run_id},
+                    "payload": {
+                        "session_id": session_id,
+                        "upstream_run_id": upstream_run_id,
+                        "runtime_profile": runtime_profile,
+                    },
                 }
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
                 sequence += 1
@@ -442,7 +448,7 @@ def create_app() -> FastAPI:
                     "session_id": session_id,
                 }, continuation=continuation))
                 sequence += 1
-                async with client.stream("GET", upstream_url() + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
+                async with client.stream("GET", profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
                     events_response.raise_for_status()
                     event_name = "message"
                     data: list[str] = []
@@ -620,9 +626,10 @@ def create_app() -> FastAPI:
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
+            runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
             async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.post(upstream_url() + f"/v1/runs/{upstream_run_id}/stop", headers=headers)
+                response = await client.post(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}/stop", headers=headers)
                 response.raise_for_status()
             return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "upstream_run_id": upstream_run_id, "status": "cancellation_requested"})
         except httpx.HTTPError as exc:
@@ -635,9 +642,10 @@ def create_app() -> FastAPI:
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
+            runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
             async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(upstream_url() + f"/v1/runs/{upstream_run_id}", headers=headers)
+                response = await client.get(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}", headers=headers)
                 response.raise_for_status()
             return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**dict(response.json()), "run_id": run_id, "upstream_run_id": upstream_run_id})
         except httpx.HTTPError as exc:
@@ -648,9 +656,10 @@ def create_app() -> FastAPI:
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
+            runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
             async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.post(upstream_url() + f"/v1/runs/{upstream_run_id}/{operation}", headers=headers, json=dict(body))
+                response = await client.post(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}/{operation}", headers=headers, json=dict(body))
                 response.raise_for_status()
             result = response.json()
             return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**dict(result), "run_id": run_id, "upstream_run_id": upstream_run_id})

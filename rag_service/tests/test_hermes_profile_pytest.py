@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
-from app.runtime.hermes_profile import resolve_hermes_profile
+from app.runtime.hermes_profile import (
+    HERMES_EXTERNAL_PROFILE,
+    HERMES_OFFLINE_PROFILE,
+    resolve_hermes_profile,
+)
 
 
 def _spec() -> dict:
@@ -13,7 +19,7 @@ def _spec() -> dict:
         "config": {
             "system_prompt": "Use evidence.",
             "mcp_server": "askpdf",
-            "allowed_tool_ids": ["thread_conversation_history", "document_evidence", "document_evidence"],
+            "allowed_tool_ids": ["search_thread_conversation_history", "search_documents", "search_documents"],
             "model": "model-a",
             "provider": "provider-a",
             "skills": ["summarize", "research", "summarize"],
@@ -27,7 +33,8 @@ def test_profile_resolution_is_deterministic_and_canonical() -> None:
     first = resolve_hermes_profile(_spec())
     second = resolve_hermes_profile(copy.deepcopy(_spec()))
     assert first == second
-    assert first["mcp"]["allowed_tool_ids"] == ["document_evidence", "thread_conversation_history"]
+    assert first["mcp"]["allowed_tool_ids"] == ["search_documents", "search_thread_conversation_history"]
+    assert first["mcp"]["runtime_profile"] == HERMES_OFFLINE_PROFILE
     assert first["skills"]["enabled"] == ["research", "summarize"]
     assert first["delegation"] == {"enabled": True}
     assert len(first["profile_id"]) == 64
@@ -46,3 +53,33 @@ def test_profile_version_is_required() -> None:
     spec.pop("definition_version")
     with pytest.raises(ValueError, match="definition_version"):
         resolve_hermes_profile(spec)
+
+
+def test_external_profile_adds_canonical_langgraph_parity_tools() -> None:
+    spec = _spec()
+    spec["config"].update({
+        "use_web_search": True,
+        "allowed_tool_ids": ["search_documents", "search_web", "pubmed", "semantic_scholar"],
+    })
+    profile = resolve_hermes_profile(spec)
+    assert profile["mcp"]["runtime_profile"] == HERMES_EXTERNAL_PROFILE
+    assert profile["mcp"]["allowed_tool_ids"] == ["pubmed", "search_documents", "search_web", "semantic_scholar"]
+
+
+def test_offline_profile_removes_external_tools() -> None:
+    spec = _spec()
+    spec["config"]["allowed_tool_ids"] = ["search_documents", "search_web", "wikipedia"]
+    profile = resolve_hermes_profile(spec)
+    assert profile["mcp"]["allowed_tool_ids"] == ["search_documents"]
+
+
+def test_builtin_requires_retrieval_before_no_context_claim() -> None:
+    definition = json.loads(
+        (Path(__file__).parents[1] / "app/agent_workflows/builtins/hermes_rag_agent.json").read_text()
+    )
+    prompt = definition["spec_json"]["config"]["system_prompt"]
+    assert all(phrase in prompt for phrase in ("this paper", "the paper", "according to the context"))
+    assert "Never claim that a document or context is unavailable" in prompt
+    assert {"get_thread_shape", "search_documents", "search_document_by_id"}.issubset(
+        definition["spec_json"]["config"]["allowed_tool_ids"]
+    )

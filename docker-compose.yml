@@ -128,6 +128,7 @@ services:
       - API_SERVER_PORT=8642
       - API_SERVER_KEY=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-askpdf-local-provider}
+      - GATEWAY_MULTIPLEX_PROFILES=true
     env_file:
       - path: .env.example
         required: true
@@ -139,7 +140,11 @@ services:
         condition: service_healthy
     volumes:
       - ./hermes_runtime/config.yaml:/opt/data/config.yaml:ro
+      - ./hermes_runtime/profiles/askpdf-deep-offline/config.yaml:/opt/data/profiles/askpdf-deep-offline/config.yaml:ro
+      - ./hermes_runtime/profiles/askpdf-deep-external/config.yaml:/opt/data/profiles/askpdf-deep-external/config.yaml:ro
       - ./.env:/opt/data/.env:ro
+      - ./.env:/opt/data/profiles/askpdf-deep-offline/.env:ro
+      - ./.env:/opt/data/profiles/askpdf-deep-external/.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 10s
@@ -156,7 +161,6 @@ services:
       - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
       - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-http://rag-service:8000/health}
       - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
-      - HERMES_MCP_ALLOWED_TOOLS=${HERMES_MCP_ALLOWED_TOOLS:-search_documents,search_thread_conversation_history,search_thread_events,search_durable_memory}
       - HERMES_API_TOKEN=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}

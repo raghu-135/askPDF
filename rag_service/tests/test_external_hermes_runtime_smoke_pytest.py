@@ -129,7 +129,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             if task["status"] in {"completed", "failed", "cancelled"}:
                 break
             await asyncio.sleep(0.5)
-        assert task["status"] == "completed", task
+        assert task["status"] == "completed", json.dumps(task, indent=2, default=str)
         run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})
         run_response.raise_for_status()

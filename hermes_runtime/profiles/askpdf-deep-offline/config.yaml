@@ -1,0 +1,14 @@
+# Managed profile for Hermes Deep Research without external access.
+# Pinned to NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894.
+_config_version: 37
+model:
+  default: askpdf-runtime-selected
+  provider: custom
+  base_url: ${LLM_API_URL}
+  context_length: ${HERMES_MODEL_CONTEXT_LENGTH}
+mcp_servers:
+  askpdf:
+    url: http://rag-service:8000/internal/hermes-mcp/offline/
+    enabled: true
+    tools:
+      include: [get_thread_shape, search_documents, search_document_by_id, search_thread_conversation_history, search_thread_events, search_durable_memory]

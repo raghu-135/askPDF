@@ -21,23 +21,24 @@ def _payload(allowed_tools):
     }
 
 
-def test_hermes_accepts_allowlisted_mcp_document_tool(monkeypatch):
+def test_hermes_reports_frozen_profile_tool_allowlist(monkeypatch):
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
-    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence,clarify_intent")
     with TestClient(create_app()) as client:
-        response = client.post("/v1/validate", json=_payload(["document_evidence"]))
+        response = client.post("/v1/validate", json=_payload(["search_documents", "get_thread_shape"]))
     assert response.status_code == 200
-    assert response.json()["result"]["validation"]["valid"] is True
-
-
-def test_hermes_rejects_tool_outside_allowlist(monkeypatch):
-    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
-    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence")
-    with TestClient(create_app()) as client:
-        response = client.post("/v1/validate", json=_payload(["admin_delete_everything"]))
     validation = response.json()["result"]["validation"]
-    assert validation["valid"] is False
-    assert any(issue["code"] == "unsupported_tool_allowlist" for issue in validation["issues"])
+    assert validation["valid"] is True
+    assert validation["runtime_metadata"]["allowed_tool_ids"] == ["get_thread_shape", "search_documents"]
+
+
+def test_environment_cannot_override_frozen_profile_tool_allowlist(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "admin_delete_everything")
+    with TestClient(create_app()) as client:
+        response = client.post("/v1/validate", json=_payload(["search_documents"]))
+    validation = response.json()["result"]["validation"]
+    assert validation["valid"] is True
+    assert validation["runtime_metadata"]["allowed_tool_ids"] == ["search_documents"]
 
 
 def test_phase7_runner_enables_and_guards_every_integration_proof_command():

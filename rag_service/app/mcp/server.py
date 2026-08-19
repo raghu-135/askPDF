@@ -38,9 +38,11 @@ class MCPServer:
 
     protocol_version = "2025-06-18"
 
-    def __init__(self) -> None:
+    def __init__(self, *, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = False) -> None:
         validate_mcp_configuration()
         validate_registry()
+        self.allowed_tools = allowed_tools
+        self.require_execution_token = require_execution_token
         self.sdk = Server("askpdf-first-party", version="1")
         self._register_handlers()
 
@@ -60,15 +62,21 @@ class MCPServer:
                     },
                 )
                 for name, definition in enabled_definitions().items()
+                if self.allowed_tools is None or name in self.allowed_tools
             ]
 
         @self.sdk.call_tool(validate_input=True)
         async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
             definition = MCP_TOOL_DEFINITIONS.get(name)
-            if definition is None or name not in enabled_definitions():
+            if definition is None or name not in enabled_definitions() or (
+                self.allowed_tools is not None and name not in self.allowed_tools
+            ):
                 raise ValueError(f"Unknown tool: {name}")
             arguments = dict(arguments or {})
             execution_token = arguments.pop(TOKEN_ARGUMENT, None)
+            if self.require_execution_token and not execution_token:
+                logger.warning("Hermes MCP tool rejected tool=%s reason=missing_execution_context", name)
+                raise ValueError("Hermes MCP execution context is required")
             request_context = self.sdk.request_context
             meta = request_context.meta
             if hasattr(meta, "model_dump"):
@@ -115,8 +123,7 @@ class MCPServer:
                 isError=not result.ok or result.error is not None,
             )
 
-    @staticmethod
-    def _input_schema(model: type[Any]) -> dict[str, Any]:
+    def _input_schema(self, model: type[Any]) -> dict[str, Any]:
         schema = dict(_schema(model))
         properties = dict(schema.get("properties") or {})
         properties[TOKEN_ARGUMENT] = {
@@ -124,16 +131,20 @@ class MCPServer:
             "description": "Opaque askPDF execution context supplied in the task instructions.",
         }
         schema["properties"] = properties
+        if self.require_execution_token:
+            schema["required"] = list(dict.fromkeys([*(schema.get("required") or []), TOKEN_ARGUMENT]))
         return schema
 
 
-def get_http_app() -> Any:
+def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = False) -> Any:
     """Return the SDK streamable-HTTP app backed by the low-level Server."""
     validate_mcp_configuration()
 
+    server = MCPServer(allowed_tools=allowed_tools, require_execution_token=require_execution_token)
+
     def create_manager() -> StreamableHTTPSessionManager:
         return StreamableHTTPSessionManager(
-            app=get_sdk_server(),
+            app=server.sdk,
             json_response=True,
             stateless=True,
             security_settings=TransportSecuritySettings(

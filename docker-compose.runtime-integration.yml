@@ -188,6 +188,9 @@ services:
       API_SERVER_PORT: "8642"
       API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       OPENAI_API_KEY: askpdf-hermes-integration-local
+      LLM_API_URL: http://fake-llm:9000/v1
+      HERMES_MODEL_CONTEXT_LENGTH: "32768"
+      GATEWAY_MULTIPLEX_PROFILES: "true"
     command: ["gateway"]
     depends_on:
       fake-llm:
@@ -196,9 +199,15 @@ services:
         condition: service_healthy
     volumes:
       - ./rag_service/tests/fixtures/hermes/config.yaml:/opt/data/config.yaml:ro
+      - ./hermes_runtime/profiles/askpdf-deep-offline/config.yaml:/opt/data/profiles/askpdf-deep-offline/config.yaml:ro
+      - ./hermes_runtime/profiles/askpdf-deep-external/config.yaml:/opt/data/profiles/askpdf-deep-external/config.yaml:ro
     configs:
       - source: hermes_integration_env
         target: /opt/data/.env
+      - source: hermes_integration_env
+        target: /opt/data/profiles/askpdf-deep-offline/.env
+      - source: hermes_integration_env
+        target: /opt/data/profiles/askpdf-deep-external/.env
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 10s
@@ -214,7 +223,6 @@ services:
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_REQUIRED: "false"
-      HERMES_MCP_ALLOWED_TOOLS: search_documents,search_thread_conversation_history,search_thread_events,search_durable_memory
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"

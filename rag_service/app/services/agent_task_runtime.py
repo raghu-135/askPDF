@@ -346,7 +346,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         runtime_input: dict[str, Any] = {"question": task.objective}
         if definition.framework == "hermes":
             snapshot = await _task_context_snapshot(task, thread, config)
-            allowed_tools = list((resolved_spec.get("config") or {}).get("allowed_tool_ids") or [])
+            allowed_tools = list(
+                ((resolved_spec.get("managed_profile") or {}).get("mcp") or {}).get("allowed_tool_ids")
+                or (resolved_spec.get("config") or {}).get("allowed_tool_ids")
+                or []
+            )
             token = issue_execution_context_token(
                 ToolInvocationContext(
                     thread_id=task.thread_id,
@@ -355,6 +359,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     context_window=int(config.get("context_window") or 32_768),
                     use_web_search=bool(config.get("use_web_search")),
                     use_reranker=True,
+                    extensions={
+                        "task_id": task.id,
+                        "llm_model": config.get("llm_model"),
+                        "web_search_mode": config.get("web_search_mode", "off"),
+                    },
                 ),
                 task_id=task.id,
                 allowed_tools=allowed_tools,

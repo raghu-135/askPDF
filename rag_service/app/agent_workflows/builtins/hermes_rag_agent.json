@@ -13,10 +13,10 @@
     "version": 1,
     "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": true, "supports_artifacts": true}},
     "config": {
-      "system_prompt": "Perform the requested research task. Use askPDF MCP tools for document and prior-conversation evidence, cite the evidence used, and do not claim that a paper is unavailable before searching the attached documents.",
+      "system_prompt": "Perform the requested research task using askPDF MCP evidence. When the user says this paper, the paper, or according to the context, first call get_thread_shape, then call search_document_by_id when a file hash is known or search_documents otherwise. Search conversation history when recent context does not resolve the reference. Cite the evidence used. Never claim that a document or context is unavailable until an authorized retrieval tool has returned an applicable empty or error result.",
       "model": "",
       "mcp_server": "askpdf",
-      "allowed_tool_ids": ["search_documents", "search_thread_conversation_history", "search_thread_events", "search_durable_memory"],
+      "allowed_tool_ids": ["get_thread_shape", "search_documents", "search_document_by_id", "search_thread_conversation_history", "search_thread_events", "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv", "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news"],
       "max_output_chars": 12000,
       "max_duration_seconds": 300,
       "max_event_count": 200,

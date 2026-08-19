@@ -39,12 +39,21 @@ def issue_execution_context_token(
     allowed_tools: list[str],
     ttl_seconds: int = 3600,
 ) -> str:
+    context_data = context.as_dict()
+    extensions = dict(context_data.get("extensions") or {})
+    extensions["task_id"] = task_id
+    context_data["extensions"] = extensions
     payload = {
         "v": 1,
         "exp": int(time.time()) + max(60, ttl_seconds),
         "task_id": task_id,
         "allowed_tools": sorted(set(allowed_tools)),
-        "context": context.as_dict(),
+        "model_settings": {
+            "llm_model": extensions.get("llm_model"),
+            "embedding_model": context.embedding_model,
+            "context_window": context.context_window,
+        },
+        "context": context_data,
     }
     encoded = _encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
     signature = _encode(hmac.new(_secret(), encoded.encode(), hashlib.sha256).digest())
@@ -65,6 +74,13 @@ def decode_execution_context_token(token: str, *, tool_name: str) -> ToolInvocat
         context = payload.get("context")
         if not payload.get("task_id") or not isinstance(context, Mapping):
             raise ValueError("token context is incomplete")
-        return ToolInvocationContext.from_mapping(context)
+        decoded = ToolInvocationContext.from_mapping(context)
+        extensions = dict(decoded.extensions or {})
+        if extensions.get("task_id") != payload.get("task_id") or not decoded.thread_id or not decoded.run_id:
+            raise ValueError("token identity is incomplete or mismatched")
+        model_settings = payload.get("model_settings")
+        if not isinstance(model_settings, Mapping) or model_settings.get("context_window") != decoded.context_window:
+            raise ValueError("token model settings are mismatched")
+        return decoded
     except (TypeError, ValueError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
         raise ValueError("Invalid Hermes MCP execution context") from exc
