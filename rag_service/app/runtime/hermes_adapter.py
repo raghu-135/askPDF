@@ -20,6 +20,13 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
     def _ensure_enabled(self) -> None:
         if os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
             raise RuntimeError("runtime_disabled", "Hermes runtime is disabled")
+        raw_context_length = os.getenv("HERMES_MODEL_CONTEXT_LENGTH", "").strip()
+        try:
+            context_length = int(raw_context_length)
+        except ValueError as exc:
+            raise RuntimeError("runtime_configuration_invalid", "Hermes model context length is not configured") from exc
+        if context_length < 2048:
+            raise RuntimeError("runtime_configuration_invalid", "Hermes model context length is not configured")
 
     def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
         headers = super()._headers(request)

@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
+from app.db.enums import AgentRunStatus
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
     AgentRun,
@@ -887,14 +888,47 @@ async def active_runtime_budget_exhausted(task_id: str) -> bool:
     )
 
 
-async def attach_run(task_id: str, run: AgentRun, *, parent_run_id: Optional[str] = None) -> AgentTask:
+async def attach_run(task_id: str, run: AgentRun, *, parent_run_id: Optional[str] = None) -> AgentRun:
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
-            next_attempt = task.latest_run_attempt + 1
             stored_run = await session.get(AgentRun, run.id)
             if stored_run is None:
                 raise AgentTaskConflict("task_run_missing", "Agent run does not exist")
+
+            # The API eagerly prepares a run after the start command while a
+            # worker may claim the task at the same time. Serialize attachment
+            # on the task row and converge both callers on the run that won.
+            # Query by task_id as well as active_run_id so this also repairs a
+            # stale task pointer left by an interrupted attachment.
+            existing_active = (await session.execute(
+                select(AgentRun).where(
+                    AgentRun.task_id == task.id,
+                    AgentRun.status.in_([
+                        AgentRunStatus.RUNNING.value,
+                        AgentRunStatus.AWAITING_HUMAN.value,
+                    ]),
+                ).order_by(AgentRun.task_attempt.desc(), AgentRun.started_at.desc()).limit(1)
+            )).scalar_one_or_none()
+            if existing_active is not None and existing_active.id == stored_run.id:
+                task.active_run_id = existing_active.id
+                task.primary_run_id = task.primary_run_id or existing_active.id
+                task.latest_run_attempt = max(task.latest_run_attempt, existing_active.task_attempt)
+                return existing_active
+            if existing_active is not None and existing_active.id != stored_run.id:
+                stored_run.status = AgentRunStatus.CANCELLED.value
+                stored_run.completed_at = utc_now()
+                stored_run.error_json = {
+                    "code": "concurrent_task_run_superseded",
+                    "retryable": False,
+                    "active_run_id": existing_active.id,
+                }
+                task.active_run_id = existing_active.id
+                task.primary_run_id = task.primary_run_id or existing_active.id
+                task.latest_run_attempt = max(task.latest_run_attempt, existing_active.task_attempt)
+                return existing_active
+
+            next_attempt = task.latest_run_attempt + 1
             stored_run.task_id = task.id
             stored_run.parent_run_id = parent_run_id
             stored_run.task_attempt = next_attempt
@@ -904,7 +938,8 @@ async def attach_run(task_id: str, run: AgentRun, *, parent_run_id: Optional[str
             task.version += 1
             await _append_event(session, task, "task.run_attached", agent_run_id=stored_run.id, payload={"attempt": next_attempt})
         await session.refresh(task)
-        return task
+        await session.refresh(stored_run)
+        return stored_run
 
 
 async def persist_plan(

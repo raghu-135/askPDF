@@ -1995,6 +1995,7 @@ export interface AgentTaskSummary {
   id: string;
   thread_id: string;
   objective: string;
+  workflow_id: string;
   status: AgentTaskStatus;
   version: number;
   active_run_id?: string | null;
@@ -2111,14 +2112,21 @@ export interface AgentTaskSubagentRun {
 
 const taskQuery = (threadId: string) => new URLSearchParams({ thread_id: threadId }).toString();
 
-export async function getDeepResearchCapabilities(): Promise<{ enabled: boolean; web_enabled: boolean; limits: Record<string, number> }> {
+export type DeepResearchEngine = 'langgraph' | 'hermes';
+
+export async function getDeepResearchCapabilities(): Promise<{
+  enabled: boolean;
+  web_enabled: boolean;
+  limits: Record<string, number>;
+  engines: Record<DeepResearchEngine, { enabled: boolean; workflow_id: string; max_context_length?: number | null }>;
+}> {
   const response = await fetch(`${API_BASE}/api/deep-research/capabilities`);
   if (!response.ok) throw new Error(await readApiError(response));
   return response.json();
 }
 
 export async function createAgentTask(threadId: string, payload: {
-  objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
+  objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on'; engine?: DeepResearchEngine;
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',

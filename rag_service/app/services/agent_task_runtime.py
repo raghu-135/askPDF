@@ -10,9 +10,11 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
+from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.db import AgentRunStatus, get_thread, get_thread_settings
-from app.models.deep_research import AgentTaskStatus, DEEP_RESEARCH_WORKFLOW_ID
+from app.db import AgentRunStatus, get_recent_messages, get_thread, get_thread_settings
+from app.mcp.execution_context_token import issue_execution_context_token
+from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
@@ -21,12 +23,47 @@ from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRun
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
+from app.tools.context import ToolInvocationContext
 
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
 WAKE_RUNTIME_LIMIT_SECONDS = 15 * 60
+
+
+async def _task_context_snapshot(task: Any, thread: Any, config: dict[str, Any]) -> dict[str, Any]:
+    """Create a bounded, deterministic context seed; retrieval remains MCP-backed."""
+
+    messages = await get_recent_messages(task.thread_id, limit=20)
+    conversation: list[dict[str, str]] = []
+    remaining = min(24_000, max(4_000, int(config.get("context_window") or 32_768)))
+    for message in reversed(messages):
+        content = str(getattr(message, "context_compact", None) or getattr(message, "content", "")).strip()
+        if not content or remaining <= 0:
+            continue
+        content = content[-remaining:]
+        conversation.append({"role": str(getattr(message, "role", "user")), "content": content})
+        remaining -= len(content)
+    conversation.reverse()
+    documents = []
+    for file_hash, metadata in sorted(dict(getattr(thread, "documents_meta", None) or {}).items()):
+        item = dict(metadata or {}) if isinstance(metadata, dict) else {}
+        documents.append({
+            "file_hash": str(file_hash),
+            "name": str(item.get("file_name") or item.get("filename") or file_hash),
+        })
+    return {
+        "objective": task.objective,
+        "thread_id": task.thread_id,
+        "project_id": task.project_id,
+        "model": config.get("llm_model"),
+        "embedding_model": thread.embedding_model,
+        "context_window": int(config.get("context_window") or 32_768),
+        "limits": dict(config.get("limits") or {}),
+        "recent_conversation": conversation,
+        "documents": documents,
+    }
 
 
 async def _complete_run_with_trace(
@@ -79,10 +116,10 @@ async def ensure_task_run(task_id: str):
         return active
 
     repository = AgentWorkflowRepository()
-    workflow = await repository.get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+    workflow = await repository.get_workflow(task.workflow_id, include_custom=False)
     if workflow is None:
         await repository.seed_builtin_workflows()
-        workflow = await repository.get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        workflow = await repository.get_workflow(task.workflow_id, include_custom=False)
     if workflow is None:
         raise RuntimeError("deep_research_workflow_unavailable")
 
@@ -98,7 +135,11 @@ async def ensure_task_run(task_id: str):
         definition,
         workflow.spec_json,
         thread_settings=thread_settings,
-        request_overrides={"use_web_search": bool((task.config_json or {}).get("use_web_search"))},
+        request_overrides={
+            "llm_model": (task.config_json or {}).get("llm_model"),
+            "context_window": (task.config_json or {}).get("context_window"),
+            "use_web_search": bool((task.config_json or {}).get("use_web_search")),
+        },
     )
     config = dict(resolved.get("config") or {})
     task_policy = dict(config.get("task_policy") or {})
@@ -131,8 +172,7 @@ async def ensure_task_run(task_id: str):
     # front.  That identity is not evidence that a checkpoint exists yet.
     # Keep this process-local marker until the first start operation completes.
     setattr(run, "_fresh_runtime_run", True)
-    await tasks.attach_run(task.id, run, parent_run_id=active.id if active is not None else None)
-    return run
+    return await tasks.attach_run(task.id, run, parent_run_id=active.id if active is not None else None)
 
 
 async def _heartbeat(task_id: str, worker_id: str) -> None:
@@ -204,10 +244,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     # workflow definition and attach its materialized spec to this run before
     # continuation is sent to the runtime.
     if not isinstance(run.resolved_spec_json, dict) or not run.resolved_spec_json.get("config"):
-        workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=False)
         if workflow is None:
             await AgentWorkflowRepository().seed_builtin_workflows()
-            workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+            workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=False)
         if workflow is None:
             raise RuntimeError("deep_research_workflow_unavailable")
         thread_settings = await get_thread_settings(task.thread_id)
@@ -222,7 +262,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             definition,
             workflow.spec_json,
             thread_settings=thread_settings,
-            request_overrides={"use_web_search": bool(config.get("use_web_search"))},
+            request_overrides={
+                "llm_model": config.get("llm_model"),
+                "context_window": config.get("context_window"),
+                "use_web_search": bool(config.get("use_web_search")),
+            },
         )
         resolved_config = dict(resolved.get("config") or {})
         task_policy = dict(resolved_config.get("task_policy") or {})
@@ -299,13 +343,31 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         ))
         if resolved_spec != (run.resolved_spec_json or {}):
             run.resolved_spec_json = resolved_spec
+        runtime_input: dict[str, Any] = {"question": task.objective}
+        if definition.framework == "hermes":
+            snapshot = await _task_context_snapshot(task, thread, config)
+            allowed_tools = list((resolved_spec.get("config") or {}).get("allowed_tool_ids") or [])
+            token = issue_execution_context_token(
+                ToolInvocationContext(
+                    thread_id=task.thread_id,
+                    run_id=run.id,
+                    embedding_model=thread.embedding_model,
+                    context_window=int(config.get("context_window") or 32_768),
+                    use_web_search=bool(config.get("use_web_search")),
+                    use_reranker=True,
+                ),
+                task_id=task.id,
+                allowed_tools=allowed_tools,
+                ttl_seconds=max(3600, int((config.get("limits") or {}).get("max_active_runtime_ms", 3_600_000)) // 1000),
+            )
+            runtime_input.update({"task_context": snapshot, "mcp_execution_context_token": token})
         runtime_request = AgentRuntimeRequest(
             run_id=run.id,
             thread_id=run.thread_id,
             definition_id=definition.definition_id,
             framework=definition.framework,
             builder_id=definition.builder_id,
-            input={"question": task.objective},
+            input=runtime_input,
             task_id=task.id,
             continuation=continuation_from_run(run),
         )
@@ -320,17 +382,24 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_id=task.id,
             task_worker_id=worker_id,
         )
+        runtime_event_sink = None
+        if definition.framework == "hermes":
+            runtime_event_sink = AgentExecutionEventSink(include_details=False)
+            runtime_event_sink.bind_trace_recorder(trace)
+            runtime_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
+            runtime_event_sink.bind_runtime_event_persister(run.id, repository.append_run_event)
         if getattr(run, "_fresh_runtime_run", False):
-            runtime_result = await adapter.start(runtime_request, context=runtime_context)
+            runtime_result = await adapter.start(runtime_request, context=runtime_context, event_sink=runtime_event_sink)
             await repository.mark_runtime_started(run.id)
         elif pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
             runtime_result = await adapter.resume(
                 runtime_request,
                 interrupt=pending,
                 context=runtime_context,
+                event_sink=runtime_event_sink,
             )
         else:
-            runtime_result = await adapter.continue_run(runtime_request, context=runtime_context)
+            runtime_result = await adapter.continue_run(runtime_request, context=runtime_context, event_sink=runtime_event_sink)
         if runtime_result is None:
             # A continuation is optional at the runtime boundary.  A missing
             # checkpoint is a terminal runtime outcome, not a legacy result
@@ -343,6 +412,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     "retryable": False,
                 },
             )
+        if runtime_result.continuation is not None:
+            await repository.update_runtime_binding(run.id, runtime_result.continuation)
         result = legacy_result_from_runtime(runtime_result)
         # Runtime artifacts are data, not product records. Project them in
         # rag-service after the stream completes and translate deterministic

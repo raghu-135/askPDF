@@ -509,3 +509,10 @@ This project uses the following third-party technologies:
 ## 📧 Contact
 
 For questions, issues, or suggestions, please open an issue on the [GitHub repository](https://github.com/raghu13590/askpdf).
+# Hermes Deep Research runtime
+
+Hermes is an opt-in engine for durable Deep Research tasks; standard chat workflows remain on LangGraph. The integration is pinned to `NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894` (Hermes config schema 37).
+
+Set `HERMES_RUNTIME_ENABLED=true`, `HERMES_MODEL_CONTEXT_LENGTH` to the selected provider model's real maximum context length, and `HERMES_MCP_CONTEXT_SECRET` to a random value of at least 32 characters. Hermes task creation is unavailable until all three settings are valid. Definitions contain no credentials; askPDF supplies short-lived signed execution context to the allowed MCP tools at run time.
+
+LangGraph remains the default Deep Research engine. Select Hermes explicitly in the Deep Research workspace. The selected engine, model, context window, and workflow definition are frozen on the task and retained for retries and inspection.

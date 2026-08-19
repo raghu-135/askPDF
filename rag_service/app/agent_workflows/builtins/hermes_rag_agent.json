@@ -1,29 +1,48 @@
 {
   "builtin_key": "hermes_rag_agent",
-  "description": "A bounded Hermes runtime proof agent using the shared MCP tool boundary.",
+  "description": "An opt-in durable Deep Research engine backed by the pinned Hermes runtime.",
   "is_builtin": true,
   "visibility": "builtin",
   "name": "Hermes RAG Agent",
   "framework": "hermes",
   "builder_id": "hermes_agent",
-  "category": "router",
+  "category": "deep",
   "spec_json": {
     "schema_version": 2,
     "definition_version": 1,
     "version": 1,
-    "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": false}},
+    "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": true, "supports_artifacts": true}},
     "config": {
-      "system_prompt": "Answer the user's question concisely. Use only the enabled MCP tools when evidence is needed.",
+      "system_prompt": "Perform the requested research task. Use askPDF MCP tools for document and prior-conversation evidence, cite the evidence used, and do not claim that a paper is unavailable before searching the attached documents.",
       "model": "",
       "mcp_server": "askpdf",
-      "allowed_tool_ids": ["document_evidence", "thread_conversation_history", "clarify_intent"],
+      "allowed_tool_ids": ["search_documents", "search_thread_conversation_history", "search_thread_events", "search_durable_memory"],
       "max_output_chars": 12000,
       "max_duration_seconds": 300,
       "max_event_count": 200,
-      "allow_subagents": false,
+      "allow_subagents": true,
       "allow_persistent_memory": false,
       "skills": [],
-      "cancellation_mode": "upstream_stop"
+      "cancellation_mode": "upstream_stop",
+      "task_policy": {
+        "builtin_only": true,
+        "profiles": ["document_researcher", "memory_researcher", "evidence_critic"],
+        "limits": {
+          "max_todos": 50,
+          "max_plan_revisions": 8,
+          "max_replans": 5,
+          "max_concurrency": 2,
+          "max_fanout": 2,
+          "max_attempts_per_todo": 2,
+          "subagent_timeout_ms": 180000,
+          "max_active_runtime_ms": 3600000,
+          "max_tool_calls": 100,
+          "max_model_tokens": 500000,
+          "max_artifacts": 200,
+          "max_artifact_bytes": 104857600,
+          "max_single_artifact_bytes": 10485760
+        }
+      }
     }
   }
 }

@@ -15,6 +15,7 @@ from starlette.routing import Mount
 
 from app.mcp.config import mcp_mode, mcp_transport, validate_mcp_configuration
 from app.mcp.context_codec import decode_context
+from app.mcp.execution_context_token import TOKEN_ARGUMENT, decode_execution_context_token
 from app.mcp.registry import (
     MCP_TOOL_DEFINITIONS,
     TOOL_RESULT_OUTPUT_SCHEMA,
@@ -50,7 +51,7 @@ class MCPServer:
                 types.Tool(
                     name=name,
                     description=TOOL_FRIENDLY_CONFIG[name]["description"],
-                    inputSchema=_schema(definition.request_model),
+                    inputSchema=self._input_schema(definition.request_model),
                     outputSchema=TOOL_RESULT_OUTPUT_SCHEMA,
                     _meta={
                         "com.askpdf/contract-id": TOOL_FRIENDLY_CONFIG[name]["id"],
@@ -66,6 +67,8 @@ class MCPServer:
             definition = MCP_TOOL_DEFINITIONS.get(name)
             if definition is None or name not in enabled_definitions():
                 raise ValueError(f"Unknown tool: {name}")
+            arguments = dict(arguments or {})
+            execution_token = arguments.pop(TOKEN_ARGUMENT, None)
             request_context = self.sdk.request_context
             meta = request_context.meta
             if hasattr(meta, "model_dump"):
@@ -73,6 +76,8 @@ class MCPServer:
             elif not isinstance(meta, dict):
                 meta = dict(meta or {})
             context = decode_context(meta)
+            if execution_token:
+                context = decode_execution_context_token(str(execution_token), tool_name=name)
             if not context.mcp_request_id:
                 context = context.__class__.from_mapping({
                     **context.as_dict(), "mcp_request_id": str(request_context.request_id),
@@ -109,6 +114,17 @@ class MCPServer:
                 structuredContent=structured,
                 isError=not result.ok or result.error is not None,
             )
+
+    @staticmethod
+    def _input_schema(model: type[Any]) -> dict[str, Any]:
+        schema = dict(_schema(model))
+        properties = dict(schema.get("properties") or {})
+        properties[TOKEN_ARGUMENT] = {
+            "type": "string",
+            "description": "Opaque askPDF execution context supplied in the task instructions.",
+        }
+        schema["properties"] = properties
+        return schema
 
 
 def get_http_app() -> Any:

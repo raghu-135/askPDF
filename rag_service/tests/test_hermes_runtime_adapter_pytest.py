@@ -62,6 +62,7 @@ def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
 @pytest.mark.asyncio
 async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     calls = []
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
 
@@ -116,6 +117,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
     operations = (
@@ -127,6 +129,16 @@ async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
     for operation in operations:
         with pytest.raises(RuntimeError, match="binding"):
             await operation()
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_rejects_missing_context_length(monkeypatch):
+    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.delenv("HERMES_MODEL_CONTEXT_LENGTH", raising=False)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    with pytest.raises(RuntimeError, match="context length"):
+        await adapter.start(request, context=None)
 
 
 def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200, mcp_required=True):

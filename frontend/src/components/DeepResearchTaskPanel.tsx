@@ -29,6 +29,7 @@ import {
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
   type AgentRunResumeAction,
+  type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, shouldPollAgentTask } from '../lib/deep-research-ui-state';
 import {
@@ -236,6 +237,9 @@ export default function DeepResearchTaskPanel({
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
   const [webCapability, setWebCapability] = useState<boolean | null>(null);
+  const [engine, setEngine] = useState<DeepResearchEngine>('langgraph');
+  const [hermesEnabled, setHermesEnabled] = useState(false);
+  const [hermesMaxContext, setHermesMaxContext] = useState<number | null>(null);
   const [capabilityError, setCapabilityError] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
@@ -275,7 +279,12 @@ export default function DeepResearchTaskPanel({
     let active = true;
     setCapabilityError('');
     void getDeepResearchCapabilities()
-      .then((capabilities) => { if (active) setWebCapability(capabilities.web_enabled); })
+      .then((capabilities) => {
+        if (!active) return;
+        setWebCapability(capabilities.web_enabled);
+        setHermesEnabled(Boolean(capabilities.engines?.hermes?.enabled));
+        setHermesMaxContext(capabilities.engines?.hermes?.max_context_length ?? null);
+      })
       .catch(() => {
         if (!active) return;
         setWebCapability(false);
@@ -341,7 +350,7 @@ export default function DeepResearchTaskPanel({
     }
     setBusy(true); setError('');
     try {
-      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode });
+      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode, engine });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);
     } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
@@ -395,6 +404,7 @@ export default function DeepResearchTaskPanel({
     return [] as Array<'pause' | 'resume' | 'cancel' | 'retry'>;
   }, [task]);
   const frozen = Boolean(selectedRun);
+  const frozenEngine: DeepResearchEngine = task?.workflow_id === 'hermes_rag_agent' ? 'hermes' : 'langgraph';
   const configuredWebMode = String(task?.configuration?.web_search_mode || 'off') as 'off' | 'ask' | 'on';
   const frozenWebMode = task?.web_access === 'allowed_for_task'
     ? 'on'
@@ -422,7 +432,19 @@ export default function DeepResearchTaskPanel({
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
-      beforeModelControls={renderWebControl(frozen ? frozenWebMode : webSearchMode, frozen || webCapability === false)}
+      beforeModelControls={<Stack direction="row" spacing={1} alignItems="center">
+        <Chip
+          size="small"
+          label={(frozen ? frozenEngine : engine) === 'hermes' ? 'Hermes' : 'LangGraph'}
+          color={(frozen ? frozenEngine : engine) === 'hermes' ? 'secondary' : 'default'}
+          onClick={frozen ? undefined : () => setEngine((value) => value === 'langgraph' && hermesEnabled ? 'hermes' : 'langgraph')}
+          title={!hermesEnabled && !frozen ? 'Hermes is not configured' : 'Deep Research engine'}
+        />
+        {engine === 'hermes' && !frozen && hermesMaxContext !== null && contextWindow > hermesMaxContext
+          ? <Typography variant="caption" color="error">Hermes max: {hermesMaxContext.toLocaleString()}</Typography>
+          : null}
+        {renderWebControl(frozen ? frozenWebMode : webSearchMode, frozen || webCapability === false)}
+      </Stack>}
       trailingActions={<DeepResearchTaskPicker threadId={threadId} selectedTaskId={selectedTaskId} onSelect={onTaskSelect} />}
     />}
     status={<>

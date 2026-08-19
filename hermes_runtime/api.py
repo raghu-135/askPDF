@@ -301,6 +301,15 @@ def create_app() -> FastAPI:
         max_duration_seconds = max(1, int(config.get("max_duration_seconds") or 300))
         deadline = time.monotonic() + max_duration_seconds
         system_prompt = str(config.get("system_prompt") or "").strip()
+        task_context = input_data.get("task_context")
+        context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
+        if isinstance(task_context, Mapping):
+            question = question + "\n\naskPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False)
+        if context_token:
+            system_prompt += (
+                "\n\nFor every askPDF MCP tool call, pass this exact value in the "
+                "_askpdf_context_token argument: " + context_token
+            )
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,

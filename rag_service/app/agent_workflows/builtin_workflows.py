@@ -18,6 +18,7 @@ BUILTIN_DISCOVERY_CATEGORIES = {
     "orchestrator_worker_rag_agent": "replanner",
     "corrective_self_rag_agent": "replanner",
     "deep_research_agent": "deep",
+    "hermes_rag_agent": "deep",
 }
 
 DEFAULT_FRAMEWORK = "langgraph"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query
@@ -10,10 +11,12 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.agent.tool_registry import TOOL_LIVE_WEB_RECON
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.service import AgentRunService
 from app.db import get_thread
 from app.models.deep_research import (
     AgentTaskCommandRequest,
     AgentTaskCreateRequest,
+    DEEP_RESEARCH_ENGINE_WORKFLOWS,
     DEEP_RESEARCH_WORKFLOW_ID,
 )
 from app.services import agent_task_repository as repository
@@ -28,6 +31,11 @@ from app.time_utils import maybe_iso_utc_z
 
 router = APIRouter(tags=["agent-tasks"])
 logger = logging.getLogger(__name__)
+
+
+def _hermes_available() -> bool:
+    enabled = os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return enabled and len(os.getenv("HERMES_MCP_CONTEXT_SECRET", "")) >= 32 and _hermes_context_length(required=False) is not None
 
 
 async def _deep_research_contract() -> dict[str, Any]:
@@ -61,7 +69,30 @@ async def get_deep_research_capabilities():
         "enabled": True,
         "web_enabled": contract["web_enabled"],
         "limits": limits,
+        "engines": {
+            "langgraph": {"enabled": True, "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["langgraph"]},
+            "hermes": {
+                "enabled": _hermes_available(),
+                "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["hermes"],
+                "max_context_length": _hermes_context_length(required=False),
+            },
+        },
     }
+
+
+def _hermes_context_length(*, required: bool) -> int | None:
+    raw = os.getenv("HERMES_MODEL_CONTEXT_LENGTH", "").strip()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=503, detail={"code": "hermes_context_length_unconfigured"})
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail={"code": "hermes_context_length_invalid"}) from exc
+    if value < 2048:
+        raise HTTPException(status_code=503, detail={"code": "hermes_context_length_invalid"})
+    return value
 
 
 def _task_payload(task: Any) -> dict[str, Any]:
@@ -165,6 +196,16 @@ async def create_agent_task(
     if thread is None:
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
     contract = await _deep_research_contract()
+    workflow_id = DEEP_RESEARCH_ENGINE_WORKFLOWS[req.engine]
+    if req.engine == "hermes":
+        if not _hermes_available():
+            raise HTTPException(status_code=409, detail={"code": "hermes_runtime_unavailable"})
+        max_context_length = _hermes_context_length(required=True)
+        if max_context_length is not None and req.context_window > max_context_length:
+            raise HTTPException(status_code=422, detail={
+                "code": "hermes_context_window_exceeded",
+                "max_context_length": max_context_length,
+            })
     if req.web_search_mode != "off" and not contract["web_enabled"]:
         raise HTTPException(status_code=409, detail={"code": "deep_research_web_unavailable"})
     config = req.model_dump(mode="json")
@@ -180,7 +221,7 @@ async def create_agent_task(
         thread_id=thread_id,
         project_id=thread.project_id,
         user_id=None,
-        workflow_id=DEEP_RESEARCH_WORKFLOW_ID,
+        workflow_id=workflow_id,
         objective=req.objective,
         idempotency_key=idempotency_key,
         config=config,
@@ -245,9 +286,15 @@ async def command_agent_task(
                     resume_version=int(pending.get("resume_version") or 1),
                     expected_thread_id=thread_id,
                 )
-        if action == "cancel" and task.status == "cancelled" and not duplicate:
+        if action == "cancel" and not duplicate:
             run = await repository.get_task_run(task.id)
             if run is not None:
+                if getattr(run, "framework", None) == "hermes":
+                    try:
+                        await AgentRunService().cancel_agent_run(run.id, thread_id=thread_id)
+                    except Exception as exc:
+                        if getattr(exc, "code", None) != "runtime_binding_missing":
+                            logger.warning("Hermes /stop failed for task %s: %s", task.id, exc)
                 pending = dict(run.pending_interrupt_json or {})
                 if pending.get("status") == "pending" and "reject" in (pending.get("allowed_actions") or []):
                     await AgentWorkflowRepository().resolve_pending_interrupt(
@@ -258,11 +305,12 @@ async def command_agent_task(
                         resume_version=int(pending.get("resume_version") or 1),
                         expected_thread_id=thread_id,
                     )
-                await AgentWorkflowRepository().complete_run(
-                    run.id,
-                    status="cancelled",
-                    error_json={"code": "agent_task_cancelled", "retryable": False},
-                )
+                if task.status == "cancelled":
+                    await AgentWorkflowRepository().complete_run(
+                        run.id,
+                        status="cancelled",
+                        error_json={"code": "agent_task_cancelled", "retryable": False},
+                    )
         return {"task": _task_payload(task), "command_id": command.id, "duplicate": duplicate}
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc

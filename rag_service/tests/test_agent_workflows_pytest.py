@@ -4114,7 +4114,7 @@ class TestAgentRunService:
         assert runs == []
 
     @pytest.mark.asyncio
-    async def test_hermes_chat_persists_and_executes_same_provider_validated_spec(
+    async def test_hermes_long_running_definition_is_rejected_from_chat(
         self, engine, sample_thread, monkeypatch
     ):
         session_factory = async_sessionmaker(
@@ -4154,24 +4154,13 @@ class TestAgentRunService:
             await repo.seed_builtin_workflows()
             service = AgentRunService(repository=repo)
             service.projection = SimpleNamespace(project_chat_result=fake_project_chat_result)
-            result = await service.run_thread_chat(
-                sample_thread.id,
-                self._agent_req("Use Hermes"),
-                sample_thread.embedding_model,
-            )
-            run = await repo.get_run(result["agent_run_id"])
-
-        assert run.framework == "hermes"
-        assert run.builder_id == "hermes_agent"
-        assert run.resolved_spec_json == captured["runtime_spec"]
-        assert set(run.resolved_spec_json["config"]) <= {
-            "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
-            "max_output_chars", "max_duration_seconds", "max_event_count",
-            "allow_subagents", "allow_persistent_memory", "cancellation_mode",
-            "skills",
-        }
-        assert "use_web_search" not in run.resolved_spec_json["config"]
-        assert captured["request"].framework == "hermes"
+            with pytest.raises(RuntimeError, match="Deep research task workspace"):
+                await service.run_thread_chat(
+                    sample_thread.id,
+                    self._agent_req("Use Hermes"),
+                    sample_thread.embedding_model,
+                )
+            assert await repo.list_runs_for_thread(sample_thread.id) == []
 
     @pytest.mark.asyncio
     async def test_invalid_custom_hermes_resolver_output_prevents_run_creation(
@@ -4201,7 +4190,7 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            with pytest.raises(RuntimeError, match="incompatible with this service version"):
+            with pytest.raises(RuntimeError, match="Deep research task workspace"):
                 await AgentRunService(repository=repo, resolver=InvalidResolver()).run_thread_chat(
                     sample_thread.id,
                     self._agent_req("Invalid Hermes spec"),
@@ -7935,13 +7924,8 @@ class TestAgentWorkflowApi:
         payload = response.json()
         assert payload["valid"] is False
         assert payload["workflow_id"] == "hermes_rag_agent"
-        assert {
-            issue["path"] for issue in payload["validation"]["issues"]
-        } == {"overrides.malicious", "overrides.use_web_search"}
-        assert all(
-            issue["code"] == "unsupported_request_override"
-            for issue in payload["validation"]["issues"]
-        )
+        assert payload["validation"]["errors"] == ["long_running_workflow_requires_agent_task"]
+        assert payload["fallback_workflow_id"] == ROUTER_RAG_AGENT_ID
         assert "malicious" not in payload["resolved_spec_json"]["config"]
 
     @pytest.mark.asyncio

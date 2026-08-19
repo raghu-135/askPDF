@@ -41,6 +41,8 @@ services:
       - AGENT_RUNTIME_MODE=${AGENT_RUNTIME_MODE:-external}
       - LANGGRAPH_RUNTIME_URL=http://langgraph-runtime:8100
       - HERMES_RUNTIME_ENABLED=true
+      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-32768}
+      - HERMES_MCP_CONTEXT_SECRET=${HERMES_MCP_CONTEXT_SECRET:-}
       - HERMES_RUNTIME_URL=http://hermes-runtime:8200
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
@@ -154,7 +156,7 @@ services:
       - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
       - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-http://rag-service:8000/health}
       - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
-      - HERMES_MCP_ALLOWED_TOOLS=${HERMES_MCP_ALLOWED_TOOLS:-document_evidence,thread_conversation_history,clarify_intent}
+      - HERMES_MCP_ALLOWED_TOOLS=${HERMES_MCP_ALLOWED_TOOLS:-search_documents,search_thread_conversation_history,search_thread_events,search_durable_memory}
       - HERMES_API_TOKEN=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}

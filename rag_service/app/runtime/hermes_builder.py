@@ -27,9 +27,9 @@ class HermesBuilderProvider:
         "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",
         "allow_subagents", "allow_persistent_memory", "cancellation_mode",
-        "skills",
+        "skills", "task_policy", "use_web_search", "context_window",
     }
-    _supported_request_override_keys: frozenset[str] = frozenset({"llm_model"})
+    _supported_request_override_keys: frozenset[str] = frozenset({"llm_model", "context_window", "use_web_search"})
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []

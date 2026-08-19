@@ -46,7 +46,8 @@ def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
             "max_duration_seconds": int(config.get("max_duration_seconds") or 300),
             "max_event_count": int(config.get("max_event_count") or 200),
         },
+        "context_window": int(config.get("context_window") or 0) or None,
+        "task_policy": dict(config.get("task_policy") or {}),
     }
     canonical = json.dumps(profile, sort_keys=True, separators=(",", ":"))
     return {**profile, "profile_id": hashlib.sha256(canonical.encode()).hexdigest()}
-

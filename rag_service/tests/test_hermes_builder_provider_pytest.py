@@ -9,7 +9,7 @@ from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
 
 def _definition() -> AgentDefinition:
-    return AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent", category="router")
+    return AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent", category="deep")
 
 
 def _spec() -> dict:
@@ -77,7 +77,7 @@ async def test_hermes_resolution_drops_langgraph_request_overrides():
         },
     )
     assert set(resolved["config"]) <= provider._allowed_config_keys
-    assert "use_web_search" not in resolved["config"]
+    assert resolved["config"]["use_web_search"] is True
     assert "replans" not in resolved["config"]
     assert "system_role" not in resolved["config"]
     assert "arbitrary" not in resolved["config"]
@@ -120,7 +120,7 @@ def test_hermes_explicit_unsupported_override_is_rejected():
             {"use_web_search": True, "malicious": {"graph": "payload"}},
             reject_unsupported=True,
         )
-    assert exc_info.value.keys == ("malicious", "use_web_search")
+    assert exc_info.value.keys == ("malicious",)
 
 
 @pytest.mark.asyncio

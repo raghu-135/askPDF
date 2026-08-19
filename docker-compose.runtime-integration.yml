@@ -65,6 +65,8 @@ services:
       ASKPDF_AGENT_CHECKPOINTER: postgres
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       HERMES_RUNTIME_ENABLED: ${PHASE7_HERMES_RUNTIME_ENABLED:-false}
+      HERMES_MODEL_CONTEXT_LENGTH: "32768"
+      HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
@@ -212,7 +214,7 @@ services:
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_REQUIRED: "false"
-      HERMES_MCP_ALLOWED_TOOLS: document_evidence,thread_conversation_history,clarify_intent
+      HERMES_MCP_ALLOWED_TOOLS: search_documents,search_thread_conversation_history,search_thread_events,search_durable_memory
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"

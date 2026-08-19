@@ -467,6 +467,10 @@ async def list_agent_workflows():
     valid_workflows = []
     for workflow in workflows:
         try:
+            spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+            features = ((spec.get("runtime") or {}).get("features") or {})
+            if features.get("supports_long_running_tasks"):
+                continue
             if getattr(workflow, "framework", "langgraph") == "hermes" and os.getenv("HERMES_RUNTIME_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
                 continue
             if _is_valid_workflow_for_service(workflow):
@@ -785,6 +789,26 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     )
     if not workflow:
         raise HTTPException(status_code=404, detail="Agent workflow not found")
+
+    features = (((workflow.spec_json or {}).get("runtime") or {}).get("features") or {})
+    if features.get("supports_long_running_tasks"):
+        default_workflow = await repo.get_workflow(default_agent_workflow_key(), include_custom=False)
+        return {
+            "valid": False,
+            "workflow_id": workflow.id,
+            "workflow_version": workflow.version,
+            "validation": {
+                "valid": False,
+                "errors": ["long_running_workflow_requires_agent_task"],
+                "issues": [{
+                    "code": "long_running_workflow_requires_agent_task",
+                    "severity": "error",
+                    "message": "This workflow is available only through the Deep Research task workspace.",
+                }],
+            },
+            "resolved_spec_json": dict(default_workflow.spec_json or {}) if default_workflow else {},
+            "fallback_workflow_id": default_agent_workflow_key(),
+        }
 
     provider = _provider_for_workflow(workflow)
     definition = _definition_for_workflow(workflow)

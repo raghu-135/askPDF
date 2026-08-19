@@ -9,6 +9,9 @@ model:
   default: askpdf-runtime-selected
   provider: custom
   base_url: ${LLM_API_URL}
+  # Required when Hermes is enabled. This prevents Hermes from silently
+  # assuming its 256k fallback for custom/provider-selected models.
+  context_length: ${HERMES_MODEL_CONTEXT_LENGTH}
 
 mcp_servers:
   askpdf:

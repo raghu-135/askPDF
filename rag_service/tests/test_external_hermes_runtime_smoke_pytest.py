@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -39,7 +40,7 @@ def _definition_and_spec() -> tuple[AgentDefinition, dict]:
         definition_id="hermes_rag_agent",
         framework="hermes",
         builder_id="hermes_agent",
-        category="router",
+        category="deep",
     ), dict(value["spec_json"])
 
 
@@ -85,7 +86,7 @@ async def test_external_hermes_runtime_contract_and_execution():
 
 
 @pytest.mark.asyncio
-async def test_product_api_executes_and_persists_hermes_run():
+async def test_product_api_executes_and_persists_hermes_deep_research_task():
     unique = uuid.uuid4().hex
     base_url = os.getenv("PHASE7_CONTROL_PLANE_URL", "http://rag-service:8000")
     async with httpx.AsyncClient(base_url=base_url, timeout=120) as client:
@@ -100,32 +101,43 @@ async def test_product_api_executes_and_persists_hermes_run():
         )
         thread.raise_for_status()
         thread_id = thread.json()["id"]
-        settings = await client.put(
-            f"/api/threads/{thread_id}/settings",
-            json={"agent_workflow": {"workflow_id": "hermes_rag_agent"}},
-        )
-        settings.raise_for_status()
-        chat = await client.post(
-            f"/api/threads/{thread_id}/chat",
+        created = await client.post(
+            f"/api/threads/{thread_id}/agent-tasks",
+            headers={"Idempotency-Key": f"phase7-hermes-{unique}"},
             json={
-                "thread_id": thread_id,
-                "question": "Use document evidence and provide the deterministic answer.",
+                "objective": "Use document evidence and provide the deterministic answer.",
                 "llm_model": _TEST_MODEL,
-                "bypass_clarification": True,
+                "context_window": 32768,
+                "web_search_mode": "off",
+                "engine": "hermes",
             },
         )
-        chat.raise_for_status()
-        result = chat.json()
-        assert result["status"] == "completed", result
-        assert result["answer"]
-        run_id = result["agent_run_id"]
+        created.raise_for_status()
+        task = created.json()["task"]
+        started = await client.post(
+            f"/api/agent-tasks/{task['id']}/start",
+            params={"thread_id": thread_id},
+            headers={"Idempotency-Key": f"phase7-hermes-start-{unique}"},
+            json={"expected_version": task["version"]},
+        )
+        started.raise_for_status()
+        task = started.json()["task"]
+        for _ in range(120):
+            current = await client.get(f"/api/agent-tasks/{task['id']}", params={"thread_id": thread_id})
+            current.raise_for_status()
+            task = current.json()["task"]
+            if task["status"] in {"completed", "failed", "cancelled"}:
+                break
+            await asyncio.sleep(0.5)
+        assert task["status"] == "completed", task
+        run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})
         run_response.raise_for_status()
         persisted = run_response.json()["agent_run"]
         assert persisted["framework"] == "hermes"
         assert persisted["builder_id"] == "hermes_agent"
         assert persisted["status"] == "completed"
-        assert persisted["final_output"]["answer"]
+        assert persisted["workflow_id"] == "hermes_rag_agent"
 
     connection = await asyncpg.connect(os.environ["PHASE7_PRODUCT_DATABASE_URL"])
     try:

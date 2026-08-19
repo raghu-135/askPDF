@@ -55,6 +55,44 @@ async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | Non
     return run
 
 
+@pytest.mark.asyncio
+async def test_attach_run_converges_on_existing_active_run(test_session_maker, sample_thread):
+    await _seed_deep_workflow(test_session_maker)
+    task, _ = await repository.create_task(
+        thread_id=sample_thread.id,
+        project_id=sample_thread.project_id,
+        user_id=None,
+        workflow_id="deep_research_agent",
+        objective="Research safely",
+        idempotency_key=str(uuid.uuid4()),
+        config={},
+    )
+    active = await _attach_test_run(test_session_maker, task)
+    contender = AgentRun(
+        id=str(uuid.uuid4()),
+        thread_id=task.thread_id,
+        workflow_id=task.workflow_id,
+        resolved_spec_json=_spec(),
+        checkpoint_thread_id=str(uuid.uuid4()),
+        run_metadata_json={"run_kind": "agent_task"},
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(contender)
+
+    selected = await repository.attach_run(task.id, contender)
+
+    assert selected.id == active.id
+    async with test_session_maker() as session:
+        discarded = await session.get(AgentRun, contender.id)
+        refreshed_task = await session.get(type(task), task.id)
+    assert discarded.status == "cancelled"
+    assert discarded.task_id is None
+    assert discarded.error_json["code"] == "concurrent_task_run_superseded"
+    assert refreshed_task.active_run_id == active.id
+    assert refreshed_task.latest_run_attempt == 1
+
+
 async def _seed_deep_workflow(test_session_maker) -> None:
     async with test_session_maker() as session:
         async with session.begin():
@@ -1131,6 +1169,8 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     )
     assert created.status_code == 201
     task = created.json()["task"]
+    assert task["workflow_id"] == "deep_research_agent"
+    assert task["configuration"]["engine"] == "langgraph"
     assert task["configuration"]["limits"]["max_concurrency"] == builtin_limits["max_concurrency"]
 
     web_created = api_client.post(
@@ -1165,6 +1205,36 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     assert started.status_code == 200, started.text
     assert started.json()["task"]["status"] == "queued"
     assert started.json()["task"]["active_run_id"]
+
+
+def test_task_api_explicitly_selects_hermes_and_enforces_context_limit(api_client, sample_thread, monkeypatch):
+    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    payload = {
+        "objective": "Research with Hermes",
+        "llm_model": "test-model",
+        "context_window": 8192,
+        "web_search_mode": "off",
+        "engine": "hermes",
+    }
+    created = api_client.post(
+        f"/api/threads/{sample_thread.id}/agent-tasks",
+        json=payload,
+        headers={"Idempotency-Key": "api-create-hermes"},
+    )
+    assert created.status_code == 201, created.text
+    task = created.json()["task"]
+    assert task["workflow_id"] == "hermes_rag_agent"
+    assert task["configuration"]["engine"] == "hermes"
+
+    too_large = api_client.post(
+        f"/api/threads/{sample_thread.id}/agent-tasks",
+        json={**payload, "context_window": 8193},
+        headers={"Idempotency-Key": "api-create-hermes-too-large"},
+    )
+    assert too_large.status_code == 422
+    assert too_large.json()["detail"]["code"] == "hermes_context_window_exceeded"
 
 
 @pytest.mark.asyncio

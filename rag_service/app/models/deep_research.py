@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 DEEP_RESEARCH_WORKFLOW_ID = "deep_research_agent"
+HERMES_DEEP_RESEARCH_WORKFLOW_ID = "hermes_rag_agent"
+DEEP_RESEARCH_ENGINE_WORKFLOWS = {
+    "langgraph": DEEP_RESEARCH_WORKFLOW_ID,
+    "hermes": HERMES_DEEP_RESEARCH_WORKFLOW_ID,
+}
 
 
 class AgentTaskStatus(str, Enum):
@@ -61,6 +66,7 @@ class DeepResearchLimits(BaseModel):
 
 
 class AgentTaskCreateRequest(BaseModel):
+    engine: Literal["langgraph", "hermes"] = "langgraph"
     objective: str = Field(min_length=1, max_length=20_000)
     llm_model: str = Field(min_length=1, max_length=300)
     context_window: int = Field(default=32_768, ge=2_048, le=2_000_000)
