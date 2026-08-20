@@ -3,12 +3,16 @@
 _config_version: 37
 model:
   default: askpdf-runtime-selected
-  provider: custom
+  provider: __HERMES_MODEL_PROVIDER__
   base_url: ${LLM_API_URL}
-  context_length: ${HERMES_MODEL_CONTEXT_LENGTH}
-mcp_servers:
-  askpdf:
-    url: http://rag-service:8000/internal/hermes-mcp/external/
-    enabled: true
-    tools:
-      include: [get_thread_shape, search_documents, search_document_by_id, search_thread_conversation_history, search_thread_events, search_durable_memory, search_web, wikipedia, wikidata, arxiv, pubmed, semantic_scholar, stack_exchange, yahoo_finance_news]
+  context_length: __HERMES_MODEL_CONTEXT_LENGTH__
+platforms:
+  # The default profile owns the shared listener in multiplex mode. The key
+  # remains available for authentication on this profile's /p/<profile>/ path.
+  api_server:
+    enabled: false
+auxiliary:
+  title_generation:
+    enabled: false
+# Runtime MCP registration belongs exclusively to generated per-run profiles.
+mcp_servers: {}

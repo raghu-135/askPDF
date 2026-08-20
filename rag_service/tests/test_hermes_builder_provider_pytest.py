@@ -84,7 +84,8 @@ async def test_hermes_resolution_drops_langgraph_request_overrides():
 
 
 @pytest.mark.asyncio
-async def test_hermes_resolution_inherits_thread_model_through_custom_provider():
+async def test_hermes_resolution_inherits_thread_model_through_deployment_provider(monkeypatch):
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     resolved = await HermesBuilderProvider().resolve(
         _definition(),
         _spec(),
@@ -92,15 +93,16 @@ async def test_hermes_resolution_inherits_thread_model_through_custom_provider()
     )
 
     assert resolved["config"]["model"] == "askpdf-selected-model"
-    assert resolved["config"]["provider"] == "custom"
+    assert resolved["config"]["provider"] == "lmstudio"
     assert resolved["managed_profile"]["model_policy"] == {
         "model": "askpdf-selected-model",
-        "provider": "custom",
+        "provider": "lmstudio",
     }
 
 
 @pytest.mark.asyncio
-async def test_hermes_resolution_prefers_request_selected_model():
+async def test_hermes_resolution_prefers_request_selected_model(monkeypatch):
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     resolved = await HermesBuilderProvider().resolve(
         _definition(),
         _spec(),
@@ -109,7 +111,7 @@ async def test_hermes_resolution_prefers_request_selected_model():
     )
 
     assert resolved["config"]["model"] == "askpdf-request-model"
-    assert resolved["config"]["provider"] == "custom"
+    assert resolved["config"]["provider"] == "lmstudio"
 
 
 def test_hermes_explicit_unsupported_override_is_rejected():

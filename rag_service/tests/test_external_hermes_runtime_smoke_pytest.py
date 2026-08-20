@@ -16,6 +16,9 @@ from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
+from app.runtime.hermes_builder import HermesBuilderProvider
+from app.mcp.execution_context_token import issue_execution_context_token
+from app.tools.context import ToolInvocationContext
 
 
 _enabled = os.getenv("PHASE7_HERMES_SMOKE", "").lower() in {"1", "true", "yes", "on"}
@@ -50,14 +53,29 @@ async def test_external_hermes_runtime_contract_and_execution():
     unique = uuid.uuid4().hex
     run_id = f"phase7-smoke-hermes-{unique}"
     thread_id = f"phase7-smoke-thread-{unique}"
+    configured_context = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
+    token = issue_execution_context_token(
+        ToolInvocationContext(
+            thread_id=thread_id,
+            run_id=run_id,
+            embedding_model="phase5-deterministic-embedding",
+            context_window=configured_context,
+            extensions={"task_id": run_id, "llm_model": _TEST_MODEL},
+        ),
+        task_id=run_id,
+        allowed_tools=list(spec["config"]["allowed_tool_ids"]),
+    )
     request = AgentRuntimeRequest(
         run_id=run_id,
         thread_id=thread_id,
         definition_id=definition.definition_id,
         framework=definition.framework,
         builder_id=definition.builder_id,
-        input={"question": "Use the approved document evidence tool and summarize the available evidence."},
-        options={"llm_model": _TEST_MODEL},
+        input={
+            "question": "Use the approved document evidence tool and summarize the available evidence.",
+            "mcp_execution_context_token": token,
+        },
+        options={"llm_model": _TEST_MODEL, "context_window": configured_context},
     )
     adapter = HermesRuntimeAdapter(base_url=os.environ["HERMES_RUNTIME_URL"])
     try:
@@ -66,11 +84,16 @@ async def test_external_hermes_runtime_contract_and_execution():
         assert capabilities.cancellation is True
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True
+        resolved_spec = await HermesBuilderProvider().resolve(
+            definition,
+            spec,
+            request_overrides={"llm_model": _TEST_MODEL, "context_window": configured_context},
+        )
         result = await adapter.start(
             request,
             context=RuntimeExecutionContext(
                 request=SimpleNamespace(question=request.input["question"], runtime_execution_mode=True),
-                resolved_spec=spec,
+                resolved_spec=resolved_spec,
                 agent_run_context={"agent_run_id": request.run_id, "agent_workflow_id": definition.definition_id},
             ),
         )
@@ -107,7 +130,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             json={
                 "objective": "Use document evidence and provide the deterministic answer.",
                 "llm_model": _TEST_MODEL,
-                "context_window": 32768,
+                "context_window": int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]),
                 "web_search_mode": "off",
                 "engine": "hermes",
             },
@@ -129,14 +152,15 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             if task["status"] in {"completed", "failed", "cancelled"}:
                 break
             await asyncio.sleep(0.5)
-        assert task["status"] == "completed", json.dumps(task, indent=2, default=str)
+        assert task["status"] == "failed", json.dumps(task, indent=2, default=str)
+        assert task["terminal_reason"] == "required_evidence_unavailable"
         run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})
         run_response.raise_for_status()
         persisted = run_response.json()["agent_run"]
         assert persisted["framework"] == "hermes"
         assert persisted["builder_id"] == "hermes_agent"
-        assert persisted["status"] == "completed"
+        assert persisted["status"] == "failed"
         assert persisted["workflow_id"] == "hermes_rag_agent"
 
     connection = await asyncpg.connect(os.environ["PHASE7_PRODUCT_DATABASE_URL"])

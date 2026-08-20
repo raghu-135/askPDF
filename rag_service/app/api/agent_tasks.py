@@ -27,6 +27,12 @@ from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
+from app.runtime.hermes_config import (
+    HermesConfigurationError,
+    hermes_model_context_length,
+    hermes_runtime_enabled,
+    validate_hermes_model_compatibility,
+)
 
 
 router = APIRouter(tags=["agent-tasks"])
@@ -34,8 +40,13 @@ logger = logging.getLogger(__name__)
 
 
 def _hermes_available() -> bool:
-    enabled = os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-    return enabled and len(os.getenv("HERMES_MCP_CONTEXT_SECRET", "")) >= 32 and _hermes_context_length(required=False) is not None
+    if not hermes_runtime_enabled() or len(os.getenv("HERMES_MCP_CONTEXT_SECRET", "")) < 32:
+        return False
+    try:
+        validate_hermes_model_compatibility()
+        return True
+    except HermesConfigurationError:
+        return False
 
 
 async def _deep_research_contract() -> dict[str, Any]:
@@ -81,18 +92,17 @@ async def get_deep_research_capabilities():
 
 
 def _hermes_context_length(*, required: bool) -> int | None:
-    raw = os.getenv("HERMES_MODEL_CONTEXT_LENGTH", "").strip()
-    if not raw:
-        if required:
-            raise HTTPException(status_code=503, detail={"code": "hermes_context_length_unconfigured"})
-        return None
     try:
-        value = int(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail={"code": "hermes_context_length_invalid"}) from exc
-    if value < 2048:
-        raise HTTPException(status_code=503, detail={"code": "hermes_context_length_invalid"})
-    return value
+        if required:
+            return validate_hermes_model_compatibility()[0]
+        value = hermes_model_context_length(required=False)
+        if value is not None:
+            validate_hermes_model_compatibility()
+        return value
+    except HermesConfigurationError as exc:
+        if not required:
+            return None
+        raise HTTPException(status_code=503, detail={"code": exc.code}) from exc
 
 
 def _task_payload(task: Any) -> dict[str, Any]:
@@ -202,6 +212,11 @@ async def create_agent_task(
         if not _hermes_available():
             raise HTTPException(status_code=409, detail={"code": "hermes_runtime_unavailable"})
         hermes_context_length = _hermes_context_length(required=True)
+        if "context_window" in req.model_fields_set and req.context_window != hermes_context_length:
+            raise HTTPException(status_code=409, detail={
+                "code": "hermes_context_length_conflict",
+                "configured_context_length": hermes_context_length,
+            })
     if req.web_search_mode != "off" and not contract["web_enabled"]:
         raise HTTPException(status_code=409, detail={"code": "deep_research_web_unavailable"})
     config = req.model_dump(mode="json")

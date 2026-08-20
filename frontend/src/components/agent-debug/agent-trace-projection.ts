@@ -213,7 +213,7 @@ export const buildCorrectiveInspection = (
   const metrics = asObject(runDetails.metrics_json);
   const corrective = asObject(runDetails.corrective || metrics.corrective || traceMetrics.corrective);
   const retrievalQuality = asObject(runDetails.retrieval_quality_report || metrics.retrieval_quality_report || traceMetrics.retrieval_quality_report);
-  const grounding = asObject(runDetails.grounding_report || metrics.grounding_report || traceMetrics.grounding_report);
+  const grounding = asObject(runDetails.grounding_report || metrics.grounding_report || metrics.grounding || traceMetrics.grounding_report || traceMetrics.grounding);
   if (!Object.keys(corrective).length && !Object.keys(retrievalQuality).length && !Object.keys(grounding).length) return undefined;
   return { corrective, retrievalQuality, grounding };
 };

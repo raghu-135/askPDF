@@ -1,5 +1,6 @@
 import builtins
 import json
+import os
 from pathlib import Path
 import httpx
 import pytest
@@ -63,6 +64,7 @@ def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
 async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     calls = []
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
 
@@ -118,6 +120,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
 async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
     operations = (
@@ -141,7 +144,7 @@ async def test_hermes_adapter_rejects_missing_context_length(monkeypatch):
         await adapter.start(request, context=None)
 
 
-def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200, mcp_required=True):
+def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200, mcp_required=True, rendered_context=None):
     requested_urls = []
     async_client = httpx.AsyncClient
 
@@ -154,6 +157,10 @@ def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200,
         return async_client(transport=httpx.MockTransport(handler))
 
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes-readiness.json"))
+    context_length = os.environ["HERMES_MODEL_CONTEXT_LENGTH"]
+    rendered_config = tmp_path / "hermes-config.yaml"
+    rendered_config.write_text(f"model:\n  context_length: {rendered_context or context_length}\n")
+    monkeypatch.setenv("HERMES_RENDERED_CONFIG_PATH", str(rendered_config))
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("ASKPDF_MCP_HEALTH_URL", "http://mcp.test/healthz")
     monkeypatch.setenv("ASKPDF_MCP_REQUIRED", "true" if mcp_required else "false")
@@ -171,6 +178,24 @@ def test_hermes_readiness_accepts_healthy_hermes_and_mcp(monkeypatch, tmp_path):
     assert response.json()["checks"]["hermes"]["status"] == "ok"
     assert response.json()["checks"]["mcp"]["status"] == "ok"
     assert requested_urls == ["http://hermes.test/health", "http://mcp.test/healthz"]
+
+
+def test_hermes_readiness_rejects_rendered_context_mismatch(monkeypatch, tmp_path):
+    configured = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
+    response, _ = _readiness_response(
+        monkeypatch,
+        tmp_path,
+        hermes_status=200,
+        mcp_status=204,
+        rendered_context=configured + 1,
+    )
+    assert response.status_code == 503
+    assert response.json()["checks"]["model_context"] == {
+        "status": "failed",
+        "configured_context_length": configured,
+        "rendered_context_length": configured + 1,
+        "provider": os.getenv("HERMES_MODEL_PROVIDER", "custom"),
+    }
 
 
 def test_hermes_readiness_does_not_invent_health_route_from_mcp_transport(monkeypatch, tmp_path):

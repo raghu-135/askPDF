@@ -17,9 +17,27 @@ async def test_mcp_initialize_and_tools_list():
 
 
 @pytest.mark.asyncio
-async def test_hermes_mcp_catalog_is_filtered_and_requires_context_token():
+async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeypatch):
+    from app.mcp import server as server_module
     from app.mcp.server import get_http_app
     from app.mcp.transport import LoopbackHTTPMCPClient
+    from app.mcp.execution_context_token import TOKEN_HEADER, issue_execution_context_token
+    from app.tools.context import ToolInvocationContext
+    from app.agent.tool_contract import ToolResult
+
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    definition = server_module.MCP_TOOL_DEFINITIONS["get_thread_shape"]
+
+    async def handler(request, context):
+        assert context.run_id == "run-1"
+        return ToolResult(content="thread shape", sources=[{"thread_id": context.thread_id}])
+
+    monkeypatch.setitem(
+        server_module.MCP_TOOL_DEFINITIONS,
+        "get_thread_shape",
+        definition.__class__(definition.name, definition.request_model, handler, definition.registry_contract_id, definition.contract_version, definition.server_name),
+    )
 
     mcp_app = get_http_app(
         allowed_tools=frozenset({"get_thread_shape", "search_documents"}),
@@ -30,10 +48,21 @@ async def test_hermes_mcp_catalog_is_filtered_and_requires_context_token():
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
             listed = await client.request("tools/list")
             assert {tool["name"] for tool in listed["tools"]} == {"get_thread_shape", "search_documents"}
-            assert all("_askpdf_context_token" in tool["inputSchema"]["required"] for tool in listed["tools"])
+            assert all("_askpdf_context_token" not in tool["inputSchema"].get("properties", {}) for tool in listed["tools"])
             rejected = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
             assert rejected["isError"] is True
-            assert "_askpdf_context_token' is a required property" in rejected["content"][0]["text"]
+            assert "execution context is required" in rejected["content"][0]["text"]
+
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
+        task_id="task-1", allowed_tools=["get_thread_shape"],
+    )
+    async with mcp_app.router.lifespan_context(mcp_app):
+        async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost", headers={TOKEN_HEADER: token}) as http_client:
+            client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
+            accepted = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
+            assert accepted["isError"] is False
+            assert accepted["structuredContent"]["result_count"] == 1
 
 
 @pytest.mark.asyncio

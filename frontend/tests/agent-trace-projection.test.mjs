@@ -49,6 +49,23 @@ test('corrective inspection preserves wave outcomes, packet grades, and exact cl
   assert.equal(inspection.grounding.contradictions.length, 1);
 });
 
+test('Hermes grounding inspection reads runtime evidence metrics', () => {
+  const inspection = buildCorrectiveInspection({
+    id: 'run-hermes',
+    metrics_json: {
+      grounding: {
+        grounded: false,
+        requirement: 'document',
+        evidence_result_count: 0,
+        failure_codes: ['tool_arguments_invalid'],
+      },
+    },
+  });
+  assert.equal(inspection.grounding.grounded, false);
+  assert.equal(inspection.grounding.requirement, 'document');
+  assert.deepEqual(inspection.grounding.failure_codes, ['tool_arguments_invalid']);
+});
+
 const backendDebug = {
   version: 1,
   trace: {

@@ -8,6 +8,7 @@ import httpx
 
 
 RUNTIME_URL = os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200")
+LEGACY_PROFILE_MODEL = "askpdf-runtime-selected"
 
 
 def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[str, Any]:
@@ -19,7 +20,7 @@ def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[
             "framework": "hermes",
             "builder_id": "hermes_agent",
             "input": {"question": question},
-            "options": {"llm_model": "phase5-deterministic", "llm_provider": "custom"},
+            "options": {"llm_model": LEGACY_PROFILE_MODEL, "llm_provider": "lmstudio"},
         },
         "context": {
             "resolved_spec": {
@@ -28,8 +29,8 @@ def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[
                     "mcp_server": "askpdf",
                     "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                     "system_prompt": "Use approved tools.",
-                    "model": "phase5-deterministic",
-                    "provider": "custom",
+                    "model": LEGACY_PROFILE_MODEL,
+                    "provider": "lmstudio",
                 },
             },
         },

@@ -12,21 +12,18 @@ model:
   # Product requests always override this with the model selected in askPDF's
   # thread settings. This value exists only to satisfy Hermes startup config.
   default: askpdf-runtime-selected
-  provider: custom
+  provider: __HERMES_MODEL_PROVIDER__
   base_url: ${LLM_API_URL}
   # Required when Hermes is enabled. This prevents Hermes from silently
   # assuming its 256k fallback for custom/provider-selected models.
-  context_length: ${HERMES_MODEL_CONTEXT_LENGTH}
+  context_length: __HERMES_MODEL_CONTEXT_LENGTH__
 
-mcp_servers:
-  askpdf:
-    url: http://rag-service:8000/internal/hermes-mcp/offline/
-    enabled: true
-    tools:
-      include:
-        - get_thread_shape
-        - search_documents
-        - search_document_by_id
-        - search_thread_conversation_history
-        - search_thread_events
-        - search_durable_memory
+auxiliary:
+  # askPDF owns task/report titles. Hermes title generation runs outside the
+  # per-run secret scope in multiplex mode and is intentionally unused.
+  title_generation:
+    enabled: false
+
+# MCP servers are registered only by isolated generated run profiles, where a
+# signed execution-context header is available.
+mcp_servers: {}

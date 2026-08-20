@@ -17,7 +17,8 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
-from app.runtime.hermes_profile import HERMES_DEFINITION_VERSION, resolve_hermes_profile
+from app.runtime.hermes_config import hermes_model_provider
+from app.runtime.hermes_profile import HERMES_DEFINITION_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS, resolve_hermes_profile
 
 
 class HermesBuilderProvider:
@@ -33,8 +34,8 @@ class HermesBuilderProvider:
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
-        if spec.get("definition_version") != HERMES_DEFINITION_VERSION:
-            issues.append(RuntimeValidationIssue("unsupported_definition_version", f"Hermes definitions must use definition_version {HERMES_DEFINITION_VERSION}", "definition_version"))
+        if spec.get("definition_version") not in HERMES_SUPPORTED_DEFINITION_VERSIONS:
+            issues.append(RuntimeValidationIssue("unsupported_definition_version", f"Hermes definitions must use one of {sorted(HERMES_SUPPORTED_DEFINITION_VERSIONS)}", "definition_version"))
         if spec.get("schema_version") != 2:
             issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 2", "schema_version"))
         runtime = spec.get("runtime")
@@ -139,7 +140,7 @@ class HermesBuilderProvider:
         ).strip()
         if selected_model:
             config["model"] = selected_model
-            config["provider"] = "custom"
+            config["provider"] = hermes_model_provider()
         config.update(filtered_overrides)
         resolved["config"] = config
         resolved["managed_profile"] = resolve_hermes_profile(resolved)

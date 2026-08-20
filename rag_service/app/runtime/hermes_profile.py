@@ -7,8 +7,9 @@ import json
 from typing import Any, Mapping
 
 
-HERMES_DEFINITION_VERSION = 1
-HERMES_PROFILE_VERSION = 1
+HERMES_DEFINITION_VERSION = 2
+HERMES_PROFILE_VERSION = 2
+HERMES_SUPPORTED_DEFINITION_VERSIONS = frozenset({1, HERMES_DEFINITION_VERSION})
 HERMES_OFFLINE_PROFILE = "askpdf-deep-offline"
 HERMES_EXTERNAL_PROFILE = "askpdf-deep-external"
 HERMES_BASE_TOOL_IDS = (
@@ -46,8 +47,9 @@ def _reject_secrets(value: Any, path: str = "config") -> None:
 
 
 def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
-    if int(spec.get("definition_version") or 0) != HERMES_DEFINITION_VERSION:
-        raise ValueError(f"Hermes definition_version must be {HERMES_DEFINITION_VERSION}")
+    definition_version = int(spec.get("definition_version") or 0)
+    if definition_version not in HERMES_SUPPORTED_DEFINITION_VERSIONS:
+        raise ValueError(f"Hermes definition_version must be one of {sorted(HERMES_SUPPORTED_DEFINITION_VERSIONS)}")
     config = spec.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("Hermes definitions require config")
@@ -64,7 +66,7 @@ def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
     runtime_profile = HERMES_EXTERNAL_PROFILE if external_enabled else HERMES_OFFLINE_PROFILE
     skills = tuple(sorted(set(str(item) for item in config.get("skills") or [])))
     profile = {
-        "profile_version": HERMES_PROFILE_VERSION,
+        "profile_version": HERMES_PROFILE_VERSION if definition_version == HERMES_DEFINITION_VERSION else 1,
         "instructions": str(config.get("system_prompt") or ""),
         "mcp": {
             "server": str(config.get("mcp_server") or ""),

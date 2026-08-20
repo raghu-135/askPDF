@@ -12,8 +12,10 @@ import copy
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
 import httpx
@@ -24,6 +26,13 @@ from hermes_runtime.execution_store import (
     HermesExecutionStore,
 )
 from hermes_runtime.compatibility import HERMES_REVISION, HERMES_TERMINAL_EVENTS
+from hermes_runtime.profile_manager import (
+    RunProfile,
+    RunProfileManager,
+    configured_context_length,
+    configured_provider,
+    validate_provider_context,
+)
 
 
 WIRE_VERSION = 1
@@ -64,6 +73,14 @@ def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
         else float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
     )
     return httpx.Timeout(read_timeout, connect=5, write=10)
+
+
+def _rendered_model_context_length() -> int:
+    config_path = Path(os.getenv("HERMES_RENDERED_CONFIG_PATH", "/opt/data/config.yaml"))
+    match = re.search(r"(?m)^\s{2}context_length:\s*([0-9]+)\s*$", config_path.read_text())
+    if not match:
+        raise RuntimeError("Hermes rendered config has no concrete model.context_length")
+    return int(match.group(1))
 
 
 class _HermesEventBudget:
@@ -211,6 +228,7 @@ def create_app() -> FastAPI:
     if worker_count > 1:
         raise RuntimeError("Hermes file execution storage supports one worker only")
     store = HermesExecutionStore()
+    profile_manager = RunProfileManager()
     state: dict[str, Any] = {
         "active": {},
         "draining": False,
@@ -218,12 +236,21 @@ def create_app() -> FastAPI:
         "storage_backend": storage_backend,
         "worker_count": worker_count,
         "storage_healthy": True,
+        "profile_manager": profile_manager,
     }
     start_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         state["draining"] = False
+        profile_max_age = int(os.getenv("HERMES_RUN_PROFILE_MAX_AGE_SECONDS", "86400"))
+        profile_manager.sweep_stale(max_age_seconds=profile_max_age)
+        async def sweep_profiles() -> None:
+            interval = max(60, int(os.getenv("HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS", "3600")))
+            while True:
+                await asyncio.sleep(interval)
+                profile_manager.sweep_stale(max_age_seconds=profile_max_age)
+        profile_sweeper = asyncio.create_task(sweep_profiles(), name="hermes-profile-sweeper")
         # Recovered records remain inspectable. Their upstream bindings are
         # intentionally not discarded when the gateway process restarts.
         for run_id, record in list(store.records.items()):
@@ -232,8 +259,15 @@ def create_app() -> FastAPI:
                     _background_run(_recovery_payload(record), None),
                     name=f"hermes-runtime-recovery-{run_id}",
                 )
-        yield
-        state["draining"] = True
+        try:
+            yield
+        finally:
+            state["draining"] = True
+            profile_sweeper.cancel()
+            try:
+                await profile_sweeper
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(title="AskPDF Hermes Runtime", version=os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"), lifespan=lifespan)
 
@@ -278,7 +312,17 @@ def create_app() -> FastAPI:
         if not state["storage_healthy"]:
             state["storage_healthy"] = store.probe()
         storage_ready = bool(state["storage_healthy"])
-        ready = hermes_ready and mcp_ready and storage_ready
+        try:
+            context_length = configured_context_length()
+            provider = configured_provider()
+            validate_provider_context(provider, context_length)
+            rendered_context_length = _rendered_model_context_length()
+            context_ready = rendered_context_length == context_length
+        except (OSError, RuntimeError, ValueError):
+            context_length = None
+            rendered_context_length = None
+            context_ready = False
+        ready = hermes_ready and mcp_ready and storage_ready and context_ready
         return JSONResponse(
             {
                 "status": "ok" if ready else "not_ready",
@@ -295,6 +339,12 @@ def create_app() -> FastAPI:
                     "storage": {
                         "status": "ok" if storage_ready else "failed",
                         "backend": state["storage_backend"],
+                    },
+                    "model_context": {
+                        "status": "ok" if context_ready else "failed",
+                        "configured_context_length": context_length,
+                        "rendered_context_length": rendered_context_length,
+                        "provider": provider if context_length is not None else None,
                     },
                 },
             },
@@ -330,8 +380,8 @@ def create_app() -> FastAPI:
             issues.append({"code": "invalid_runtime_identity", "message": "Hermes runtime requires framework=hermes and builder_id=hermes_agent"})
         if spec.get("schema_version") != 2:
             issues.append({"code": "unsupported_schema_version", "message": "Hermes definitions must use schema_version 2"})
-        if spec.get("definition_version") != 1:
-            issues.append({"code": "unsupported_definition_version", "message": "Hermes definitions must use definition_version 1"})
+        if spec.get("definition_version") not in {1, 2}:
+            issues.append({"code": "unsupported_definition_version", "message": "Hermes definitions must use definition_version 1 or 2"})
         config = spec.get("config")
         if not isinstance(config, Mapping):
             issues.append({"code": "missing_config", "message": "Hermes spec requires config"})
@@ -369,8 +419,10 @@ def create_app() -> FastAPI:
         continuation = neutral_request.get("continuation") if isinstance(neutral_request.get("continuation"), Mapping) else None
         context = dict(payload.get("context") or {})
         question = str(input_data.get("question") or context.get("request_payload", {}).get("question") or "")
-        config = dict(context.get("resolved_spec") or {}).get("config") or {}
-        managed_profile = dict(context.get("resolved_spec") or {}).get("managed_profile") or {}
+        resolved_spec = dict(context.get("resolved_spec") or {})
+        definition_version = int(resolved_spec.get("definition_version") or 1)
+        config = resolved_spec.get("config") or {}
+        managed_profile = resolved_spec.get("managed_profile") or {}
         runtime_profile = str((managed_profile.get("mcp") or {}).get("runtime_profile") or "").strip()
         max_events = max(1, int(config.get("max_event_count") or 200))
         max_output_chars = max(1, int(config.get("max_output_chars") or 12000))
@@ -381,11 +433,6 @@ def create_app() -> FastAPI:
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
             question = question + "\n\naskPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False)
-        if context_token:
-            system_prompt += (
-                "\n\nFor every askPDF MCP tool call, pass this exact value in the "
-                "_askpdf_context_token argument: " + context_token
-            )
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,
@@ -478,12 +525,112 @@ def create_app() -> FastAPI:
                 sequence += 1
             return event, result, operation_event
 
+        binding_payload = ((neutral_request.get("continuation") or {}).get("payload") or {})
+        execution_profile = str(binding_payload.get("runtime_profile") or "")
+        run_profile: RunProfile | None = None
         try:
+            if definition_version >= 2 and not profile_manager.is_reusable(execution_profile):
+                run_profile = profile_manager.create(
+                    run_id=run_id,
+                    policy_profile=runtime_profile,
+                    context_token=context_token,
+                    allowed_tools=list(config.get("allowed_tool_ids") or []),
+                    selected_model=str(upstream_payload.get("model") or ""),
+                    selected_provider=str(upstream_payload.get("provider") or ""),
+                )
+                execution_profile = run_profile.name
+                if not profile_manager.verify(run_profile):
+                    raise HTTPException(status_code=502, detail=_error(
+                        "hermes_profile_preflight_failed",
+                        "Hermes run profile could not be verified",
+                        retryable=True,
+                        details={"stage": "profile_identity", "reason": "fingerprint_mismatch", "profile_digest": run_profile.config_fingerprint},
+                    ))
+            elif not execution_profile:
+                # Version-1 runs predate task-scoped MCP credentials. Preserve
+                # their frozen static profile instead of changing them in place.
+                execution_profile = runtime_profile
             async with httpx.AsyncClient(timeout=_upstream_timeout(max_duration_seconds)) as client:
+                if run_profile is not None:
+                    preflight_url = profile_upstream_url(execution_profile) + "/v1/toolsets"
+                    try:
+                        preflight = await client.get(preflight_url, headers=headers)
+                        preflight.raise_for_status()
+                        toolset_payload = preflight.json()
+                        activation = (
+                            toolset_payload.get("askpdf_runtime_profile")
+                            if isinstance(toolset_payload, Mapping)
+                            else None
+                        )
+                        if not isinstance(activation, Mapping):
+                            raise ValueError("profile activation metadata missing")
+                        registered_tools = {
+                            str(value) for value in activation.get("registered_tools") or []
+                        }
+                        expected_registered = {
+                            f"mcp__{run_profile.mcp_server_name}__{tool_name}"
+                            for tool_name in run_profile.expected_tools
+                        }
+                        activation_mismatches = []
+                        if str(activation.get("name") or "") != run_profile.name:
+                            activation_mismatches.append("profile_name")
+                        if str(activation.get("config_fingerprint") or "") != run_profile.activation_fingerprint:
+                            activation_mismatches.append("config_fingerprint")
+                        if set(str(value) for value in activation.get("mcp_server_names") or []) != {run_profile.mcp_server_name}:
+                            activation_mismatches.append("mcp_server_names")
+                        if not expected_registered.issubset(registered_tools):
+                            activation_mismatches.append("registered_tools")
+                        if activation_mismatches:
+                            logger.warning(
+                                "Hermes profile activation mismatch profile=%s fields=%s expected_tools=%s registered_tools=%s",
+                                run_profile.name,
+                                activation_mismatches,
+                                sorted(expected_registered),
+                                sorted(registered_tools),
+                            )
+                            raise ValueError("profile activation identity or tools mismatch")
+                    except (httpx.HTTPError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                        raise HTTPException(status_code=502, detail=_error(
+                            "hermes_profile_preflight_failed",
+                            "Hermes run profile could not activate its MCP tools",
+                            retryable=True,
+                            details={
+                                "stage": "tool_discovery",
+                                "reason": "activation_mismatch" if isinstance(exc, ValueError) else "transport_or_protocol",
+                                "http_status": status_code,
+                                "profile_digest": run_profile.config_fingerprint,
+                                "expected_tools": list(run_profile.expected_tools),
+                            },
+                        )) from exc
+                    try:
+                        mcp_response = await client.get(
+                            "http://rag-service:8000/internal/hermes-mcp/preflight",
+                            headers={"x-askpdf-execution-context": context_token},
+                        )
+                        mcp_response.raise_for_status()
+                        mcp_payload = mcp_response.json()
+                        if not isinstance(mcp_payload, Mapping) or mcp_payload.get("status") != "ok" or str(mcp_payload.get("run_id") or "") != run_id:
+                            raise ValueError("MCP preflight returned an error")
+                    except (httpx.HTTPError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                        raise HTTPException(status_code=502, detail=_error(
+                            "hermes_profile_preflight_failed",
+                            "Hermes run profile could not activate its MCP tools",
+                            retryable=True,
+                            details={"stage": "mcp_context", "reason": "context_rejected", "http_status": status_code, "profile_digest": run_profile.config_fingerprint},
+                        )) from exc
+                    yield _sse(_neutral_event(run_id, sequence, "operation.completed", {
+                        "operation_id": "hermes_profile_preflight", "operation_type": "runtime_preflight",
+                        "operation_label": "Hermes profile and MCP preflight", "visit_index": 1,
+                        "profile_digest": run_profile.config_fingerprint, "token_digest": run_profile.token_digest,
+                        "token_expires_at": run_profile.token_expires_at, "tool_count": len(run_profile.expected_tools),
+                    }))
+                    sequence += 1
                 existing_binding = (neutral_request.get("continuation") or {}).get("payload") or {}
                 upstream_run_id = str(existing_binding.get("upstream_run_id") or "")
                 if not upstream_run_id:
-                    response = await client.post(profile_upstream_url(runtime_profile) + "/v1/runs", headers=headers, json=upstream_payload)
+                    response = await client.post(profile_upstream_url(execution_profile) + "/v1/runs", headers=headers, json=upstream_payload)
                     response.raise_for_status()
                     start = response.json()
                     response_session_id = _response_session_id(start)
@@ -493,7 +640,7 @@ def create_app() -> FastAPI:
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
                 if not session_id:
-                    status_response = await client.get(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}", headers=headers)
+                    status_response = await client.get(profile_upstream_url(execution_profile) + f"/v1/runs/{upstream_run_id}", headers=headers)
                     status_response.raise_for_status()
                     status_payload = status_response.json()
                     if isinstance(status_payload, Mapping):
@@ -508,7 +655,9 @@ def create_app() -> FastAPI:
                     "payload": {
                         "session_id": session_id,
                         "upstream_run_id": upstream_run_id,
-                        "runtime_profile": runtime_profile,
+                        "runtime_profile": execution_profile,
+                        "policy_profile": runtime_profile,
+                        **(run_profile.continuation_metadata() if run_profile is not None else {}),
                     },
                 }
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
@@ -521,7 +670,7 @@ def create_app() -> FastAPI:
                     "session_id": session_id,
                 }, continuation=continuation))
                 sequence += 1
-                async with client.stream("GET", profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
+                async with client.stream("GET", profile_upstream_url(execution_profile) + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
                     events_response.raise_for_status()
                     event_name = "message"
                     data: list[str] = []
@@ -597,6 +746,8 @@ def create_app() -> FastAPI:
             event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
             yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+        finally:
+            profile_manager.retire(run_profile or execution_profile)
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         try:

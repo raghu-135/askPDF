@@ -1,6 +1,7 @@
 import pytest
 
 from app.mcp.execution_context_token import (
+    ExecutionContextTokenError,
     decode_execution_context_token,
     issue_execution_context_token,
 )
@@ -9,6 +10,7 @@ from app.tools.context import ToolInvocationContext
 
 def test_signed_context_round_trip_and_tool_allowlist(monkeypatch):
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     token = issue_execution_context_token(
         ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
         task_id="task-1",
@@ -25,19 +27,22 @@ def test_signed_context_round_trip_and_tool_allowlist(monkeypatch):
 
 def test_signed_context_rejects_tampering(monkeypatch):
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     token = issue_execution_context_token(
         ToolInvocationContext(thread_id="thread-1"),
         task_id="task-1",
         allowed_tools=["search_documents"],
     )
-    with pytest.raises(ValueError, match="Invalid Hermes MCP"):
+    with pytest.raises(ExecutionContextTokenError, match="Invalid Hermes MCP") as rejected:
         decode_execution_context_token(token + "tampered", tool_name="search_documents")
+    assert rejected.value.reason == "bad_signature"
 
 
 def test_signed_context_rejects_expiry_and_incomplete_identity(monkeypatch):
     from app.mcp import execution_context_token as token_module
 
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     monkeypatch.setattr(token_module.time, "time", lambda: 100)
     token = issue_execution_context_token(
         ToolInvocationContext(thread_id="thread-1", run_id="run-1", context_window=8192),
@@ -46,8 +51,9 @@ def test_signed_context_rejects_expiry_and_incomplete_identity(monkeypatch):
         ttl_seconds=60,
     )
     monkeypatch.setattr(token_module.time, "time", lambda: 200)
-    with pytest.raises(ValueError, match="Invalid Hermes MCP"):
+    with pytest.raises(ExecutionContextTokenError, match="Invalid Hermes MCP") as expired:
         decode_execution_context_token(token, tool_name="search_documents")
+    assert expired.value.reason == "expired"
 
     monkeypatch.setattr(token_module.time, "time", lambda: 100)
     incomplete = issue_execution_context_token(
@@ -57,3 +63,17 @@ def test_signed_context_rejects_expiry_and_incomplete_identity(monkeypatch):
     )
     with pytest.raises(ValueError, match="Invalid Hermes MCP"):
         decode_execution_context_token(incomplete, tool_name="search_documents")
+
+
+def test_signed_context_rejects_deployment_context_mismatch(monkeypatch):
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", context_window=8192),
+        task_id="task-1",
+        allowed_tools=["search_documents"],
+    )
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    with pytest.raises(ExecutionContextTokenError) as rejected:
+        decode_execution_context_token(token, tool_name="search_documents")
+    assert rejected.value.reason == "model_context_mismatch"

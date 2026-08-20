@@ -6,7 +6,12 @@ from fastapi.testclient import TestClient
 
 from fastapi import HTTPException
 
-from hermes_runtime.api import _error, _HermesEventBudget, _upstream_timeout, create_app
+from hermes_runtime.api import (
+    _error,
+    _HermesEventBudget,
+    _upstream_timeout,
+    create_app,
+)
 
 
 def _payload(allowed_tools):

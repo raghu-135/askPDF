@@ -18,6 +18,8 @@ pytestmark = pytest.mark.skipif(
     reason="requires PHASE7_REAL_HERMES_SMOKE=true and the pinned real-Hermes Compose profile",
 )
 
+_LEGACY_PROFILE_MODEL = "askpdf-runtime-selected"
+
 
 class _Sink:
     def __init__(self) -> None:
@@ -41,18 +43,18 @@ def _request(prompt: str) -> AgentRuntimeRequest:
         framework="hermes",
         builder_id="hermes_agent",
         input={"question": prompt},
-        options={"llm_model": "phase5-deterministic", "llm_provider": "custom"},
+        options={"llm_model": _LEGACY_PROFILE_MODEL, "llm_provider": "lmstudio"},
     )
 
 
 def _context() -> RuntimeExecutionContext:
-    return RuntimeExecutionContext(resolved_spec={"definition_version": 1, "config": {"system_prompt": "Respond concisely.", "model": "phase5-deterministic", "provider": "custom", "mcp_server": "askpdf", "allowed_tool_ids": [], "max_duration_seconds": 120}})
+    return RuntimeExecutionContext(resolved_spec={"definition_version": 1, "config": {"system_prompt": "Respond concisely.", "model": _LEGACY_PROFILE_MODEL, "provider": "lmstudio", "mcp_server": "askpdf", "allowed_tool_ids": [], "max_duration_seconds": 120}})
 
 
 @pytest.mark.asyncio
 async def test_pinned_real_hermes_completion_stream_and_session_capture(monkeypatch) -> None:
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    assert int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]) >= 2048
     adapter = HermesRuntimeAdapter(base_url=os.getenv("HERMES_RUNTIME_URL", "http://localhost:8201"))
     sink = _Sink()
     try:
@@ -69,7 +71,7 @@ async def test_pinned_real_hermes_completion_stream_and_session_capture(monkeypa
 @pytest.mark.asyncio
 async def test_pinned_real_hermes_cancellation(monkeypatch) -> None:
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    assert int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]) >= 2048
     adapter = HermesRuntimeAdapter(base_url=os.getenv("HERMES_RUNTIME_URL", "http://localhost:8201"))
     request = _request("Work slowly and continue until stopped.")
     sink = _Sink()

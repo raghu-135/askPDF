@@ -30,7 +30,7 @@ logging.basicConfig(
 logging.getLogger("app").setLevel(getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +60,7 @@ from app.mcp.server import get_http_app
 from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOOL_IDS
 from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
+from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
@@ -121,6 +122,8 @@ async def lifespan(app: FastAPI):
     agent_task_worker = None
     mcp_lifespans = []
     try:
+        if hermes_runtime_enabled():
+            validate_hermes_model_compatibility()
         get_runtime_registry().initialize()
         # Keep cleanup active from the first allocation onward.  In
         # particular, database or MCP startup failures must not strand the
@@ -239,6 +242,24 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+
+@app.get("/internal/hermes-mcp/preflight", include_in_schema=False)
+async def hermes_mcp_preflight(
+    execution_context: str | None = Header(default=None, alias="X-AskPDF-Execution-Context"),
+):
+    """Validate a run-scoped MCP context without invoking or auditing a tool."""
+    from app.mcp.execution_context_token import ExecutionContextTokenError, decode_execution_context_token
+
+    if not execution_context:
+        logger.warning("Hermes MCP preflight rejected reason=missing")
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"})
+    try:
+        context = decode_execution_context_token(execution_context)
+    except ExecutionContextTokenError as exc:
+        logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc
+    return {"status": "ok", "run_id": context.run_id}
 
 # CORS Middleware for cross-service communication
 app.add_middleware(

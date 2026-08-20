@@ -65,7 +65,8 @@ services:
       ASKPDF_AGENT_CHECKPOINTER: postgres
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       HERMES_RUNTIME_ENABLED: ${PHASE7_HERMES_RUNTIME_ENABLED:-false}
-      HERMES_MODEL_CONTEXT_LENGTH: "32768"
+      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_MODEL_PROVIDER: lmstudio
       HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
@@ -179,6 +180,18 @@ services:
       timeout: 3s
       retries: 12
 
+  hermes-config-init:
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    command: ["python", "-m", "hermes_runtime.profile_manager"]
+    environment:
+      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_MODEL_PROVIDER: lmstudio
+      HERMES_DATA_ROOT: /opt/data
+    volumes:
+      - runtime_integration_hermes_data:/opt/data
+
   hermes:
     build:
       context: https://github.com/NousResearch/hermes-agent.git#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
@@ -189,18 +202,23 @@ services:
       API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       OPENAI_API_KEY: askpdf-hermes-integration-local
       LLM_API_URL: http://fake-llm:9000/v1
-      HERMES_MODEL_CONTEXT_LENGTH: "32768"
+      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_MODEL_PROVIDER: lmstudio
       GATEWAY_MULTIPLEX_PROFILES: "true"
+      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      ASKPDF_HERMES_COMPAT_ENABLED: "1"
+      PYTHONPATH: /opt/askpdf-hermes-compat
     command: ["gateway"]
     depends_on:
+      hermes-config-init:
+        condition: service_completed_successfully
       fake-llm:
         condition: service_healthy
       rag-service:
         condition: service_healthy
     volumes:
-      - ./rag_service/tests/fixtures/hermes/config.yaml:/opt/data/config.yaml:ro
-      - ./hermes_runtime/profiles/askpdf-deep-offline/config.yaml:/opt/data/profiles/askpdf-deep-offline/config.yaml:ro
-      - ./hermes_runtime/profiles/askpdf-deep-external/config.yaml:/opt/data/profiles/askpdf-deep-external/config.yaml:ro
+      - runtime_integration_hermes_data:/opt/data
+      - ./hermes_runtime/hermes_compat:/opt/askpdf-hermes-compat:ro
     configs:
       - source: hermes_integration_env
         target: /opt/data/.env
@@ -221,6 +239,8 @@ services:
     environment:
       HERMES_API_URL: http://hermes:8642
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      OPENAI_API_KEY: askpdf-hermes-integration-local
+      LLM_API_URL: http://fake-llm:9000/v1
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_REQUIRED: "false"
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
@@ -228,6 +248,11 @@ services:
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
       HERMES_RUNTIME_READ_TIMEOUT_SECONDS: "30"
+      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_MODEL_PROVIDER: lmstudio
+      HERMES_PROFILE_ROOT: /opt/data/profiles
+      HERMES_PROFILE_UID: "10000"
+      HERMES_PROFILE_GID: "10000"
     depends_on:
       hermes:
         condition: service_healthy
@@ -235,6 +260,7 @@ services:
         condition: service_healthy
     volumes:
       - runtime_integration_hermes_state:/var/lib/hermes
+      - runtime_integration_hermes_data:/opt/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8200/healthz"]
       interval: 5s
@@ -258,6 +284,7 @@ services:
       PHASE5_EXTERNAL_EMBEDDING_MODEL: phase5-deterministic-embedding
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       HERMES_RUNTIME_ENABLED: "true"
+      HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
@@ -291,6 +318,7 @@ volumes:
   runtime_integration_product_data:
   runtime_integration_test_data:
   runtime_integration_hermes_state:
+  runtime_integration_hermes_data:
 
 configs:
   hermes_integration_env:

@@ -9,8 +9,8 @@
   "category": "deep",
   "spec_json": {
     "schema_version": 2,
-    "definition_version": 1,
-    "version": 1,
+    "definition_version": 2,
+    "version": 2,
     "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": true, "supports_artifacts": true}},
     "config": {
       "system_prompt": "Perform the requested research task using askPDF MCP evidence. When the user says this paper, the paper, or according to the context, first call get_thread_shape, then call search_document_by_id when a file hash is known or search_documents otherwise. Search conversation history when recent context does not resolve the reference. Cite the evidence used. Never claim that a document or context is unavailable until an authorized retrieval tool has returned an applicable empty or error result.",
@@ -26,6 +26,7 @@
       "cancellation_mode": "upstream_stop",
       "task_policy": {
         "builtin_only": true,
+        "evidence": "document_when_available",
         "profiles": ["document_researcher", "memory_researcher", "evidence_critic"],
         "limits": {
           "max_todos": 50,

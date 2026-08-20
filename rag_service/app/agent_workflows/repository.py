@@ -700,6 +700,22 @@ class AgentWorkflowRepository:
             replace_jsonb_field(run, "run_metadata_json", metadata)
             return run
 
+    async def update_run_metadata_fields(self, run_id: str, fields: Dict[str, Any]) -> Optional[AgentRun]:
+        """Merge bounded control-plane metadata without replacing other owners."""
+
+        session = async_session_maker()
+        try:
+            async with session.begin():
+                run = await session.get(AgentRun, run_id)
+                if run is None:
+                    return None
+                metadata = dict(run.run_metadata_json or {})
+                metadata.update(dict(fields))
+                replace_jsonb_field(run, "run_metadata_json", metadata)
+                return run
+        finally:
+            await session.close()
+
     async def update_runtime_binding(
         self,
         run_id: str,

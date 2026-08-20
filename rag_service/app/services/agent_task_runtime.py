@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import socket
@@ -23,6 +24,7 @@ from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRun
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
+from app.runtime.hermes_config import hermes_model_context_length
 from app.tools.context import ToolInvocationContext
 
 
@@ -30,6 +32,37 @@ logger = logging.getLogger(__name__)
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
 WAKE_RUNTIME_LIMIT_SECONDS = 15 * 60
+HERMES_DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_documents", "search_document_by_id"})
+HERMES_RESEARCH_EVIDENCE_TOOLS = frozenset({
+    *HERMES_DOCUMENT_EVIDENCE_TOOLS,
+    "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv",
+    "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news",
+})
+
+
+def _hermes_grounding_summary(events: list[Any], *, documents_present: bool) -> dict[str, Any]:
+    successful: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for event in events:
+        payload = dict(getattr(event, "payload_json", None) or getattr(event, "payload", None) or {})
+        if payload.get("source") != "askpdf_mcp":
+            continue
+        name = str(payload.get("tool_name") or "")
+        if getattr(event, "kind", "") == "tool.completed" and payload.get("ok") is True and int(payload.get("result_count") or 0) > 0:
+            successful.append(payload)
+        elif getattr(event, "kind", "") == "tool.failed":
+            failures.append(payload)
+    eligible = HERMES_DOCUMENT_EVIDENCE_TOOLS if documents_present else HERMES_RESEARCH_EVIDENCE_TOOLS
+    qualifying = [item for item in successful if item.get("tool_name") in eligible]
+    return {
+        "required": True,
+        "requirement": "document" if documents_present else "research",
+        "grounded": bool(qualifying),
+        "evidence_result_count": sum(int(item.get("result_count") or 0) for item in qualifying),
+        "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
+        "failed_tool_count": len(failures),
+        "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
+    }
 
 
 async def _task_context_snapshot(task: Any, thread: Any, config: dict[str, Any]) -> dict[str, Any]:
@@ -37,7 +70,8 @@ async def _task_context_snapshot(task: Any, thread: Any, config: dict[str, Any])
 
     messages = await get_recent_messages(task.thread_id, limit=20)
     conversation: list[dict[str, str]] = []
-    remaining = min(24_000, max(4_000, int(config.get("context_window") or 32_768)))
+    context_window = int(config.get("context_window") or hermes_model_context_length(required=True))
+    remaining = min(24_000, max(4_000, context_window))
     for message in reversed(messages):
         content = str(getattr(message, "context_compact", None) or getattr(message, "content", "")).strip()
         if not content or remaining <= 0:
@@ -59,7 +93,7 @@ async def _task_context_snapshot(task: Any, thread: Any, config: dict[str, Any])
         "project_id": task.project_id,
         "model": config.get("llm_model"),
         "embedding_model": thread.embedding_model,
-        "context_window": int(config.get("context_window") or 32_768),
+        "context_window": context_window,
         "limits": dict(config.get("limits") or {}),
         "recent_conversation": conversation,
         "documents": documents,
@@ -281,7 +315,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     request = SimpleNamespace(
         question=task.objective,
         llm_model=config.get("llm_model"),
-        context_window=config.get("context_window", 32_768),
+        context_window=config.get("context_window"),
         use_web_search=bool(config.get("use_web_search")),
         web_search_mode=str(config.get("web_search_mode") or "off"),
         task_web_access=task_web_access,
@@ -351,12 +385,13 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 or (resolved_spec.get("config") or {}).get("allowed_tool_ids")
                 or []
             )
+            token_ttl_seconds = max(3600, int((config.get("limits") or {}).get("max_active_runtime_ms", 3_600_000)) // 1000)
             token = issue_execution_context_token(
                 ToolInvocationContext(
                     thread_id=task.thread_id,
                     run_id=run.id,
                     embedding_model=thread.embedding_model,
-                    context_window=int(config.get("context_window") or 32_768),
+                    context_window=int(config.get("context_window") or hermes_model_context_length(required=True)),
                     use_web_search=bool(config.get("use_web_search")),
                     use_reranker=True,
                     extensions={
@@ -367,8 +402,15 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 ),
                 task_id=task.id,
                 allowed_tools=allowed_tools,
-                ttl_seconds=max(3600, int((config.get("limits") or {}).get("max_active_runtime_ms", 3_600_000)) // 1000),
+                ttl_seconds=token_ttl_seconds,
             )
+            await repository.update_run_metadata_fields(run.id, {
+                "hermes_mcp_context": {
+                    "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+                    "expires_at_epoch": int(time.time()) + token_ttl_seconds,
+                    "context_window": int(config.get("context_window") or hermes_model_context_length(required=True)),
+                },
+            })
             runtime_input.update({"task_context": snapshot, "mcp_execution_context_token": token})
         runtime_request = AgentRuntimeRequest(
             run_id=run.id,
@@ -540,6 +582,31 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 )
                 await tasks.complete_task(task.id, status=AgentTaskStatus.FAILED.value, reason="final_report_missing")
                 return
+            evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
+            if definition.framework == "hermes" and evidence_policy == "document_when_available":
+                grounding = _hermes_grounding_summary(
+                    await repository.list_run_events(run.id),
+                    documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
+                )
+                metrics["grounding"] = grounding
+                result["grounding"] = grounding
+                if not grounding["grounded"]:
+                    terminal_error = {
+                        "code": "required_evidence_unavailable",
+                        "message": "Hermes did not return the evidence required for this research task",
+                        "retryable": True,
+                        "details": grounding,
+                    }
+                    await _complete_run_with_trace(
+                        repository, run=run, recorder=trace,
+                        status=AgentRunStatus.FAILED.value, metrics=metrics,
+                        result=result, error=terminal_error,
+                    )
+                    await tasks.complete_task(
+                        task.id, status=AgentTaskStatus.FAILED.value,
+                        reason="required_evidence_unavailable",
+                    )
+                    return
             evidence_manifest = [
                 value for value in result.get("task_evidence_manifest") or []
                 if isinstance(value, dict) and value.get("id")

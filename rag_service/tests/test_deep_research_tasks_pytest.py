@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -29,6 +30,7 @@ from app.services import agent_task_maintenance
 from app.services.content_store import SharedVolumeContentStore, set_content_store
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
+from app.runtime.errors import RuntimeError as AgentRuntimeError
 
 
 def _spec() -> dict:
@@ -37,6 +39,83 @@ def _spec() -> dict:
         for value in load_builtin_workflows()
         if value["builtin_key"] == "deep_research_agent"
     )
+
+
+def _valid_plan_text(profile: str = "document_researcher") -> str:
+    return json.dumps({
+        "objective": "Research Lamport clocks",
+        "success_criteria": ["Evidence-backed report"],
+        "todos": [{
+            "id": "retrieve-evidence",
+            "title": "Retrieve evidence",
+            "description": "Search the available evidence",
+            "completion_criteria": "Relevant sources are collected",
+            "profile_id": profile,
+        }],
+    })
+
+
+@pytest.mark.asyncio
+async def test_deep_planner_repairs_invalid_output_once(monkeypatch):
+    call_model = AsyncMock(side_effect=[
+        ("{}", {"attempt": "initial"}),
+        (_valid_plan_text(), {"attempt": "repair"}),
+    ])
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    sink = SimpleNamespace(emit=AsyncMock())
+    state = {
+        "runtime_execution_mode": True,
+        "question": "Research Lamport clocks",
+        "task_enabled_profiles": ["document_researcher", "evidence_critic"],
+        "task_limits": {"max_todos": 5, "max_attempts": 2},
+        "task_todos": [],
+        "task_plan_revision": 0,
+        "task_run_plan_count": 0,
+        "llm_model": "small-test-model",
+    }
+
+    result = await deep_research_nodes.deep_task_planner(
+        state, {"configurable": {"execution_event_sink": sink}},
+    )
+
+    assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
+    assert call_model.await_count == 2
+    assert [call.args[0] for call in sink.emit.await_args_list] == [
+        "planner.validation_failed", "planner.repair_started",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deep_planner_returns_stable_error_after_invalid_repair(monkeypatch):
+    secret_marker = "must-not-be-persisted"
+    call_model = AsyncMock(side_effect=[
+        (f"not json {secret_marker}", {}),
+        ("{}", {}),
+    ])
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    sink = SimpleNamespace(emit=AsyncMock())
+    state = {
+        "runtime_execution_mode": True,
+        "question": "Research Lamport clocks",
+        "task_enabled_profiles": ["document_researcher"],
+        "task_limits": {"max_todos": 5},
+        "task_todos": [],
+        "llm_model": "small-test-model",
+    }
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await deep_research_nodes.deep_task_planner(
+            state, {"configurable": {"execution_event_sink": sink}},
+        )
+
+    assert caught.value.code == "deep_research_plan_invalid"
+    assert caught.value.retryable is True
+    assert caught.value.details["repair_attempted"] is True
+    assert secret_marker not in json.dumps(caught.value.details)
+    assert call_model.await_count == 2
+    assert [call.args[0] for call in sink.emit.await_args_list] == [
+        "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
+    ]
 
 
 async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | None = None) -> AgentRun:
@@ -1229,13 +1308,14 @@ def test_task_api_explicitly_selects_hermes_and_uses_deployment_context(api_clie
     assert task["configuration"]["engine"] == "hermes"
     assert task["configuration"]["context_window"] == 8192
 
-    normalized = api_client.post(
+    conflicting = api_client.post(
         f"/api/threads/{sample_thread.id}/agent-tasks",
         json={**payload, "context_window": 4096},
         headers={"Idempotency-Key": "api-create-hermes-normalized"},
     )
-    assert normalized.status_code == 201, normalized.text
-    assert normalized.json()["task"]["configuration"]["context_window"] == 8192
+    assert conflicting.status_code == 409, conflicting.text
+    assert conflicting.json()["detail"]["code"] == "hermes_context_length_conflict"
+    assert conflicting.json()["detail"]["configured_context_length"] == 8192
 
 
 @pytest.mark.asyncio

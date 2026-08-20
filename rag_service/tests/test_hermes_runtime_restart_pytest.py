@@ -8,7 +8,7 @@ import pytest
 
 from hermes_runtime.execution_store import HermesExecutionStore
 
-from hermes_test_helpers import RUNTIME_URL, read_sse, runtime_payload
+from hermes_test_helpers import LEGACY_PROFILE_MODEL, RUNTIME_URL, read_sse, runtime_payload
 
 
 pytestmark = pytest.mark.skipif(
@@ -30,8 +30,8 @@ async def test_seed_restart_recovery_record() -> None:
             json={
                 "input": payload["request"]["input"]["question"],
                 "instructions": "Respond one word at a time.",
-                "model": "phase5-deterministic",
-                "provider": "custom",
+                "model": LEGACY_PROFILE_MODEL,
+                "provider": "lmstudio",
                 "metadata": {"askpdf_run_id": RECOVERY_RUN_ID},
             },
         )

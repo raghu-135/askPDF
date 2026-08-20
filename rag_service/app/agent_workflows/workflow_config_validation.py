@@ -31,7 +31,7 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
         if not isinstance(task_policy, dict):
             errors.append("task_policy must be an object")
         else:
-            allowed_task_keys = {"builtin_only", "profiles", "limits", "compaction"}
+            allowed_task_keys = {"builtin_only", "profiles", "limits", "compaction", "evidence"}
             unknown_task_keys = sorted(set(task_policy) - allowed_task_keys)
             if unknown_task_keys:
                 errors.append(f"task_policy has unknown keys: {', '.join(unknown_task_keys)}")

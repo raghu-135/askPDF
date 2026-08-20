@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, ContinuationBinding, RuntimeApprovalResponse, RuntimeCapabilities, RuntimeSteeringInput
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
+from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
 
 
 class HermesRuntimeAdapter(HttpRuntimeAdapter):
@@ -18,15 +19,12 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         super().__init__(base_url=base_url or os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200"), **kwargs)
 
     def _ensure_enabled(self) -> None:
-        if os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        if not hermes_runtime_enabled():
             raise RuntimeError("runtime_disabled", "Hermes runtime is disabled")
-        raw_context_length = os.getenv("HERMES_MODEL_CONTEXT_LENGTH", "").strip()
         try:
-            context_length = int(raw_context_length)
-        except ValueError as exc:
-            raise RuntimeError("runtime_configuration_invalid", "Hermes model context length is not configured") from exc
-        if context_length < 2048:
-            raise RuntimeError("runtime_configuration_invalid", "Hermes model context length is not configured")
+            validate_hermes_model_compatibility()
+        except HermesConfigurationError as exc:
+            raise RuntimeError("runtime_configuration_invalid", str(exc)) from exc
 
     def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
         headers = super()._headers(request)

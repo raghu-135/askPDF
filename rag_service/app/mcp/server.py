@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from mcp.server.lowlevel import Server
@@ -15,7 +16,13 @@ from starlette.routing import Mount
 
 from app.mcp.config import mcp_mode, mcp_transport, validate_mcp_configuration
 from app.mcp.context_codec import decode_context
-from app.mcp.execution_context_token import TOKEN_ARGUMENT, decode_execution_context_token
+from app.mcp.execution_context_token import (
+    TOKEN_ARGUMENT,
+    TOKEN_HEADER,
+    ExecutionContextTokenError,
+    decode_execution_context_token,
+    verified_token_run_id,
+)
 from app.mcp.registry import (
     MCP_TOOL_DEFINITIONS,
     TOOL_RESULT_OUTPUT_SCHEMA,
@@ -25,8 +32,12 @@ from app.mcp.registry import (
     validate_registry,
 )
 from app.mcp.telemetry import extracted_trace_context, tool_span
+from app.mcp.tool_audit import persist_tool_audit
 
 logger = logging.getLogger(__name__)
+_transport_execution_token: ContextVar[str | None] = ContextVar(
+    "askpdf_mcp_execution_token", default=None,
+)
 
 
 def _schema(model: type[Any]) -> dict[str, Any]:
@@ -49,6 +60,16 @@ class MCPServer:
     def _register_handlers(self) -> None:
         @self.sdk.list_tools()
         async def list_tools() -> list[types.Tool]:
+            if self.require_execution_token:
+                execution_token = _transport_execution_token.get()
+                if not execution_token:
+                    logger.warning("Hermes MCP discovery rejected reason=missing")
+                    raise ValueError("Hermes MCP execution context is required")
+                try:
+                    decode_execution_context_token(str(execution_token))
+                except ExecutionContextTokenError as exc:
+                    logger.warning("Hermes MCP discovery rejected reason=%s", exc.reason)
+                    raise ValueError("Invalid Hermes MCP execution context") from exc
             return [
                 types.Tool(
                     name=name,
@@ -73,9 +94,10 @@ class MCPServer:
             ):
                 raise ValueError(f"Unknown tool: {name}")
             arguments = dict(arguments or {})
-            execution_token = arguments.pop(TOKEN_ARGUMENT, None)
+            argument_token = arguments.pop(TOKEN_ARGUMENT, None)
+            execution_token = _transport_execution_token.get() if self.require_execution_token else argument_token
             if self.require_execution_token and not execution_token:
-                logger.warning("Hermes MCP tool rejected tool=%s reason=missing_execution_context", name)
+                logger.warning("Hermes MCP tool rejected tool=%s reason=missing", name)
                 raise ValueError("Hermes MCP execution context is required")
             request_context = self.sdk.request_context
             meta = request_context.meta
@@ -85,7 +107,24 @@ class MCPServer:
                 meta = dict(meta or {})
             context = decode_context(meta)
             if execution_token:
-                context = decode_execution_context_token(str(execution_token), tool_name=name)
+                try:
+                    context = decode_execution_context_token(str(execution_token), tool_name=name)
+                except ExecutionContextTokenError as exc:
+                    logger.warning("Hermes MCP tool rejected tool=%s reason=%s", name, exc.reason)
+                    rejected_run_id = verified_token_run_id(str(execution_token))
+                    if rejected_run_id:
+                        await persist_tool_audit(
+                            run_id=rejected_run_id,
+                            request_id=str(request_context.request_id),
+                            phase="failed",
+                            tool_name=name,
+                            payload={
+                                "failure_stage": "execution_context",
+                                "token_rejection_reason": exc.reason,
+                                "error": {"code": "mcp_execution_context_rejected", "retryable": exc.reason == "expired"},
+                            },
+                        )
+                    raise ValueError("Invalid Hermes MCP execution context") from exc
             if not context.mcp_request_id:
                 context = context.__class__.from_mapping({
                     **context.as_dict(), "mcp_request_id": str(request_context.request_id),
@@ -96,14 +135,48 @@ class MCPServer:
                 "MCP tool call start tool=%s thread_id=%s run_id=%s tool_call_id=%s mcp_request_id=%s",
                 name, context.thread_id, context.run_id, context.tool_call_id, context.mcp_request_id,
             )
+            audit_request_id = str(context.mcp_request_id or request_context.request_id)
+            await persist_tool_audit(
+                run_id=str(context.run_id or ""), request_id=audit_request_id,
+                phase="started", tool_name=name,
+                payload={"argument_names": sorted(arguments)},
+            )
             async with extracted_trace_context(meta):
                 async with tool_span(
                     "askpdf.mcp.tool", tool_name=name, contract_id=config["id"],
                     thread_id=context.thread_id,
                 ):
-                    request_model = definition.request_model
-                    request = request_model.model_validate(arguments)
-                    result = await definition.handler(request, context)
+                    try:
+                        request_model = definition.request_model
+                        request = request_model.model_validate(arguments)
+                        result = await definition.handler(request, context)
+                    except Exception as exc:
+                        missing_fields = []
+                        invalid_fields = []
+                        if hasattr(exc, "errors"):
+                            for issue in exc.errors():
+                                field = ".".join(str(value) for value in issue.get("loc") or [])
+                                if issue.get("type") == "missing":
+                                    missing_fields.append(field)
+                                elif field:
+                                    invalid_fields.append(field)
+                        await persist_tool_audit(
+                            run_id=str(context.run_id or ""), request_id=audit_request_id,
+                            phase="failed", tool_name=name,
+                            payload={
+                                "failure_stage": "arguments" if missing_fields or invalid_fields else "handler",
+                                "missing_arguments": sorted(missing_fields),
+                                "invalid_arguments": sorted(invalid_fields),
+                                "error": {"code": "tool_arguments_invalid" if missing_fields or invalid_fields else "tool_execution_failed", "retryable": True},
+                            },
+                        )
+                        raise
+            await persist_tool_audit(
+                run_id=str(context.run_id or ""), request_id=audit_request_id,
+                phase="completed" if result.ok and result.error is None else "failed",
+                tool_name=name, result=result,
+                payload={"failure_stage": "handler"} if not result.ok or result.error is not None else None,
+            )
             structured = result.structured(
                 contract_id=config["id"],
                 contract_version=config.get("contract_version", "1"),
@@ -111,6 +184,7 @@ class MCPServer:
             trace = structured.setdefault("trace", {})
             trace.setdefault("mcp_request_id", context.mcp_request_id)
             trace.setdefault("tool_call_id", context.tool_call_id)
+            structured["result_count"] = len(result.sources)
             structured.update({
                 "mcp_server": config.get("mcp_server"),
                 "mcp_contract_version": config.get("contract_version", "1"),
@@ -126,13 +200,12 @@ class MCPServer:
     def _input_schema(self, model: type[Any]) -> dict[str, Any]:
         schema = dict(_schema(model))
         properties = dict(schema.get("properties") or {})
-        properties[TOKEN_ARGUMENT] = {
-            "type": "string",
-            "description": "Opaque askPDF execution context supplied in the task instructions.",
-        }
+        if not self.require_execution_token:
+            properties[TOKEN_ARGUMENT] = {
+                "type": "string",
+                "description": "Opaque askPDF execution context supplied by an authorized runtime.",
+            }
         schema["properties"] = properties
-        if self.require_execution_token:
-            schema["required"] = list(dict.fromkeys([*(schema.get("required") or []), TOKEN_ARGUMENT]))
         return schema
 
 
@@ -168,7 +241,14 @@ def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_executi
     async def handle_request(scope: Any, receive: Any, send: Any) -> None:
         if manager is None:
             raise RuntimeError("MCP HTTP application is not running")
-        await manager.handle_request(scope, receive, send)
+        token = None
+        if scope.get("type") == "http":
+            token = next((value.decode("latin-1") for key, value in scope.get("headers") or [] if key.decode("latin-1").lower() == TOKEN_HEADER), None)
+        marker = _transport_execution_token.set(token)
+        try:
+            await manager.handle_request(scope, receive, send)
+        finally:
+            _transport_execution_token.reset(marker)
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):

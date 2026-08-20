@@ -391,7 +391,17 @@ function AgentRunDebugPanel({
           )}
           {grounding && (
             <Box component="details" sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
-              <Typography component="summary" variant="caption">Support and citations · {Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported</Typography>
+              <Typography component="summary" variant="caption">
+                {typeof grounding.grounded === 'boolean'
+                  ? `Hermes grounding · ${grounding.grounded ? 'grounded' : 'evidence unavailable'} · ${Number(grounding.evidence_result_count || 0)} results`
+                  : `Support and citations · ${Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported`}
+              </Typography>
+              {Array.isArray(grounding.successful_evidence_tools) && grounding.successful_evidence_tools.length > 0
+                ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5 }}>Tools: {grounding.successful_evidence_tools.join(', ')}</Typography>
+                : null}
+              {Array.isArray(grounding.failure_codes) && grounding.failure_codes.length > 0
+                ? <Typography variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>Failures: {grounding.failure_codes.join(', ').replaceAll('_', ' ')}</Typography>
+                : null}
               {(Array.isArray(grounding.claims) ? grounding.claims : []).map((claim: Record<string, any>, index: number) => (
                 <Typography key={`claim:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
                   {claim.claim_id ? `${claim.claim_id} · ` : ''}{claim.support}: {claim.claim}{(claim.source_ids || []).length ? ` · ${(claim.source_ids || []).join(', ')}` : ''}{claim.contradicted ? ' · contradicted' : ''}
