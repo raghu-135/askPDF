@@ -68,6 +68,23 @@ def issue_execution_context_token(
     return f"{encoded}.{signature}"
 
 
+def validate_execution_context_identity(
+    context: ToolInvocationContext,
+    *,
+    run_id: str,
+    thread_id: str,
+    task_id: str,
+) -> None:
+    """Bind a valid token to the exact runtime request admitting it."""
+    extensions = dict(context.extensions or {})
+    if any((
+        str(context.run_id or "") != str(run_id),
+        str(context.thread_id or "") != str(thread_id),
+        str(extensions.get("task_id") or "") != str(task_id),
+    )):
+        raise ExecutionContextTokenError("identity_mismatch")
+
+
 def decode_execution_context_token(token: str, *, tool_name: str | None = None) -> ToolInvocationContext:
     try:
         parts = token.split(".", 1)

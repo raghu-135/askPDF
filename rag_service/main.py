@@ -247,15 +247,35 @@ app = FastAPI(
 @app.get("/internal/hermes-mcp/preflight", include_in_schema=False)
 async def hermes_mcp_preflight(
     execution_context: str | None = Header(default=None, alias="X-AskPDF-Execution-Context"),
+    expected_run_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Run-Id"),
+    expected_thread_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Thread-Id"),
+    expected_task_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Task-Id"),
 ):
     """Validate a run-scoped MCP context without invoking or auditing a tool."""
-    from app.mcp.execution_context_token import ExecutionContextTokenError, decode_execution_context_token
+    from app.mcp.execution_context_token import (
+        ExecutionContextTokenError,
+        decode_execution_context_token,
+        validate_execution_context_identity,
+    )
 
     if not execution_context:
         logger.warning("Hermes MCP preflight rejected reason=missing")
         raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"})
+    if not expected_run_id or not expected_thread_id or not expected_task_id:
+        logger.warning("Hermes MCP preflight rejected reason=identity_mismatch fields=expected_identity")
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"})
     try:
         context = decode_execution_context_token(execution_context)
+    except ExecutionContextTokenError as exc:
+        logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc
+    try:
+        validate_execution_context_identity(
+            context,
+            run_id=expected_run_id,
+            thread_id=expected_thread_id,
+            task_id=expected_task_id,
+        )
     except ExecutionContextTokenError as exc:
         logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
         raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc

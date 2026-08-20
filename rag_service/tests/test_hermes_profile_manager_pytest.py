@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from hermes_runtime.hermes_compat.sitecustomize import _context_header_digests
 from hermes_runtime.profile_manager import RunProfileManager, configured_context_length
 
 
@@ -33,13 +34,14 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     assert f'name: "{profile.name}"' in config
     assert f'config_fingerprint: "{profile.activation_fingerprint}"' in config
     assert profile.mcp_server_name.startswith("askpdf_")
-    assert "signed.token" not in config
+    assert 'X-AskPDF-Execution-Context: "signed.token"' in config
     profile_env = (tmp_path / name / ".env").read_text()
     assert "API_SERVER_KEY=gateway-secret" in profile_env
     assert "LLM_API_URL=" not in profile_env
-    assert "ASKPDF_MCP_EXECUTION_CONTEXT=signed.token" in profile_env
+    assert "ASKPDF_MCP_EXECUTION_CONTEXT" not in profile_env
     assert "OPENAI_API_KEY=provider-secret" in profile_env
-    assert all(value not in config for value in ("gateway-secret", "signed.token", "provider-secret"))
+    assert all(value not in config for value in ("gateway-secret", "provider-secret"))
+    assert ((tmp_path / name / "config.yaml").stat().st_mode & 0o777) == 0o600
     assert ((tmp_path / name / ".env").stat().st_mode & 0o777) == 0o600
     assert manager.verify(profile) is True
     (tmp_path / name / "config.yaml").write_text(config + "\n# tampered")
@@ -72,14 +74,26 @@ def test_run_profiles_are_isolated_and_stale_profiles_are_swept(monkeypatch, tmp
     first = manager.create(run_id="run-one", policy_profile="askpdf-deep-offline", context_token="one.token", allowed_tools=["search_documents"], selected_model="model-one", selected_provider="lmstudio")
     second = manager.create(run_id="run-two", policy_profile="askpdf-deep-external", context_token="two.token", allowed_tools=["search_web"], selected_model="model-two", selected_provider="lmstudio")
     assert first.name != second.name
-    assert "one.token" in (tmp_path / first.name / ".env").read_text()
-    assert "two.token" in (tmp_path / second.name / ".env").read_text()
+    assert 'X-AskPDF-Execution-Context: "one.token"' in (tmp_path / first.name / "config.yaml").read_text()
+    assert 'X-AskPDF-Execution-Context: "two.token"' in (tmp_path / second.name / "config.yaml").read_text()
     manager.retire(first)
     old = time.time() - 3600
     os.utime(tmp_path / first.name, (old, old))
     assert manager.sweep_stale(max_age_seconds=60) == 1
     assert not (tmp_path / first.name).exists()
     assert (tmp_path / second.name).exists()
+
+
+def test_activated_header_proof_distinguishes_sequential_profiles():
+    first = {"askpdf_first": {"headers": {"X-AskPDF-Execution-Context": "one.token"}}}
+    second = {"askpdf_second": {"headers": {"x-askpdf-execution-context": "two.token"}}}
+
+    first_digest = _context_header_digests(first)
+    second_digest = _context_header_digests(second)
+
+    assert first_digest["askpdf_first"] != second_digest["askpdf_second"]
+    assert "one.token" not in str(first_digest)
+    assert "two.token" not in str(second_digest)
 
 
 def test_generic_provider_preserves_pinned_hermes_64k_floor(monkeypatch, tmp_path: Path):

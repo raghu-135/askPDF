@@ -10,6 +10,8 @@ from app.agent_workflows.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
+from app.agent_workflows.deep_research_nodes import DEEP_RESEARCH_POLICY, _deep_system
+from app.prompts.loaders import get_deep_research_policy
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -26,6 +28,13 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
     assert "User locale: en-US" in context
     assert "User-local current datetime: 2026-06-25T14:00:00-05:00" in context
     assert "Server current UTC datetime: 2026-06-25T19:00:00Z" in context
+
+
+def test_deep_research_nodes_share_the_versioned_policy_with_hermes():
+    policy = get_deep_research_policy("deep_research_v1")
+    assert DEEP_RESEARCH_POLICY == policy
+    assert policy in _deep_system("node-specific role")
+    assert "successful, nonempty document-retrieval result" in policy
 
 
 def test_router_agent_prompt_preview_uses_graph_runtime_prompts():

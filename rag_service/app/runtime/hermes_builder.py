@@ -19,13 +19,14 @@ from app.runtime.contracts import (
 from app.runtime.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_provider
 from app.runtime.hermes_profile import HERMES_DEFINITION_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS, resolve_hermes_profile
+from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
 class HermesBuilderProvider:
     framework = "hermes"
     builder_id = "hermes_agent"
     _allowed_config_keys = {
-        "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
+        "research_policy_id", "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",
         "allow_subagents", "allow_persistent_memory", "cancellation_mode",
         "skills", "task_policy", "use_web_search", "context_window",
@@ -45,9 +46,11 @@ class HermesBuilderProvider:
         if not isinstance(config, Mapping):
             issues.append(RuntimeValidationIssue("missing_config", "Hermes definitions require a config object", "config"))
         else:
-            for key in ("system_prompt", "mcp_server", "allowed_tool_ids"):
+            for key in ("research_policy_id", "system_prompt", "mcp_server", "allowed_tool_ids"):
                 if not config.get(key):
                     issues.append(RuntimeValidationIssue("missing_config_field", f"Hermes config requires {key}", f"config.{key}"))
+            if config.get("research_policy_id") not in (None, DEEP_RESEARCH_POLICY_ID):
+                issues.append(RuntimeValidationIssue("unsupported_research_policy", "Hermes requires the current shared Deep Research policy", "config.research_policy_id"))
             if not isinstance(config.get("allowed_tool_ids"), list) or not all(isinstance(item, str) and item for item in config.get("allowed_tool_ids") or []):
                 issues.append(RuntimeValidationIssue("invalid_tool_allowlist", "Hermes allowed_tool_ids must be a non-empty string list", "config.allowed_tool_ids"))
             unknown = sorted(set(config) - self._allowed_config_keys)
@@ -142,6 +145,9 @@ class HermesBuilderProvider:
             config["model"] = selected_model
             config["provider"] = hermes_model_provider()
         config.update(filtered_overrides)
+        policy_id = str(config.get("research_policy_id") or "")
+        runtime_instructions = str(config.get("system_prompt") or "").strip()
+        config["system_prompt"] = get_deep_research_policy(policy_id) + "\n\n" + runtime_instructions
         resolved["config"] = config
         resolved["managed_profile"] = resolve_hermes_profile(resolved)
         return await self.normalize(definition, resolved)

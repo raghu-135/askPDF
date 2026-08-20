@@ -27,6 +27,16 @@ def test_hermes_builtin_is_concrete_and_not_a_graph():
     assert "graph" not in workflow["spec_json"]["config"]
 
 
+def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
+    prompt = _spec()["config"]["system_prompt"]
+    assert "tool_search" in prompt
+    assert "tool_describe" in prompt
+    assert "tool_call" in prompt
+    assert "exact namespaced name" in prompt
+    assert "do not invent a namespaced name" in prompt
+    assert "call search_document_by_id" not in prompt
+
+
 def test_hermes_provider_is_registered_without_changing_langgraph_provider():
     assert get_builder_registry().get(_definition()).framework == "hermes"
     assert get_builder_registry().get(AgentDefinition("router_rag_agent", "langgraph", "langgraph_graph")).framework == "langgraph"
@@ -98,6 +108,9 @@ async def test_hermes_resolution_inherits_thread_model_through_deployment_provid
         "model": "askpdf-selected-model",
         "provider": "lmstudio",
     }
+    assert "# askPDF Deep Research Policy (v1)" in resolved["config"]["system_prompt"]
+    assert "Hermes MCP execution protocol" in resolved["config"]["system_prompt"]
+    assert resolved["config"]["research_policy_id"] == "deep_research_v1"
 
 
 @pytest.mark.asyncio

@@ -578,6 +578,12 @@ def create_app() -> FastAPI:
                             activation_mismatches.append("config_fingerprint")
                         if set(str(value) for value in activation.get("mcp_server_names") or []) != {run_profile.mcp_server_name}:
                             activation_mismatches.append("mcp_server_names")
+                        header_digests = activation.get("mcp_context_header_sha256") or {}
+                        if (
+                            not isinstance(header_digests, Mapping)
+                            or str(header_digests.get(run_profile.mcp_server_name) or "") != run_profile.token_digest
+                        ):
+                            activation_mismatches.append("mcp_context_header")
                         if not expected_registered.issubset(registered_tools):
                             activation_mismatches.append("registered_tools")
                         if activation_mismatches:
@@ -606,7 +612,12 @@ def create_app() -> FastAPI:
                     try:
                         mcp_response = await client.get(
                             "http://rag-service:8000/internal/hermes-mcp/preflight",
-                            headers={"x-askpdf-execution-context": context_token},
+                            headers={
+                                "x-askpdf-execution-context": context_token,
+                                "x-askpdf-expected-run-id": run_id,
+                                "x-askpdf-expected-thread-id": str(neutral_request.get("thread_id") or ""),
+                                "x-askpdf-expected-task-id": str(neutral_request.get("task_id") or ""),
+                            },
                         )
                         mcp_response.raise_for_status()
                         mcp_payload = mcp_response.json()

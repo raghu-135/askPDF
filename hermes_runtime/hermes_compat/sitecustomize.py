@@ -8,6 +8,7 @@ discover that profile's MCP server before the run is admitted.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -29,6 +30,22 @@ def _registered_tools(server_names: list[str]) -> list[str]:
             result.extend(list(getattr(server, "_registered_tool_names", ()) or ()))
             result.extend(list(mcp_tool._lazy_server_tool_names.get(name, ()) or ()))
     return sorted(set(result))
+
+
+def _context_header_digests(servers: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Return non-secret proof of the exact headers loaded by pinned Hermes."""
+    result: dict[str, str] = {}
+    for name, server in servers.items():
+        headers = server.get("headers") if isinstance(server, dict) else None
+        if not isinstance(headers, dict):
+            continue
+        token = next(
+            (str(value) for key, value in headers.items() if str(key).lower() == "x-askpdf-execution-context"),
+            "",
+        )
+        if token:
+            result[str(name)] = hashlib.sha256(token.encode()).hexdigest()
+    return result
 
 
 def _retire_servers(server_names: list[str]) -> None:
@@ -95,6 +112,7 @@ def _install() -> None:
             "config_fingerprint": str(metadata.get("config_fingerprint") or ""),
             "mcp_server_names": server_names,
             "registered_tools": registered_tools,
+            "mcp_context_header_sha256": _context_header_digests(servers),
         }
         return web.json_response(payload, status=response.status)
 

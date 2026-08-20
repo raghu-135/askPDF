@@ -17,7 +17,6 @@ from dataclasses import dataclass
 MIN_CONTEXT_LENGTH = 2048
 PINNED_MIN_CONTEXT_LENGTH = 64_000
 PROFILE_PREFIX = "askpdf-run-"
-TOKEN_ENV_KEY = "ASKPDF_MCP_EXECUTION_CONTEXT"
 TOKEN_HEADER = "X-AskPDF-Execution-Context"
 PINNED_HERMES_UID = 10_000
 PINNED_HERMES_GID = 10_000
@@ -168,7 +167,7 @@ class RunProfileManager:
             f"{profile_name}\0{mcp_server_name}\0{tools}\0{context_length}".encode()
         ).hexdigest()
         config = (
-            "# Generated from the versioned askPDF Hermes profile; contains no provider credentials.\n"
+            "# Generated run profile. Secret-bearing; retire immediately after the run.\n"
             "_config_version: 37\n"
             "model:\n"
             f"  default: {json.dumps(selected_model)}\n"
@@ -189,7 +188,7 @@ class RunProfileManager:
             f"    url: http://rag-service:8000/internal/hermes-mcp/{endpoint}/\n"
             "    enabled: true\n"
             "    headers:\n"
-            f"      {TOKEN_HEADER}: ${{{TOKEN_ENV_KEY}}}\n"
+            f"      {TOKEN_HEADER}: {json.dumps(context_token)}\n"
             "    tools:\n"
             f"      include: {tools}\n"
         )
@@ -198,7 +197,6 @@ class RunProfileManager:
         env_file = temporary / ".env"
         profile_environment = [
             f"API_SERVER_KEY={api_server_key}",
-            f"{TOKEN_ENV_KEY}={context_token}",
         ]
         if provider_api_key:
             profile_environment.append(f"OPENAI_API_KEY={provider_api_key}")
@@ -206,7 +204,7 @@ class RunProfileManager:
         profile_uid = int(os.getenv("HERMES_PROFILE_UID", str(PINNED_HERMES_UID)))
         profile_gid = int(os.getenv("HERMES_PROFILE_GID", str(PINNED_HERMES_GID)))
         config_file = temporary / "config.yaml"
-        for path, mode in ((temporary, 0o750), (config_file, 0o640), (env_file, 0o600)):
+        for path, mode in ((temporary, 0o750), (config_file, 0o600), (env_file, 0o600)):
             os.chown(path, profile_uid, profile_gid)
             os.chmod(path, mode)
         temporary.rename(destination)

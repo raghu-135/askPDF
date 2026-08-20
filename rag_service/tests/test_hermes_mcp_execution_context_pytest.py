@@ -4,6 +4,7 @@ from app.mcp.execution_context_token import (
     ExecutionContextTokenError,
     decode_execution_context_token,
     issue_execution_context_token,
+    validate_execution_context_identity,
 )
 from app.tools.context import ToolInvocationContext
 
@@ -77,3 +78,18 @@ def test_signed_context_rejects_deployment_context_mismatch(monkeypatch):
     with pytest.raises(ExecutionContextTokenError) as rejected:
         decode_execution_context_token(token, tool_name="search_documents")
     assert rejected.value.reason == "model_context_mismatch"
+
+
+def test_execution_context_identity_rejects_cross_run_reuse(monkeypatch):
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", context_window=8192),
+        task_id="task-1",
+        allowed_tools=["search_documents"],
+    )
+    context = decode_execution_context_token(token)
+    validate_execution_context_identity(context, run_id="run-1", thread_id="thread-1", task_id="task-1")
+    with pytest.raises(ExecutionContextTokenError) as rejected:
+        validate_execution_context_identity(context, run_id="run-2", thread_id="thread-1", task_id="task-1")
+    assert rejected.value.reason == "identity_mismatch"
