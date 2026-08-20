@@ -12,6 +12,18 @@ import {
 } from '../../lib/parallel-runtime.ts';
 import { normalizeAgentExecutionStatus } from '../agent-graph/agent-execution-status.ts';
 
+export function getRetainedRunErrorMessage(runDetails: { error_json?: Record<string, any> | null }): string | null {
+  const error = runDetails.error_json;
+  if (typeof error?.safe_message === 'string' && error.safe_message.trim()) return error.safe_message;
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message;
+  return null;
+}
+
+export function shouldRefreshRetainedTrace(runDetails: AgentRunDetails): boolean {
+  const terminal = ['completed', 'failed', 'cancelled'].includes(String(runDetails.status));
+  return terminal && !getRunDebug(runDetails);
+}
+
 export interface TraceNodeView {
   id: string;
   type?: string;

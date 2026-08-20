@@ -1207,7 +1207,7 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     assert started.json()["task"]["active_run_id"]
 
 
-def test_task_api_explicitly_selects_hermes_and_enforces_context_limit(api_client, sample_thread, monkeypatch):
+def test_task_api_explicitly_selects_hermes_and_uses_deployment_context(api_client, sample_thread, monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
@@ -1227,14 +1227,15 @@ def test_task_api_explicitly_selects_hermes_and_enforces_context_limit(api_clien
     task = created.json()["task"]
     assert task["workflow_id"] == "hermes_rag_agent"
     assert task["configuration"]["engine"] == "hermes"
+    assert task["configuration"]["context_window"] == 8192
 
-    too_large = api_client.post(
+    normalized = api_client.post(
         f"/api/threads/{sample_thread.id}/agent-tasks",
-        json={**payload, "context_window": 8193},
-        headers={"Idempotency-Key": "api-create-hermes-too-large"},
+        json={**payload, "context_window": 4096},
+        headers={"Idempotency-Key": "api-create-hermes-normalized"},
     )
-    assert too_large.status_code == 422
-    assert too_large.json()["detail"]["code"] == "hermes_context_window_exceeded"
+    assert normalized.status_code == 201, normalized.text
+    assert normalized.json()["task"]["configuration"]["context_window"] == 8192
 
 
 @pytest.mark.asyncio

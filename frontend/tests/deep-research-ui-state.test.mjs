@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isTaskOwnedAgentRun, mergeActiveAgentTaskRun, shouldPollAgentTask } from '../src/lib/deep-research-ui-state.ts';
+import {
+  isTaskOwnedAgentRun,
+  mergeActiveAgentTaskRun,
+  resolveDeepResearchContextWindow,
+  shouldPollAgentTask,
+} from '../src/lib/deep-research-ui-state.ts';
 
 test('authoritative active-run interrupt replaces a stale task run projection', () => {
   const interrupt = { interrupt_id: 'interrupt-1', status: 'pending', allowed_actions: ['approve', 'reject'] };
@@ -27,4 +32,10 @@ test('active tasks continue polling while terminal tasks stop', () => {
 test('task-owned runs cannot use Debug Trace as an approval surface', () => {
   assert.equal(isTaskOwnedAgentRun({ id: 'run-1', task_id: 'task-1' }), true);
   assert.equal(isTaskOwnedAgentRun({ id: 'run-2', task_id: null }), false);
+});
+
+test('Hermes uses its deployment context without changing LangGraph selection', () => {
+  assert.equal(resolveDeepResearchContextWindow('hermes', 20_000, 32_768), 32_768);
+  assert.equal(resolveDeepResearchContextWindow('langgraph', 20_000, 32_768), 20_000);
+  assert.equal(resolveDeepResearchContextWindow('hermes', 20_000, null), 20_000);
 });

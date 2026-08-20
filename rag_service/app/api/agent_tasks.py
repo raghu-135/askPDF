@@ -197,18 +197,18 @@ async def create_agent_task(
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
     contract = await _deep_research_contract()
     workflow_id = DEEP_RESEARCH_ENGINE_WORKFLOWS[req.engine]
+    hermes_context_length: int | None = None
     if req.engine == "hermes":
         if not _hermes_available():
             raise HTTPException(status_code=409, detail={"code": "hermes_runtime_unavailable"})
-        max_context_length = _hermes_context_length(required=True)
-        if max_context_length is not None and req.context_window > max_context_length:
-            raise HTTPException(status_code=422, detail={
-                "code": "hermes_context_window_exceeded",
-                "max_context_length": max_context_length,
-            })
+        hermes_context_length = _hermes_context_length(required=True)
     if req.web_search_mode != "off" and not contract["web_enabled"]:
         raise HTTPException(status_code=409, detail={"code": "deep_research_web_unavailable"})
     config = req.model_dump(mode="json")
+    if hermes_context_length is not None:
+        # Hermes uses one deployment-owned context window. Never allow a
+        # client or stale UI capability response to select a per-task value.
+        config["context_window"] = hermes_context_length
     config["use_web_search"] = req.web_search_mode != "off"
     contract_limits = contract["limits"]
     config["limits"]["max_concurrency"] = min(
@@ -524,6 +524,24 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             "sources": timeline_sources(evidence_artifacts, attempts_by_run=attempts_by_run, selected_run_id=run_id),
             "evidence_manifest": evidence_manifest,
             "artifact_ids": [final_report.id], "trace_anchor": {"node_type": "finalizer"},
+        })
+    if run.status == "failed":
+        run_error = dict(run.error_json or {})
+        safe_message = str(run_error.get("safe_message") or "Deep Research failed before producing a report.")
+        items.append({
+            "id": f"failure:{run.id}",
+            "type": "run_failure",
+            "status": "failed",
+            "primary_content": safe_message,
+            "timestamp": maybe_iso_utc_z(run.completed_at or run.started_at),
+            "folds": {
+                "technical_details": {
+                    "code": run_error.get("code"),
+                    "retryable": bool(run_error.get("retryable")),
+                    "details": dict(run_error.get("details") or {}),
+                },
+            },
+            "trace_anchor": {"run_id": run.id},
         })
     items.sort(key=lambda item: (item.get("timestamp") or "", item["id"]))
     task_payload = _task_payload(task)

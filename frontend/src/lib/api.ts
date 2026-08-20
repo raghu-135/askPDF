@@ -2065,7 +2065,7 @@ export interface AgentTaskRun {
   completed_at?: string | null;
 }
 
-export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'approval' | 'replan' | 'final_report';
+export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'run_failure' | 'approval' | 'replan' | 'final_report';
 
 export interface AgentTaskTimelineSource {
   id: string;

@@ -41,8 +41,88 @@ def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Ma
     }
 
 
-def _error(code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
-    return {"code": code, "safe_message": message, "retryable": retryable, "details": {}}
+def _error(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "safe_message": message,
+        "retryable": retryable,
+        "details": dict(details or {}),
+    }
+
+
+def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
+    """Use the task budget for streams and the configured limit for short calls."""
+    read_timeout = (
+        float(max_seconds)
+        if max_seconds is not None
+        else float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
+    )
+    return httpx.Timeout(read_timeout, connect=5, write=10)
+
+
+class _HermesEventBudget:
+    """Bound semantic events and streamed text independently.
+
+    Hermes commonly emits one message.delta per token. Those chunks are
+    bounded by output characters and must not consume the lifecycle-event
+    budget used for tools, reasoning, approvals, and other state changes.
+    """
+
+    def __init__(self, *, max_lifecycle_events: int, max_output_chars: int) -> None:
+        self.max_lifecycle_events = max_lifecycle_events
+        self.max_output_chars = max_output_chars
+        self.max_raw_frames = max_lifecycle_events + max_output_chars
+        self.lifecycle_events = 0
+        self.output_chars = 0
+        self.raw_frames = 0
+
+    def observe(self, kind: str, output_delta: str = "") -> None:
+        self.raw_frames += 1
+        if self.raw_frames > self.max_raw_frames:
+            raise HTTPException(
+                status_code=409,
+                detail=_error(
+                    "runtime_limit_exceeded",
+                    "Hermes emitted too many stream frames",
+                    details=self.details(),
+                ),
+            )
+        if kind == "output.delta" and output_delta:
+            self.output_chars += len(output_delta)
+            if self.output_chars > self.max_output_chars:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error(
+                        "runtime_limit_exceeded",
+                        "Hermes output exceeded the configured limit",
+                        details=self.details(),
+                    ),
+                )
+            return
+        # Empty deltas consume this budget so a peer cannot evade both limits.
+        self.lifecycle_events += 1
+        if self.lifecycle_events > self.max_lifecycle_events:
+            raise HTTPException(
+                status_code=409,
+                detail=_error(
+                    "runtime_limit_exceeded",
+                    "Hermes emitted too many lifecycle events",
+                    details=self.details(),
+                ),
+            )
+
+    def details(self) -> dict[str, int]:
+        return {
+            "lifecycle_event_count": self.lifecycle_events,
+            "output_char_count": self.output_chars,
+            "raw_frame_count": self.raw_frames,
+        }
 
 
 def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, Any] | None = None, *, event_id: str | None = None, source_event_id: str | None = None, terminal: bool = False, continuation: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -172,12 +252,6 @@ def create_app() -> FastAPI:
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
         return headers
-
-    def timeout(max_seconds: float | None = None) -> httpx.Timeout:
-        read_timeout = float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
-        if max_seconds is not None:
-            read_timeout = min(read_timeout, max_seconds)
-        return httpx.Timeout(read_timeout, connect=5, write=10)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -330,11 +404,14 @@ def create_app() -> FastAPI:
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
         sequence = store.next_sequence(run_id) if os.getenv("HERMES_RUNTIME_EVENT_ID_MODE", "durable").strip().lower() == "durable" else 1
-        output_chars = 0
+        event_budget = _HermesEventBudget(
+            max_lifecycle_events=max_events,
+            max_output_chars=max_output_chars,
+        )
         terminal_seen = False
 
         def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
-            nonlocal output_chars, sequence, terminal_seen, session_id
+            nonlocal sequence, terminal_seen, session_id
             try:
                 raw = json.loads("\n".join(frame_data))
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -356,12 +433,8 @@ def create_app() -> FastAPI:
             if kind == "runtime.event":
                 event_payload = {"upstream_event": upstream_event_name, "data": dict(event_payload)}
             terminal = kind in HERMES_TERMINAL_EVENTS
-            if kind == "output.delta":
-                output_chars += len(str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or ""))
-                if output_chars > max_output_chars:
-                    raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes output exceeded the configured limit"))
-            if sequence > max_events:
-                raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes emitted too many events"))
+            output_delta = str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or "") if kind == "output.delta" else ""
+            event_budget.observe(kind, output_delta)
             event = _neutral_event(run_id, sequence, kind, event_payload, source_event_id=source_event_id, terminal=terminal, continuation=continuation)
             result = None
             if terminal:
@@ -406,7 +479,7 @@ def create_app() -> FastAPI:
             return event, result, operation_event
 
         try:
-            async with httpx.AsyncClient(timeout=timeout(max_duration_seconds)) as client:
+            async with httpx.AsyncClient(timeout=_upstream_timeout(max_duration_seconds)) as client:
                 existing_binding = (neutral_request.get("continuation") or {}).get("payload") or {}
                 upstream_run_id = str(existing_binding.get("upstream_run_id") or "")
                 if not upstream_run_id:
@@ -486,15 +559,44 @@ def create_app() -> FastAPI:
                 return
             detail = exc.detail if isinstance(exc.detail, Mapping) else _error("hermes_runtime_error", str(exc.detail))
             error = detail if isinstance(detail, Mapping) and detail.get("code") else _error("hermes_runtime_error", str(exc.detail))
+            if error.get("code") == "runtime_limit_exceeded":
+                logger.warning(
+                    "Hermes runtime limit reached | run_id=%s upstream_run_id=%s profile=%s details=%s",
+                    run_id,
+                    upstream_run_id or None,
+                    runtime_profile,
+                    dict(error.get("details") or {}),
+                )
             event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
             yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
         except httpx.HTTPError as exc:
             if terminal_seen:
                 return
-            event = _neutral_event(run_id, sequence, "run.failed", {"error": _error("hermes_upstream_error", "Hermes runtime is unavailable", retryable=True)}, terminal=True, continuation=continuation)
+            phase = "event_stream" if upstream_run_id else "run_start"
+            is_timeout = isinstance(exc, httpx.TimeoutException)
+            safe_message = (
+                "Hermes did not produce an event before the task execution timeout"
+                if is_timeout
+                else "Hermes runtime is unavailable"
+            )
+            error = _error(
+                "hermes_upstream_timeout" if is_timeout else "hermes_upstream_error",
+                safe_message,
+                retryable=True,
+                details={"phase": phase, "error_type": type(exc).__name__},
+            )
+            logger.warning(
+                "Hermes upstream request failed | run_id=%s upstream_run_id=%s profile=%s phase=%s error_type=%s",
+                run_id,
+                upstream_run_id or None,
+                runtime_profile,
+                phase,
+                type(exc).__name__,
+            )
+            event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
-            yield _sse(event, {"status": "failed", "error": _error("hermes_upstream_error", str(exc), retryable=True), "continuation": continuation})
+            yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         try:

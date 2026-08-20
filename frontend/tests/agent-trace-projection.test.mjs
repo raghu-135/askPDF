@@ -6,8 +6,20 @@ import {
   buildCorrectiveInspection,
   buildLiveTraceView,
   buildRunTraceView,
+  getRetainedRunErrorMessage,
   mergeLiveAndRetainedTraceViews,
+  shouldRefreshRetainedTrace,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
+
+test('retained run errors remain visible when no trace was captured', () => {
+  assert.equal(
+    getRetainedRunErrorMessage({ error_json: { safe_message: 'Hermes timed out' } }),
+    'Hermes timed out',
+  );
+  assert.equal(getRetainedRunErrorMessage({ error_json: {} }), null);
+  assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'failed' }), true);
+  assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'running' }), false);
+});
 
 test('corrective inspection preserves wave outcomes, packet grades, and exact claim sources', () => {
   const inspection = buildCorrectiveInspection({

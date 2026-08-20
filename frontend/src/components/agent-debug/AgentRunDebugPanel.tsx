@@ -5,9 +5,9 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
-import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
+import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
+import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
@@ -17,7 +17,7 @@ function AgentRunDebugPanel({
   runId,
   routeReason,
   traceRefs,
-  runDetails,
+  runDetails: providedRunDetails,
   loading,
   error,
   onRunDetailsChange,
@@ -44,7 +44,11 @@ function AgentRunDebugPanel({
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const resumeSubmissionKeyRef = useRef<string | null>(null);
+  const traceRefreshAttemptedRef = useRef(new Set<string>());
+  const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
+  const runDetails = refreshedRunDetails?.id === runId ? refreshedRunDetails : providedRunDetails;
   const debug = runDetails?.debug;
+  const retainedErrorMessage = runDetails ? getRetainedRunErrorMessage(runDetails) : null;
   const pendingInterrupt = runDetails?.pending_interrupt;
   const isTaskOwnedRun = isTaskOwnedAgentRun(runDetails);
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
@@ -82,6 +86,25 @@ function AgentRunDebugPanel({
     || (typeof grounding?.usefulness_score === 'number'
       ? (Number(grounding.usefulness_score) >= 3 ? 'yes (historical score)' : 'no (historical score)')
       : undefined);
+
+  useEffect(() => {
+    setRefreshedRunDetails(undefined);
+  }, [runId, providedRunDetails]);
+
+  useEffect(() => {
+    if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
+    if (traceRefreshAttemptedRef.current.has(runId)) return;
+    traceRefreshAttemptedRef.current.add(runId);
+    const timer = window.setTimeout(() => {
+      void getAgentRun(runId, executionThreadId)
+        .then((refreshed) => {
+          setRefreshedRunDetails(refreshed);
+          onRunDetailsChange?.(refreshed);
+        })
+        .catch(() => undefined);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [executionThreadId, onRunDetailsChange, runDetails, runId]);
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -453,8 +476,8 @@ function AgentRunDebugPanel({
         </Box>
       )}
       {!loading && !error && runDetails && !debug && (
-        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
-          Trace not captured for this run.
+        <Typography variant="caption" color={retainedErrorMessage ? 'error' : 'text.secondary'} sx={{ px: 1, py: 0.75 }}>
+          {retainedErrorMessage || 'Trace not captured for this run.'}
         </Typography>
       )}
       {debug && !traceView && (

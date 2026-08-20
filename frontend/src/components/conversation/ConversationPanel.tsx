@@ -61,6 +61,7 @@ export function ConversationHeader({
   model,
   contextWindow,
   disabled = false,
+  contextWindowDisabled = false,
   leading,
   beforeModelControls,
   trailingActions,
@@ -72,6 +73,7 @@ export function ConversationHeader({
   model: string;
   contextWindow: number;
   disabled?: boolean;
+  contextWindowDisabled?: boolean;
   leading?: React.ReactNode;
   beforeModelControls?: React.ReactNode;
   trailingActions?: React.ReactNode;
@@ -169,7 +171,7 @@ export function ConversationHeader({
             label="Ctx size"
             type="number"
             value={contextWindow}
-            disabled={disabled}
+            disabled={disabled || contextWindowDisabled}
             onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
             onClick={dismissContextHelp}
             onFocus={dismissContextHelp}

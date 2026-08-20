@@ -31,7 +31,7 @@ import {
   type AgentRunResumeAction,
   type DeepResearchEngine,
 } from '../lib/api';
-import { mergeActiveAgentTaskRun, shouldPollAgentTask } from '../lib/deep-research-ui-state';
+import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
 import {
   deriveConversationSentences,
   type ConversationSentence,
@@ -155,7 +155,7 @@ function TimelineBubble({
     content={item.primary_content}
     active={active}
     wide={!isObjective}
-    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={item.type === 'todo_failure' ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
+    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
       {onSaveToMemory && ['todo_result', 'final_report'].includes(item.type) && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
     </ConversationMessageActions>}
@@ -350,7 +350,8 @@ export default function DeepResearchTaskPanel({
     }
     setBusy(true); setError('');
     try {
-      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode, engine });
+      const effectiveContextWindow = resolveDeepResearchContextWindow(engine, contextWindow, hermesMaxContext);
+      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: effectiveContextWindow, web_search_mode: webSearchMode, engine });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);
     } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
@@ -405,6 +406,9 @@ export default function DeepResearchTaskPanel({
   }, [task]);
   const frozen = Boolean(selectedRun);
   const frozenEngine: DeepResearchEngine = task?.workflow_id === 'hermes_rag_agent' ? 'hermes' : 'langgraph';
+  const displayedContextWindow = frozen
+    ? Number(task?.configuration?.context_window || contextWindow)
+    : resolveDeepResearchContextWindow(engine, contextWindow, hermesMaxContext);
   const configuredWebMode = String(task?.configuration?.web_search_mode || 'off') as 'off' | 'ask' | 'on';
   const frozenWebMode = task?.web_access === 'allowed_for_task'
     ? 'on'
@@ -427,8 +431,9 @@ export default function DeepResearchTaskPanel({
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
-      contextWindow={frozen ? Number(task?.configuration?.context_window || contextWindow) : contextWindow}
+      contextWindow={displayedContextWindow}
       disabled={frozen}
+      contextWindowDisabled={!frozen && engine === 'hermes'}
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
@@ -440,8 +445,8 @@ export default function DeepResearchTaskPanel({
           onClick={frozen ? undefined : () => setEngine((value) => value === 'langgraph' && hermesEnabled ? 'hermes' : 'langgraph')}
           title={!hermesEnabled && !frozen ? 'Hermes is not configured' : 'Deep Research engine'}
         />
-        {engine === 'hermes' && !frozen && hermesMaxContext !== null && contextWindow > hermesMaxContext
-          ? <Typography variant="caption" color="error">Hermes max: {hermesMaxContext.toLocaleString()}</Typography>
+        {engine === 'hermes' && !frozen && hermesMaxContext !== null
+          ? <Typography variant="caption" color="text.secondary">Hermes env: {hermesMaxContext.toLocaleString()}</Typography>
           : null}
         {renderWebControl(frozen ? frozenWebMode : webSearchMode, frozen || webCapability === false)}
       </Stack>}
