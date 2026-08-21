@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import os
-
-
-HERMES_MIN_CONTEXT_LENGTH = 2048
-HERMES_PINNED_MIN_CONTEXT_LENGTH = 64_000
+from app.runtime.hermes_compatibility import (
+    HERMES_MIN_CONTEXT_LENGTH, validate_provider_context,
+)
 
 
 class HermesConfigurationError(ValueError):
@@ -16,9 +15,12 @@ class HermesConfigurationError(ValueError):
 
 
 def hermes_runtime_enabled() -> bool:
-    return os.getenv("HERMES_RUNTIME_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on",
+    profiles = {
+        value.strip().lower()
+        for value in os.getenv("COMPOSE_PROFILES", "").split(",")
+        if value.strip()
     }
+    return "hermes" in profiles
 
 
 def hermes_model_context_length(*, required: bool = True) -> int | None:
@@ -72,10 +74,11 @@ def validate_hermes_model_compatibility() -> tuple[int, str]:
     provider = hermes_model_provider()
     # bdd0a79 permits an explicitly configured smaller window only for its
     # first-class LM Studio provider. All other providers enforce the 64K floor.
-    if provider != "lmstudio" and context_length < HERMES_PINNED_MIN_CONTEXT_LENGTH:
+    try:
+        validate_provider_context(provider, context_length)
+    except ValueError as exc:
         raise HermesConfigurationError(
             "hermes_context_length_provider_incompatible",
-            f"Hermes provider {provider!r} requires a context length of at least "
-            f"{HERMES_PINNED_MIN_CONTEXT_LENGTH}; LM Studio permits an explicitly configured smaller value",
-        )
+            f"{exc}; LM Studio permits an explicitly configured smaller value",
+        ) from exc
     return context_length, provider

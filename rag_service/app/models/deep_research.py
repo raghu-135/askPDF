@@ -97,6 +97,10 @@ class AgentTaskCommandRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class AgentTaskSteerRequest(AgentTaskCommandRequest):
+    text: str = Field(min_length=1, max_length=4_000)
+
+
 class DeepResearchTodoProposal(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=300)

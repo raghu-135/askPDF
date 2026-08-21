@@ -8,6 +8,17 @@ from hermes_runtime.hermes_compat.sitecustomize import _context_header_digests
 from hermes_runtime.profile_manager import RunProfileManager, configured_context_length
 
 
+def _managed(profile: str, tools: list[str], model: str, provider: str, context: int) -> dict:
+    return {
+        "profile_version": 2, "profile_id": "policy-id", "instructions": "research",
+        "mcp": {"server": "askpdf", "runtime_profile": profile, "allowed_tool_ids": tools},
+        "model_policy": {"model": model, "provider": provider}, "skills": {"enabled": []},
+        "memory": {"persistent": False}, "delegation": {"enabled": True},
+        "limits": {"max_output_chars": 12000, "max_duration_seconds": 300, "max_event_count": 200},
+        "context_window": context, "task_policy": {"builtin_only": True},
+    }
+
+
 @pytest.mark.parametrize("value", [8192, 32768, 131072])
 def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Path, value: int):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", str(value))
@@ -18,9 +29,8 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
     manager = RunProfileManager(str(tmp_path))
     profile = manager.create(
-        run_id=f"run-{value}", policy_profile="askpdf-deep-offline",
-        context_token="signed.token", allowed_tools=["search_documents"],
-        selected_model=f"model-{value}", selected_provider="lmstudio",
+        run_id=f"run-{value}", context_token="signed.token",
+        managed_profile=_managed("askpdf-deep-offline", ["search_documents"], f"model-{value}", "lmstudio", value),
     )
     name = profile.name
     config = (tmp_path / name / "config.yaml").read_text()
@@ -71,8 +81,8 @@ def test_run_profiles_are_isolated_and_stale_profiles_are_swept(monkeypatch, tmp
     monkeypatch.setenv("HERMES_PROFILE_UID", str(os.getuid()))
     monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
     manager = RunProfileManager(str(tmp_path))
-    first = manager.create(run_id="run-one", policy_profile="askpdf-deep-offline", context_token="one.token", allowed_tools=["search_documents"], selected_model="model-one", selected_provider="lmstudio")
-    second = manager.create(run_id="run-two", policy_profile="askpdf-deep-external", context_token="two.token", allowed_tools=["search_web"], selected_model="model-two", selected_provider="lmstudio")
+    first = manager.create(run_id="run-one", context_token="one.token", managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "model-one", "lmstudio", 24576))
+    second = manager.create(run_id="run-two", context_token="two.token", managed_profile=_managed("askpdf-deep-external", ["search_web"], "model-two", "lmstudio", 24576))
     assert first.name != second.name
     assert 'X-AskPDF-Execution-Context: "one.token"' in (tmp_path / first.name / "config.yaml").read_text()
     assert 'X-AskPDF-Execution-Context: "two.token"' in (tmp_path / second.name / "config.yaml").read_text()
@@ -103,7 +113,6 @@ def test_generic_provider_preserves_pinned_hermes_64k_floor(monkeypatch, tmp_pat
     manager = RunProfileManager(str(tmp_path))
     with pytest.raises(RuntimeError, match="at least 64000"):
         manager.create(
-            run_id="run-generic", policy_profile="askpdf-deep-offline",
-            context_token="signed.token", allowed_tools=["search_documents"],
-            selected_model="generic-model", selected_provider="custom",
+            run_id="run-generic", context_token="signed.token",
+            managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "generic-model", "custom", 32768),
         )

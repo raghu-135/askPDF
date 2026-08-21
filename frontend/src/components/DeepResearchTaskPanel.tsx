@@ -24,6 +24,7 @@ import {
   getAgentTaskTimeline,
   listAgentTasks,
   resumeAgentRun,
+  steerAgentTask,
   type AgentTaskRun,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
@@ -374,7 +375,7 @@ export default function DeepResearchTaskPanel({
 
   const decide = async (
     action: AgentRunResumeAction,
-    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown> },
+    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown>; runtimeApprovalChoice?: 'once' | 'session' | 'always' | 'deny' },
   ) => {
     const pending = selectedRun?.pending_interrupt;
     if (!selectedRun || !pending) return;
@@ -390,6 +391,7 @@ export default function DeepResearchTaskPanel({
         selected_option_ids: options?.selectedOptionIds,
         edited_payload: options?.editedPayload,
         client_metadata: { source: 'deep_research_task_panel' },
+        runtime_approval_choice: options?.runtimeApprovalChoice,
       });
       await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
@@ -417,6 +419,7 @@ export default function DeepResearchTaskPanel({
       : configuredWebMode;
   const requestedWebUnavailable = !frozen && webSearchMode !== 'off' && webCapability !== true;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
+  const isHermesApproval = frozenEngine === 'hermes' && pendingInterrupt?.type === 'hermes_approval';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
     : [];
@@ -485,7 +488,15 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={pendingInterrupt ? <HumanReviewDecisionPanel
+    decision={pendingInterrupt && isHermesApproval ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Hermes approval required'}</Typography>
+      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
+      <Stack direction="row" spacing={1} flexWrap="wrap">
+        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting)} onClick={() => void decide('approve', { runtimeApprovalChoice: choice })}>Approve {choice}</Button>)}
+        <Button size="small" color="error" disabled={Boolean(decisionSubmitting)} onClick={() => void decide('reject', { runtimeApprovalChoice: 'deny' })}>Deny</Button>
+      </Stack>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}
@@ -494,6 +505,13 @@ export default function DeepResearchTaskPanel({
     /> : undefined}
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
+    </Box> : frozenEngine === 'hermes' && task.status === 'running' ? <Box sx={{ pb: 1 }}>
+      <ConversationComposer placeholder="Steer the active Hermes run…" busy={busy} onSubmit={async (value) => {
+        setBusy(true); setError('');
+        try { await steerAgentTask(task.id, threadId, value, task.version); await refresh(); }
+        catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+        finally { setBusy(false); }
+      }} />
     </Box> : <Box sx={{ px: 2, py: 1 }}><Typography variant="body2" color="text.secondary">
       {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
     </Typography></Box>}

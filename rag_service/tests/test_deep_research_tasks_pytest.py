@@ -86,7 +86,7 @@ async def test_deep_planner_repairs_invalid_output_once(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deep_planner_returns_stable_error_after_invalid_repair(monkeypatch):
+async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypatch):
     secret_marker = "must-not-be-persisted"
     call_model = AsyncMock(side_effect=[
         (f"not json {secret_marker}", {}),
@@ -103,19 +103,18 @@ async def test_deep_planner_returns_stable_error_after_invalid_repair(monkeypatc
         "llm_model": "small-test-model",
     }
 
-    with pytest.raises(AgentRuntimeError) as caught:
-        await deep_research_nodes.deep_task_planner(
-            state, {"configurable": {"execution_event_sink": sink}},
-        )
+    result = await deep_research_nodes.deep_task_planner(
+        state, {"configurable": {"execution_event_sink": sink}},
+    )
 
-    assert caught.value.code == "deep_research_plan_invalid"
-    assert caught.value.retryable is True
-    assert caught.value.details["repair_attempted"] is True
-    assert secret_marker not in json.dumps(caught.value.details)
+    assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
+    assert len(result["task_plan"]["todos"]) == 1
     assert call_model.await_count == 2
     assert [call.args[0] for call in sink.emit.await_args_list] == [
         "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
+        "planner.fallback_created",
     ]
+    assert secret_marker not in json.dumps(sink.emit.await_args_list[-1].args[1])
 
 
 async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | None = None) -> AgentRun:
@@ -1287,7 +1286,7 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
 
 
 def test_task_api_explicitly_selects_hermes_and_uses_deployment_context(api_client, sample_thread, monkeypatch):
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
     payload = {

@@ -1,0 +1,10 @@
+# Generated test profile for the pinned Hermes container smoke test.
+# Credentials stay in environment variables; this file is deterministic.
+_config_version: 37
+
+model:
+  default: phase5-deterministic
+  provider: custom
+  base_url: http://fake-llm:9000/v1
+
+mcp_servers: {}

@@ -726,7 +726,7 @@ class AgentTaskCommand(SQLModel, table=True):
     completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     __table_args__ = (
-        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete')", name="ck_agent_task_commands_action"),
+        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete','steer')", name="ck_agent_task_commands_action"),
         CheckConstraint("status in ('accepted','completed','rejected') and expected_version >= 1", name="ck_agent_task_commands_state"),
         UniqueConstraint("task_id", "action", "idempotency_key", name="uq_agent_task_command_idempotency"),
     )

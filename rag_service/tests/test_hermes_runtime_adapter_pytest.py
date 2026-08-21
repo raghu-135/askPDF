@@ -98,7 +98,7 @@ async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
 
     def handler(request):
         requested.append((request.method, str(request.url), request.headers.get("x-hermes-session-id")))
-        return httpx.Response(200, request=request)
+        return httpx.Response(200, json={"run_id": "upstream-run-7", "status": "stopping"}, request=request)
 
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setattr(
@@ -107,7 +107,7 @@ async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
         lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
     )
 
-    await hermes_api._request_upstream_stop(
+    result = await hermes_api._request_upstream_stop(
         "http://hermes.test",
         "askpdf-run-profile-1",
         "upstream-run-7",
@@ -119,11 +119,167 @@ async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
         "http://hermes.test/p/askpdf-run-profile-1/v1/runs/upstream-run-7/stop",
         "session-3",
     )]
+    assert result["status"] == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypatch):
+    statuses = iter(("stopping", "running", "cancelled"))
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"run_id": "upstream-run-7", "status": next(statuses)},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await hermes_api._confirm_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {},
+        timeout_seconds=1,
+        poll_interval_seconds=0.01,
+    )
+
+    assert result == {
+        "confirmed": True,
+        "status": "cancelled",
+        "last_event": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_reports_unconfirmed_while_executor_is_still_running(monkeypatch):
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"run_id": "upstream-run-7", "status": "stopping"},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await hermes_api._confirm_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {},
+        timeout_seconds=0,
+    )
+
+    assert result == {"confirmed": False, "status": "stopping"}
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_rejects_a_malformed_acknowledgement(monkeypatch):
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(200, text="not-json", request=request)
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(httpx.DecodingError, match="not valid JSON"):
+        await hermes_api._request_upstream_stop(
+            "http://hermes.test",
+            "askpdf-run-profile-1",
+            "upstream-run-7",
+            {},
+        )
+
+
+def _cancel_payload():
+    return {
+        "continuation": {
+            "binding_type": "hermes_session",
+            "payload": {
+                "session_id": "session-3",
+                "upstream_run_id": "upstream-run-7",
+                "runtime_profile": "askpdf-run-profile-1",
+            },
+        },
+    }
+
+
+def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monkeypatch, tmp_path):
+    retired = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        status = "stopping" if request.method == "POST" else "cancelled"
+        return httpx.Response(200, json={"status": status}, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(
+        hermes_api.RunProfileManager,
+        "retire",
+        lambda _self, profile: retired.append(profile),
+    )
+
+    with TestClient(hermes_api.create_app()) as client:
+        response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
+
+    assert response.json()["result"]["status"] == "cancelled"
+    assert retired == ["askpdf-run-profile-1"]
+
+
+def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp_path):
+    retired = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(200, json={"status": "stopping"}, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("HERMES_STOP_CONFIRM_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(
+        hermes_api.RunProfileManager,
+        "retire",
+        lambda _self, profile: retired.append(profile),
+    )
+
+    with TestClient(hermes_api.create_app()) as client:
+        response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
+
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "hermes_stop_unconfirmed"
+    assert retired == []
 
 
 @pytest.mark.asyncio
 async def test_hermes_controls_use_neutral_contracts(monkeypatch):
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     calls = []
@@ -179,7 +335,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
@@ -197,7 +353,7 @@ async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hermes_adapter_rejects_missing_context_length(monkeypatch):
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.delenv("HERMES_MODEL_CONTEXT_LENGTH", raising=False)
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")

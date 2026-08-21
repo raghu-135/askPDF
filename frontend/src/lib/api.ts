@@ -1956,6 +1956,8 @@ export interface AgentRunResumePayload {
   resume_token?: string;
   resume_version?: number;
   thread_id?: string;
+  runtime_approval_choice?: 'once' | 'session' | 'always' | 'deny';
+  resolve_all?: boolean;
 }
 
 export interface AgentRunResumeResponse {
@@ -2164,6 +2166,15 @@ export async function commandAgentTask(taskId: string, threadId: string, action:
   });
   if (!response.ok) throw new Error(await readApiError(response));
   return (await response.json()).task;
+}
+
+export async function steerAgentTask(taskId: string, threadId: string, text: string, version: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/steer?${taskQuery(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify({ expected_version: version, text }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
 }
 
 export async function getAgentTaskTodos(taskId: string, threadId: string): Promise<AgentTaskTodo[]> {

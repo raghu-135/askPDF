@@ -64,7 +64,7 @@ services:
       POSTGRES_MAX_OVERFLOW: "5"
       ASKPDF_AGENT_CHECKPOINTER: postgres
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
-      HERMES_RUNTIME_ENABLED: ${PHASE7_HERMES_RUNTIME_ENABLED:-false}
+      COMPOSE_PROFILES: ${PHASE7_HERMES_COMPOSE_PROFILES:-}
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       HERMES_MODEL_PROVIDER: lmstudio
       HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
@@ -283,7 +283,7 @@ services:
       PHASE5_SMOKE_TIMEOUT_SECONDS: "120"
       PHASE5_EXTERNAL_EMBEDDING_MODEL: phase5-deterministic-embedding
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
-      HERMES_RUNTIME_ENABLED: "true"
+      COMPOSE_PROFILES: "hermes"
       HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642

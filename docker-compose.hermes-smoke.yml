@@ -1,0 +1,79 @@
+name: askpdf-hermes-smoke
+
+services:
+  hermes-real:
+    profiles: ["real-hermes"]
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_PORT: "8642"
+    env_file:
+      - ./hermes_runtime/smoke.env
+    command: ["gateway"]
+    ports:
+      - "8642:8642"
+    volumes:
+      - ./hermes_runtime/smoke-config.yaml:/opt/data/config.yaml:ro
+      - ./hermes_runtime/smoke.env:/opt/data/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      fake-llm:
+        condition: service_healthy
+
+  fake-llm:
+    profiles: ["real-hermes"]
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.fake-llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/v1/models"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  hermes-runtime-real:
+    profiles: ["real-hermes"]
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    environment:
+      HERMES_API_URL: http://hermes-real:8642
+      HERMES_RUNTIME_VERSION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
+      HERMES_RUNTIME_STORAGE_BACKEND: file
+      HERMES_RUNTIME_WORKERS: "1"
+      HERMES_MODEL: phase5-deterministic
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      ASKPDF_MCP_REQUIRED: "false"
+    depends_on:
+      hermes-real:
+        condition: service_healthy
+    ports:
+      - "8201:8200"
+    volumes:
+      - real_hermes_gateway_state_v2:/var/lib/hermes
+
+  real-hermes-smoke-test:
+    profiles: ["real-hermes"]
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.test
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      PHASE7_REAL_HERMES_SMOKE: "true"
+      COMPOSE_PROFILES: "hermes"
+      HERMES_RUNTIME_URL: http://hermes-runtime-real:8200
+    command: ["pytest", "--noconftest", "-q", "tests/test_real_hermes_container_smoke_pytest.py"]
+    depends_on:
+      hermes-runtime-real:
+        condition: service_started
+
+volumes:
+  real_hermes_gateway_state_v2:

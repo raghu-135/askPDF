@@ -261,7 +261,11 @@ class HttpRuntimeAdapter:
                             if persist_binding is not None:
                                 await persist_binding(request.run_id, event.continuation)
                     if envelope.get("result") is not None:
-                        if not event.terminal:
+                        resumable_boundary = (
+                            isinstance(envelope.get("result"), Mapping)
+                            and str(envelope["result"].get("status") or "") in {"awaiting_human", "paused"}
+                        )
+                        if not event.terminal and not resumable_boundary:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to a nonterminal event")
                         if terminal_event_id is not None and event.event_id != terminal_event_id:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal result")

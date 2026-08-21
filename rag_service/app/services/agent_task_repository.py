@@ -715,6 +715,49 @@ async def apply_command(
         return task, command, False
 
 
+async def record_steering_command(
+    task_id: str, *, text: str, idempotency_key: str, expected_version: int,
+    actor_id: Optional[str] = None,
+) -> tuple[AgentTask, AgentTaskCommand, bool]:
+    """Persist an auditable runtime control without changing task state/version."""
+    async with async_session_maker() as session:
+        async with session.begin():
+            duplicate = (await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.idempotency_key == idempotency_key,
+            ))).scalar_one_or_none()
+            task = (await session.execute(select(AgentTask).where(
+                AgentTask.id == task_id,
+            ).with_for_update())).scalar_one_or_none()
+            if task is None:
+                raise AgentTaskConflict("task_not_found", "Agent task not found")
+            if duplicate:
+                return task, duplicate, True
+            if task.version != expected_version:
+                raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
+            if task.status != AgentTaskStatus.RUNNING.value:
+                raise AgentTaskConflict("task_transition_invalid", "Steering requires an active task", current_version=task.version)
+            command = AgentTaskCommand(
+                task_id=task.id, action="steer", idempotency_key=idempotency_key,
+                expected_version=expected_version, actor_id=actor_id,
+                status="accepted", result_json={"text": text},
+            )
+            session.add(command)
+            await session.flush()
+            return task, command, False
+
+
+async def complete_control_command(command_id: str, *, result: dict[str, Any] | None = None, rejected: bool = False) -> None:
+    async with async_session_maker() as session:
+        async with session.begin():
+            command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
+            if command is not None:
+                command.status = "rejected" if rejected else "completed"
+                command.result_json = dict(result or {})
+                command.completed_at = utc_now()
+
+
 async def request_task_deletion(
     task_id: str,
     *,

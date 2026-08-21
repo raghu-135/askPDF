@@ -186,7 +186,7 @@ fi
 if [ "${RUN_PHASE7:-0}" = "1" ]; then
     PHASE7_RECOVERY_RUN_ID="${PHASE7_RECOVERY_RUN_ID:-phase7-recovery-$$}"
     export PHASE7_RECOVERY_RUN_ID
-    export PHASE7_HERMES_RUNTIME_ENABLED=true
+    export PHASE7_HERMES_COMPOSE_PROFILES=hermes
     export PHASE7_HERMES_INTEGRATION=true
     echo "Starting deterministic Phase 7 Hermes runtime proof..."
     "${DOCKER_COMPOSE[@]}" "${PHASE5_COMPOSE_ARGS[@]}" build rag-service

@@ -5,13 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any, Mapping
-
-
-HERMES_DEFINITION_VERSION = 2
-HERMES_PROFILE_VERSION = 2
-HERMES_SUPPORTED_DEFINITION_VERSIONS = frozenset({1, HERMES_DEFINITION_VERSION})
-HERMES_OFFLINE_PROFILE = "askpdf-deep-offline"
-HERMES_EXTERNAL_PROFILE = "askpdf-deep-external"
+from app.runtime.hermes_compatibility import (
+    HERMES_DEFINITION_VERSION, HERMES_EXTERNAL_PROFILE, HERMES_OFFLINE_PROFILE,
+    HERMES_PROFILE_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS,
+)
 HERMES_BASE_TOOL_IDS = (
     "get_thread_shape",
     "search_document_by_id",

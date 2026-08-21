@@ -12,10 +12,14 @@ import tempfile
 import time
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Any, Mapping
+
+from hermes_runtime.compatibility import (
+    HERMES_CONFIG_SCHEMA_VERSION, HERMES_PROFILE_NAMES, provider_requires_api_key,
+    validate_provider_context,
+)
 
 
-MIN_CONTEXT_LENGTH = 2048
-PINNED_MIN_CONTEXT_LENGTH = 64_000
 PROFILE_PREFIX = "askpdf-run-"
 TOKEN_HEADER = "X-AskPDF-Execution-Context"
 PINNED_HERMES_UID = 10_000
@@ -66,14 +70,26 @@ def configured_context_length() -> int:
         value = int(raw, 10)
     except ValueError as exc:
         raise RuntimeError("HERMES_MODEL_CONTEXT_LENGTH must be an integer") from exc
-    if value < MIN_CONTEXT_LENGTH:
-        raise RuntimeError(f"HERMES_MODEL_CONTEXT_LENGTH must be at least {MIN_CONTEXT_LENGTH}")
+    if value < 2048:
+        raise RuntimeError("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
     return value
 
 
 def render_bootstrap_config() -> None:
     """Materialize checked-in templates with a concrete numeric context length."""
 
+    provider = configured_provider()
+    required_secrets = {
+        "API_SERVER_KEY": os.getenv("API_SERVER_KEY", "").strip(),
+        "HERMES_MCP_CONTEXT_SECRET": os.getenv("HERMES_MCP_CONTEXT_SECRET", "").strip(),
+    }
+    if provider_requires_api_key(provider):
+        required_secrets["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "").strip()
+    missing = [name for name, value in required_secrets.items() if not value]
+    if missing:
+        raise RuntimeError("Hermes profile requires: " + ", ".join(missing))
+    if len(required_secrets["HERMES_MCP_CONTEXT_SECRET"]) < 32:
+        raise RuntimeError("HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters")
     context_length = configured_context_length()
     template_root = Path(os.getenv("HERMES_CONFIG_TEMPLATE_ROOT", "/app/hermes_runtime"))
     data_root = Path(os.getenv("HERMES_DATA_ROOT", "/opt/data"))
@@ -83,7 +99,6 @@ def render_bootstrap_config() -> None:
         template_root / "profiles/askpdf-deep-external/config.yaml": data_root / "profiles/askpdf-deep-external/config.yaml",
     }
     for source, target in targets.items():
-        provider = configured_provider()
         validate_provider_context(provider, context_length)
         rendered = (
             source.read_text()
@@ -103,14 +118,6 @@ def configured_provider() -> str:
     return provider
 
 
-def validate_provider_context(provider: str, context_length: int) -> None:
-    if provider != "lmstudio" and context_length < PINNED_MIN_CONTEXT_LENGTH:
-        raise RuntimeError(
-            f"Hermes provider {provider!r} requires HERMES_MODEL_CONTEXT_LENGTH "
-            f"of at least {PINNED_MIN_CONTEXT_LENGTH}"
-        )
-
-
 class RunProfileManager:
     def __init__(self, root: str | None = None) -> None:
         self.root = Path(root or os.getenv("HERMES_PROFILE_ROOT", "/opt/data/profiles"))
@@ -121,24 +128,30 @@ class RunProfileManager:
         self,
         *,
         run_id: str,
-        policy_profile: str,
+        managed_profile: Mapping[str, Any],
         context_token: str,
-        allowed_tools: list[str],
-        selected_model: str,
-        selected_provider: str,
     ) -> RunProfile:
         if not context_token:
             raise RuntimeError("Hermes MCP execution context is required")
         api_server_key = os.getenv("HERMES_API_TOKEN", "").strip()
         if not api_server_key:
             raise RuntimeError("HERMES_API_TOKEN is required for run profiles")
-        selected_model = selected_model.strip()
-        selected_provider = selected_provider.strip()
+        policy = json.loads(json.dumps(managed_profile))
+        mcp = policy.get("mcp") if isinstance(policy.get("mcp"), dict) else {}
+        model_policy = policy.get("model_policy") if isinstance(policy.get("model_policy"), dict) else {}
+        limits = policy.get("limits") if isinstance(policy.get("limits"), dict) else {}
+        policy_profile = str(mcp.get("runtime_profile") or "")
+        allowed_tools = [str(value) for value in mcp.get("allowed_tool_ids") or []]
+        selected_model = str(model_policy.get("model") or "").strip()
+        selected_provider = str(model_policy.get("provider") or "").strip()
         if not selected_model or not selected_provider:
             raise RuntimeError("Hermes run profiles require a selected model and provider")
         selected_provider = selected_provider.lower()
-        context_length = configured_context_length()
-        validate_provider_context(selected_provider, context_length)
+        context_length = int(policy.get("context_window") or configured_context_length())
+        try:
+            validate_provider_context(selected_provider, context_length)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         provider_url = os.getenv("LLM_API_URL", "").strip()
         if not provider_url:
             raise RuntimeError("LLM_API_URL is required for run profiles")
@@ -149,8 +162,15 @@ class RunProfileManager:
         )
         if any(character in value for value in secret_values for character in "\r\n"):
             raise RuntimeError("Hermes run-profile secrets must be single-line values")
-        if policy_profile not in {"askpdf-deep-offline", "askpdf-deep-external"}:
+        if policy_profile not in HERMES_PROFILE_NAMES:
             raise RuntimeError("Unsupported Hermes managed profile")
+        required = {"profile_version", "profile_id", "instructions", "skills", "memory", "delegation", "task_policy"}
+        missing = sorted(required - set(policy))
+        if missing:
+            raise RuntimeError(f"Hermes managed profile is incomplete: {', '.join(missing)}")
+        if not all(isinstance(limits.get(key), int) and limits[key] > 0 for key in
+                   ("max_output_chars", "max_duration_seconds", "max_event_count")):
+            raise RuntimeError("Hermes managed profile runtime limits are invalid")
         suffix = hashlib.sha256(run_id.encode()).hexdigest()[:20]
         profile_name = PROFILE_PREFIX + suffix
         destination = self.root / profile_name
@@ -163,12 +183,19 @@ class RunProfileManager:
         # connection and its headers, so every run requires its own namespace.
         mcp_server_name = "askpdf_" + suffix
         tools = json.dumps(sorted(set(allowed_tools)))
-        activation_fingerprint = hashlib.sha256(
-            f"{profile_name}\0{mcp_server_name}\0{tools}\0{context_length}".encode()
-        ).hexdigest()
+        activation_material = {
+            "managed_profile": policy,
+            "runtime_profile": profile_name,
+            "mcp_server_name": mcp_server_name,
+            "provider_url": provider_url,
+        }
+        activation_fingerprint = hashlib.sha256(json.dumps(
+            activation_material, sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        policy_json = json.dumps(policy, sort_keys=True, separators=(",", ":"))
         config = (
             "# Generated run profile. Secret-bearing; retire immediately after the run.\n"
-            "_config_version: 37\n"
+            f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}\n"
             "model:\n"
             f"  default: {json.dumps(selected_model)}\n"
             f"  provider: {json.dumps(selected_provider)}\n"
@@ -177,6 +204,7 @@ class RunProfileManager:
             "askpdf_runtime_profile:\n"
             f"  name: {json.dumps(profile_name)}\n"
             f"  config_fingerprint: {json.dumps(activation_fingerprint)}\n"
+            f"  managed_profile: {policy_json}\n"
             "platforms:\n"
             "  api_server:\n"
             "    enabled: false\n"
@@ -289,7 +317,9 @@ class RunProfileManager:
         cutoff = time.time() - max(60, max_age_seconds)
         removed = 0
         for candidate in self.root.glob(PROFILE_PREFIX + "*"):
-            if candidate.name not in self._active and candidate.is_dir() and candidate.stat().st_mtime < cutoff:
+            if candidate.is_dir() and candidate.stat().st_mtime < cutoff:
+                if candidate.name in self._active:
+                    self.retire(candidate.name)
                 self.remove(candidate.name)
                 removed += 1
         return removed

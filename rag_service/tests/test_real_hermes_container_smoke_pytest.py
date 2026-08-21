@@ -53,7 +53,7 @@ def _context() -> RuntimeExecutionContext:
 
 @pytest.mark.asyncio
 async def test_pinned_real_hermes_completion_stream_and_session_capture(monkeypatch) -> None:
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     assert int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]) >= 2048
     adapter = HermesRuntimeAdapter(base_url=os.getenv("HERMES_RUNTIME_URL", "http://localhost:8201"))
     sink = _Sink()
@@ -70,7 +70,7 @@ async def test_pinned_real_hermes_completion_stream_and_session_capture(monkeypa
 
 @pytest.mark.asyncio
 async def test_pinned_real_hermes_cancellation(monkeypatch) -> None:
-    monkeypatch.setenv("HERMES_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     assert int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]) >= 2048
     adapter = HermesRuntimeAdapter(base_url=os.getenv("HERMES_RUNTIME_URL", "http://localhost:8201"))
     request = _request("Work slowly and continue until stopped.")
@@ -80,7 +80,7 @@ async def test_pinned_real_hermes_cancellation(monkeypatch) -> None:
         await asyncio.wait_for(sink.started.wait(), timeout=30)
         bound_request = AgentRuntimeRequest(**{**request.__dict__, "continuation": sink.continuation})
         response = await adapter.cancel(bound_request)
-        assert response["status"] == "cancellation_requested"
+        assert response["status"] == "cancelled"
         result = await asyncio.wait_for(task, timeout=30)
         assert result.status == "cancelled"
     finally:

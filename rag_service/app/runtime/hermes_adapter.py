@@ -48,7 +48,10 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         raise RuntimeError("runtime_capability_unsupported", "Hermes resume is not supported by the pinned runs API")
 
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
-        raise RuntimeError("runtime_capability_unsupported", "Hermes continuation is not supported by the pinned runs API")
+        self._ensure_enabled()
+        if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
+            raise RuntimeError("runtime_binding_missing", "Hermes continuation requires an upstream run binding")
+        return await super().continue_run(request, context=context, event_sink=event_sink)
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._ensure_enabled()

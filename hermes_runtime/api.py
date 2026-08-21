@@ -259,8 +259,13 @@ async def _request_upstream_stop(
     runtime_profile: str,
     upstream_run_id: str,
     headers: Mapping[str, str],
-) -> None:
-    """Stop one exact profile-scoped Hermes run."""
+) -> dict[str, Any]:
+    """Request a cooperative stop for one exact profile-scoped Hermes run.
+
+    Pinned Hermes acknowledges this operation with ``status=stopping``.  That
+    acknowledgement is not terminal: the synchronous agent/provider worker may
+    still be running until it observes the hard-interrupt flag.
+    """
 
     async with httpx.AsyncClient(timeout=5) as client:
         response = await client.post(
@@ -268,6 +273,90 @@ async def _request_upstream_stop(
             headers=dict(headers),
         )
         response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError(
+                "Hermes stop response was not valid JSON", request=response.request
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise httpx.DecodingError("Hermes stop response was not an object", request=response.request)
+        return dict(payload)
+
+
+async def _confirm_upstream_stop(
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+    *,
+    timeout_seconds: float | None = None,
+    poll_interval_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Wait for Hermes' cooperative stop to reach an actual terminal state."""
+
+    timeout = max(
+        0.0,
+        float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else os.getenv("HERMES_STOP_CONFIRM_TIMEOUT_SECONDS", "15")
+        ),
+    )
+    interval = max(
+        0.01,
+        float(
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else os.getenv("HERMES_STOP_POLL_INTERVAL_SECONDS", "0.25")
+        ),
+    )
+    status_url = (
+        hermes_api_url.rstrip("/")
+        + f"/p/{runtime_profile}/v1/runs/{upstream_run_id}"
+    )
+    deadline = time.monotonic() + timeout
+    last_status = "stopping"
+    async with httpx.AsyncClient(timeout=5) as client:
+        while True:
+            response = await client.get(status_url, headers=dict(headers))
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise httpx.DecodingError(
+                    "Hermes run status was not valid JSON", request=response.request
+                ) from exc
+            if not isinstance(payload, Mapping):
+                raise httpx.DecodingError("Hermes run status was not an object", request=response.request)
+            last_status = str(payload.get("status") or "unknown").lower()
+            if last_status in {"cancelled", "completed", "failed"}:
+                return {
+                    "confirmed": True,
+                    "status": last_status,
+                    "last_event": payload.get("last_event"),
+                }
+            if time.monotonic() >= deadline:
+                return {"confirmed": False, "status": last_status}
+            await asyncio.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+
+async def _stop_and_confirm_upstream_run(
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+) -> dict[str, Any]:
+    acknowledgement = await _request_upstream_stop(
+        hermes_api_url, runtime_profile, upstream_run_id, headers
+    )
+    confirmation = await _confirm_upstream_stop(
+        hermes_api_url, runtime_profile, upstream_run_id, headers
+    )
+    return {
+        **confirmation,
+        "acknowledged_status": str(acknowledgement.get("status") or "unknown"),
+    }
 
 
 def create_app() -> FastAPI:
@@ -476,14 +565,17 @@ def create_app() -> FastAPI:
         question = str(input_data.get("question") or context.get("request_payload", {}).get("question") or "")
         resolved_spec = dict(context.get("resolved_spec") or {})
         definition_version = int(resolved_spec.get("definition_version") or 1)
-        config = resolved_spec.get("config") or {}
         managed_profile = resolved_spec.get("managed_profile") or {}
-        runtime_profile = str((managed_profile.get("mcp") or {}).get("runtime_profile") or "").strip()
-        max_events = max(1, int(config.get("max_event_count") or 200))
-        max_output_chars = max(1, int(config.get("max_output_chars") or 12000))
-        max_duration_seconds = max(1, int(config.get("max_duration_seconds") or 300))
+        config = resolved_spec.get("config") or {}
+        managed_mcp = managed_profile.get("mcp") or {}
+        runtime_profile = str(managed_mcp.get("runtime_profile") or "").strip()
+        managed_limits = managed_profile.get("limits") or {}
+        effective_limits = managed_limits if definition_version >= 2 else config
+        max_events = max(1, int(effective_limits.get("max_event_count") or 200))
+        max_output_chars = max(1, int(effective_limits.get("max_output_chars") or 12000))
+        max_duration_seconds = max(1, int(effective_limits.get("max_duration_seconds") or 300))
         deadline = time.monotonic() + max_duration_seconds
-        system_prompt = str(config.get("system_prompt") or "").strip()
+        system_prompt = str((managed_profile.get("instructions") if definition_version >= 2 else config.get("system_prompt")) or "").strip()
         task_context = input_data.get("task_context")
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
@@ -491,8 +583,8 @@ def create_app() -> FastAPI:
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,
-            "model": options.get("llm_model") or config.get("model") or "",
-            "provider": options.get("llm_provider") or config.get("provider") or "custom",
+            "model": ((managed_profile.get("model_policy") or {}).get("model") if definition_version >= 2 else options.get("llm_model") or config.get("model")) or "",
+            "provider": ((managed_profile.get("model_policy") or {}).get("provider") if definition_version >= 2 else options.get("llm_provider") or config.get("provider")) or "custom",
             "metadata": {
                 "askpdf_run_id": run_id,
                 "askpdf_thread_id": neutral_request.get("thread_id"),
@@ -511,6 +603,7 @@ def create_app() -> FastAPI:
             max_output_chars=max_output_chars,
         )
         terminal_seen = False
+        retain_profile = False
         tool_activity = {
             "started": 0,
             "completed": 0,
@@ -558,6 +651,22 @@ def create_app() -> FastAPI:
             event_budget.observe(kind, output_delta)
             event = _neutral_event(run_id, sequence, kind, event_payload, source_event_id=source_event_id, terminal=terminal, continuation=continuation)
             result = None
+            if kind == "approval.request":
+                interrupt_id = str(event_payload.get("approval_id") or event_payload.get("id") or f"hermes-approval-{sequence}")
+                result = {
+                    "status": "awaiting_human",
+                    "pending_interrupt": {
+                        "interrupt_id": interrupt_id,
+                        "type": "hermes_approval",
+                        "title": str(event_payload.get("title") or "Hermes tool approval required"),
+                        "description": str(event_payload.get("command") or event_payload.get("description") or ""),
+                        "allowed_actions": ["approve", "reject"],
+                        "runtime_approval_choices": ["once", "session", "always", "deny"],
+                        "checkpoint_resume": True,
+                        "runtime_payload": dict(event_payload),
+                    },
+                    "continuation": continuation,
+                }
             if terminal:
                 terminal_seen = True
                 status = "completed" if kind == "run.completed" else "cancelled" if kind == "run.cancelled" else "failed"
@@ -570,8 +679,9 @@ def create_app() -> FastAPI:
                     "runtime_metadata": {
                         "session_id": session_id,
                         "upstream_run_id": upstream_run_id,
-                        "mcp_server": config.get("mcp_server"),
-                        "allowed_tool_ids": list(config.get("allowed_tool_ids") or []),
+                        "mcp_server": managed_mcp.get("server") if definition_version >= 2 else config.get("mcp_server"),
+                        "allowed_tool_ids": list(managed_mcp.get("allowed_tool_ids") or []) if definition_version >= 2 else list(config.get("allowed_tool_ids") or []),
+                        "policy_fingerprint": managed_profile.get("profile_id"),
                     },
                     "continuation": continuation,
                     "error": event_payload.get("error"),
@@ -606,11 +716,8 @@ def create_app() -> FastAPI:
             if definition_version >= 2 and not profile_manager.is_reusable(execution_profile):
                 run_profile = profile_manager.create(
                     run_id=run_id,
-                    policy_profile=runtime_profile,
+                    managed_profile=managed_profile,
                     context_token=context_token,
-                    allowed_tools=list(config.get("allowed_tool_ids") or []),
-                    selected_model=str(upstream_payload.get("model") or ""),
-                    selected_provider=str(upstream_payload.get("provider") or ""),
                 )
                 execution_profile = run_profile.name
                 if not profile_manager.verify(run_profile):
@@ -658,7 +765,11 @@ def create_app() -> FastAPI:
                             or str(header_digests.get(run_profile.mcp_server_name) or "") != run_profile.token_digest
                         ):
                             activation_mismatches.append("mcp_context_header")
-                        if not expected_registered.issubset(registered_tools):
+                        askpdf_registered = {
+                            value for value in registered_tools
+                            if value.startswith(f"mcp__{run_profile.mcp_server_name}__")
+                        }
+                        if askpdf_registered != expected_registered:
                             activation_mismatches.append("registered_tools")
                         if activation_mismatches:
                             logger.warning(
@@ -770,6 +881,8 @@ def create_app() -> FastAPI:
                                 yield _sse(event, result)
                                 if terminal_seen:
                                     return
+                                if result is not None and result.get("status") == "awaiting_human":
+                                    return
                             event_name, data = "message", []
                             continue
                         if line.startswith("event:"):
@@ -782,6 +895,8 @@ def create_app() -> FastAPI:
                             yield _sse(operation_event)
                         yield _sse(event, result)
                         if terminal_seen:
+                            return
+                        if result is not None and result.get("status") == "awaiting_human":
                             return
                     if not terminal_seen:
                         error = _error("hermes_upstream_protocol_error", "Hermes closed the event stream without a terminal event", retryable=True)
@@ -798,11 +913,20 @@ def create_app() -> FastAPI:
                 stop_error_type = None
                 if upstream_run_id and execution_profile:
                     try:
-                        await _request_upstream_stop(hermes_api_url, execution_profile, upstream_run_id, headers)
-                        stop_status = "requested"
+                        stop_result = await _stop_and_confirm_upstream_run(
+                            hermes_api_url,
+                            execution_profile,
+                            upstream_run_id,
+                            headers,
+                        )
+                        stop_status = str(stop_result["status"])
+                        if not stop_result["confirmed"]:
+                            stop_status = "unconfirmed"
+                            retain_profile = True
                     except httpx.HTTPError as stop_exc:
                         stop_status = "failed"
                         stop_error_type = type(stop_exc).__name__
+                        retain_profile = True
                 details = dict(error.get("details") or {})
                 details.update({
                     "configured_limit_seconds": max_duration_seconds,
@@ -833,11 +957,34 @@ def create_app() -> FastAPI:
                 if is_timeout
                 else "Hermes runtime is unavailable"
             )
+            details: dict[str, Any] = {
+                "phase": phase,
+                "error_type": type(exc).__name__,
+            }
+            if is_timeout and upstream_run_id and execution_profile:
+                try:
+                    stop_result = await _stop_and_confirm_upstream_run(
+                        hermes_api_url,
+                        execution_profile,
+                        upstream_run_id,
+                        headers,
+                    )
+                    details["upstream_stop_status"] = (
+                        stop_result["status"]
+                        if stop_result["confirmed"]
+                        else "unconfirmed"
+                    )
+                    if not stop_result["confirmed"]:
+                        retain_profile = True
+                except httpx.HTTPError as stop_exc:
+                    details["upstream_stop_status"] = "failed"
+                    details["upstream_stop_error_type"] = type(stop_exc).__name__
+                    retain_profile = True
             error = _error(
                 "hermes_upstream_timeout" if is_timeout else "hermes_upstream_error",
                 safe_message,
                 retryable=True,
-                details={"phase": phase, "error_type": type(exc).__name__},
+                details=details,
             )
             logger.warning(
                 "Hermes upstream request failed | run_id=%s upstream_run_id=%s profile=%s phase=%s error_type=%s",
@@ -851,13 +998,18 @@ def create_app() -> FastAPI:
             terminal_seen = True
             yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
         finally:
-            profile_manager.retire(run_profile or execution_profile)
+            # Approval is a resumable boundary. Keep the credential-bearing
+            # profile active until a terminal result, cancellation, or expiry.
+            if terminal_seen and not retain_profile:
+                profile_manager.retire(run_profile or execution_profile)
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         try:
             async for frame in stream_run(payload, request):
                 terminal_status = None
-                if "event: run.completed" in frame:
+                if '"status":"awaiting_human"' in frame:
+                    terminal_status = "awaiting_human"
+                elif "event: run.completed" in frame:
                     terminal_status = "completed"
                 elif "event: run.failed" in frame:
                     terminal_status = "failed"
@@ -914,7 +1066,7 @@ def create_app() -> FastAPI:
             record = state["store"].records.get(run_id)
             if record is None:
                 return
-            if record.get("status") in {"completed", "failed", "cancelled"}:
+            if record.get("status") in {"completed", "failed", "cancelled", "awaiting_human"}:
                 return
             task = state["active"].get(run_id)
             if task is None and record.get("status") in {"queued", "running"}:
@@ -973,8 +1125,33 @@ def create_app() -> FastAPI:
         return JSONResponse(_envelope(status="failed", error=_error("runtime_capability_unsupported", "Hermes resume is not enabled")), status_code=409)
 
     @app.post("/v1/runs/{run_id}/continue")
-    async def continue_run(run_id: str) -> JSONResponse:
-        return JSONResponse(_envelope(status="failed", error=_error("runtime_capability_unsupported", "Hermes continuation is not enabled")), status_code=409)
+    async def continue_run(run_id: str, payload: Mapping[str, Any], request: Request) -> StreamingResponse:
+        record = state["store"].records.get(run_id)
+        if record is None or record.get("status") != "awaiting_human":
+            raise HTTPException(status_code=409, detail=_error("runtime_continuation_unavailable", "Hermes run is not awaiting continuation"))
+        continuation = _binding(payload)
+        profile = str((((continuation or {}).get("payload") or {}).get("runtime_profile") or ""))
+        if not profile_manager.is_reusable(profile):
+            raise HTTPException(status_code=409, detail=_error("runtime_profile_expired", "Hermes continuation profile has expired"))
+        state["store"].update(run_id, status="running", payload=dict(payload))
+
+        async def continued() -> AsyncIterator[str]:
+            async for frame in stream_run(payload, request, expected_run_id=run_id):
+                status = None
+                if '"status":"awaiting_human"' in frame:
+                    status = "awaiting_human"
+                elif "event: run.completed" in frame:
+                    status = "completed"
+                elif "event: run.failed" in frame:
+                    status = "failed"
+                elif "event: run.cancelled" in frame:
+                    status = "cancelled"
+                if status:
+                    state["store"].finalize(run_id, frame, status=status)
+                else:
+                    state["store"].append(run_id, frame)
+                yield frame
+        return StreamingResponse(continued(), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -985,8 +1162,39 @@ def create_app() -> FastAPI:
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
             runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
-            await _request_upstream_stop(hermes_api_url, runtime_profile, upstream_run_id, headers)
-            return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "upstream_run_id": upstream_run_id, "status": "cancellation_requested"})
+            stop_result = await _stop_and_confirm_upstream_run(
+                hermes_api_url,
+                str(runtime_profile or ""),
+                upstream_run_id,
+                headers,
+            )
+            if not stop_result["confirmed"]:
+                return _envelope(
+                    status="failed",
+                    error=_error(
+                        "hermes_stop_unconfirmed",
+                        "Hermes accepted cancellation but the upstream run is still stopping",
+                        retryable=True,
+                        details={
+                            "run_id": run_id,
+                            "upstream_run_id": upstream_run_id,
+                            "upstream_status": stop_result["status"],
+                            "acknowledged_status": stop_result["acknowledged_status"],
+                        },
+                    ),
+                    request_id=request.headers.get("x-request-id"),
+                )
+            profile_manager.retire(str(runtime_profile or ""))
+            return _envelope(
+                status="ok",
+                request_id=request.headers.get("x-request-id"),
+                result={
+                    "run_id": run_id,
+                    "upstream_run_id": upstream_run_id,
+                    "status": "cancelled" if stop_result["status"] == "cancelled" else "already_terminal",
+                    "upstream_status": stop_result["status"],
+                },
+            )
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_cancel_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
 

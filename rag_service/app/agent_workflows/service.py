@@ -19,7 +19,7 @@ from app.agent_workflows.workflow_runtime import (
 )
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.catalog import definition_from_workflow
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeSteeringInput
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
@@ -136,6 +136,19 @@ class AgentRunService:
             continuation=continuation_from_run(run),
         )
         return dict(await adapter.inspect(request))
+
+    async def steer_agent_run(self, run: Any, *, text: str) -> Dict[str, Any]:
+        definition = AgentDefinition(
+            definition_id=str(run.workflow_id),
+            framework=str(getattr(run, "framework", None) or "langgraph"),
+            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+        )
+        request = AgentRuntimeRequest(
+            run_id=run.id, thread_id=run.thread_id, definition_id=definition.definition_id,
+            framework=definition.framework, builder_id=definition.builder_id,
+            task_id=getattr(run, "task_id", None), continuation=continuation_from_run(run),
+        )
+        return dict(await adapter_for_definition(definition).steer(request, RuntimeSteeringInput(text)))
 
     async def run_thread_chat(
         self,
@@ -523,6 +536,8 @@ class AgentRunService:
         resume_version: Optional[int] = None,
         expected_thread_id: Optional[str] = None,
         execution_event_sink: Any = None,
+        runtime_approval_choice: Optional[str] = None,
+        resolve_all: bool = False,
     ) -> Optional[InterruptResolutionResult]:
         resolution = await self.repository.resolve_pending_interrupt(
             run_id,
@@ -576,6 +591,23 @@ class AgentRunService:
                 set_task_web_access,
             )
 
+            if str(getattr(resolution.run, "framework", "")) == "hermes" and resolution.interrupt.get("type") == "hermes_approval":
+                choice = runtime_approval_choice or ("deny" if action == AgentRunResumeAction.REJECT.value else "once")
+                if choice not in {"once", "session", "always", "deny"}:
+                    raise ValueError("Invalid Hermes approval choice")
+                definition = AgentDefinition(
+                    definition_id=str(resolution.run.workflow_id), framework="hermes",
+                    builder_id=str(getattr(resolution.run, "builder_id", None) or "hermes_agent"),
+                )
+                request = AgentRuntimeRequest(
+                    run_id=resolution.run.id, thread_id=resolution.run.thread_id,
+                    definition_id=definition.definition_id, framework=definition.framework,
+                    builder_id=definition.builder_id, task_id=resolution.run.task_id,
+                    continuation=continuation_from_run(resolution.run),
+                )
+                await adapter_for_definition(definition).respond_to_approval(
+                    request, RuntimeApprovalResponse(choice, resolve_all=resolve_all),
+                )
             if _is_web_approval_interrupt(resolution.interrupt):
                 if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
                     await set_task_web_access(

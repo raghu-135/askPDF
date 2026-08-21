@@ -2,9 +2,29 @@ import pytest
 
 from app.runtime.hermes_config import (
     HermesConfigurationError,
+    hermes_runtime_enabled,
     hermes_model_context_length,
     validate_hermes_model_compatibility,
 )
+from app.runtime.hermes_compatibility import provider_requires_api_key
+
+
+@pytest.mark.parametrize("profiles", ["hermes", "langgraph,hermes", " HERMES "])
+def test_hermes_profile_is_the_single_enablement_switch(monkeypatch, profiles):
+    monkeypatch.setenv("COMPOSE_PROFILES", profiles)
+    assert hermes_runtime_enabled() is True
+
+
+@pytest.mark.parametrize("profiles", ["", "langgraph", "real-hermes", "true"])
+def test_hermes_is_disabled_without_exact_compose_profile(monkeypatch, profiles):
+    monkeypatch.setenv("COMPOSE_PROFILES", profiles)
+    assert hermes_runtime_enabled() is False
+
+
+def test_lmstudio_is_the_pinned_keyless_provider():
+    assert provider_requires_api_key("lmstudio") is False
+    assert provider_requires_api_key(" LMSTUDIO ") is False
+    assert provider_requires_api_key("custom") is True
 
 
 @pytest.mark.parametrize("configured", ["8192", "32768", "131072"])

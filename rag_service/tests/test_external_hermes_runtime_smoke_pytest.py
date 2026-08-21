@@ -29,8 +29,8 @@ _required = (
 _TEST_MODEL = "phase5-deterministic"
 if _enabled:
     missing = [name for name in _required if not os.getenv(name)]
-    if os.getenv("HERMES_RUNTIME_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
-        missing.append("HERMES_RUNTIME_ENABLED=true")
+    if "hermes" not in {value.strip().lower() for value in os.getenv("COMPOSE_PROFILES", "").split(",")}:
+        missing.append("COMPOSE_PROFILES=hermes")
     if missing:
         raise RuntimeError("PHASE7_HERMES_SMOKE=true requires: " + ", ".join(missing))
 
