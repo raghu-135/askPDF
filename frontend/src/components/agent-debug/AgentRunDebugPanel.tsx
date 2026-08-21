@@ -44,7 +44,8 @@ function AgentRunDebugPanel({
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const resumeSubmissionKeyRef = useRef<string | null>(null);
-  const traceRefreshAttemptedRef = useRef(new Set<string>());
+  const traceRefreshAttemptedRef = useRef(new Map<string, number>());
+  const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
   const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
   const runDetails = refreshedRunDetails?.id === runId ? refreshedRunDetails : providedRunDetails;
   const debug = runDetails?.debug;
@@ -89,12 +90,17 @@ function AgentRunDebugPanel({
 
   useEffect(() => {
     setRefreshedRunDetails(undefined);
+    setTraceRefreshExhausted(false);
   }, [runId, providedRunDetails]);
 
   useEffect(() => {
     if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
-    if (traceRefreshAttemptedRef.current.has(runId)) return;
-    traceRefreshAttemptedRef.current.add(runId);
+    const attempts = traceRefreshAttemptedRef.current.get(runId) || 0;
+    if (attempts >= 5) {
+      setTraceRefreshExhausted(true);
+      return;
+    }
+    traceRefreshAttemptedRef.current.set(runId, attempts + 1);
     const timer = window.setTimeout(() => {
       void getAgentRun(runId, executionThreadId)
         .then((refreshed) => {
@@ -102,7 +108,7 @@ function AgentRunDebugPanel({
           onRunDetailsChange?.(refreshed);
         })
         .catch(() => undefined);
-    }, 500);
+    }, 500 * (attempts + 1));
     return () => window.clearTimeout(timer);
   }, [executionThreadId, onRunDetailsChange, runDetails, runId]);
 
@@ -487,7 +493,7 @@ function AgentRunDebugPanel({
       )}
       {!loading && !error && runDetails && !debug && (
         <Typography variant="caption" color={retainedErrorMessage ? 'error' : 'text.secondary'} sx={{ px: 1, py: 0.75 }}>
-          {retainedErrorMessage || 'Trace not captured for this run.'}
+          {retainedErrorMessage || (traceRefreshExhausted ? 'Trace not captured for this run.' : 'Retained execution trace is finalizing…')}
         </Typography>
       )}
       {debug && !traceView && (

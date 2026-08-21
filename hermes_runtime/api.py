@@ -196,6 +196,8 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
         return "tool.started"
     if name == "tool.completed":
         return "tool.completed"
+    if name == "tool.failed":
+        return "tool.failed"
     if name == "reasoning.available":
         return "reasoning.available"
     if name == "approval.request":
@@ -213,6 +215,59 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
     if name in {"subagent.start", "subagent.complete"}:
         return name
     return "runtime.event"
+
+
+def _normalized_tool_payload(kind: str, payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Normalize pinned-Hermes tool events without retaining argument values."""
+
+    data = dict(payload)
+    tool_name = str(data.get("tool_name") or data.get("tool") or data.get("name") or "").strip()
+    call_id = str(
+        data.get("tool_call_id")
+        or data.get("call_id")
+        or data.get("request_id")
+        or data.get("id")
+        or ""
+    ).strip()
+    arguments = data.get("arguments") or data.get("args") or data.get("input")
+    argument_names = sorted(str(key) for key in arguments) if isinstance(arguments, Mapping) else []
+    error = data.get("error")
+    ok = data.get("ok")
+    if ok is None and kind == "tool.completed":
+        ok = not bool(error)
+    if kind == "tool.completed" and ok is False:
+        kind = "tool.failed"
+    normalized = {
+        **data,
+        "tool_name": tool_name or None,
+        "tool_call_id": call_id or None,
+        "request_id": str(data.get("request_id") or call_id or "") or None,
+        "provided_argument_names": argument_names,
+        "ok": bool(ok) if ok is not None else None,
+        "duration_ms": data.get("duration_ms") or data.get("elapsed_ms"),
+        "result_count": data.get("result_count") or data.get("source_count") or 0,
+        "source": data.get("source") or "hermes",
+        "error": error,
+    }
+    for key in ("arguments", "args", "input"):
+        normalized.pop(key, None)
+    return kind, normalized
+
+
+async def _request_upstream_stop(
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+) -> None:
+    """Stop one exact profile-scoped Hermes run."""
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        response = await client.post(
+            hermes_api_url.rstrip("/") + f"/p/{runtime_profile}/v1/runs/{upstream_run_id}/stop",
+            headers=dict(headers),
+        )
+        response.raise_for_status()
 
 
 def create_app() -> FastAPI:
@@ -456,6 +511,14 @@ def create_app() -> FastAPI:
             max_output_chars=max_output_chars,
         )
         terminal_seen = False
+        tool_activity = {
+            "started": 0,
+            "completed": 0,
+            "failed": 0,
+            "evidence_result_count": 0,
+            "last_tool_name": None,
+            "last_tool_call_id": None,
+        }
 
         def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id
@@ -479,6 +542,17 @@ def create_app() -> FastAPI:
             kind = _hermes_event_kind(upstream_event_name, event_payload)
             if kind == "runtime.event":
                 event_payload = {"upstream_event": upstream_event_name, "data": dict(event_payload)}
+            elif kind in {"tool.started", "tool.completed", "tool.failed"}:
+                kind, event_payload = _normalized_tool_payload(kind, event_payload)
+                if kind == "tool.started":
+                    tool_activity["started"] += 1
+                elif kind == "tool.completed":
+                    tool_activity["completed"] += 1
+                    tool_activity["evidence_result_count"] += max(0, int(event_payload.get("result_count") or 0))
+                else:
+                    tool_activity["failed"] += 1
+                tool_activity["last_tool_name"] = event_payload.get("tool_name")
+                tool_activity["last_tool_call_id"] = event_payload.get("tool_call_id")
             terminal = kind in HERMES_TERMINAL_EVENTS
             output_delta = str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or "") if kind == "output.delta" else ""
             event_budget.observe(kind, output_delta)
@@ -720,6 +794,25 @@ def create_app() -> FastAPI:
             detail = exc.detail if isinstance(exc.detail, Mapping) else _error("hermes_runtime_error", str(exc.detail))
             error = detail if isinstance(detail, Mapping) and detail.get("code") else _error("hermes_runtime_error", str(exc.detail))
             if error.get("code") == "runtime_limit_exceeded":
+                stop_status = "not_attempted"
+                stop_error_type = None
+                if upstream_run_id and execution_profile:
+                    try:
+                        await _request_upstream_stop(hermes_api_url, execution_profile, upstream_run_id, headers)
+                        stop_status = "requested"
+                    except httpx.HTTPError as stop_exc:
+                        stop_status = "failed"
+                        stop_error_type = type(stop_exc).__name__
+                details = dict(error.get("details") or {})
+                details.update({
+                    "configured_limit_seconds": max_duration_seconds,
+                    "elapsed_ms": round((time.monotonic() - (deadline - max_duration_seconds)) * 1000, 2),
+                    "upstream_stop_status": stop_status,
+                    "tool_activity": dict(tool_activity),
+                })
+                if stop_error_type:
+                    details["upstream_stop_error_type"] = stop_error_type
+                error = {**dict(error), "details": details}
                 logger.warning(
                     "Hermes runtime limit reached | run_id=%s upstream_run_id=%s profile=%s details=%s",
                     run_id,
@@ -892,9 +985,7 @@ def create_app() -> FastAPI:
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
             runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.post(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}/stop", headers=headers)
-                response.raise_for_status()
+            await _request_upstream_stop(hermes_api_url, runtime_profile, upstream_run_id, headers)
             return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "upstream_run_id": upstream_run_id, "status": "cancellation_requested"})
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_cancel_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))

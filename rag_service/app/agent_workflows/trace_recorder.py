@@ -863,7 +863,7 @@ class AgentTraceRecorder:
             or (TraceStatus.ERROR.value if span.status.status_code == StatusCode.ERROR else NodeEventStatus.COMPLETED.value),
             "start_time": _ns_to_iso(span.start_time),
             "end_time": _ns_to_iso(span.end_time),
-            "duration_ms": round((span.end_time - span.start_time) / 1_000_000, 2) if span.start_time and span.end_time else None,
+            "duration_ms": max(0.0, round((span.end_time - span.start_time) / 1_000_000, 2)) if span.start_time and span.end_time else None,
             "attributes": attributes,
             "input": sidecar.get("input") or {},
             "output": sidecar.get("output") or {},

@@ -160,6 +160,11 @@ def _artifact_payload(artifact: Any) -> dict[str, Any]:
 
 
 def _run_payload(run: Any) -> dict[str, Any]:
+    debug = (
+        {key: value for key, value in run.debug_trace_json.items() if key != "details"}
+        if isinstance(run.debug_trace_json, dict)
+        else None
+    )
     return {
         "id": run.id,
         "task_id": run.task_id,
@@ -170,6 +175,7 @@ def _run_payload(run: Any) -> dict[str, Any]:
         "pending_interrupt": dict(run.pending_interrupt_json or {}) or None,
         "metrics": dict(run.metrics_json or {}),
         "error": dict(run.error_json or {}) or None,
+        "debug": debug,
         "started_at": maybe_iso_utc_z(run.started_at),
         "completed_at": maybe_iso_utc_z(run.completed_at),
     }

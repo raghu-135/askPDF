@@ -2061,6 +2061,7 @@ export interface AgentTaskRun {
   pending_interrupt?: AgentRunPendingInterrupt | null;
   metrics: Record<string, any>;
   error?: Record<string, any> | null;
+  debug?: AgentRunDebug | null;
   started_at: string;
   completed_at?: string | null;
 }

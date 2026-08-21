@@ -1,5 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+
+from app.api.agent_tasks import _run_payload
+from app.services import agent_task_runtime
 from app.services.agent_task_runtime import _hermes_grounding_summary
 
 
@@ -34,3 +39,44 @@ def test_no_document_task_accepts_research_evidence_but_not_context_discovery():
     assert _hermes_grounding_summary([
         _event("tool.completed", tool_name="wikipedia", ok=True, result_count=2),
     ], documents_present=False)["grounded"] is True
+
+
+def test_agent_task_run_payload_exposes_compact_retained_trace():
+    run = SimpleNamespace(
+        id="run-1", task_id="task-1", task_attempt=1, parent_run_id=None,
+        status="failed", checkpoint_thread_id=None, pending_interrupt_json=None,
+        metrics_json={}, error_json={"code": "runtime_limit_exceeded"},
+        started_at=None, completed_at=None,
+        debug_trace_json={"version": 1, "trace": {"status": "failed"}, "summary": {}, "details": {"large": True}},
+    )
+
+    payload = _run_payload(run)
+
+    assert payload["debug"]["trace"]["status"] == "failed"
+    assert "details" not in payload["debug"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_and_trace_are_written_atomically(monkeypatch):
+    repository = SimpleNamespace(complete_run=AsyncMock(return_value=SimpleNamespace(id="run-1")))
+    run = SimpleNamespace(id="run-1", status="running", completed_at=None, debug_trace_json=None)
+    monkeypatch.setattr(
+        agent_task_runtime,
+        "finalize_and_merge_debug_payload",
+        lambda **kwargs: {"version": 1, "trace": {"status": kwargs["run_status"]}, "summary": {}},
+    )
+
+    await agent_task_runtime._complete_run_with_trace(
+        repository,
+        run=run,
+        recorder=SimpleNamespace(),
+        status="failed",
+        metrics={"duration_ms": 300000},
+        result={},
+        error={"code": "runtime_limit_exceeded"},
+    )
+
+    repository.complete_run.assert_awaited_once()
+    call = repository.complete_run.await_args
+    assert call.kwargs["debug_trace_json"]["trace"]["status"] == "failed"
+    assert call.kwargs["completed_at"] is not None

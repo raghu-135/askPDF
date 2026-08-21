@@ -39,6 +39,7 @@ def test_hermes_continuation_binding_is_opaque():
         ("message.delta", "output.delta"),
         ("tool.started", "tool.started"),
         ("tool.completed", "tool.completed"),
+        ("tool.failed", "tool.failed"),
         ("reasoning.available", "reasoning.available"),
         ("approval.request", "approval.request"),
         ("run.completed", "run.completed"),
@@ -58,6 +59,66 @@ def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
     assert fixture["hermes_revision"] == HERMES_REVISION
     upstream_events = {event["event"] for values in fixture.values() if isinstance(values, list) for event in values}
     assert {"message.delta", "tool.started", "tool.completed", "reasoning.available", "approval.request", "run.completed", "run.failed", "run.cancelled", "subagent.start", "subagent.complete", "run.steered", "future.event"} <= upstream_events
+
+
+def test_hermes_tool_events_are_normalized_and_argument_values_are_removed():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {
+            "tool": "search_document_by_id",
+            "request_id": "request-7",
+            "arguments": {"query": "secret query", "file_hash": "secret hash"},
+            "source_count": 55,
+        },
+    )
+
+    assert kind == "tool.completed"
+    assert payload["tool_name"] == "search_document_by_id"
+    assert payload["tool_call_id"] == "request-7"
+    assert payload["provided_argument_names"] == ["file_hash", "query"]
+    assert payload["result_count"] == 55
+    assert payload["ok"] is True
+    assert "arguments" not in payload
+
+
+def test_hermes_failed_tool_completion_is_projected_as_failure():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {"tool": "tool_call", "error": {"code": "invalid_arguments"}},
+    )
+
+    assert kind == "tool.failed"
+    assert payload["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
+    requested = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        requested.append((request.method, str(request.url), request.headers.get("x-hermes-session-id")))
+        return httpx.Response(200, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    await hermes_api._request_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {"X-Hermes-Session-Id": "session-3"},
+    )
+
+    assert requested == [(
+        "POST",
+        "http://hermes.test/p/askpdf-run-profile-1/v1/runs/upstream-run-7/stop",
+        "session-3",
+    )]
 
 
 @pytest.mark.asyncio

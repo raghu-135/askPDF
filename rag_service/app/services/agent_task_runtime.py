@@ -7,6 +7,7 @@ import os
 import socket
 import time
 from contextlib import suppress
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -110,29 +111,28 @@ async def _complete_run_with_trace(
     result: dict[str, Any],
     error: Optional[dict[str, Any]] = None,
 ) -> Any:
-    """Complete one AgentRun, then durably persist its merged trace payload."""
+    """Atomically persist one terminal AgentRun and its merged trace payload."""
 
-    completed_run = await repository.complete_run(
-        run.id,
-        status=status,
-        metrics_json=metrics,
-        error_json=error,
-    )
-    if completed_run is None:
-        return None
+    completed_at = datetime.now(timezone.utc)
     debug_payload = finalize_and_merge_debug_payload(
         recorder=recorder,
-        run=completed_run,
+        run=run,
         metrics=metrics,
         result=result,
         route=result.get("route"),
         route_reason=result.get("route_reason"),
         error=error,
         run_status=status,
-        completed_at=completed_run.completed_at,
+        completed_at=completed_at,
     )
-    await repository.set_run_debug_trace(run.id, debug_payload)
-    return completed_run
+    return await repository.complete_run(
+        run.id,
+        status=status,
+        metrics_json=metrics,
+        error_json=error,
+        debug_trace_json=debug_payload,
+        completed_at=completed_at,
+    )
 
 
 async def ensure_task_run(task_id: str):
