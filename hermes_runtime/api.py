@@ -501,15 +501,38 @@ def create_app() -> FastAPI:
             status="ok",
             request_id=request.headers.get("x-request-id"),
             result={"capabilities": {
-                "streaming": True,
-                "resume": False,
-                "cancellation": True,
-                "inspection": True,
-                "continuation_cleanup": False,
-                "task_execution": False,
-                "native_checkpoints": False,
-                "approval_response": True,
-                "steering": True,
+                "operations": {
+                    "run.approval.respond": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.cancel": {
+                        "support": "native", "enabled": True,
+                        "modes": ["cooperative"],
+                        "confirmation": "asynchronous",
+                        "terminal_states": ["cancelled"],
+                    },
+                    "run.continuation.cleanup": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.events": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.inspect": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.resume": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.start": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.steer_live": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                },
                 "runtime_version": os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"),
                 "contract_version": WIRE_VERSION,
             }},

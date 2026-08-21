@@ -99,7 +99,7 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
     smoke_timeout = float(os.getenv("PHASE5_SMOKE_TIMEOUT_SECONDS", "120"))
     try:
         capabilities = await adapter.capabilities(definition)
-        assert capabilities.streaming is True
+        assert capabilities.operations["run.events"].enabled is True
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True
         try:

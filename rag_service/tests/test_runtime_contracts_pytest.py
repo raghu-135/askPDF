@@ -7,6 +7,9 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeOperationDescriptor,
+    RuntimeOperationId,
+    RuntimeSupportLevel,
     RuntimeValidationIssue,
     RuntimeValidationResult,
     RuntimeArtifact,
@@ -42,12 +45,32 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
         kind="run.completed",
         terminal=True,
     )
-    capabilities = RuntimeCapabilities(streaming=True, resume=True, native_checkpoints=True)
+    capabilities = RuntimeCapabilities(operations={
+        RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
+            support=RuntimeSupportLevel.NATIVE,
+            enabled=True,
+        ),
+        RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
+            support=RuntimeSupportLevel.CONDITIONAL,
+            enabled=True,
+            semantics="resume_from_interrupt",
+        ),
+    })
 
     assert request.to_dict()["continuation"]["payload"]["checkpoint_thread_id"] == "checkpoint-1"
     assert result.to_dict()["status"] == "completed"
     assert event.to_dict()["terminal"] is True
-    assert capabilities.to_dict()["resume"] is True
+    assert capabilities.to_dict()["operations"]["run.resume"]["support"] == "conditional"
+    assert list(capabilities.to_dict()["operations"]) == ["run.events", "run.resume"]
+
+
+def test_runtime_operation_descriptor_rejects_invalid_enabled_states():
+    import pytest
+
+    with pytest.raises(ValueError):
+        RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, True)
+    with pytest.raises(ValueError):
+        RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, False)
 
 
 def test_runtime_event_can_carry_an_opaque_continuation_binding():

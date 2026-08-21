@@ -191,7 +191,10 @@ class HttpRuntimeAdapter:
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
         value = await self._json("GET", "/v1/capabilities")
-        return capabilities_from_dict(value.get("capabilities") or value)
+        try:
+            return capabilities_from_dict(value.get("capabilities") or value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})

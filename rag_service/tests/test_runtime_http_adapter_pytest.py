@@ -77,16 +77,33 @@ async def test_runtime_cancellation_probe_is_awaitable():
 async def test_http_adapter_round_trips_capabilities_and_validation():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/capabilities":
-            return httpx.Response(200, json={"contract_version": 1, "capabilities": {"streaming": True, "resume": True}})
+            return httpx.Response(200, json={"contract_version": 1, "capabilities": {"operations": {
+                "run.events": {"support": "native", "enabled": True},
+                "run.resume": {"support": "conditional", "enabled": True, "semantics": "resume_from_interrupt"},
+            }}})
         return httpx.Response(200, json={"contract_version": 1, "validation": {"valid": True, "issues": []}})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     capabilities = await adapter.capabilities(AgentDefinition("router", "langgraph", "langgraph_graph"))
     validation = await adapter.validate(AgentDefinition("router", "langgraph", "langgraph_graph"), {"nodes": []})
-    assert capabilities.streaming and capabilities.resume
+    assert capabilities.operations["run.events"].enabled
+    assert capabilities.operations["run.resume"].support.value == "conditional"
     assert validation.valid
     await client.aclose()
+
+
+def test_capability_parser_rejects_flat_or_malformed_payloads():
+    from app.runtime.transport import capabilities_from_dict
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"streaming": True})
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"operations": {"run.start": {"support": "unknown", "enabled": True}}})
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"operations": {"run.start": {"support": "native", "enabled": False}}})
 
 
 @pytest.mark.asyncio

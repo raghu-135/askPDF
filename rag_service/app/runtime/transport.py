@@ -13,6 +13,8 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeOperationDescriptor,
+    RuntimeSupportLevel,
     RuntimeApprovalResponse,
     RuntimeSteeringInput,
     RuntimeValidationIssue,
@@ -131,16 +133,58 @@ def validation_from_dict(value: Mapping[str, Any]) -> RuntimeValidationResult:
 
 
 def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
+    if not isinstance(value, Mapping):
+        raise ValueError("runtime capabilities must be an object")
+    raw_operations = value.get("operations")
+    if not isinstance(raw_operations, Mapping):
+        raise ValueError("runtime capabilities must contain an operations object")
+
+    operations: dict[str, RuntimeOperationDescriptor] = {}
+    for operation, raw_descriptor in raw_operations.items():
+        if not isinstance(operation, str) or not operation.strip():
+            raise ValueError("runtime capability operation identifiers must be non-empty strings")
+        if not isinstance(raw_descriptor, Mapping):
+            raise ValueError(f"runtime capability descriptor for {operation!r} must be an object")
+        try:
+            support = RuntimeSupportLevel(raw_descriptor["support"])
+            enabled = raw_descriptor["enabled"]
+            disabled_reason = raw_descriptor.get("disabled_reason")
+            raw_modes = raw_descriptor.get("modes", ())
+            raw_terminal_states = raw_descriptor.get("terminal_states", ())
+            if not isinstance(raw_modes, (list, tuple)) or not isinstance(raw_terminal_states, (list, tuple)):
+                raise ValueError("modes and terminal_states must be arrays")
+            modes = tuple(raw_modes)
+            terminal_states = tuple(raw_terminal_states)
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a bool")
+            if not all(isinstance(item, str) and item for item in modes + terminal_states):
+                raise ValueError("modes and terminal_states must contain non-empty strings")
+            if disabled_reason is not None and not isinstance(disabled_reason, str):
+                raise ValueError("disabled_reason must be a string or null")
+            for field_name in ("semantics", "confirmation"):
+                field_value = raw_descriptor.get(field_name)
+                if field_value is not None and not isinstance(field_value, str):
+                    raise ValueError(f"{field_name} must be a string or null")
+            for field_name in ("preserves_run_id", "preserves_session_id"):
+                field_value = raw_descriptor.get(field_name)
+                if field_value is not None and not isinstance(field_value, bool):
+                    raise ValueError(f"{field_name} must be a bool or null")
+            descriptor = RuntimeOperationDescriptor(
+                support=support,
+                enabled=enabled,
+                disabled_reason=disabled_reason,
+                modes=modes,
+                semantics=raw_descriptor.get("semantics"),
+                confirmation=raw_descriptor.get("confirmation"),
+                terminal_states=terminal_states,
+                preserves_run_id=raw_descriptor.get("preserves_run_id"),
+                preserves_session_id=raw_descriptor.get("preserves_session_id"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid runtime capability descriptor for {operation!r}") from exc
+        operations[operation] = descriptor
     return RuntimeCapabilities(
-        streaming=bool(value.get("streaming")),
-        resume=bool(value.get("resume")),
-        cancellation=bool(value.get("cancellation")),
-        inspection=bool(value.get("inspection")),
-        continuation_cleanup=bool(value.get("continuation_cleanup")),
-        task_execution=bool(value.get("task_execution")),
-        native_checkpoints=bool(value.get("native_checkpoints")),
-        approval_response=bool(value.get("approval_response")),
-        steering=bool(value.get("steering")),
+        operations=operations,
         runtime_version=value.get("runtime_version"),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )

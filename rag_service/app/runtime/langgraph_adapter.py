@@ -11,6 +11,9 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeOperationDescriptor,
+    RuntimeOperationId,
+    RuntimeSupportLevel,
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
@@ -32,15 +35,39 @@ class LangGraphRuntimeAdapter:
         return await project_agent_task_result(**kwargs)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        features = dict(definition.capabilities or {})
         return RuntimeCapabilities(
-            streaming=True,
-            resume=True,
-            cancellation=True,
-            inspection=True,
-            continuation_cleanup=True,
-            task_execution=bool(features.get("supports_long_running_tasks")),
-            native_checkpoints=True,
+            operations={
+                RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                ),
+                RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                    semantics="resume_from_interrupt",
+                ),
+                RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                    modes=("interrupt",),
+                    confirmation="asynchronous",
+                    terminal_states=("cancelled", "interrupted"),
+                ),
+                RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                ),
+                RuntimeOperationId.RUN_INSPECT.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                ),
+                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.UNSUPPORTED, False,
+                    disabled_reason="runtime_capability_unsupported",
+                ),
+                RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.UNSUPPORTED, False,
+                    disabled_reason="runtime_capability_unsupported",
+                ),
+                RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                ),
+            },
         )
 
     async def validate(

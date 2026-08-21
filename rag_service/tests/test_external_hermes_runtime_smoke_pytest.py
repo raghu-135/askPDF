@@ -80,8 +80,9 @@ async def test_external_hermes_runtime_contract_and_execution():
     adapter = HermesRuntimeAdapter(base_url=os.environ["HERMES_RUNTIME_URL"])
     try:
         capabilities = await adapter.capabilities(definition)
-        assert capabilities.streaming is True
-        assert capabilities.cancellation is True
+        assert capabilities.operations["run.events"].enabled is True
+        assert capabilities.operations["run.cancel"].enabled is True
+        assert capabilities.operations["run.steer_live"].enabled is False
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True
         resolved_spec = await HermesBuilderProvider().resolve(

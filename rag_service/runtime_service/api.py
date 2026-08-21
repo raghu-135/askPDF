@@ -315,13 +315,38 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             status="ok",
             request_id=request.headers.get("x-request-id"),
             result={"capabilities": {
-                "streaming": True,
-                "resume": True,
-                "cancellation": True,
-                "inspection": True,
-                "continuation_cleanup": True,
-                "task_execution": True,
-                "native_checkpoints": True,
+                "operations": {
+                    "run.approval.respond": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.cancel": {
+                        "support": "native", "enabled": True,
+                        "modes": ["interrupt"],
+                        "confirmation": "asynchronous",
+                        "terminal_states": ["cancelled", "interrupted"],
+                    },
+                    "run.continuation.cleanup": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.events": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.inspect": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.resume": {
+                        "support": "native", "enabled": True,
+                        "semantics": "resume_from_interrupt",
+                    },
+                    "run.start": {
+                        "support": "native", "enabled": True,
+                    },
+                    "run.steer_live": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                },
                 "runtime_version": os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
                 "contract_version": WIRE_VERSION,
             }},

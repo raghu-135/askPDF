@@ -77,6 +77,7 @@ async def _deep_research_contract() -> dict[str, Any]:
 async def get_deep_research_capabilities():
     contract = await _deep_research_contract()
     limits = contract["limits"]
+    hermes_enabled = _hermes_available()
     return {
         "enabled": True,
         "web_enabled": contract["web_enabled"],
@@ -84,11 +85,21 @@ async def get_deep_research_capabilities():
         "engines": {
             "langgraph": {"enabled": True, "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["langgraph"]},
             "hermes": {
-                "enabled": _hermes_available(),
+                "enabled": hermes_enabled,
                 "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["hermes"],
                 "max_context_length": _hermes_context_length(required=False),
-                "approval_response": _hermes_available(),
-                "steering": _hermes_available(),
+                "operations": {
+                    "run.approval.respond": {
+                        "support": "native",
+                        "enabled": hermes_enabled,
+                        "disabled_reason": None if hermes_enabled else "runtime_unavailable",
+                    },
+                    "run.steer_live": {
+                        "support": "unsupported",
+                        "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                },
             },
         },
     }
