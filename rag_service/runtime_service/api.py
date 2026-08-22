@@ -339,6 +339,14 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         "support": "native", "enabled": True,
                         "semantics": "resume_from_interrupt",
                     },
+                    "run.pause": {
+                        "support": "conditional", "enabled": True,
+                        "semantics": "product_task_pause",
+                    },
+                    "run.retry": {
+                        "support": "conditional", "enabled": True,
+                        "semantics": "product_task_retry",
+                    },
                     "run.start": {
                         "support": "native", "enabled": True,
                     },

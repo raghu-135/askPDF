@@ -5,7 +5,8 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
-import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
+import { getAgentRun, getAgentRunCapabilities, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentRuntimeCapabilityResponse, type AgentTraceRefs } from '../../lib/api';
+import { isRuntimeOperationEnabled, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
@@ -47,6 +48,7 @@ function AgentRunDebugPanel({
   const traceRefreshAttemptedRef = useRef(new Map<string, number>());
   const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
   const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
+  const [runCapabilities, setRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
   const runDetails = refreshedRunDetails?.id === runId ? refreshedRunDetails : providedRunDetails;
   const debug = runDetails?.debug;
   const retainedErrorMessage = runDetails ? getRetainedRunErrorMessage(runDetails) : null;
@@ -56,6 +58,8 @@ function AgentRunDebugPanel({
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
+  const responseOperation = pendingInterrupt?.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+  const responseAvailability = runtimeOperationAvailability(runCapabilities, responseOperation);
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
   const executionTraceView = useMemo(
     () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
@@ -92,6 +96,21 @@ function AgentRunDebugPanel({
     setRefreshedRunDetails(undefined);
     setTraceRefreshExhausted(false);
   }, [runId, providedRunDetails]);
+
+  useEffect(() => {
+    let active = true;
+    const threadId = runDetails?.thread_id;
+    setRunCapabilities(null);
+    if (!threadId) return () => { active = false; };
+    void getAgentRunCapabilities(runId, threadId)
+      .then((capabilities) => {
+        if (active) setRunCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (active) setRunCapabilities(null);
+      });
+    return () => { active = false; };
+  }, [pendingInterrupt?.interrupt_id, pendingInterrupt?.resume_version, runDetails?.status, runDetails?.thread_id, runId]);
 
   useEffect(() => {
     if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
@@ -201,7 +220,7 @@ function AgentRunDebugPanel({
     icon: React.ReactNode,
     color: 'primary' | 'error' | 'inherit' = 'primary',
   ) => {
-    if (!allowedActions.includes(action)) return null;
+    if (!allowedActions.includes(action) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)) return null;
     return (
       <Button
         key={action}
@@ -443,6 +462,11 @@ function AgentRunDebugPanel({
           )}
           {interruptStatus === InterruptStatus.Pending && (
             <>
+              {responseAvailability.visible && !responseAvailability.enabled && (
+                <Typography variant="caption" color="text.secondary">
+                  Human input is currently unavailable: {responseAvailability.disabledReason}
+                </Typography>
+              )}
               {isTaskOwnedRun ? (
                 <Typography variant="caption" color="text.secondary">
                   Respond to this request in the Deep Research panel. Debug Trace is inspection-only for task runs.

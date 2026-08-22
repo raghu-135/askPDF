@@ -38,6 +38,7 @@ import {
   type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
+import { isRuntimeOperationEnabled, runtimeOperationAvailability, type RuntimeControlOperation } from '../lib/runtime-capabilities';
 import {
   deriveConversationSentences,
   type ConversationSentence,
@@ -343,7 +344,7 @@ export default function DeepResearchTaskPanel({
       .then((value) => { if (active) setRunCapabilities(value); })
       .catch((value) => { if (active) setCapabilityError(String(value)); });
     return () => { active = false; };
-  }, [selectedRun?.id, selectedRun?.status, threadId]);
+  }, [selectedRun?.id, selectedRun?.pending_interrupt?.interrupt_id, selectedRun?.pending_interrupt?.resume_version, selectedRun?.status, task?.version, threadId]);
 
   useEffect(() => {
     if (!selectedTaskId || !selectedRun) return;
@@ -398,6 +399,10 @@ export default function DeepResearchTaskPanel({
   ) => {
     const pending = selectedRun?.pending_interrupt;
     if (!selectedRun || !pending) return;
+    const responseOperation: RuntimeControlOperation = pending.type === 'hermes_approval'
+      ? 'run.approval.respond'
+      : 'run.resume';
+    if (!isRuntimeOperationEnabled(runCapabilities, responseOperation)) return;
     setDecisionSubmitting(action);
     setDecisionError('');
     try {
@@ -438,7 +443,7 @@ export default function DeepResearchTaskPanel({
       : configuredWebMode;
   const requestedWebUnavailable = !frozen && webSearchMode !== 'off' && webCapability !== true;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
-  const isHermesApproval = frozenEngine === 'hermes' && pendingInterrupt?.type === 'hermes_approval';
+  const isApprovalInterrupt = pendingInterrupt?.type === 'hermes_approval';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
     : [];
@@ -449,14 +454,17 @@ export default function DeepResearchTaskPanel({
   useEffect(() => setDecisionError(''), [pendingInterrupt?.interrupt_id]);
 
   const interactionDescriptors = useMemo(() => {
-    const operations = runCapabilities?.capabilities?.operations || {};
-    return [
+    const candidates: Array<{ id: 'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'; label: string; placeholder: string }> = [
       { id: 'run.send_followup' as const, label: 'Follow up', placeholder: 'Send input after the current run finishes…' },
       { id: 'run.interrupt_with_input' as const, label: 'Interrupt with input', placeholder: 'Interrupt the run and continue with new input…' },
       { id: 'run.steer_live' as const, label: 'Steer live', placeholder: 'Guide the active run without replacing it…' },
-    ].filter((item) => operations[item.id]?.enabled);
+    ];
+    return candidates
+      .map((item) => ({ ...item, availability: runtimeOperationAvailability(runCapabilities, item.id) }))
+      .filter((item) => item.availability.visible);
   }, [runCapabilities]);
-  const stateUpdateEnabled = Boolean(runCapabilities?.capabilities?.operations['run.update_state']?.enabled);
+  const stateUpdateAvailability = runtimeOperationAvailability(runCapabilities, 'run.update_state');
+  const responseOperation: RuntimeControlOperation = isApprovalInterrupt ? 'run.approval.respond' : 'run.resume';
   useEffect(() => {
     if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
       setInteractionOperation(interactionDescriptors[0].id);
@@ -500,7 +508,25 @@ export default function DeepResearchTaskPanel({
           <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
           <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
           <Box sx={{ flex: 1 }} />
-          {actions.map((action) => <Button key={action} size="small" color={action === 'cancel' ? 'error' : 'primary'} disabled={busy} onClick={() => void command(action)}>{action}</Button>)}
+          {actions.map((action) => {
+            const operation: RuntimeControlOperation = action === 'pause'
+              ? 'run.pause'
+              : action === 'resume'
+                ? 'run.resume'
+                : action === 'cancel'
+                  ? 'run.cancel'
+                  : 'run.retry';
+            const availability = runtimeOperationAvailability(runCapabilities, operation);
+            if (!availability.visible) return null;
+            return <Button
+              key={action}
+              size="small"
+              color={action === 'cancel' ? 'error' : 'primary'}
+              disabled={busy || !availability.enabled}
+              title={availability.disabledReason}
+              onClick={() => void command(action)}
+            >{action}</Button>;
+          })}
           <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
         </Stack>
         <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
@@ -522,32 +548,36 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={pendingInterrupt && isHermesApproval ? <Box sx={{ p: 2 }}>
+    decision={pendingInterrupt && isApprovalInterrupt ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Hermes approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">
-        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting)} onClick={() => void decide('approve', { runtimeApprovalChoice: choice })}>Approve {choice}</Button>)}
-        <Button size="small" color="error" disabled={Boolean(decisionSubmitting)} onClick={() => void decide('reject', { runtimeApprovalChoice: 'deny' })}>Deny</Button>
+        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('approve', { runtimeApprovalChoice: choice })}>Approve {choice}</Button>)}
+        <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('reject', { runtimeApprovalChoice: 'deny' })}>Deny</Button>
       </Stack>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
     </Box> : pendingInterrupt ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}
+      disabled={!runtimeOperationAvailability(runCapabilities, responseOperation).visible || !isRuntimeOperationEnabled(runCapabilities, responseOperation)}
+      disabledReason={runtimeOperationAvailability(runCapabilities, responseOperation).disabledReason}
       scopeOptions={approvalScopeOptions}
       onAction={(action, options) => void decide(action, options)}
     /> : undefined}
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-    </Box> : interactionDescriptors.length > 0 || stateUpdateEnabled ? <Box sx={{ pb: 1 }}>
+    </Box> : interactionDescriptors.length > 0 || stateUpdateAvailability.visible ? <Box sx={{ pb: 1 }}>
       <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
         {interactionDescriptors.map((operation) => <Button
           key={operation.id}
           size="small"
           variant={interactionOperation === operation.id ? 'contained' : 'outlined'}
+          disabled={!operation.availability.enabled}
+          title={operation.availability.disabledReason}
           onClick={() => setInteractionOperation(operation.id)}
         >{operation.label}</Button>)}
-        {stateUpdateEnabled && <Button size="small" variant="outlined" onClick={() => {
+        {stateUpdateAvailability.visible && <Button size="small" variant="outlined" disabled={!stateUpdateAvailability.enabled} title={stateUpdateAvailability.disabledReason} onClick={() => {
           const raw = window.prompt('State update JSON');
           if (!raw || !selectedRun) return;
           try {
@@ -558,6 +588,7 @@ export default function DeepResearchTaskPanel({
       {interactionDescriptors.length > 0 && <ConversationComposer
           placeholder={interactionDescriptors.find((operation) => operation.id === interactionOperation)?.placeholder || 'Send runtime input…'}
           busy={busy}
+          disabled={!interactionDescriptors.find((operation) => operation.id === interactionOperation)?.availability.enabled}
           onSubmit={async (value) => {
             if (!selectedRun) return;
             setBusy(true); setError('');

@@ -10,6 +10,8 @@ from app.runtime.contracts import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
+    RuntimeApprovalResponse,
+    RuntimeSteeringInput,
     RuntimeCapabilities,
     RuntimeOperationDescriptor,
     RuntimeOperationId,

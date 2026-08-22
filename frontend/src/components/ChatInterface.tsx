@@ -45,6 +45,7 @@ import {
     getPromptPreview,
     listAgentWorkflows,
     getAgentRun,
+    getAgentRunCapabilities,
     listThreadAgentRuns,
     AgentRunDetails,
     AgentTraceRefs,
@@ -59,7 +60,9 @@ import {
     streamAgentWorkflowBuilderTest,
     type Project,
     type ThreadChatResponse,
+    type AgentRuntimeCapabilityResponse,
 } from '../lib/api';
+import { isRuntimeOperationEnabled, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
@@ -248,6 +251,7 @@ const ChatComposer = React.memo(function ChatComposer({
     isEmbeddingModelValid,
     indexingStatus,
     liveExecution,
+    liveRunCapabilities,
     isTestRuntime,
     onSubmit,
     onStop,
@@ -264,6 +268,7 @@ const ChatComposer = React.memo(function ChatComposer({
     isEmbeddingModelValid: boolean | null;
     indexingStatus: ChatComposerIndexingStatusValue;
     liveExecution: LiveChatExecution | null;
+    liveRunCapabilities: AgentRuntimeCapabilityResponse | null;
     isTestRuntime: boolean;
     onSubmit: (text: string) => void;
     onStop: () => void;
@@ -300,12 +305,18 @@ const ChatComposer = React.memo(function ChatComposer({
             placeholder={composerState.placeholder}
             disabled={composerState.disabled}
             busy={composerState.busy}
-            showStop={loading && Boolean(liveExecution)}
-            canStop={Boolean(liveExecution?.runId && liveExecution.running)}
+            showStop={loading && Boolean(liveExecution) && runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').visible}
+            canStop={Boolean(
+                liveExecution?.runId
+                && liveExecution.running
+                && isRuntimeOperationEnabled(liveRunCapabilities, 'run.cancel')
+            )}
             stopping={Boolean(liveExecution?.canceling)}
             stopTooltip={
                 liveExecution?.canceling
-                    ? 'Stopping after the current LLM or tool call finishes'
+                        ? 'Stopping after the current LLM or tool call finishes'
+                        : runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').disabledReason
+                            ? `Cancellation unavailable: ${runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').disabledReason}`
                     : liveExecution?.runId
                         ? 'Stop after the current step'
                         : 'Preparing the chat run'
@@ -728,12 +739,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const workspaceTraceMessageIdRef = useRef<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
+    const [liveRunCapabilities, setLiveRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
+    const [humanReviewCapabilities, setHumanReviewCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -744,6 +757,40 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const manuallyToggledAgentRunsRef = useRef(new Set<string>());
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
+
+    useEffect(() => {
+        let active = true;
+        const runId = pendingHumanReview?.runId;
+        setHumanReviewCapabilities(null);
+        if (!runId || !activeThread) {
+            return () => { active = false; };
+        }
+        void getAgentRunCapabilities(runId, activeThread.id)
+            .then((capabilities) => {
+                if (active) setHumanReviewCapabilities(capabilities);
+            })
+            .catch(() => {
+                if (active) setHumanReviewCapabilities(null);
+            });
+        return () => { active = false; };
+    }, [activeThread?.id, pendingHumanReview?.interrupt.resume_version, pendingHumanReview?.runId]);
+
+    useEffect(() => {
+        let active = true;
+        const runId = liveExecution?.runId;
+        setLiveRunCapabilities(null);
+        if (!runId || !activeThread) {
+            return () => { active = false; };
+        }
+        void getAgentRunCapabilities(runId, activeThread.id)
+            .then((capabilities) => {
+                if (active) setLiveRunCapabilities(capabilities);
+            })
+            .catch(() => {
+                if (active) setLiveRunCapabilities(null);
+            });
+        return () => { active = false; };
+    }, [activeThread?.id, liveExecution?.canceling, liveExecution?.runId, liveExecution?.running, testRuntime]);
     const messageVirtualizer = useVirtualizer({
         count: messages.length,
         getScrollElement: () => messageListRef.current,
@@ -1507,6 +1554,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
+        const responseOperation = interrupt.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+        if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
@@ -2051,7 +2100,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleStopChat = async () => {
         const execution = liveExecution;
-        if (!activeThread || !canRequestChatCancellation(execution)) return;
+        if (
+            !activeThread
+            || !canRequestChatCancellation(execution)
+            || !isRuntimeOperationEnabled(liveRunCapabilities, 'run.cancel')
+        ) return;
         setLiveExecution((current) => current?.runId === execution.runId
             ? { ...current, canceling: true, error: undefined }
             : current);
@@ -2377,6 +2430,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
+    const pendingReviewOperation = pendingReviewInterrupt?.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+    const pendingReviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation);
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2535,6 +2590,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     submitting={humanReviewSubmitting}
                     error={humanReviewError}
                     editText={humanReviewEditText}
+                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
+                    disabledReason={pendingReviewAvailability.disabledReason}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
@@ -2575,6 +2632,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     isEmbeddingModelValid={isEmbeddingModelValid}
                     indexingStatus={indexingStatus}
                     liveExecution={liveExecution}
+                    liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}

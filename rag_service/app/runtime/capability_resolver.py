@@ -35,6 +35,11 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
 })
 
+TASK_ONLY_OPERATIONS = frozenset({
+    RuntimeOperationId.RUN_PAUSE.value,
+    RuntimeOperationId.RUN_RETRY.value,
+})
+
 
 def deployment_id(adapter: Any) -> str:
     return f"{adapter.framework}:{adapter.builder_id}"
@@ -44,7 +49,7 @@ def _disabled(
     descriptor: RuntimeOperationDescriptor,
     reason: str,
 ) -> RuntimeOperationDescriptor:
-    if descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
+    if descriptor.support is RuntimeSupportLevel.UNSUPPORTED or not descriptor.enabled:
         return descriptor
     return replace(descriptor, enabled=False, disabled_reason=reason)
 
@@ -87,6 +92,11 @@ async def resolve_capabilities(
         return capabilities
 
     operations = dict(capabilities.operations)
+    supports_long_running_tasks = bool(definition.capabilities.get("supports_long_running_tasks"))
+    if not supports_long_running_tasks:
+        for operation in TASK_ONLY_OPERATIONS:
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
     status = str(getattr(run, "status", "") or "")
     pending = getattr(run, "pending_interrupt_json", None)
     has_pending = isinstance(pending, Mapping) and bool(pending)
@@ -101,6 +111,11 @@ async def resolve_capabilities(
         for operation in (RuntimeOperationId.RUN_RESUME.value, RuntimeOperationId.RUN_APPROVAL_RESPOND.value, RuntimeOperationId.INTERRUPT_RESPOND.value):
             if operation in operations and not has_pending:
                 operations[operation] = _disabled(operations[operation], "no_pending_interrupt")
+
+    if status not in TERMINAL_RUN_STATES and RuntimeOperationId.RUN_PAUSE.value in operations and status not in {"queued", "running"}:
+        operations[RuntimeOperationId.RUN_PAUSE.value] = _disabled(operations[RuntimeOperationId.RUN_PAUSE.value], "run_not_pauseable")
+    if RuntimeOperationId.RUN_RETRY.value in operations and status not in {"failed", "expired"}:
+        operations[RuntimeOperationId.RUN_RETRY.value] = _disabled(operations[RuntimeOperationId.RUN_RETRY.value], "run_not_retryable")
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation in (

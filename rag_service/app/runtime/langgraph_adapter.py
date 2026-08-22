@@ -29,6 +29,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     builder_id = "langgraph_graph"
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
+        task_runtime = bool(definition.capabilities.get("supports_long_running_tasks"))
         return RuntimeCapabilities(
             operations={
                 RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(
@@ -43,6 +44,16 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     modes=("interrupt",),
                     confirmation="asynchronous",
                     terminal_states=("cancelled", "interrupted"),
+                ),
+                RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.CONDITIONAL, task_runtime,
+                    semantics="product_task_pause",
+                    disabled_reason=None if task_runtime else "definition_not_task_runtime",
+                ),
+                RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.CONDITIONAL, task_runtime,
+                    semantics="product_task_retry",
+                    disabled_reason=None if task_runtime else "definition_not_task_runtime",
                 ),
                 RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.NATIVE, True,

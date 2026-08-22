@@ -32,6 +32,7 @@ class RuntimeOperationId(str, Enum):
     RUN_RESUME = "run.resume"
     RUN_CANCEL = "run.cancel"
     RUN_PAUSE = "run.pause"
+    RUN_RETRY = "run.retry"
     RUN_EVENTS = "run.events"
     RUN_INSPECT_STATE = "run.inspect_state"
     RUN_APPROVAL_RESPOND = "run.approval.respond"

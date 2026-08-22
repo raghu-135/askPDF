@@ -523,6 +523,14 @@ def create_app() -> FastAPI:
                         "support": "unsupported", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
+                    "run.pause": {
+                        "support": "conditional", "enabled": True,
+                        "semantics": "product_task_pause",
+                    },
+                    "run.retry": {
+                        "support": "conditional", "enabled": True,
+                        "semantics": "product_task_retry",
+                    },
                     "run.start": {
                         "support": "native", "enabled": True,
                     },
