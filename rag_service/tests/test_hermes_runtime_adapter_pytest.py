@@ -30,6 +30,24 @@ async def test_hermes_resume_is_explicitly_unsupported():
     assert error.value.details["operation_id"] == "run.resume"
 
 
+def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+
+    with TestClient(hermes_api.create_app()) as client:
+        capabilities = client.get("/v1/capabilities")
+        steer = client.post("/v1/runs/run-1/steer", json={})
+
+    assert capabilities.status_code == 200
+    descriptor = capabilities.json()["result"]["capabilities"]["operations"]["run.steer_live"]
+    assert descriptor == {
+        "support": "unsupported",
+        "enabled": False,
+        "disabled_reason": "runtime_capability_unsupported",
+    }
+    assert steer.status_code == 404
+
+
 def test_hermes_continuation_binding_is_opaque():
     binding = ContinuationBinding("hermes_session", {"session_id": "session-1"})
     assert binding.to_dict()["payload"]["session_id"] == "session-1"
@@ -302,6 +320,27 @@ async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     assert len(calls) == 1
     assert error.value.code == "runtime_capability_unsupported"
     assert error.value.details["operation_id"] == "run.steer_live"
+
+
+@pytest.mark.asyncio
+async def test_hermes_live_steering_makes_no_transport_request():
+    requested = []
+
+    def handler(request):
+        requested.append(request)
+        return httpx.Response(200, json={"accepted": True}, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("focus"))
+
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.steer_live"
+    assert requested == []
+    await client.aclose()
 
 
 def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):

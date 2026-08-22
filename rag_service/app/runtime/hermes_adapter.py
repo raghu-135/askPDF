@@ -44,6 +44,9 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         from app.runtime.transport import capabilities_from_dict
         return capabilities_from_dict(value.get("capabilities") or value)
 
+    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
+        self._unsupported("run.resume", "Hermes resume is not supported by the pinned runs API")
+
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
         self._ensure_enabled()
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):

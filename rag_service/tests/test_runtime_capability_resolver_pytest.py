@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.capability_resolver import require_capability, resolve_capabilities
+from app.runtime.capability_resolver import capabilities_for_definition, require_capability, resolve_capabilities
 from app.runtime.contracts import (
     AgentDefinition,
     RuntimeCapabilities,
@@ -36,6 +36,11 @@ class CapabilityAdapter:
         )
 
 
+class HermesCapabilityAdapter(CapabilityAdapter):
+    framework = "hermes"
+    builder_id = "hermes_agent"
+
+
 def _definition(**capabilities):
     return AgentDefinition(
         definition_id="definition-1",
@@ -65,6 +70,32 @@ async def test_definition_policy_and_run_state_gate_operations():
     assert capabilities.operations[RuntimeOperationId.RUN_RESUME.value].disabled_reason == "no_pending_interrupt"
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].support is RuntimeSupportLevel.UNSUPPORTED
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].enabled is False
+
+
+@pytest.mark.asyncio
+async def test_hermes_live_steering_remains_disabled_at_all_capability_levels():
+    registry = RuntimeRegistry(adapters=[HermesCapabilityAdapter()])
+    definition = AgentDefinition(
+        definition_id="hermes_rag_agent",
+        framework="hermes",
+        builder_id="hermes_agent",
+    )
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "hermes_session"},
+        runtime_binding_status="active",
+    )
+
+    runtime_capabilities = await resolve_capabilities(definition, registry=registry)
+    definition_capabilities = await capabilities_for_definition(definition, registry=registry)
+    run_capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+
+    for capabilities in (runtime_capabilities, definition_capabilities, run_capabilities):
+        descriptor = capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value]
+        assert descriptor.support is RuntimeSupportLevel.UNSUPPORTED
+        assert descriptor.enabled is False
+        assert descriptor.disabled_reason == "runtime_capability_unsupported"
 
 
 @pytest.mark.asyncio
