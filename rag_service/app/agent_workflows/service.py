@@ -73,6 +73,20 @@ def _workflow_version_info(workflow: Any) -> SimpleNamespace:
     )
 
 
+def _definition_for_run(run: Any) -> AgentDefinition:
+    resolved_spec = run.resolved_spec_json if isinstance(getattr(run, "resolved_spec_json", None), dict) else {}
+    runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), dict) else {}
+    features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
+    return AgentDefinition(
+        definition_id=str(run.workflow_id),
+        framework=str(getattr(run, "framework", None) or "langgraph"),
+        builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+        category=getattr(run, "definition_category", None),
+        capabilities=dict(features),
+        runtime_version=str(runtime.get("version")) if runtime.get("version") else None,
+    )
+
+
 class AgentRunService:
     """Runs the selected agent workflow, defaulting to the compiled Router graph."""
 
@@ -103,12 +117,8 @@ class AgentRunService:
         run = await self.repository.get_run(run_id)
         if run is None or run.thread_id != thread_id:
             return None
-        definition = AgentDefinition(
-            definition_id=str(run.workflow_id),
-            framework=str(getattr(run, "framework", None) or "langgraph"),
-            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-            category=getattr(run, "definition_category", None),
-        )
+        definition = _definition_for_run(run)
+        await require_capability(definition, RuntimeOperationId.RUN_CANCEL, registry=get_runtime_registry(), run=run)
         adapter = adapter_for_definition(definition)
         request = AgentRuntimeRequest(
             run_id=run.id,
@@ -121,12 +131,8 @@ class AgentRunService:
         return await adapter.cancel(request)
 
     async def inspect_agent_run(self, run: Any) -> Dict[str, Any]:
-        definition = AgentDefinition(
-            definition_id=str(run.workflow_id),
-            framework=str(getattr(run, "framework", None) or "langgraph"),
-            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-            category=getattr(run, "definition_category", None),
-        )
+        definition = _definition_for_run(run)
+        await require_capability(definition, RuntimeOperationId.RUN_INSPECT_STATE, registry=get_runtime_registry(), run=run)
         adapter = adapter_for_definition(definition)
         request = AgentRuntimeRequest(
             run_id=run.id,
@@ -147,17 +153,7 @@ class AgentRunService:
         update: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        definition = AgentDefinition(
-            definition_id=str(run.workflow_id),
-            framework=str(getattr(run, "framework", None) or "langgraph"),
-            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-            category=getattr(run, "definition_category", None),
-            capabilities=dict(
-                ((run.resolved_spec_json or {}).get("runtime") or {}).get("features") or {}
-                if isinstance(getattr(run, "resolved_spec_json", None), dict)
-                else {}
-            ),
-        )
+        definition = _definition_for_run(run)
         adapter = adapter_for_definition(definition)
         await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
         request = AgentRuntimeRequest(
@@ -571,6 +567,30 @@ class AgentRunService:
         runtime_approval_choice: Optional[str] = None,
         resolve_all: bool = False,
     ) -> Optional[InterruptResolutionResult]:
+        current_run = await self.repository.get_run(run_id)
+        if current_run is None or (
+            expected_thread_id is not None
+            and str(getattr(current_run, "thread_id", "")) != str(expected_thread_id)
+        ):
+            return None
+        pending_interrupt = getattr(current_run, "pending_interrupt_json", None)
+        if (
+            str(getattr(current_run, "status", "")) not in {"completed", "failed", "rejected", "expired", "cancelled"}
+            and isinstance(pending_interrupt, dict)
+            and pending_interrupt.get("checkpoint_resume") is True
+        ):
+            operation = (
+                RuntimeOperationId.RUN_APPROVAL_RESPOND
+                if str(getattr(current_run, "framework", "")) == "hermes"
+                and pending_interrupt.get("type") == "hermes_approval"
+                else RuntimeOperationId.RUN_RESUME
+            )
+            await require_capability(
+                _definition_for_run(current_run),
+                operation,
+                registry=get_runtime_registry(),
+                run=current_run,
+            )
         resolution = await self.repository.resolve_pending_interrupt(
             run_id,
             interrupt_id=interrupt_id,
@@ -627,9 +647,12 @@ class AgentRunService:
                 choice = runtime_approval_choice or ("deny" if action == AgentRunResumeAction.REJECT.value else "once")
                 if choice not in {"once", "session", "always", "deny"}:
                     raise ValueError("Invalid Hermes approval choice")
-                definition = AgentDefinition(
-                    definition_id=str(resolution.run.workflow_id), framework="hermes",
-                    builder_id=str(getattr(resolution.run, "builder_id", None) or "hermes_agent"),
+                definition = _definition_for_run(resolution.run)
+                await require_capability(
+                    definition,
+                    RuntimeOperationId.RUN_APPROVAL_RESPOND,
+                    registry=get_runtime_registry(),
+                    run=resolution.run,
                 )
                 request = AgentRuntimeRequest(
                     run_id=resolution.run.id, thread_id=resolution.run.thread_id,
@@ -679,11 +702,12 @@ class AgentRunService:
                 execution_event_sink.bind_runtime_event_persister(resolution.run.id, self.repository.append_run_event)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
                 execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
-            definition = AgentDefinition(
-                definition_id=str(resolution.run.workflow_id),
-                framework=str(getattr(resolution.run, "framework", None) or "langgraph"),
-                builder_id=str(getattr(resolution.run, "builder_id", None) or "langgraph_graph"),
-                category=getattr(resolution.run, "definition_category", None),
+            definition = _definition_for_run(resolution.run)
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_RESUME,
+                registry=get_runtime_registry(),
+                run=resolution.run,
             )
             adapter = adapter_for_definition(definition)
             runtime_request = AgentRuntimeRequest(

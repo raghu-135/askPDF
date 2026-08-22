@@ -356,8 +356,8 @@ export default function DeepResearchTaskPanel({
       let payload: any = {};
       try { payload = JSON.parse((event as MessageEvent).data || '{}'); } catch { payload = {}; }
       const type = String(payload.type || '');
-      if (type.startsWith('task.') || type.startsWith('todo.') || type.startsWith('subagent.')) void refresh();
-      if (/^(plan\.|todo\.|subagent\.|artifact\.|task\.approval|task\.(completed|failed|cancelled))/.test(type)) {
+      if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
+      if (/^(runtime\.event|subagent\.|artifact\.|output\.)/.test(type)) {
         void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => setItems(value.items));
       }
     });

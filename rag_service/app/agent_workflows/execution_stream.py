@@ -9,6 +9,7 @@ from app.agent_workflows.trace_sanitization import _bounded_value
 from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.runtime.contracts import AgentRuntimeEvent
+from app.runtime.events import create_runtime_event, validate_runtime_event
 from app.runtime.observability import normalize_runtime_event, project_event_to_trace_recorder
 
 
@@ -66,6 +67,7 @@ class AgentExecutionEventSink:
 
     def _event(self, event: str, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payload = enrich_parallel_event(event, data or {}) if event.startswith(PARALLEL_EVENT_PREFIXES) else dict(data or {})
+        public_event, _ = normalize_runtime_event(event, payload)
         if event.startswith(PARALLEL_EVENT_PREFIXES):
             payload.setdefault("occurred_at", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         if not self.include_details:
@@ -75,7 +77,7 @@ class AgentExecutionEventSink:
             payload.pop("prompt", None)
             payload.pop("reasoning", None)
             payload.pop("tools", None)
-        return {"event": event, "data": _bounded_value(payload)}
+        return {"event": public_event, "data": _bounded_value(payload)}
 
     async def emit(self, event: str, data: Dict[str, Any] | None = None) -> None:
         if self.closed:
@@ -89,7 +91,10 @@ class AgentExecutionEventSink:
                 self._runtime_event_ids.add(event_id)
             self._sequence += 1
             normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
-            canonical = AgentRuntimeEvent(
+            source_metadata = dict(normalized_payload.get("source_metadata") or {})
+            if normalized_kind != event:
+                source_metadata.setdefault("source_event", event)
+            canonical = create_runtime_event(
                 event_id=event_id or f"{self._run_id or 'run'}:{self._sequence}",
                 run_id=self._run_id or str(normalized_payload.get("run_id") or ""),
                 sequence=int(normalized_payload.get("sequence") or self._sequence),
@@ -97,9 +102,10 @@ class AgentExecutionEventSink:
                 kind=normalized_kind,
                 payload=normalized_payload,
                 occurred_at=normalized_payload.get("occurred_at") or normalized_payload.get("timestamp"),
-                terminal=normalized_kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
                 trace_id=normalized_payload.get("trace_id"),
+                source_metadata=source_metadata,
             )
+            validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
             self._canonical_events.append(canonical)
             if _canonical_projection_enabled() and self._runtime_event_persister is not None and canonical.run_id:
                 await self._runtime_event_persister(canonical.run_id, canonical)
@@ -125,6 +131,8 @@ class AgentExecutionEventSink:
             payload.setdefault("occurred_at", event.occurred_at)
         if event.trace_id:
             payload.setdefault("trace_id", event.trace_id)
+        if event.source_metadata:
+            payload.setdefault("source_metadata", dict(event.source_metadata))
         await self.emit(event.kind, payload)
 
     def emit_nowait(self, event: str, data: Dict[str, Any] | None = None) -> None:
@@ -137,7 +145,10 @@ class AgentExecutionEventSink:
                 self._runtime_event_ids.add(event_id)
             self._sequence += 1
             normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
-            canonical = AgentRuntimeEvent(
+            source_metadata = dict(normalized_payload.get("source_metadata") or {})
+            if normalized_kind != event:
+                source_metadata.setdefault("source_event", event)
+            canonical = create_runtime_event(
                 event_id=event_id or f"{self._run_id or 'run'}:{self._sequence}",
                 run_id=self._run_id or str(normalized_payload.get("run_id") or ""),
                 sequence=int(normalized_payload.get("sequence") or self._sequence),
@@ -146,7 +157,9 @@ class AgentExecutionEventSink:
                 payload=normalized_payload,
                 occurred_at=normalized_payload.get("occurred_at") or normalized_payload.get("timestamp"),
                 trace_id=normalized_payload.get("trace_id"),
+                source_metadata=source_metadata,
             )
+            validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
             self._canonical_events.append(canonical)
             if _canonical_projection_enabled() and self._trace_recorder is not None:
                 project_event_to_trace_recorder(self._trace_recorder, canonical.kind, canonical.payload)

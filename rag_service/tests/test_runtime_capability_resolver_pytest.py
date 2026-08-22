@@ -18,22 +18,53 @@ class CapabilityAdapter:
     framework = "fake"
     builder_id = "fake_builder"
 
+    def __init__(self, *, unsupported=()):
+        self.calls = {"cancel": 0, "resume": 0, "update_state": 0, "replay": 0, "inspect_state": 0}
+        self.unsupported = set(unsupported)
+
     async def capabilities(self, definition):
-        return RuntimeCapabilities(
-            operations={
+        operations = {
                 RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
                 RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
                 RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
+                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, False, disabled_reason="runtime_capability_unsupported"),
+                RuntimeOperationId.RUN_REPLAY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, False, disabled_reason="runtime_capability_unsupported"),
                 RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.UNSUPPORTED,
                     False,
                     disabled_reason="runtime_capability_unsupported",
                 ),
             }
-        )
+        for operation in self.unsupported:
+            operations[operation] = RuntimeOperationDescriptor(
+                RuntimeSupportLevel.UNSUPPORTED,
+                False,
+                disabled_reason="runtime_capability_unsupported",
+            )
+        return RuntimeCapabilities(operations=operations)
+
+    async def cancel(self, request):
+        self.calls["cancel"] += 1
+        return {"status": "cancel_requested"}
+
+    async def resume(self, request, *, interrupt, context, event_sink=None):
+        self.calls["resume"] += 1
+        return None
+
+    async def update_state(self, request, update):
+        self.calls["update_state"] += 1
+        return {"status": "updated"}
+
+    async def replay(self, request, checkpoint_id):
+        self.calls["replay"] += 1
+        return None
+
+    async def inspect_state(self, request):
+        self.calls["inspect_state"] += 1
+        return {"state": {}}
 
 
 class HermesCapabilityAdapter(CapabilityAdapter):
@@ -130,6 +161,49 @@ async def test_require_capability_rejects_unsupported_operation_before_adapter_c
 
     assert caught.value.code == "runtime_capability_unsupported"
     assert caught.value.details["operation_id"] == "run.steer_live"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", [
+    RuntimeOperationId.RUN_STEER_LIVE,
+    RuntimeOperationId.RUN_RESUME,
+    RuntimeOperationId.RUN_UPDATE_STATE,
+    RuntimeOperationId.RUN_REPLAY,
+])
+async def test_unsupported_operations_are_rejected_without_runtime_invocation(operation):
+    adapter = CapabilityAdapter(unsupported={operation.value})
+    with pytest.raises(RuntimeError) as caught:
+        await require_capability(
+            _definition(),
+            operation,
+            registry=RuntimeRegistry(adapters=[adapter]),
+        )
+
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert caught.value.details["support_level"] == "unsupported"
+    assert all(value == 0 for value in adapter.calls.values())
+
+
+@pytest.mark.asyncio
+async def test_supported_but_ineligible_operation_is_rejected_without_runtime_invocation():
+    adapter = CapabilityAdapter()
+    terminal = SimpleNamespace(
+        status="completed",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+    with pytest.raises(RuntimeError) as caught:
+        await require_capability(
+            _definition(),
+            RuntimeOperationId.RUN_CANCEL,
+            registry=RuntimeRegistry(adapters=[adapter]),
+            run=terminal,
+        )
+
+    assert caught.value.code == "runtime_capability_unavailable"
+    assert caught.value.details["disabled_reason"] == "run_terminal"
+    assert all(value == 0 for value in adapter.calls.values())
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,8 @@ from app.db.models_sqlmodel import (
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import utc_now
 from app.agent_workflows.trace_details import sanitize_trace_detail
+from app.runtime.contracts import TERMINAL_RUNTIME_EVENT_KINDS
+from app.runtime.events import normalize_product_event_kind
 
 
 ACTIVE_TASK_STATUSES = {
@@ -510,10 +512,13 @@ async def _append_event(
         select(func.coalesce(func.max(AgentTaskEvent.sequence), 0))
         .where(AgentTaskEvent.task_id == task.id)
     )
+    normalized_type, source_metadata = normalize_product_event_kind(event_type)
+    event_sequence = int(latest.scalar_one()) + 1
     event = AgentTaskEvent(
         task_id=task.id,
-        sequence=int(latest.scalar_one()) + 1,
-        event_type=event_type,
+        sequence=event_sequence,
+        event_id=f"{task.id}:{event_sequence}",
+        event_type=normalized_type,
         actor_type=actor_type,
         actor_id=actor_id,
         agent_run_id=agent_run_id,
@@ -523,6 +528,9 @@ async def _append_event(
         payload_json=sanitize_trace_detail(payload or {})[0],
         policy_hash=policy_hash,
         config_hash=config_hash,
+        occurred_at=utc_now(),
+        terminal=normalized_type in TERMINAL_RUNTIME_EVENT_KINDS,
+        source_metadata_json=source_metadata,
     )
     session.add(event)
     await session.flush()
@@ -544,15 +552,12 @@ async def get_task_web_access(task_id: str) -> str:
             select(AgentTaskEvent)
             .where(
                 AgentTaskEvent.task_id == task_id,
-                AgentTaskEvent.event_type.in_({
-                    f"{WEB_ACCESS_EVENT_PREFIX}{WEB_ACCESS_ALLOWED}",
-                    f"{WEB_ACCESS_EVENT_PREFIX}{WEB_ACCESS_DENIED}",
-                }),
+                AgentTaskEvent.event_type == "approval.responded",
             )
             .order_by(AgentTaskEvent.sequence.desc())
             .limit(1)
         )).scalar_one_or_none()
-        return event.event_type.removeprefix(WEB_ACCESS_EVENT_PREFIX) if event else "undecided"
+        return str((event.payload_json or {}).get("status") or "undecided") if event else "undecided"
 
 
 async def set_task_web_access(
@@ -574,12 +579,16 @@ async def set_task_web_access(
                 select(AgentTaskEvent)
                 .where(
                     AgentTaskEvent.task_id == task_id,
-                    AgentTaskEvent.event_type == f"{WEB_ACCESS_EVENT_PREFIX}{status}",
+                    AgentTaskEvent.event_type == "approval.responded",
                 )
                 .order_by(AgentTaskEvent.sequence.desc())
                 .limit(100)
             )).scalars().all())
-            if any(str((event.payload_json or {}).get("interrupt_id") or "") == interrupt_id for event in prior_events):
+            if any(
+                str((event.payload_json or {}).get("interrupt_id") or "") == interrupt_id
+                and str((event.payload_json or {}).get("status") or "") == status
+                for event in prior_events
+            ):
                 return task
             task.version += 1
             task.updated_at = utc_now()
@@ -590,7 +599,7 @@ async def set_task_web_access(
                 actor_type="user",
                 actor_id=actor_id,
                 agent_run_id=agent_run_id,
-                payload={"interrupt_id": interrupt_id, "scope": "task", "version": task.version},
+                payload={"interrupt_id": interrupt_id, "scope": "task", "status": status, "version": task.version},
             )
         await session.refresh(task)
         return task

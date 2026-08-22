@@ -645,11 +645,17 @@ async def stream_agent_task_events(
                     if scope == "task" and row.agent_run_id not in {None, active_run_id}:
                         continue
                     event_payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+                    event_id = getattr(row, "event_id", None)
+                    occurred_at = getattr(row, "occurred_at", None)
+                    terminal = getattr(row, "terminal", False)
+                    source_metadata = getattr(row, "source_metadata_json", {})
                     payload = {
-                        "id": row.id, "sequence": row.sequence, "type": row.event_type,
+                        "id": row.id, "event_id": event_id, "sequence": row.sequence, "type": row.event_type,
                         "task_id": row.task_id, "run_id": row.agent_run_id, "todo_id": row.todo_id,
                         "subagent_run_id": row.subagent_run_id, "artifact_id": row.artifact_id,
                         "payload": event_payload, "created_at": maybe_iso_utc_z(row.created_at),
+                        "occurred_at": maybe_iso_utc_z(occurred_at), "terminal": bool(terminal),
+                        "source_metadata": dict(source_metadata or {}),
                     }
                     yield f"id: {sequence}\nevent: task_event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
             else:

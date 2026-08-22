@@ -1658,7 +1658,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 client_metadata: { source: 'chat_pending_review_panel' },
             }, (event) => {
                 if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (['run.completed', 'run.failed', 'interrupt.created'].includes(event.event)) {
+                if (['run.completed', 'run.failed', 'interrupt.requested'].includes(event.event)) {
                     response = event.data?.response;
                     const rawError = event.data?.error;
                     terminalError = event.event === 'run.failed' && !response
@@ -1958,7 +1958,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             traceRefs: response.agent_trace_refs,
                             runDetails: run,
                             liveTraceView: mergeLiveAndRetainedTraceViews(
-                                buildLiveTraceView(traceStream.snapshot('interrupt.created', terminalStreamError, response.status).events),
+                                buildLiveTraceView(traceStream.snapshot('interrupt.requested', terminalStreamError, response.status).events),
                                 buildRunTraceView(run),
                             ),
                             running: false,
@@ -1979,7 +1979,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             status: 'review',
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
-                            liveTraceView: buildLiveTraceView(traceStream.snapshot('interrupt.created').events),
+                            liveTraceView: buildLiveTraceView(traceStream.snapshot('interrupt.requested').events),
                             running: false,
                             error: error?.message || 'Unable to load agent run.',
                         });

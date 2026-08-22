@@ -150,6 +150,7 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
         "kind": kind,
         "payload": dict(payload or {}),
         "terminal": terminal,
+        "source_metadata": {"framework": "hermes", "source_event": source_event_id} if source_event_id else {"framework": "hermes"},
         "contract_version": WIRE_VERSION,
     }
     if continuation is not None:
@@ -201,7 +202,7 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
     if name == "reasoning.available":
         return "reasoning.available"
     if name == "approval.request":
-        return "approval.request"
+        return "approval.requested"
     if name == "approval.responded":
         return "approval.responded"
     if name == "run.completed":
@@ -210,8 +211,10 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
         return "run.failed"
     if name == "run.cancelled":
         return "run.cancelled"
-    if name in {"subagent.start", "subagent.complete"}:
-        return name
+    if name == "subagent.start":
+        return "subagent.started"
+    if name == "subagent.complete":
+        return "subagent.completed"
     return "runtime.event"
 
 
@@ -654,7 +657,7 @@ def create_app() -> FastAPI:
             "last_tool_call_id": None,
         }
 
-        def process_frame(frame_event_name: str, frame_data: list[str]) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+        def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id
             try:
                 raw = json.loads("\n".join(frame_data))
@@ -692,7 +695,7 @@ def create_app() -> FastAPI:
             event_budget.observe(kind, output_delta)
             event = _neutral_event(run_id, sequence, kind, event_payload, source_event_id=source_event_id, terminal=terminal, continuation=continuation)
             result = None
-            if kind == "approval.request":
+            if kind == "approval.requested":
                 interrupt_id = str(event_payload.get("approval_id") or event_payload.get("id") or f"hermes-approval-{sequence}")
                 result = {
                     "status": "awaiting_human",
@@ -729,6 +732,7 @@ def create_app() -> FastAPI:
                 }
             sequence += 1
             operation_event = None
+            output_complete_event = None
             if terminal:
                 operation_event = _neutral_event(
                     run_id,
@@ -745,10 +749,19 @@ def create_app() -> FastAPI:
                     continuation=continuation,
                 )
                 sequence += 1
+                if output_seen:
+                    output_complete_event = _neutral_event(
+                        run_id,
+                        sequence,
+                        "output.completed",
+                        {"source": "hermes", "upstream_run_id": upstream_run_id},
+                        continuation=continuation,
+                    )
+                    sequence += 1
                 event["sequence"] = sequence
                 event["event_id"] = f"{run_id}:{sequence}"
                 sequence += 1
-            return event, result, operation_event
+            return event, result, operation_event, output_complete_event
 
         binding_payload = ((neutral_request.get("continuation") or {}).get("payload") or {})
         execution_profile = str(binding_payload.get("runtime_profile") or "")
@@ -911,14 +924,19 @@ def create_app() -> FastAPI:
                     events_response.raise_for_status()
                     event_name = "message"
                     data: list[str] = []
+                    output_seen = False
                     async for line in events_response.aiter_lines():
                         if time.monotonic() >= deadline:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
                             if data:
-                                event, result, operation_event = process_frame(event_name, data)
+                                event, result, operation_event, output_complete_event = process_frame(event_name, data, output_seen=output_seen)
                                 if operation_event is not None:
                                     yield _sse(operation_event)
+                                if event["kind"] == "output.delta":
+                                    output_seen = True
+                                if output_complete_event is not None:
+                                    yield _sse(output_complete_event)
                                 yield _sse(event, result)
                                 if terminal_seen:
                                     return
@@ -931,9 +949,11 @@ def create_app() -> FastAPI:
                         elif line.startswith("data:"):
                             data.append(line[5:].lstrip())
                     if data and not terminal_seen:
-                        event, result, operation_event = process_frame(event_name, data)
+                        event, result, operation_event, output_complete_event = process_frame(event_name, data, output_seen=output_seen)
                         if operation_event is not None:
                             yield _sse(operation_event)
+                        if output_complete_event is not None:
+                            yield _sse(output_complete_event)
                         yield _sse(event, result)
                         if terminal_seen:
                             return

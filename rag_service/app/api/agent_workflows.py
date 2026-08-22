@@ -880,7 +880,10 @@ async def get_latest_internal_agent_workflow_test(
         raise HTTPException(status_code=404, detail="Builder test run not found")
     turns = await AgentWorkflowRepository().list_chat_turns_for_run(run.id)
     payload = _run_payload(run, turns)
-    payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
+    try:
+        payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     return {"agent_run": payload}
 
 
@@ -1246,7 +1249,10 @@ async def cancel_chat_agent_run(
 ):
     if not await get_thread(req.thread_id):
         raise HTTPException(status_code=404, detail="Agent run not found")
-    result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    try:
+        result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     if result.status == "missing":
@@ -1315,6 +1321,8 @@ async def resume_agent_run(
                 })
             except AgentRunInterruptError as exc:
                 await sink.queue.put({"event": "__error__", "data": {"error": {"code": exc.code, "raw_message": str(exc), "retryable": False}}})
+            except RuntimeError as exc:
+                await sink.queue.put({"event": "__error__", "data": {"error": exc.to_dict()}})
             except Exception as exc:
                 await sink.queue.put({"event": "__error__", "data": {"error": {"code": "agent_run_resume_failed", "raw_message": str(exc), "retryable": True}}})
 
@@ -1342,7 +1350,7 @@ async def resume_agent_run(
                         break
                     if event == "__result__":
                         status = str((data.get("agent_run") or {}).get("status") or "completed")
-                        terminal_event = "interrupt.created" if status == AgentRunStatus.AWAITING_HUMAN.value else "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                        terminal_event = "interrupt.requested" if status == AgentRunStatus.AWAITING_HUMAN.value else "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
                         sequence += 1
                         yield _sse({"event": terminal_event, "data": {"run_id": run_id, "status": status, "response": data}}, sequence)
                         break
@@ -1360,6 +1368,8 @@ async def resume_agent_run(
             status_code=exc.http_status,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     repo = AgentWorkflowRepository()

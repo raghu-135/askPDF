@@ -482,6 +482,11 @@ class AgentRunEvent(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False, default=dict),
     )
     trace_id: Optional[str] = Field(default=None, index=True)
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
@@ -690,6 +695,7 @@ class AgentTaskEvent(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
     sequence: int
+    event_id: Optional[str] = Field(default=None, index=True)
     event_type: str = Field(index=True)
     actor_type: str
     actor_id: Optional[str] = None
@@ -700,6 +706,12 @@ class AgentTaskEvent(SQLModel, table=True):
     payload_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
     policy_hash: Optional[str] = None
     config_hash: Optional[str] = None
+    occurred_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
 
     __table_args__ = (

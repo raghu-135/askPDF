@@ -21,6 +21,7 @@ from app.runtime.contracts import (
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
+from app.runtime.events import create_runtime_event
 
 
 WIRE_VERSION = 1
@@ -83,7 +84,7 @@ def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
 
 
 def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
-    return AgentRuntimeEvent(
+    return create_runtime_event(
         event_id=str(value["event_id"]),
         run_id=str(value["run_id"]),
         sequence=int(value["sequence"]),
@@ -91,8 +92,8 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
         attempt=int(value.get("attempt") or 1),
         payload=dict(value.get("payload") or {}),
         occurred_at=value.get("occurred_at"),
-        terminal=bool(value.get("terminal")),
         trace_id=value.get("trace_id"),
+        source_metadata=dict(value.get("source_metadata") or {}),
         runtime_version=value.get("runtime_version"),
         continuation=_binding(value.get("continuation")),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),

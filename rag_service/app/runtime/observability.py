@@ -15,6 +15,15 @@ OPERATION_KINDS = {
 
 def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
     data = dict(payload or {})
+    if kind in {"interrupt.created", "run.interrupted"}:
+        data.setdefault("source_event", kind)
+        return "interrupt.requested", dict(_bounded_value(data))
+    if kind == "approval.request":
+        data.setdefault("source_event", kind)
+        return "approval.requested", dict(_bounded_value(data))
+    if kind == "approval.response":
+        data.setdefault("source_event", kind)
+        return "approval.responded", dict(_bounded_value(data))
     if kind.startswith("node."):
         suffix = kind.split(".", 1)[1]
         normalized_kind = f"operation.{suffix}"

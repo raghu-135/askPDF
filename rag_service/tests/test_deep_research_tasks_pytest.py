@@ -1095,7 +1095,8 @@ async def test_scheduler_respects_dependencies_and_replays_unstarted_claim(
     assert await repository.get_task_web_access(task.id) == "allowed_for_task"
     access_events = [
         event for event in await repository.list_events(task.id)
-        if event.event_type == "web_access.allowed_for_task"
+        if event.event_type == "approval.responded"
+        and event.payload_json.get("status") == "allowed_for_task"
     ]
     assert len(access_events) == 1
     await repository.persist_plan(task.id, proposal, agent_run_id=run.id, reason="initial", planner_visit=1)

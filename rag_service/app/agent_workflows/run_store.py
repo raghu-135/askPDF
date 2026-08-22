@@ -173,17 +173,21 @@ async def append_run_event(
     payload_json: Dict[str, Any],
     occurred_at: Any = None,
     trace_id: Optional[str] = None,
+    terminal: bool = False,
+    source_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> bool:
     values = {
         "id": str(uuid.uuid4()),
         "agent_run_id": run_id,
         "event_id": event_id,
-        "sequence": max(0, int(sequence or 0)),
+        "sequence": max(1, int(sequence or 0)),
         "attempt": max(1, int(attempt or 1)),
         "kind": kind,
         "payload_json": dict(payload_json or {}),
         "occurred_at": parse_datetime_utc(occurred_at) if occurred_at else None,
         "trace_id": trace_id,
+        "terminal": bool(terminal),
+        "source_metadata_json": dict(source_metadata_json or {}),
         "created_at": utc_now(),
     }
     statement = pg_insert(AgentRunEvent).values(**values).on_conflict_do_nothing(

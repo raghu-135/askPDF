@@ -21,6 +21,49 @@ RUNTIME_OPERATION_EVENT_KINDS = frozenset({
 })
 
 
+class RuntimeEventKind(str, Enum):
+    RUN_QUEUED = "run.queued"
+    RUN_STARTED = "run.started"
+    RUN_PAUSED = "run.paused"
+    RUN_RESUMED = "run.resumed"
+    RUN_COMPLETED = "run.completed"
+    RUN_FAILED = "run.failed"
+    RUN_CANCEL_REQUESTED = "run.cancel_requested"
+    RUN_CANCELLED = "run.cancelled"
+    OUTPUT_DELTA = "output.delta"
+    OUTPUT_COMPLETED = "output.completed"
+    REASONING_AVAILABLE = "reasoning.available"
+    INTERRUPT_REQUESTED = "interrupt.requested"
+    INTERRUPT_RESPONDED = "interrupt.responded"
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_RESPONDED = "approval.responded"
+    TOOL_STARTED = "tool.started"
+    TOOL_PROGRESS = "tool.progress"
+    TOOL_COMPLETED = "tool.completed"
+    TOOL_FAILED = "tool.failed"
+    SUBAGENT_STARTED = "subagent.started"
+    SUBAGENT_PROGRESS = "subagent.progress"
+    SUBAGENT_COMPLETED = "subagent.completed"
+    SUBAGENT_FAILED = "subagent.failed"
+    SUBAGENT_CANCELLED = "subagent.cancelled"
+    ARTIFACT_CREATED = "artifact.created"
+    ARTIFACT_UPDATED = "artifact.updated"
+    ARTIFACT_COMPLETED = "artifact.completed"
+    RUNTIME_EVENT = "runtime.event"
+
+
+CANONICAL_RUNTIME_EVENT_KINDS = frozenset(item.value for item in RuntimeEventKind) | RUNTIME_OPERATION_EVENT_KINDS
+TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
+    RuntimeEventKind.RUN_COMPLETED.value,
+    RuntimeEventKind.RUN_FAILED.value,
+    RuntimeEventKind.RUN_CANCELLED.value,
+})
+RUNTIME_EVENT_FAMILY_PREFIXES = (
+    "run.", "output.", "reasoning.", "interrupt.", "approval.",
+    "tool.", "subagent.", "artifact.", "operation.",
+)
+
+
 class RuntimeOperationId(str, Enum):
     """Stable identifiers for the currently exposed runtime operations."""
 
@@ -128,6 +171,7 @@ class AgentRuntimeEvent:
     occurred_at: Optional[str] = None
     terminal: bool = False
     trace_id: Optional[str] = None
+    source_metadata: Mapping[str, Any] = field(default_factory=dict)
     runtime_version: Optional[str] = None
     continuation: Optional[ContinuationBinding] = None
     contract_version: int = CONTRACT_VERSION

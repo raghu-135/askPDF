@@ -18,6 +18,7 @@ from app.runtime.contracts import (
     ContinuationBinding,
 )
 from app.runtime.errors import RuntimeError
+from app.runtime.events import create_runtime_event
 
 
 def definition_for_workflow(workflow: Any) -> AgentDefinition:
@@ -125,15 +126,15 @@ def event_from_legacy(
 ) -> AgentRuntimeEvent:
     data = dict(event.get("data") or {})
     kind = str(event.get("event") or event.get("kind") or "runtime.event")
-    return AgentRuntimeEvent(
+    return create_runtime_event(
         event_id=str(event_id or data.get("event_id") or f"{run_id}:{sequence}"),
         run_id=run_id,
         sequence=sequence,
         kind=kind,
         payload=data,
         occurred_at=data.get("occurred_at") or data.get("timestamp"),
-        terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
         trace_id=data.get("trace_id"),
+        source_metadata={"framework": "langgraph", "source_event": kind} if kind not in {"run.completed", "run.failed", "run.cancelled"} else {"framework": "langgraph"},
     )
 
 

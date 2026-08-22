@@ -278,7 +278,7 @@ async def test_http_adapter_translates_events_for_legacy_two_argument_sink():
             received.append((event_name, data))
 
     await adapter.start(request, context=RuntimeExecutionContext(), event_sink=LegacySink())
-    assert received[0] == ("node.started", {"node": "router"})
+    assert received[0] == ("operation.started", {"node": "router"})
     await client.aclose()
 
 
@@ -291,11 +291,11 @@ async def test_http_adapter_maps_no_continuation_to_none():
             "event_id": "terminal",
             "run_id": request.run_id,
             "sequence": 1,
-            "kind": "run.continuation_empty",
+            "kind": "run.completed",
             "payload": {"status": "no_continuation"},
             "terminal": True,
         }
-        body = f"id: terminal\nevent: run.continuation_empty\ndata: {json.dumps({'event': event, 'result': {'status': 'no_continuation'}})}\n\n"
+        body = f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': event, 'result': {'status': 'no_continuation'}})}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))

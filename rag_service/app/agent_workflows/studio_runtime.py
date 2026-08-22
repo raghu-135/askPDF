@@ -347,7 +347,7 @@ async def stream_builder_test(
                 recorder=recorder,
             )
             finalized = True
-            yield {"event": "run.canceled", "data": {"run_id": run.id, "duration_ms": duration_ms}}
+            yield {"event": "run.cancelled", "data": {"run_id": run.id, "duration_ms": duration_ms}}
             return
 
         pending = _pending_interrupt_from_result(latest, checkpoint_thread_id=str(run.checkpoint_thread_id or run.id))
@@ -373,7 +373,7 @@ async def stream_builder_test(
             )
             finalized = True
             pending = dict(stored.pending_interrupt_json or pending) if stored is not None else pending
-            yield {"event": "interrupt.created", "data": _bounded_value(pending)}
+            yield {"event": "interrupt.requested", "data": _bounded_value(pending)}
             return
 
         status = AgentRunStatus.CLARIFICATION.value if result.get("clarification_options") else AgentRunStatus.COMPLETED.value

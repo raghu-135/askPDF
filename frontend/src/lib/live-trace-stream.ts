@@ -3,9 +3,8 @@ import type { AgentExecutionStreamEnvelope } from './agent-execution-stream';
 export const LIVE_TRACE_TERMINAL_EVENTS = new Set([
   'run.completed',
   'run.failed',
-  'run.canceled',
   'run.cancelled',
-  'interrupt.created',
+  'interrupt.requested',
 ]);
 
 export const isLiveTraceTerminalEvent = (eventName: string) => (
@@ -18,8 +17,8 @@ export const liveTraceStatusFromEvent = (
   fallbackStatus?: string,
 ) => {
   if (terminalError || eventName === 'run.failed') return 'failed';
-  if (eventName === 'interrupt.created') return 'review';
-  if (eventName === 'run.canceled' || eventName === 'run.cancelled') return 'cancelled';
+  if (eventName === 'interrupt.requested') return 'review';
+  if (eventName === 'run.cancelled') return 'cancelled';
   if (eventName === 'run.completed') return fallbackStatus || 'completed';
   return fallbackStatus || 'running';
 };

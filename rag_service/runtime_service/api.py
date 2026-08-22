@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult
+from app.runtime.events import create_runtime_event
 from app.runtime.errors import RuntimeError
 from app.runtime.transport import (
     WIRE_VERSION,
@@ -88,18 +89,31 @@ class _QueueSink:
 
     async def emit(self, *args: Any) -> None:
         if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
-            event = args[0]
+            source = args[0]
+            event = create_runtime_event(
+                event_id=source.event_id,
+                run_id=source.run_id or self.run_id,
+                sequence=max(1, source.sequence),
+                kind=source.kind,
+                payload=source.payload,
+                attempt=source.attempt,
+                occurred_at=source.occurred_at,
+                trace_id=source.trace_id,
+                runtime_version=source.runtime_version,
+                source_metadata=source.source_metadata,
+                continuation=source.continuation,
+                contract_version=source.contract_version,
+            )
         else:
             kind = str(args[0]) if args else "runtime.event"
             payload = dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {}
             self.sequence += 1
-            event = AgentRuntimeEvent(
+            event = create_runtime_event(
                 event_id=str(payload.get("event_id") or f"{self.run_id}:{self.sequence}"),
                 run_id=self.run_id,
                 sequence=self.sequence,
                 kind=kind,
                 payload=payload,
-                terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
             )
         self.sequence = max(self.sequence, event.sequence)
         try:
@@ -348,16 +362,29 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         class DurableSink:
             async def emit(self, *args: Any) -> None:
                 if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
-                    event = args[0]
+                    source = args[0]
+                    event = create_runtime_event(
+                        event_id=source.event_id,
+                        run_id=source.run_id or run_id,
+                        sequence=max(1, source.sequence),
+                        kind=source.kind,
+                        payload=source.payload,
+                        attempt=source.attempt,
+                        occurred_at=source.occurred_at,
+                        trace_id=source.trace_id,
+                        runtime_version=source.runtime_version,
+                        source_metadata=source.source_metadata,
+                        continuation=source.continuation,
+                        contract_version=source.contract_version,
+                    )
                 else:
                     kind = str(args[0]) if args else "runtime.event"
-                    event = AgentRuntimeEvent(
+                    event = create_runtime_event(
                         event_id=f"{run_id}:{uuid.uuid4().hex}",
                         run_id=run_id,
-                        sequence=0,
+                        sequence=1,
                         kind=kind,
                         payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
-                        terminal=kind in {"run.completed", "run.failed", "run.cancelled", "run.terminal"},
                     )
                 await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
 
@@ -390,13 +417,12 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             if result is None:
                 result = AgentRuntimeResult(status="no_continuation", runtime_metadata={"continuation_available": False})
             result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
-            terminal_kind = "run.continuation_empty" if result.status == "no_continuation" else "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
-            terminal = AgentRuntimeEvent(
+            terminal_kind = "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
+            terminal = create_runtime_event(
                 event_id=f"{run_id}:terminal",
                 run_id=run_id,
-                sequence=0,
+                sequence=1,
                 kind=terminal_kind,
-                terminal=True,
                 payload={"status": result.status},
                 continuation=result.continuation,
             )
@@ -408,20 +434,20 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         except asyncio.TimeoutError:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
-            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
+            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": error.to_dict()})
             await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
             result = AgentRuntimeResult(status="failed", error=exc.to_dict())
-            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": exc.to_dict()})
+            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": exc.to_dict()})
             await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
         except Exception as exc:
             logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
             error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
-            terminal = AgentRuntimeEvent(event_id=f"{run_id}:terminal", run_id=run_id, sequence=0, kind="run.failed", terminal=True, payload={"error": error.to_dict()})
+            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": error.to_dict()})
             await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
             await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
         finally:

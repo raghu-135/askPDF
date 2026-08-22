@@ -675,6 +675,8 @@ class AgentWorkflowRepository:
                 payload_json=dict(getattr(event, "payload", None) or {}),
                 occurred_at=getattr(event, "occurred_at", None),
                 trace_id=getattr(event, "trace_id", None),
+                terminal=bool(getattr(event, "terminal", False)),
+                source_metadata_json=dict(getattr(event, "source_metadata", None) or {}),
             )
         finally:
             await session.close()
