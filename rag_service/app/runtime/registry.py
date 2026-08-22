@@ -52,6 +52,26 @@ class RuntimeRegistry:
     def register(self, adapter: AgentRuntimeAdapter) -> None:
         self._adapters[(adapter.framework, adapter.builder_id)] = adapter
 
+    @staticmethod
+    def deployment_id(adapter: AgentRuntimeAdapter) -> str:
+        return f"{adapter.framework}:{adapter.builder_id}"
+
+    def adapters(self) -> list[AgentRuntimeAdapter]:
+        """Return registered adapters in deterministic deployment order."""
+
+        self._ensure_defaults()
+        return [
+            self._adapters[key]
+            for key in sorted(self._adapters)
+        ]
+
+    def get_deployment(self, deployment_id: str) -> AgentRuntimeAdapter | None:
+        self._ensure_defaults()
+        for adapter in self._adapters.values():
+            if self.deployment_id(adapter) == deployment_id:
+                return adapter
+        return None
+
     def get(self, definition: AgentDefinition) -> AgentRuntimeAdapter:
         self._ensure_defaults()
         key = (definition.framework, definition.builder_id)

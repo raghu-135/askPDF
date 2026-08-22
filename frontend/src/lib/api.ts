@@ -1207,6 +1207,43 @@ export interface AgentRunSummary {
   [key: string]: any;
 }
 
+export type RuntimeSupportLevel = 'native' | 'emulated' | 'conditional' | 'unsupported';
+
+export interface RuntimeOperationDescriptor {
+  support: RuntimeSupportLevel;
+  enabled: boolean;
+  disabled_reason?: string | null;
+  modes?: string[];
+  semantics?: string | null;
+  confirmation?: string | null;
+  terminal_states?: string[];
+  preserves_run_id?: boolean | null;
+  preserves_session_id?: boolean | null;
+}
+
+export interface RuntimeCapabilities {
+  operations: Record<string, RuntimeOperationDescriptor>;
+  runtime_version?: string | null;
+  contract_version: number;
+}
+
+export interface AgentRuntimeCapabilityResponse {
+  resource: 'deployment' | 'definition' | 'run';
+  runtime_id: string;
+  framework: string;
+  builder_id: string;
+  available: boolean;
+  capabilities: RuntimeCapabilities | null;
+  definition_id?: string;
+  run_id?: string;
+  run_status?: string;
+  error?: Record<string, any>;
+}
+
+export interface AgentRuntimeListResponse {
+  agent_runtimes: AgentRuntimeCapabilityResponse[];
+}
+
 export async function listProjects(): Promise<{ projects: Project[] }> {
   const res = await fetch(`${API_BASE}/api/projects`);
   if (!res.ok) throw new Error(await res.text());
@@ -1577,10 +1614,32 @@ export async function listAgentWorkflows(): Promise<AgentWorkflowListResponse> {
   return res.json();
 }
 
+export async function listAgentRuntimes(): Promise<AgentRuntimeListResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-runtimes`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentRuntimeCapabilities(
+  runtimeId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-runtimes/${encodeURIComponent(runtimeId)}/capabilities`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function getAgentWorkflow(
   workflowId: string,
 ): Promise<AgentWorkflowResponse> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/${encodeURIComponent(workflowId)}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentWorkflowCapabilities(
+  workflowId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-workflows/${encodeURIComponent(workflowId)}/capabilities`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
@@ -1932,6 +1991,16 @@ export async function getAgentRun(runId: string, threadId: string): Promise<Agen
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.agent_run;
+}
+
+export async function getAgentRunCapabilities(
+  runId: string,
+  threadId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/capabilities?${params.toString()}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
 }
 
 export async function cancelChatAgentRun(

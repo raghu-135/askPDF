@@ -100,6 +100,19 @@ def test_registry_requires_concrete_framework_and_builder_identity():
         )
 
 
+def test_registry_exposes_deterministic_deployment_identity():
+    first = FakeAdapter()
+    second = SimpleNamespace(framework="langgraph", builder_id="graph")
+    registry = RuntimeRegistry(adapters=[first, second])
+
+    assert [registry.deployment_id(adapter) for adapter in registry.adapters()] == [
+        "fake:fake_builder",
+        "langgraph:graph",
+    ]
+    assert registry.get_deployment("fake:fake_builder") is first
+    assert registry.get_deployment("https://runtime.example") is None
+
+
 def test_neutral_runtime_modules_have_no_framework_imports():
     from pathlib import Path
 

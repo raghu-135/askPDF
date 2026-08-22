@@ -77,9 +77,19 @@ async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
     from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
     return await implementation(*args, **kwargs)
 from app.runtime.catalog import catalog_payload
+from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition
+from app.runtime.capability_resolver import (
+    apply_definition_policy,
+    capability_envelope,
+    deployment_id,
+    discover_adapter_capabilities,
+    resolve_capabilities,
+)
+from app.runtime.errors import RuntimeError
+from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -210,14 +220,7 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
 
 
 def _definition_for_workflow(workflow) -> AgentDefinition:
-    return AgentDefinition(
-        definition_id=str(workflow.id),
-        framework=str(getattr(workflow, "framework", None) or "langgraph"),
-        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
-        category=getattr(workflow, "category", None),
-        display_name=getattr(workflow, "name", None),
-        definition_version=str(getattr(workflow, "version", "")) or None,
-    )
+    return definition_from_workflow(workflow)
 
 
 def _provider_for_workflow(workflow):
@@ -477,6 +480,152 @@ async def list_agent_workflows():
         except Exception:
             continue
     return {"agent_workflows": [_workflow_payload(workflow) for workflow in valid_workflows]}
+
+
+@router.get("/agent-runtimes")
+async def list_agent_runtimes():
+    registry = get_runtime_registry()
+    deployments = []
+    for adapter in registry.adapters():
+        runtime_id = deployment_id(adapter)
+        definition = AgentDefinition(
+            definition_id=f"runtime:{runtime_id}",
+            framework=adapter.framework,
+            builder_id=adapter.builder_id,
+        )
+        capabilities, error = await discover_adapter_capabilities(adapter, definition)
+        deployments.append(
+            capability_envelope(
+                capabilities=capabilities,
+                resource="deployment",
+                runtime_id=runtime_id,
+                framework=adapter.framework,
+                builder_id=adapter.builder_id,
+                error=error,
+            )
+        )
+    return {"agent_runtimes": deployments}
+
+
+@router.get("/agent-runtimes/{runtime_id}/capabilities")
+async def get_agent_runtime_capabilities(runtime_id: str):
+    registry = get_runtime_registry()
+    adapter = registry.get_deployment(runtime_id)
+    if adapter is None:
+        raise HTTPException(status_code=404, detail="Agent runtime deployment not found")
+    definition = AgentDefinition(
+        definition_id=f"runtime:{runtime_id}",
+        framework=adapter.framework,
+        builder_id=adapter.builder_id,
+    )
+    capabilities, error = await discover_adapter_capabilities(adapter, definition)
+    return capability_envelope(
+        capabilities=capabilities,
+        resource="deployment",
+        runtime_id=runtime_id,
+        framework=adapter.framework,
+        builder_id=adapter.builder_id,
+        error=error,
+    )
+
+
+@router.get("/agent-workflows/{workflow_id}/capabilities")
+async def get_agent_workflow_capabilities(workflow_id: str):
+    repo = AgentWorkflowRepository()
+    await repo.seed_builtin_workflows()
+    include_custom = workflow_id not in builtin_workflow_keys()
+    workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
+    if (
+        not workflow
+        or not workflow_is_chat_eligible(workflow.spec_json)
+        or not _is_valid_workflow_for_service(workflow)
+    ):
+        raise HTTPException(status_code=404, detail="Agent workflow not found")
+
+    definition = definition_from_workflow(workflow)
+    registry = get_runtime_registry()
+    try:
+        adapter = registry.get(definition)
+    except RuntimeSelectionError as exc:
+        return capability_envelope(
+            capabilities=None,
+            resource="definition",
+            runtime_id=f"{definition.framework}:{definition.builder_id}",
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            definition_id=definition.definition_id,
+            error={"code": "runtime_selection_failed", "message": str(exc)},
+        )
+    capabilities, error = await discover_adapter_capabilities(adapter, definition)
+    if capabilities is not None:
+        capabilities = apply_definition_policy(capabilities, definition)
+    return capability_envelope(
+        capabilities=capabilities,
+        resource="definition",
+        runtime_id=deployment_id(adapter),
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        definition_id=definition.definition_id,
+        error=error,
+    )
+
+
+@router.get("/agent-runs/{run_id}/capabilities")
+async def get_agent_run_capabilities(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+):
+    if not await get_thread(thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    repo = AgentWorkflowRepository()
+    run = await repo.get_run(run_id)
+    if run is None or run.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
+    runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), dict) else {}
+    features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
+    definition = AgentDefinition(
+        definition_id=str(run.workflow_id),
+        framework=str(getattr(run, "framework", None) or "langgraph"),
+        builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+        category=getattr(run, "definition_category", None),
+        capabilities=dict(features),
+        runtime_version=str(runtime.get("version")) if runtime.get("version") else None,
+    )
+    registry = get_runtime_registry()
+    try:
+        adapter = registry.get(definition)
+        capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+        error = None
+    except RuntimeSelectionError as exc:
+        adapter = None
+        capabilities = None
+        error = {"code": "runtime_selection_failed", "message": str(exc)}
+    except RuntimeError as exc:
+        adapter = registry.get(definition)
+        capabilities = None
+        error = exc.to_dict()
+    except Exception as exc:
+        adapter = registry.get(definition)
+        capabilities = None
+        error = RuntimeError.from_exception(
+            exc,
+            code="runtime_capability_discovery_failed",
+            safe_message="Runtime capability discovery failed",
+            details={"framework": adapter.framework, "builder_id": adapter.builder_id},
+        ).to_dict()
+    return capability_envelope(
+        capabilities=capabilities,
+        resource="run",
+        runtime_id=deployment_id(adapter) if adapter is not None else f"{definition.framework}:{definition.builder_id}",
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        definition_id=definition.definition_id,
+        run_id=run.id,
+        run_status=run.status,
+        error=error,
+    )
 
 
 @router.get("/agent-workflows/builtins/{builtin_key}/source")
