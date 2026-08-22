@@ -79,7 +79,7 @@ async def reconcile_known_result(run: Any, result: Mapping[str, Any] | None, pro
 async def reconcile_request(run: Any, adapter: Any, request: AgentRuntimeRequest, projector: Any) -> Any:
     """Inspect an uncertain runtime continuation and preserve resumability."""
 
-    inspection = await adapter.inspect(request)
+    inspection = await adapter.inspect_state(request)
     if inspection.get("continuation_available"):
         return run
     projection = dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {})
@@ -132,7 +132,7 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         await reconcile_known_result(run, result, AgentRuntimeProjection())
         status = "projected"
     else:
-        inspection = await adapter.inspect(request)
+        inspection = await adapter.inspect_state(request)
         if inspection.get("continuation_available"):
             status = "preserved"
         else:

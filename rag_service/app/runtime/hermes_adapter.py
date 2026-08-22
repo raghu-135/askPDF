@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, ContinuationBinding, RuntimeApprovalResponse, RuntimeCapabilities, RuntimeSteeringInput
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeApprovalResponse, RuntimeCapabilities
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -44,9 +44,6 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         from app.runtime.transport import capabilities_from_dict
         return capabilities_from_dict(value.get("capabilities") or value)
 
-    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
-        raise RuntimeError("runtime_capability_unsupported", "Hermes resume is not supported by the pinned runs API")
-
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
         self._ensure_enabled()
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
@@ -72,14 +69,7 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         value = await self._json("POST", f"/v1/runs/{request.run_id}/approval", request=request, json={"request": request.to_dict(), "continuation": request.continuation.to_dict(), "response": response.to_dict()})
         return dict(value or {})
 
-    async def steer(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Mapping[str, Any]:
-        self._ensure_enabled()
-        if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
-            raise RuntimeError("runtime_binding_missing", "Hermes steering requires an upstream run binding")
-        value = await self._json("POST", f"/v1/runs/{request.run_id}/steer", request=request, json={"request": request.to_dict(), "continuation": request.continuation.to_dict(), "steering": steering.to_dict()})
-        return dict(value or {})
-
-    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._ensure_enabled()
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
             raise RuntimeError("runtime_binding_missing", "Hermes inspection requires an upstream run binding")
@@ -90,6 +80,3 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
             json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
         )
         return dict(value or {})
-
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        raise RuntimeError("runtime_capability_unsupported", "Hermes does not expose safe durable session deletion")

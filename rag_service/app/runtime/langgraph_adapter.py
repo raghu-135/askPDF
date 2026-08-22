@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
@@ -18,21 +18,14 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
-from app.runtime.errors import RuntimeError
-
 # Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
 # while the provider owns builder selection in Phase 6.
 from app.runtime.langgraph import checkpointing, router_runtime
 
 
-class LangGraphRuntimeAdapter:
+class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     framework = "langgraph"
     builder_id = "langgraph_graph"
-
-    async def project_task_result(self, **kwargs: Any) -> dict[str, Any]:
-        from app.runtime.langgraph.router_runtime import project_agent_task_result
-
-        return await project_agent_task_result(**kwargs)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
         return RuntimeCapabilities(
@@ -53,7 +46,7 @@ class LangGraphRuntimeAdapter:
                 RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.NATIVE, True,
                 ),
-                RuntimeOperationId.RUN_INSPECT.value: RuntimeOperationDescriptor(
+                RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.NATIVE, True,
                 ),
                 RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(
@@ -210,13 +203,7 @@ class LangGraphRuntimeAdapter:
 
         return await chat_cancellation.request_chat_run_cancel(request.run_id, thread_id=request.thread_id)
 
-    async def respond_to_approval(self, request: AgentRuntimeRequest, response: Any) -> Any:
-        raise RuntimeError("runtime_capability_unsupported", "LangGraph approvals are resolved through resume interrupts")
-
-    async def steer(self, request: AgentRuntimeRequest, steering: Any) -> Any:
-        raise RuntimeError("runtime_capability_unsupported", "LangGraph runtime steering is not supported")
-
-    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         continuation = request.continuation
         checkpoint_id = None
         if continuation is not None:

@@ -24,8 +24,10 @@ async def test_hermes_adapter_has_independent_identity():
 async def test_hermes_resume_is_explicitly_unsupported():
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
-    with pytest.raises(RuntimeError, match="resume"):
+    with pytest.raises(RuntimeError) as error:
         await adapter.resume(request, interrupt={}, context=None)
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.resume"
 
 
 def test_hermes_continuation_binding_is_opaque():
@@ -293,11 +295,13 @@ async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     binding = ContinuationBinding("hermes_session", {"session_id": "session-1", "upstream_run_id": "upstream-1"})
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent", continuation=binding)
     await adapter.respond_to_approval(request, RuntimeApprovalResponse("session", resolve_all=True))
-    await adapter.steer(request, RuntimeSteeringInput("Use the newer evidence"))
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("Use the newer evidence"))
     assert calls[0][1] == "/v1/runs/run-1/approval"
     assert calls[0][2]["response"] == {"choice": "session", "resolve_all": True}
-    assert calls[1][1] == "/v1/runs/run-1/steer"
-    assert calls[1][2]["steering"] == {"text": "Use the newer evidence"}
+    assert len(calls) == 1
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.steer_live"
 
 
 def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):
@@ -342,13 +346,15 @@ async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
     operations = (
         lambda: adapter.cancel(request),
-        lambda: adapter.inspect(request),
+        lambda: adapter.inspect_state(request),
         lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("once")),
-        lambda: adapter.steer(request, RuntimeSteeringInput("focus")),
     )
     for operation in operations:
         with pytest.raises(RuntimeError, match="binding"):
             await operation()
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("focus"))
+    assert error.value.code == "runtime_capability_unsupported"
 
 
 @pytest.mark.asyncio

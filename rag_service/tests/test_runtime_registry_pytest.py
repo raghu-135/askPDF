@@ -62,7 +62,7 @@ def test_default_registry_uses_external_adapter_without_importing_in_process(mon
         builder_id="langgraph_graph",
     )
     adapter = registry.get(definition)
-    assert adapter.__class__.__name__ == "HttpRuntimeAdapter"
+    assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter"
     assert adapter.framework == "langgraph"
 
 

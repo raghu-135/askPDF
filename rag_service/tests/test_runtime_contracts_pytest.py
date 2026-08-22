@@ -1,5 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+
+from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
+from app.runtime.errors import RuntimeError
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import (
     AgentRuntimeEvent,
@@ -65,12 +69,66 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
 
 
 def test_runtime_operation_descriptor_rejects_invalid_enabled_states():
-    import pytest
-
     with pytest.raises(ValueError):
         RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, True)
     with pytest.raises(ValueError):
         RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, False)
+
+
+@pytest.mark.asyncio
+async def test_optional_adapter_methods_have_structured_unsupported_defaults():
+    class MinimalAdapter(AgentRuntimeAdapter):
+        framework = "minimal"
+        builder_id = "minimal_builder"
+
+        async def capabilities(self, definition):
+            return RuntimeCapabilities()
+
+        async def validate(self, definition, spec, *, options=None):
+            return RuntimeValidationResult(valid=True)
+
+        async def start(self, request, *, context, event_sink=None):
+            return AgentRuntimeResult(status="completed")
+
+    adapter = MinimalAdapter()
+    request = AgentRuntimeRequest("run-1", "thread-1", "definition-1", "minimal", "minimal_builder")
+    operations = (
+        ("run.get", lambda: adapter.get_run(request)),
+        ("run.list", lambda: adapter.list_runs(thread_id="thread-1")),
+        ("run.wait", lambda: adapter.wait(request)),
+        ("run.stream_events", lambda: adapter.stream_events(request)),
+        ("run.resume", lambda: adapter.resume(request, interrupt={}, context=RuntimeExecutionContext())),
+        ("run.pause", lambda: adapter.pause(request)),
+        ("run.continue", lambda: adapter.continue_run(request, context=RuntimeExecutionContext())),
+        ("run.cancel", lambda: adapter.cancel(request)),
+        ("interrupt.respond", lambda: adapter.respond_to_interrupt(request, {})),
+        ("run.approval.respond", lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("once"))),
+        ("run.send_followup", lambda: adapter.send_followup(request, {})),
+        ("run.interrupt_with_input", lambda: adapter.interrupt_with_input(request, {})),
+        ("run.steer_live", lambda: adapter.steer_live(request, RuntimeSteeringInput("focus"))),
+        ("run.inspect_state", lambda: adapter.inspect_state(request)),
+        ("run.update_state", lambda: adapter.update_state(request, {})),
+        ("run.replay", lambda: adapter.replay(request, "checkpoint-1")),
+        ("run.fork", lambda: adapter.fork(request, "checkpoint-1")),
+        ("subagent.list", lambda: adapter.list_subagents(request)),
+        ("subagent.send", lambda: adapter.send_to_subagent(request, "subagent-1", {})),
+        ("subagent.cancel", lambda: adapter.cancel_subagent(request, "subagent-1")),
+        ("artifact.list", lambda: adapter.list_artifacts(request)),
+        ("run.continuation.cleanup", lambda: adapter.delete_continuation(ContinuationBinding("test", {}))),
+        ("trace.project", lambda: adapter.project_trace([], run_id="run-1")),
+    )
+    for operation_id, invoke in operations:
+        with pytest.raises(RuntimeError) as caught:
+            await invoke()
+        assert caught.value.code == "runtime_capability_unsupported"
+        assert caught.value.retryable is False
+        assert caught.value.details == {
+            "operation_id": operation_id,
+            "framework": "minimal",
+            "builder_id": "minimal_builder",
+            "support_level": "unsupported",
+            "explanation": caught.value.details["explanation"],
+        }
 
 
 def test_runtime_event_can_carry_an_opaque_continuation_binding():

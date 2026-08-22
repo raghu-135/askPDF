@@ -135,7 +135,7 @@ class AgentRunService:
             builder_id=definition.builder_id,
             continuation=continuation_from_run(run),
         )
-        return dict(await adapter.inspect(request))
+        return dict(await adapter.inspect_state(request))
 
     async def steer_agent_run(self, run: Any, *, text: str) -> Dict[str, Any]:
         definition = AgentDefinition(
@@ -148,7 +148,7 @@ class AgentRunService:
             framework=definition.framework, builder_id=definition.builder_id,
             task_id=getattr(run, "task_id", None), continuation=continuation_from_run(run),
         )
-        return dict(await adapter_for_definition(definition).steer(request, RuntimeSteeringInput(text)))
+        return dict(await adapter_for_definition(definition).steer_live(request, RuntimeSteeringInput(text)))
 
     async def run_thread_chat(
         self,

@@ -17,7 +17,7 @@ from app.runtime.contracts import (
     RuntimeArtifact,
     RuntimeTaskContext,
 )
-from app.runtime.adapter import AgentRuntimeEventSink
+from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink
 from app.runtime.errors import RuntimeError
 from app.runtime.builder import AgentBuilderProvider, BuilderCapabilities, BuilderCatalog
 from app.runtime.builder_registry import BuilderRegistry, BuilderSelectionError, builder_for_definition
@@ -39,6 +39,7 @@ __all__ = [
     "RuntimeArtifact",
     "RuntimeTaskContext",
     "AgentRuntimeEventSink",
+    "AgentRuntimeAdapter",
     "RuntimeError",
     "AgentBuilderProvider",
     "BuilderCapabilities",

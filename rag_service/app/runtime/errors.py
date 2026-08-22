@@ -22,6 +22,30 @@ class RuntimeError(Exception):
         return asdict(self)
 
     @classmethod
+    def capability_unsupported(
+        cls,
+        *,
+        operation_id: str,
+        framework: str,
+        builder_id: str,
+        explanation: str,
+    ) -> "RuntimeError":
+        """Build the stable error returned by unsupported adapter defaults."""
+
+        return cls(
+            code="runtime_capability_unsupported",
+            safe_message="The requested runtime operation is not supported",
+            retryable=False,
+            details={
+                "operation_id": operation_id,
+                "framework": framework,
+                "builder_id": builder_id,
+                "support_level": "unsupported",
+                "explanation": explanation,
+            },
+        )
+
+    @classmethod
     def from_exception(
         cls,
         exc: BaseException,

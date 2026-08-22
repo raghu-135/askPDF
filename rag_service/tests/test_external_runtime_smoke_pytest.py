@@ -46,7 +46,7 @@ async def _timeout_diagnostics(adapter: HttpLangGraphRuntimeAdapter, request: Ag
     diagnostics: dict[str, Any] = {}
     try:
         async with asyncio.timeout(5):
-            diagnostics["inspection"] = dict(await adapter.inspect(request))
+            diagnostics["inspection"] = dict(await adapter.inspect_state(request))
     except Exception as exc:
         diagnostics["inspection_error"] = type(exc).__name__
     try:

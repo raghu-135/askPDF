@@ -518,7 +518,7 @@ def create_app() -> FastAPI:
                     "run.events": {
                         "support": "native", "enabled": True,
                     },
-                    "run.inspect": {
+                    "run.inspect_state": {
                         "support": "native", "enabled": True,
                     },
                     "run.resume": {

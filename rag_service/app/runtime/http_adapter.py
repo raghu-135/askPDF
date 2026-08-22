@@ -15,16 +15,13 @@ from typing import Any, Mapping
 
 import httpx
 
-from app.runtime.adapter import AgentRuntimeEventSink, RuntimeExecutionContext
+from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
-    ContinuationBinding,
     RuntimeCapabilities,
-    RuntimeApprovalResponse,
-    RuntimeSteeringInput,
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
@@ -103,7 +100,7 @@ def _raise_structured_runtime_error(payload: Any) -> None:
     )
 
 
-class HttpRuntimeAdapter:
+class HttpRuntimeAdapter(AgentRuntimeAdapter):
     framework = "langgraph"
     builder_id = "langgraph_graph"
 
@@ -371,25 +368,20 @@ class HttpRuntimeAdapter:
         value = await self._json("POST", "/v1/runs/%s/cancel" % request.run_id, request=request, json={"request": request.to_dict()})
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
-    async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/approval" % request.run_id, request=request, json={"request": request.to_dict(), "response": response.to_dict()})
-        return dict(value) if isinstance(value, Mapping) else {"result": value}
-
-    async def steer(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/steer" % request.run_id, request=request, json={"request": request.to_dict(), "steering": steering.to_dict()})
-        return dict(value) if isinstance(value, Mapping) else {"result": value}
-
-    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self._json("POST", "/v1/runs/%s/inspect" % request.run_id, request=request, json={"request": request.to_dict()})
         return dict(value or {}) if isinstance(value, Mapping) else {}
-
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
-        return await self._json("DELETE", "/v1/continuations/%s" % binding_id, json={"continuation": continuation.to_dict()})
 
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
         return [event_from_dict(event) for event in events]
 
 
-# Compatibility name retained for existing LangGraph callers.
-HttpLangGraphRuntimeAdapter = HttpRuntimeAdapter
+class HttpLangGraphRuntimeAdapter(HttpRuntimeAdapter):
+    """LangGraph-specific HTTP operations layered on the neutral transport."""
+
+    framework = "langgraph"
+    builder_id = "langgraph_graph"
+
+    async def delete_continuation(self, continuation: Any) -> Any:
+        binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
+        return await self._json("DELETE", "/v1/continuations/%s" % binding_id, json={"continuation": continuation.to_dict()})

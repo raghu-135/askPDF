@@ -332,7 +332,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                     "run.events": {
                         "support": "native", "enabled": True,
                     },
-                    "run.inspect": {
+                    "run.inspect_state": {
                         "support": "native", "enabled": True,
                     },
                     "run.resume": {
@@ -625,7 +625,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         if request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         durable = await execution_store.get(run_id)
-        runtime_inspection = dict(await get_adapter().inspect(request))
+        runtime_inspection = dict(await get_adapter().inspect_state(request))
         if durable is not None:
             runtime_inspection.update({
                 "run_id": run_id,
