@@ -76,8 +76,7 @@ async def stream_builder_test(*args: Any, **kwargs: Any):
 async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
     from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
     return await implementation(*args, **kwargs)
-from app.runtime.catalog import catalog_payload
-from app.runtime.catalog import definition_from_workflow
+from app.runtime.catalog import catalog_payload, definition_from_workflow, definition_metadata_from_spec
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition, RuntimeOperationId
@@ -601,6 +600,7 @@ async def get_agent_run_capabilities(
         builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
         category=getattr(run, "definition_category", None),
         capabilities=dict(features),
+        definition_metadata=definition_metadata_from_spec(resolved_spec),
         runtime_version=str(runtime.get("version")) if runtime.get("version") else None,
     )
     registry = get_runtime_registry()

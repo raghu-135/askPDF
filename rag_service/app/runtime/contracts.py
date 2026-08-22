@@ -71,6 +71,7 @@ class AgentDefinition:
     category: Optional[str] = None
     display_name: Optional[str] = None
     capabilities: Mapping[str, Any] = field(default_factory=dict)
+    definition_metadata: Mapping[str, Any] = field(default_factory=dict)
     definition_version: Optional[str] = None
     contract_version: int = CONTRACT_VERSION
     runtime_version: Optional[str] = None
@@ -193,8 +194,47 @@ class RuntimeOperationDescriptor:
 
 
 @dataclass(frozen=True)
+class RuntimeFeatureDescriptor:
+    """Typed descriptive capability for runtime-provided harness features."""
+
+    support: RuntimeSupportLevel
+    enabled: bool
+    disabled_reason: Optional[str] = None
+    semantics: Optional[str] = None
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.support, RuntimeSupportLevel):
+            raise ValueError("support must be a RuntimeSupportLevel")
+        if not isinstance(self.enabled, bool):
+            raise TypeError("enabled must be a bool")
+        if self.enabled and self.disabled_reason is not None:
+            raise ValueError("enabled feature descriptors cannot have disabled_reason")
+        if not self.enabled and not self.disabled_reason:
+            raise ValueError("disabled feature descriptors require disabled_reason")
+        if self.support is RuntimeSupportLevel.UNSUPPORTED and self.enabled:
+            raise ValueError("unsupported feature descriptors cannot be enabled")
+        if self.semantics is not None and not isinstance(self.semantics, str):
+            raise ValueError("semantics must be a string or null")
+
+    def to_dict(self) -> Dict[str, Any]:
+        value: Dict[str, Any] = {
+            "support": self.support.value,
+            "enabled": self.enabled,
+            "disabled_reason": self.disabled_reason,
+        }
+        if self.semantics is not None:
+            value["semantics"] = self.semantics
+        if self.details:
+            value["details"] = dict(self.details)
+        return value
+
+
+@dataclass(frozen=True)
 class RuntimeCapabilities:
     operations: Mapping[str, RuntimeOperationDescriptor] = field(default_factory=dict)
+    features: Mapping[str, RuntimeFeatureDescriptor] = field(default_factory=dict)
+    deployment: Mapping[str, Any] = field(default_factory=dict)
     runtime_version: Optional[str] = None
     contract_version: int = CONTRACT_VERSION
 
@@ -204,6 +244,11 @@ class RuntimeCapabilities:
                 raise ValueError("capability operation identifiers must be non-empty strings")
             if not isinstance(descriptor, RuntimeOperationDescriptor):
                 raise TypeError("capability operations must contain RuntimeOperationDescriptor values")
+        for feature, descriptor in self.features.items():
+            if not isinstance(feature, str) or not feature.strip():
+                raise ValueError("capability feature identifiers must be non-empty strings")
+            if not isinstance(descriptor, RuntimeFeatureDescriptor):
+                raise TypeError("capability features must contain RuntimeFeatureDescriptor values")
 
     def to_dict(self) -> Dict[str, Any]:
         ordered_operations = sorted(
@@ -215,6 +260,11 @@ class RuntimeCapabilities:
                 operation.value if isinstance(operation, RuntimeOperationId) else str(operation): descriptor.to_dict()
                 for operation, descriptor in ordered_operations
             },
+            "features": {
+                str(feature): descriptor.to_dict()
+                for feature, descriptor in sorted(self.features.items(), key=lambda item: item[0])
+            },
+            "deployment": dict(self.deployment),
             "runtime_version": self.runtime_version,
             "contract_version": self.contract_version,
         }

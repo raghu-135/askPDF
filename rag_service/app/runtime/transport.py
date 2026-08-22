@@ -13,6 +13,7 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
     RuntimeSupportLevel,
     RuntimeApprovalResponse,
@@ -74,6 +75,7 @@ def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
         category=value.get("category"),
         display_name=value.get("display_name"),
         capabilities=dict(value.get("capabilities") or {}),
+        definition_metadata=dict(value.get("definition_metadata") or {}),
         definition_version=value.get("definition_version"),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),
         runtime_version=value.get("runtime_version"),
@@ -183,8 +185,43 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid runtime capability descriptor for {operation!r}") from exc
         operations[operation] = descriptor
+    raw_features = value.get("features") or {}
+    if not isinstance(raw_features, Mapping):
+        raise ValueError("runtime capabilities features must be an object")
+    features: dict[str, RuntimeFeatureDescriptor] = {}
+    for feature, raw_descriptor in raw_features.items():
+        if not isinstance(feature, str) or not feature.strip() or not isinstance(raw_descriptor, Mapping):
+            raise ValueError(f"invalid runtime feature descriptor for {feature!r}")
+        try:
+            support = RuntimeSupportLevel(raw_descriptor["support"])
+            enabled = raw_descriptor["enabled"]
+            disabled_reason = raw_descriptor.get("disabled_reason")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a bool")
+            if disabled_reason is not None and not isinstance(disabled_reason, str):
+                raise ValueError("disabled_reason must be a string or null")
+            semantics = raw_descriptor.get("semantics")
+            if semantics is not None and not isinstance(semantics, str):
+                raise ValueError("semantics must be a string or null")
+            details = raw_descriptor.get("details") or {}
+            if not isinstance(details, Mapping):
+                raise ValueError("details must be an object")
+            features[feature] = RuntimeFeatureDescriptor(
+                support=support,
+                enabled=enabled,
+                disabled_reason=disabled_reason,
+                semantics=semantics,
+                details=dict(details),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid runtime feature descriptor for {feature!r}") from exc
+    deployment = value.get("deployment") or {}
+    if not isinstance(deployment, Mapping):
+        raise ValueError("runtime capabilities deployment must be an object")
     return RuntimeCapabilities(
         operations=operations,
+        features=features,
+        deployment=dict(deployment),
         runtime_version=value.get("runtime_version"),
         contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )

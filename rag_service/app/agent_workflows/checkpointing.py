@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Sequence
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent_workflows.enums import AgentCheckpointerMode
+from app.runtime.langgraph_capabilities import checkpoint_database_url
 
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,7 @@ def _truthy_env(name: str, default: str = "") -> bool:
 
 
 def _postgres_checkpoint_url() -> str:
-    url = os.environ.get("AGENT_CHECKPOINT_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
-    if url.startswith("postgresql+asyncpg://"):
-        return "postgresql://" + url[len("postgresql+asyncpg://"):]
-    return url
+    return checkpoint_database_url(os.environ)
 
 
 def _memory_fallback_allowed() -> bool:

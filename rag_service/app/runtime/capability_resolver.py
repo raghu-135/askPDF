@@ -124,6 +124,7 @@ async def resolve_capabilities(
             RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
             RuntimeOperationId.INTERRUPT_RESPOND.value,
             RuntimeOperationId.RUN_INSPECT_STATE.value,
+            RuntimeOperationId.RUN_UPDATE_STATE.value,
             RuntimeOperationId.RUN_CONTINUE.value,
             RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
             RuntimeOperationId.TRACE_PROJECT.value,

@@ -1221,8 +1221,25 @@ export interface RuntimeOperationDescriptor {
   preserves_session_id?: boolean | null;
 }
 
+export interface RuntimeFeatureDescriptor {
+  support: RuntimeSupportLevel;
+  enabled: boolean;
+  disabled_reason?: string | null;
+  semantics?: string | null;
+  details?: Record<string, any>;
+}
+
 export interface RuntimeCapabilities {
   operations: Record<string, RuntimeOperationDescriptor>;
+  features?: Record<string, RuntimeFeatureDescriptor>;
+  deployment?: {
+    runtime_mode?: string;
+    checkpointer_backend?: string;
+    checkpoint_available?: boolean;
+    durable_persistence?: boolean;
+    runtime_available?: boolean;
+    configuration_error?: string | null;
+  };
   runtime_version?: string | null;
   contract_version: number;
 }

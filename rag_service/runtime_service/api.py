@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
+from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult
 from app.runtime.errors import RuntimeError
 from app.runtime.transport import (
     WIRE_VERSION,
@@ -24,6 +24,7 @@ from app.runtime.transport import (
     sse_encode,
     json_envelope,
 )
+from app.runtime.langgraph_capabilities import langgraph_capabilities
 from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
 from runtime_service.dependencies import (
     DependencyMonitor,
@@ -311,65 +312,18 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request) -> dict[str, Any]:
+        definition = AgentDefinition(
+            definition_id="runtime:langgraph:langgraph_graph",
+            framework="langgraph",
+            builder_id="langgraph_graph",
+            runtime_version=os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
+        )
         return json_envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
-            result={"capabilities": {
-                "operations": {
-                    "run.approval.respond": {
-                        "support": "unsupported", "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.cancel": {
-                        "support": "native", "enabled": True,
-                        "modes": ["interrupt"],
-                        "confirmation": "asynchronous",
-                        "terminal_states": ["cancelled", "interrupted"],
-                    },
-                    "run.continuation.cleanup": {
-                        "support": "native", "enabled": True,
-                    },
-                    "run.events": {
-                        "support": "native", "enabled": True,
-                    },
-                    "run.inspect_state": {
-                        "support": "native", "enabled": True,
-                    },
-                    "run.resume": {
-                        "support": "native", "enabled": True,
-                        "semantics": "resume_from_interrupt",
-                    },
-                    "run.pause": {
-                        "support": "conditional", "enabled": True,
-                        "semantics": "product_task_pause",
-                    },
-                    "run.retry": {
-                        "support": "conditional", "enabled": True,
-                        "semantics": "product_task_retry",
-                    },
-                    "run.start": {
-                        "support": "native", "enabled": True,
-                    },
-                    "run.steer_live": {
-                        "support": "unsupported", "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.send_followup": {
-                        "support": "unsupported", "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.interrupt_with_input": {
-                        "support": "unsupported", "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.update_state": {
-                        "support": "native", "enabled": True,
-                        "semantics": "checkpoint_boundary_update",
-                    },
-                },
-                "runtime_version": os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
-                "contract_version": WIRE_VERSION,
-            }},
+            result={"capabilities": langgraph_capabilities(
+                definition,
+            ).to_dict()},
             runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
         )
 

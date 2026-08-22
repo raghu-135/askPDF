@@ -2,6 +2,19 @@
 
 ## LangGraph runtime
 
+Capability discovery derives checkpoint-dependent operations from the deployment
+configuration. `ASKPDF_AGENT_CHECKPOINTER=memory` supports checkpoint operations
+only within the current process and reports `durable_persistence=false`.
+`ASKPDF_AGENT_CHECKPOINTER=postgres` reports durable checkpoint capabilities only
+when the Postgres saver and checkpoint database URL are configured; invalid
+Postgres configuration does not downgrade to memory in capability responses.
+
+The built-in `deep_research_agent` remains a LangGraph deployment. Its capability
+response additionally describes planning, parallel dispatch, artifacts, memory,
+tools, and product-managed subagent orchestration from the frozen workflow
+definition. Runtime subagent control operations remain unsupported until a
+runtime adapter implements them.
+
 The runtime execution store uses PostgreSQL and assigns one owner, lease, and
 fencing token to every active execution. A worker that loses its lease must
 stop and may not append events or finalize a run.

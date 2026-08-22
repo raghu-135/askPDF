@@ -11,14 +11,12 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
-    RuntimeOperationDescriptor,
-    RuntimeOperationId,
-    RuntimeSupportLevel,
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
 from app.runtime.errors import RuntimeError
+from app.runtime.langgraph_capabilities import langgraph_capabilities
 # Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
 # while the provider owns builder selection in Phase 6.
 from app.runtime.langgraph import checkpointing, router_runtime
@@ -29,63 +27,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     builder_id = "langgraph_graph"
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        task_runtime = bool(definition.capabilities.get("supports_long_running_tasks"))
-        return RuntimeCapabilities(
-            operations={
-                RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                ),
-                RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                    semantics="resume_from_interrupt",
-                ),
-                RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                    modes=("interrupt",),
-                    confirmation="asynchronous",
-                    terminal_states=("cancelled", "interrupted"),
-                ),
-                RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.CONDITIONAL, task_runtime,
-                    semantics="product_task_pause",
-                    disabled_reason=None if task_runtime else "definition_not_task_runtime",
-                ),
-                RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.CONDITIONAL, task_runtime,
-                    semantics="product_task_retry",
-                    disabled_reason=None if task_runtime else "definition_not_task_runtime",
-                ),
-                RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                ),
-                RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                ),
-                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.UNSUPPORTED, False,
-                    disabled_reason="runtime_capability_unsupported",
-                ),
-                RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.UNSUPPORTED, False,
-                    disabled_reason="runtime_capability_unsupported",
-                ),
-                RuntimeOperationId.RUN_SEND_FOLLOWUP.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.UNSUPPORTED, False,
-                    disabled_reason="runtime_capability_unsupported",
-                ),
-                RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.UNSUPPORTED, False,
-                    disabled_reason="runtime_capability_unsupported",
-                ),
-                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                    semantics="checkpoint_boundary_update",
-                ),
-                RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.NATIVE, True,
-                ),
-            },
-        )
+        return langgraph_capabilities(definition)
 
     async def validate(
         self,
