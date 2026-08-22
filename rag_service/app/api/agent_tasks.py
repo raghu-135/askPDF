@@ -15,7 +15,6 @@ from app.agent_workflows.service import AgentRunService
 from app.db import get_thread
 from app.models.deep_research import (
     AgentTaskCommandRequest,
-    AgentTaskSteerRequest,
     AgentTaskCreateRequest,
     DEEP_RESEARCH_ENGINE_WORKFLOWS,
     DEEP_RESEARCH_WORKFLOW_ID,
@@ -88,18 +87,6 @@ async def get_deep_research_capabilities():
                 "enabled": hermes_enabled,
                 "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["hermes"],
                 "max_context_length": _hermes_context_length(required=False),
-                "operations": {
-                    "run.approval.respond": {
-                        "support": "native",
-                        "enabled": hermes_enabled,
-                        "disabled_reason": None if hermes_enabled else "runtime_unavailable",
-                    },
-                    "run.steer_live": {
-                        "support": "unsupported",
-                        "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                },
             },
         },
     }
@@ -627,35 +614,6 @@ async def delete_agent_task(
     if not duplicate:
         background_tasks.add_task(cleanup_deleted_task, task.id)
     return {"task_id": task.id, "hidden": True, "command_id": command.id, "duplicate": duplicate}
-
-
-@router.post("/agent-tasks/{task_id}/steer")
-async def steer_agent_task(
-    task_id: str,
-    req: AgentTaskSteerRequest,
-    thread_id: str = Query(min_length=1),
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
-):
-    task = await _owned_task(task_id, thread_id)
-    run = await repository.get_task_run(task.id)
-    if run is None or getattr(run, "framework", None) != "hermes" or run.status != "running":
-        raise HTTPException(status_code=409, detail={"code": "task_steering_unavailable"})
-    try:
-        task, command, duplicate = await repository.record_steering_command(
-            task.id, text=req.text.strip(), idempotency_key=idempotency_key,
-            expected_version=req.expected_version,
-        )
-        if duplicate:
-            return {"task": _task_payload(task), "command_id": command.id, "duplicate": True}
-        try:
-            result = await AgentRunService().steer_agent_run(run, text=req.text.strip())
-        except Exception as exc:
-            await repository.complete_control_command(command.id, result={"error": type(exc).__name__}, rejected=True)
-            raise
-        await repository.complete_control_command(command.id, result=result)
-        return {"task": _task_payload(task), "command_id": command.id, "duplicate": False}
-    except repository.AgentTaskConflict as exc:
-        raise _conflict(exc) from exc
 
 
 @router.get("/agent-tasks/{task_id}/events")

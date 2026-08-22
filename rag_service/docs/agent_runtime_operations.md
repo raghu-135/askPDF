@@ -38,13 +38,13 @@ an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,
 The upstream contract is pinned to NousResearch/hermes-agent commit
 `bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894`. The verified surface is
 `POST /v1/runs`, `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events`, and the
-run-scoped `/approval`, `/steer`, and `/stop` operations. askPDF sends the user
+run-scoped `/approval` and `/stop` operations. askPDF sends the user
 input at top level, maps `system_prompt` to `instructions`, and captures the
 Hermes `session_id` from run status into its opaque continuation binding.
 
 Supported upstream events are `message.delta`, `tool.started`,
 `tool.completed`, `reasoning.available`, `approval.request`,
-`approval.responded`, `run.steered`, `run.completed`, `run.failed`,
+`approval.responded`, `run.completed`, `run.failed`,
 `run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown events are
 retained as bounded `runtime.event` records for forward compatibility.
 

@@ -204,8 +204,6 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
         return "approval.request"
     if name == "approval.responded":
         return "approval.responded"
-    if name == "run.steered":
-        return "run.steered"
     if name == "run.completed":
         return "run.completed"
     if name == "run.failed":
@@ -529,6 +527,18 @@ def create_app() -> FastAPI:
                         "support": "native", "enabled": True,
                     },
                     "run.steer_live": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.send_followup": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.interrupt_with_input": {
+                        "support": "unsupported", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
+                    "run.update_state": {
                         "support": "unsupported", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
@@ -1259,14 +1269,6 @@ def create_app() -> FastAPI:
         if choice not in {"once", "session", "always", "deny"}:
             raise HTTPException(status_code=400, detail=_error("invalid_approval_choice", "Approval choice must be once, session, always, or deny"))
         return await _forward_control(run_id, request, payload, "approval", {"choice": choice, "resolve_all": bool(response.get("resolve_all"))})
-
-    @app.post("/v1/runs/{run_id}/steer")
-    async def steer(run_id: str, request: Request, payload: Mapping[str, Any]) -> dict[str, Any]:
-        steering = payload.get("steering") or {}
-        text = str(steering.get("text") or "").strip()
-        if not text:
-            raise HTTPException(status_code=400, detail=_error("invalid_steer_input", "Steering text is required"))
-        return await _forward_control(run_id, request, payload, "steer", {"input": text})
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, request: Request) -> dict[str, Any]:

@@ -12,6 +12,6 @@
   "failure": [{"event": "run.failed", "error": "deterministic upstream failure"}],
   "cancelled": [{"event": "run.cancelled"}],
   "approval": [{"event": "approval.request", "command": "safe deterministic command", "choices": ["once", "session", "always", "deny"]}, {"event": "run.completed", "output": "approved"}],
-  "steering": [{"event": "run.steered", "accepted": true}, {"event": "run.completed", "output": "steered"}],
+  "completion": [{"event": "run.completed", "output": "completed"}],
   "unknown": [{"event": "future.event", "value": "preserved"}, {"event": "run.completed", "output": "future-safe"}]
 }

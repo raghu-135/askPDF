@@ -46,6 +46,29 @@ class RuntimeError(Exception):
         )
 
     @classmethod
+    def capability_unavailable(
+        cls,
+        *,
+        operation_id: str,
+        framework: str,
+        builder_id: str,
+        support_level: str,
+        disabled_reason: str,
+    ) -> "RuntimeError":
+        return cls(
+            code="runtime_capability_unavailable",
+            safe_message="The requested runtime operation is unavailable for this run",
+            retryable=False,
+            details={
+                "operation_id": operation_id,
+                "framework": framework,
+                "builder_id": builder_id,
+                "support_level": support_level,
+                "disabled_reason": disabled_reason,
+            },
+        )
+
+    @classmethod
     def from_exception(
         cls,
         exc: BaseException,

@@ -18,6 +18,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
+from app.runtime.errors import RuntimeError
 # Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
 # while the provider owns builder selection in Phase 6.
 from app.runtime.langgraph import checkpointing, router_runtime
@@ -56,6 +57,18 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.UNSUPPORTED, False,
                     disabled_reason="runtime_capability_unsupported",
+                ),
+                RuntimeOperationId.RUN_SEND_FOLLOWUP.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.UNSUPPORTED, False,
+                    disabled_reason="runtime_capability_unsupported",
+                ),
+                RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.UNSUPPORTED, False,
+                    disabled_reason="runtime_capability_unsupported",
+                ),
+                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(
+                    RuntimeSupportLevel.NATIVE, True,
+                    semantics="checkpoint_boundary_update",
                 ),
                 RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.NATIVE, True,
@@ -202,6 +215,37 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         from app.agent_workflows import chat_cancellation
 
         return await chat_cancellation.request_chat_run_cancel(request.run_id, thread_id=request.thread_id)
+
+    async def update_state(
+        self,
+        request: AgentRuntimeRequest,
+        update: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        from app.runtime.langgraph.compiler import WorkflowCompiler
+
+        checkpoint_thread_id = str(
+            (request.continuation.payload.get("checkpoint_thread_id") if request.continuation else None)
+            or ""
+        ).strip()
+        if not checkpoint_thread_id:
+            raise RuntimeError("runtime_binding_missing", "LangGraph state updates require a checkpoint binding")
+        resolved_spec = request.options.get("resolved_spec")
+        if not isinstance(resolved_spec, Mapping) or not resolved_spec:
+            raise RuntimeError("runtime_state_unavailable", "LangGraph state updates require the resolved workflow state")
+
+        async with checkpointing.open_agent_checkpointer() as checkpointer:
+            app = WorkflowCompiler().compile(dict(resolved_spec), checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": checkpoint_thread_id}}
+            snapshot = await app.aget_state(config)
+            if not getattr(snapshot, "values", None):
+                raise RuntimeError("runtime_state_unavailable", "LangGraph checkpoint state is unavailable")
+            updated_config = await app.aupdate_state(config, dict(update))
+            updated = await app.aget_state(updated_config)
+            return {
+                "status": "updated",
+                "checkpoint_thread_id": checkpoint_thread_id,
+                "state": dict(getattr(updated, "values", None) or {}),
+            }
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         continuation = request.continuation

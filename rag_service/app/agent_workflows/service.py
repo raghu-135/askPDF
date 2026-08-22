@@ -19,9 +19,10 @@ from app.agent_workflows.workflow_runtime import (
 )
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.catalog import definition_from_workflow
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeSteeringInput
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
+from app.runtime.capability_resolver import require_capability
 from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
-from app.runtime.registry import adapter_for_definition
+from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
@@ -137,18 +138,49 @@ class AgentRunService:
         )
         return dict(await adapter.inspect_state(request))
 
-    async def steer_agent_run(self, run: Any, *, text: str) -> Dict[str, Any]:
+    async def operate_agent_run(
+        self,
+        run: Any,
+        operation: RuntimeOperationId,
+        *,
+        input: Optional[Dict[str, Any]] = None,
+        update: Optional[Dict[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
         definition = AgentDefinition(
             definition_id=str(run.workflow_id),
             framework=str(getattr(run, "framework", None) or "langgraph"),
             builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+            category=getattr(run, "definition_category", None),
+            capabilities=dict(
+                ((run.resolved_spec_json or {}).get("runtime") or {}).get("features") or {}
+                if isinstance(getattr(run, "resolved_spec_json", None), dict)
+                else {}
+            ),
         )
+        adapter = adapter_for_definition(definition)
+        await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
         request = AgentRuntimeRequest(
             run_id=run.id, thread_id=run.thread_id, definition_id=definition.definition_id,
             framework=definition.framework, builder_id=definition.builder_id,
+            input=dict(input or {}),
+            options={
+                "resolved_spec": dict(run.resolved_spec_json or {})
+                if isinstance(getattr(run, "resolved_spec_json", None), dict) else {},
+                "idempotency_key": idempotency_key,
+            },
             task_id=getattr(run, "task_id", None), continuation=continuation_from_run(run),
         )
-        return dict(await adapter_for_definition(definition).steer_live(request, RuntimeSteeringInput(text)))
+        if operation is RuntimeOperationId.RUN_SEND_FOLLOWUP:
+            return dict(await adapter.send_followup(request, dict(input or {})))
+        if operation is RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT:
+            return dict(await adapter.interrupt_with_input(request, dict(input or {})))
+        if operation is RuntimeOperationId.RUN_STEER_LIVE:
+            text = str((input or {}).get("text") or "").strip()
+            return dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
+        if operation is RuntimeOperationId.RUN_UPDATE_STATE:
+            return dict(await adapter.update_state(request, dict(update or {})))
+        raise ValueError(f"Unsupported runtime operation: {operation}")
 
     async def run_thread_chat(
         self,

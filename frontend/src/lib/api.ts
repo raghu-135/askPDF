@@ -2237,13 +2237,35 @@ export async function commandAgentTask(taskId: string, threadId: string, action:
   return (await response.json()).task;
 }
 
-export async function steerAgentTask(taskId: string, threadId: string, text: string, version: number): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/steer?${taskQuery(threadId)}`, {
+async function operateAgentRun(
+  runId: string,
+  threadId: string,
+  path: string,
+  body: Record<string, any>,
+): Promise<Record<string, any>> {
+  const response = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-    body: JSON.stringify({ expected_version: version, text }),
+    body: JSON.stringify({ thread_id: threadId, ...body }),
   });
   if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function sendAgentRunFollowup(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'followups', { input: { text } });
+}
+
+export async function interruptAgentRunWithInput(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'interrupt-with-input', { input: { text } });
+}
+
+export async function steerAgentRunLive(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'steer-live', { input: { text } });
+}
+
+export async function updateAgentRunState(runId: string, threadId: string, update: Record<string, any>): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'state-updates', { update });
 }
 
 export async function getAgentTaskTodos(taskId: string, threadId: string): Promise<AgentTaskTodo[]> {

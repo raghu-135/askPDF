@@ -80,7 +80,7 @@ from app.runtime.catalog import catalog_payload
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition
+from app.runtime.contracts import AgentDefinition, RuntimeOperationId
 from app.runtime.capability_resolver import (
     apply_definition_policy,
     capability_envelope,
@@ -156,6 +156,16 @@ class AgentRunResumeRequest(BaseModel):
 
 class AgentRunCancelRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
+
+
+class AgentRunInputOperationRequest(BaseModel):
+    thread_id: str = Field(..., min_length=1)
+    input: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunStateUpdateRequest(BaseModel):
+    thread_id: str = Field(..., min_length=1)
+    update: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BuilderTransientMessage(BaseModel):
@@ -625,6 +635,113 @@ async def get_agent_run_capabilities(
         run_id=run.id,
         run_status=run.status,
         error=error,
+    )
+
+
+async def _owned_run_for_operation(run_id: str, thread_id: str):
+    if not await get_thread(thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    run = await AgentWorkflowRepository().get_run(run_id)
+    if run is None or run.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return run
+
+
+async def _execute_run_operation(
+    run_id: str,
+    operation: RuntimeOperationId,
+    *,
+    thread_id: str,
+    input: Optional[Dict[str, Any]] = None,
+    update: Optional[Dict[str, Any]] = None,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    if operation in {
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
+        RuntimeOperationId.RUN_STEER_LIVE,
+    } and not str((input or {}).get("text") or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_runtime_input",
+                "safe_message": "Input text must be a non-empty string",
+                "retryable": False,
+            },
+        )
+    run = await _owned_run_for_operation(run_id, thread_id)
+    try:
+        result = await AgentRunService().operate_agent_run(
+            run,
+            operation,
+            input=input,
+            update=update,
+            idempotency_key=idempotency_key,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    return {"run_id": run.id, "operation": operation.value, "result": result}
+
+
+@router.post("/agent-runs/{run_id}/followups")
+async def send_agent_run_followup(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/interrupt-with-input")
+async def interrupt_agent_run_with_input(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/steer-live")
+async def steer_agent_run_live(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_STEER_LIVE,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/state-updates")
+async def update_agent_run_state(
+    run_id: str,
+    req: AgentRunStateUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    if not req.update:
+        raise HTTPException(status_code=422, detail={"code": "invalid_state_update", "safe_message": "State update must be a non-empty object", "retryable": False})
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        thread_id=req.thread_id,
+        update=req.update,
+        idempotency_key=idempotency_key,
     )
 
 

@@ -18,18 +18,23 @@ import {
   downloadAgentTaskArtifact,
   getDeepResearchCapabilities,
   getAgentRun,
+  getAgentRunCapabilities,
   getAgentTask,
   getAgentTaskRuns,
   getAgentTaskTodos,
   getAgentTaskTimeline,
   listAgentTasks,
   resumeAgentRun,
-  steerAgentTask,
+  sendAgentRunFollowup,
+  interruptAgentRunWithInput,
+  steerAgentRunLive,
+  updateAgentRunState,
   type AgentTaskRun,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
   type AgentRunResumeAction,
+  type AgentRuntimeCapabilityResponse,
   type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
@@ -242,6 +247,8 @@ export default function DeepResearchTaskPanel({
   const [hermesEnabled, setHermesEnabled] = useState(false);
   const [hermesMaxContext, setHermesMaxContext] = useState<number | null>(null);
   const [capabilityError, setCapabilityError] = useState('');
+  const [runCapabilities, setRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
+  const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
@@ -325,6 +332,18 @@ export default function DeepResearchTaskPanel({
     if (!selectedTaskId || !selectedRun) { setItems([]); return; }
     void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => { setTask(value.task); setItems(value.items); }).catch((value) => setError(String(value)));
   }, [selectedRun?.id, selectedTaskId, threadId]);
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedRun) {
+      setRunCapabilities(null);
+      return () => { active = false; };
+    }
+    void getAgentRunCapabilities(selectedRun.id, threadId)
+      .then((value) => { if (active) setRunCapabilities(value); })
+      .catch((value) => { if (active) setCapabilityError(String(value)); });
+    return () => { active = false; };
+  }, [selectedRun?.id, selectedRun?.status, threadId]);
 
   useEffect(() => {
     if (!selectedTaskId || !selectedRun) return;
@@ -429,6 +448,21 @@ export default function DeepResearchTaskPanel({
   });
   useEffect(() => setDecisionError(''), [pendingInterrupt?.interrupt_id]);
 
+  const interactionDescriptors = useMemo(() => {
+    const operations = runCapabilities?.capabilities?.operations || {};
+    return [
+      { id: 'run.send_followup' as const, label: 'Follow up', placeholder: 'Send input after the current run finishes…' },
+      { id: 'run.interrupt_with_input' as const, label: 'Interrupt with input', placeholder: 'Interrupt the run and continue with new input…' },
+      { id: 'run.steer_live' as const, label: 'Steer live', placeholder: 'Guide the active run without replacing it…' },
+    ].filter((item) => operations[item.id]?.enabled);
+  }, [runCapabilities]);
+  const stateUpdateEnabled = Boolean(runCapabilities?.capabilities?.operations['run.update_state']?.enabled);
+  useEffect(() => {
+    if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
+      setInteractionOperation(interactionDescriptors[0].id);
+    }
+  }, [interactionDescriptors, interactionOperation]);
+
   return <ConversationPanelTemplate
     sx={{ p: 1 }}
     header={<ConversationHeader
@@ -505,13 +539,37 @@ export default function DeepResearchTaskPanel({
     /> : undefined}
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-    </Box> : frozenEngine === 'hermes' && task.status === 'running' ? <Box sx={{ pb: 1 }}>
-      <ConversationComposer placeholder="Steer the active Hermes run…" busy={busy} onSubmit={async (value) => {
-        setBusy(true); setError('');
-        try { await steerAgentTask(task.id, threadId, value, task.version); await refresh(); }
-        catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-        finally { setBusy(false); }
-      }} />
+    </Box> : interactionDescriptors.length > 0 || stateUpdateEnabled ? <Box sx={{ pb: 1 }}>
+      <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+        {interactionDescriptors.map((operation) => <Button
+          key={operation.id}
+          size="small"
+          variant={interactionOperation === operation.id ? 'contained' : 'outlined'}
+          onClick={() => setInteractionOperation(operation.id)}
+        >{operation.label}</Button>)}
+        {stateUpdateEnabled && <Button size="small" variant="outlined" onClick={() => {
+          const raw = window.prompt('State update JSON');
+          if (!raw || !selectedRun) return;
+          try {
+            void updateAgentRunState(selectedRun.id, threadId, JSON.parse(raw)).then(() => refresh()).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+          } catch { setError('State update must be valid JSON.'); }
+        }}>Update state</Button>}
+      </Stack>
+      {interactionDescriptors.length > 0 && <ConversationComposer
+          placeholder={interactionDescriptors.find((operation) => operation.id === interactionOperation)?.placeholder || 'Send runtime input…'}
+          busy={busy}
+          onSubmit={async (value) => {
+            if (!selectedRun) return;
+            setBusy(true); setError('');
+            try {
+              if (interactionOperation === 'run.send_followup') await sendAgentRunFollowup(selectedRun.id, threadId, value);
+              else if (interactionOperation === 'run.interrupt_with_input') await interruptAgentRunWithInput(selectedRun.id, threadId, value);
+              else await steerAgentRunLive(selectedRun.id, threadId, value);
+              await refresh();
+            } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+            finally { setBusy(false); }
+          }}
+        />}
     </Box> : <Box sx={{ px: 2, py: 1 }}><Typography variant="body2" color="text.secondary">
       {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
     </Typography></Box>}

@@ -30,6 +30,7 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_SEND_FOLLOWUP.value,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value,
     RuntimeOperationId.RUN_STEER_LIVE.value,
+    RuntimeOperationId.RUN_UPDATE_STATE.value,
     RuntimeOperationId.RUN_CONTINUE.value,
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
 })
@@ -116,6 +117,36 @@ async def resolve_capabilities(
                 operations[operation] = _disabled(operations[operation], "runtime_binding_unavailable")
 
     return replace(capabilities, operations=operations)
+
+
+async def require_capability(
+    definition: AgentDefinition,
+    operation: RuntimeOperationId | str,
+    *,
+    registry: RuntimeRegistry,
+    run: Any | None = None,
+) -> RuntimeOperationDescriptor:
+    """Resolve one operation and fail before an adapter call when unavailable."""
+
+    operation_id = operation.value if isinstance(operation, RuntimeOperationId) else str(operation)
+    capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+    descriptor = capabilities.operations.get(operation_id)
+    if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
+        raise RuntimeError.capability_unsupported(
+            operation_id=operation_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            explanation="The runtime does not provide this operation",
+        )
+    if not descriptor.enabled:
+        raise RuntimeError.capability_unavailable(
+            operation_id=operation_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            support_level=descriptor.support.value,
+            disabled_reason=str(descriptor.disabled_reason or "runtime_capability_unavailable"),
+        )
+    return descriptor
 
 
 def capability_envelope(

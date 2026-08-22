@@ -372,6 +372,15 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         value = await self._json("POST", "/v1/runs/%s/inspect" % request.run_id, request=request, json={"request": request.to_dict()})
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
+    async def update_state(self, request: AgentRuntimeRequest, update: Mapping[str, Any]) -> Mapping[str, Any]:
+        value = await self._json(
+            "POST",
+            "/v1/runs/%s/state" % request.run_id,
+            request=request,
+            json={"request": request.to_dict(), "update": dict(update)},
+        )
+        return dict(value or {}) if isinstance(value, Mapping) else {}
+
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
         return [event_from_dict(event) for event in events]
 

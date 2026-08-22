@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.capability_resolver import resolve_capabilities
+from app.runtime.capability_resolver import require_capability, resolve_capabilities
 from app.runtime.contracts import (
     AgentDefinition,
     RuntimeCapabilities,
@@ -10,6 +10,7 @@ from app.runtime.contracts import (
     RuntimeOperationDescriptor,
     RuntimeSupportLevel,
 )
+from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
 
 
@@ -83,3 +84,16 @@ async def test_terminal_run_disables_active_controls_without_mutating_source():
     assert cancel.disabled_reason == "run_terminal"
     assert run.status == "completed"
     assert run.pending_interrupt_json == {"interrupt_id": "i-1"}
+
+
+@pytest.mark.asyncio
+async def test_require_capability_rejects_unsupported_operation_before_adapter_call():
+    with pytest.raises(RuntimeError) as caught:
+        await require_capability(
+            _definition(),
+            RuntimeOperationId.RUN_STEER_LIVE,
+            registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        )
+
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert caught.value.details["operation_id"] == "run.steer_live"

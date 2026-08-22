@@ -60,7 +60,7 @@ def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "hermes" / "run_events.json").read_text())
     assert fixture["hermes_revision"] == HERMES_REVISION
     upstream_events = {event["event"] for values in fixture.values() if isinstance(values, list) for event in values}
-    assert {"message.delta", "tool.started", "tool.completed", "reasoning.available", "approval.request", "run.completed", "run.failed", "run.cancelled", "subagent.start", "subagent.complete", "run.steered", "future.event"} <= upstream_events
+    assert {"message.delta", "tool.started", "tool.completed", "reasoning.available", "approval.request", "run.completed", "run.failed", "run.cancelled", "subagent.start", "subagent.complete", "future.event"} <= upstream_events
 
 
 def test_hermes_tool_events_are_normalized_and_argument_values_are_removed():

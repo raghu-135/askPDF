@@ -13,12 +13,12 @@ HERMES_EXTERNAL_PROFILE = "askpdf-deep-external"
 HERMES_PROFILE_NAMES = frozenset({HERMES_OFFLINE_PROFILE, HERMES_EXTERNAL_PROFILE})
 HERMES_RUN_EVENTS = frozenset({
     "message.delta", "tool.started", "tool.completed", "reasoning.available",
-    "approval.request", "approval.responded", "run.steered", "run.completed",
+    "approval.request", "approval.responded", "run.completed",
     "run.failed", "run.cancelled", "subagent.start", "subagent.complete",
 })
 HERMES_TERMINAL_EVENTS = frozenset({"run.completed", "run.failed", "run.cancelled"})
 HERMES_APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
-HERMES_CONTROLS = frozenset({"stop", "approval", "steer"})
+HERMES_CONTROLS = frozenset({"stop", "approval"})
 HERMES_KEYLESS_PROVIDERS = frozenset({"lmstudio"})
 
 
