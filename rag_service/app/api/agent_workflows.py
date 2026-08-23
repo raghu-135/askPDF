@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Mapping, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -32,6 +32,7 @@ from app.agent_workflows.workflow_runtime import (
 from app.agent_workflows.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
+    ChatRunCancelResult,
 )
 from app.agent_workflows.trace_details import detail_manifest
 BUILDER_TEST_RUN_KIND = "builder_test"
@@ -106,7 +107,14 @@ router = APIRouter(tags=["agent-workflows"])
 async def request_chat_run_cancel(run_id: str, *, thread_id: str):
     """Compatibility seam for API callers; cancellation routes through the adapter registry."""
 
-    return await AgentRunService().cancel_agent_run(run_id, thread_id=thread_id)
+    result = await AgentRunService().cancel_agent_run(run_id, thread_id=thread_id)
+    if isinstance(result, Mapping):
+        return ChatRunCancelResult(
+            status=str(result["status"]),
+            run_id=result.get("run_id"),
+            run_status=result.get("run_status"),
+        )
+    return result
 
 
 async def _require_ready_thread(thread_id: str):

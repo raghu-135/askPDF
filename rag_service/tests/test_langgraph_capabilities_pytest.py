@@ -7,7 +7,7 @@ from app.runtime.langgraph_capabilities import (
     langgraph_capabilities,
 )
 from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
-from app.runtime.capability_resolver import resolve_capabilities
+from app.runtime.capability_resolver import capabilities_for_definition, resolve_capabilities
 from app.runtime.registry import RuntimeRegistry
 from runtime_service.api import create_app
 
@@ -120,6 +120,39 @@ def test_deep_research_profile_derives_features_but_keeps_runtime_subagent_contr
         descriptor = capabilities.operations[operation.value]
         assert descriptor.support is RuntimeSupportLevel.UNSUPPORTED
         assert descriptor.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_definition_resolver_uses_deep_definition_features_and_task_operations(monkeypatch):
+    definition = _definition(
+        definition_id="deep_research_agent",
+        category="deep",
+        capabilities={
+            "supports_replans": True,
+            "supports_parallel_dispatch": True,
+            "supports_long_running_tasks": True,
+            "supports_artifacts": True,
+        },
+        definition_metadata={
+            "graph_node_types": ["deep_task_planner", "deep_research_subagent"],
+            "allowed_tool_ids": ["durable_memory", "document_evidence"],
+            "task_profiles": ["document_researcher"],
+        },
+    )
+    monkeypatch.setattr(
+        "app.runtime.langgraph_capabilities.LangGraphDeploymentProfile.from_environment",
+        classmethod(lambda cls: LangGraphDeploymentProfile("in_process", "memory", True, False, True)),
+    )
+
+    capabilities = await capabilities_for_definition(
+        definition,
+        registry=RuntimeRegistry(adapters=[LangGraphRuntimeAdapter()]),
+    )
+
+    assert capabilities.features["planning"].enabled is True
+    assert capabilities.features["subagent_orchestration"].enabled is True
+    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is True
 
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):

@@ -25,7 +25,7 @@ from app.runtime.catalog import (
     result_to_product_payload,
 )
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
-from app.runtime.capability_resolver import require_capability
+from app.runtime.capability_resolver import pending_interrupt_response_operation, require_capability
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
@@ -538,12 +538,14 @@ class AgentRunService:
         ):
             return None
         pending_interrupt = getattr(current_run, "pending_interrupt_json", None)
+        pending_operation = pending_interrupt_response_operation(current_run)
         if (
-            str(getattr(current_run, "status", "")) not in {"completed", "failed", "rejected", "expired", "cancelled"}
+            str(getattr(current_run, "status", "")) == "awaiting_human"
             and isinstance(pending_interrupt, dict)
-            and pending_interrupt.get("checkpoint_resume") is True
+            and pending_interrupt.get("status") == "pending"
         ):
-            operation = RuntimeOperationId(str(pending_interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
+            operation_value = pending_interrupt.get("response_operation")
+            operation = pending_operation or str(operation_value or "")
             await require_capability(
                 definition_from_run(current_run),
                 operation,
@@ -602,15 +604,9 @@ class AgentRunService:
                 set_task_web_access,
             )
 
-            response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
+            response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
             if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
                 definition = definition_from_run(resolution.run)
-                await require_capability(
-                    definition,
-                    RuntimeOperationId.RUN_APPROVAL_RESPOND,
-                    registry=get_runtime_registry(),
-                    run=resolution.run,
-                )
                 request = AgentRuntimeRequest(
                     run_id=resolution.run.id, thread_id=resolution.run.thread_id,
                     definition_id=definition.definition_id, framework=definition.framework,
@@ -666,12 +662,6 @@ class AgentRunService:
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
                 execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
             definition = definition_from_run(resolution.run)
-            await require_capability(
-                definition,
-                RuntimeOperationId.RUN_RESUME,
-                registry=get_runtime_registry(),
-                run=resolution.run,
-            )
             adapter = adapter_for_definition(definition)
             runtime_request = AgentRuntimeRequest(
                 run_id=resolution.run.id,

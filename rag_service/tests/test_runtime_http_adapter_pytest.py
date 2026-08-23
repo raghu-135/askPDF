@@ -115,6 +115,21 @@ async def test_http_adapter_preserves_event_identity_and_terminal_result():
     terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
 
     def handler(http_request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(http_request.content)
+        assert request_payload["definition"] == {
+            "definition_id": "router",
+            "framework": "langgraph",
+            "builder_id": "langgraph_graph",
+            "category": None,
+            "display_name": None,
+            "capabilities": {},
+            "definition_metadata": {
+                "runtime_kind": None,
+                "graph_node_types": [],
+                "allowed_tool_ids": [],
+                "task_profiles": [],
+            },
+        }
         def body():
             yield f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': event})}\n\n".encode()
             yield f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'ok'}})}\n\n".encode()

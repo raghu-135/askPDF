@@ -134,8 +134,13 @@ async def test_direct_service_operations_reject_before_adapter_invocation(monkey
 
 @pytest.mark.asyncio
 async def test_resume_rejects_before_runtime_resume_invocation(monkeypatch):
-    interrupt = {"interrupt_id": "interrupt-1", "checkpoint_resume": True}
-    run = _run(pending=interrupt)
+    interrupt = {
+        "interrupt_id": "interrupt-1",
+        "status": "pending",
+        "response_operation": RuntimeOperationId.RUN_RESUME.value,
+        "checkpoint_resume": True,
+    }
+    run = _run(status="awaiting_human", pending=interrupt)
     resolution = InterruptResolutionResult(run=run, outcome="resumed", interrupt=interrupt)
     adapter = RecordingAdapter(unsupported={RuntimeOperationId.RUN_RESUME})
     service = _patch_runtime(monkeypatch, adapter, FakeRepository(run, resolution))
@@ -227,6 +232,23 @@ async def test_cancel_http_boundary_returns_structured_capability_rejection(monk
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "runtime_capability_unsupported"
     assert caught.value.detail["details"]["operation_id"] == RuntimeOperationId.RUN_CANCEL.value
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_normalizes_http_adapter_mapping(monkeypatch):
+    class FakeService:
+        async def cancel_agent_run(self, run_id, *, thread_id):
+            assert run_id == "run-1"
+            assert thread_id == "thread-1"
+            return {"status": "cancel_requested", "run_id": run_id, "run_status": "running"}
+
+    monkeypatch.setattr(agent_workflows_api, "AgentRunService", FakeService)
+
+    result = await agent_workflows_api.request_chat_run_cancel("run-1", thread_id="thread-1")
+
+    assert result.status == "cancel_requested"
+    assert result.run_id == "run-1"
+    assert result.run_status == "running"
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import httpx
 
 from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeExecutionContext
 from app.runtime.budgets import deep_agent_budgets
+from app.runtime.catalog import definition_metadata_from_spec
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
@@ -201,7 +202,18 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         return validation_from_dict(value.get("validation") or value)
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
+        resolved_spec = context.resolved_spec if isinstance(context.resolved_spec, Mapping) else {}
+        runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), Mapping) else {}
+        features = runtime.get("features") if isinstance(runtime.get("features"), Mapping) else {}
+        definition = AgentDefinition(
+            definition_id=request.definition_id,
+            framework=request.framework,
+            builder_id=request.builder_id,
+            capabilities=dict(features),
+            definition_metadata=definition_metadata_from_spec(resolved_spec),
+        )
         body = {
+            "definition": definition.to_dict(),
             "request": request.to_dict(),
             "context": context_to_dict(context),
             "operation_id": request.options.get("idempotency_key"),

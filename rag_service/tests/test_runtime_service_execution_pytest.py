@@ -26,7 +26,17 @@ def _request(run_id: str) -> dict:
 
 
 def _payload(run_id: str) -> dict:
-    return {"request": _request(run_id), "context": {}}
+    return {
+        "request": _request(run_id),
+        "context": {},
+        "definition": {
+            "definition_id": "router_rag_agent",
+            "framework": "langgraph",
+            "builder_id": "langgraph_graph",
+            "capabilities": {},
+            "definition_metadata": {},
+        },
+    }
 
 
 async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwargs: object) -> list[dict]:
@@ -161,6 +171,7 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
             "source_attempt": 1,
             "operation": "start",
             "request": _request("run-explicit-retry"),
+            "definition": _payload("run-explicit-retry")["definition"],
         }
         retried = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
         repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
@@ -169,6 +180,7 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
             "source_attempt": 2,
             "operation": "start",
             "request": _request("run-explicit-retry"),
+            "definition": _payload("run-explicit-retry")["definition"],
         }
         second_retry = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_two_payload)
         delayed_repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)

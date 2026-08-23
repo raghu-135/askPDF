@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.capability_resolver import capabilities_for_definition, require_capability, resolve_capabilities
+from app.runtime.adapter import AgentRuntimeAdapter
+from app.runtime.capability_resolver import (
+    capabilities_for_definition,
+    discover_adapter_capabilities,
+    require_capability,
+    resolve_capabilities,
+)
 from app.runtime.contracts import (
     AgentDefinition,
     RuntimeCapabilities,
@@ -27,6 +33,8 @@ class CapabilityAdapter:
                 RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
+                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
+                RuntimeOperationId.INTERRUPT_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
                 RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
                 RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
                 RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
@@ -104,6 +112,28 @@ async def test_definition_policy_and_run_state_gate_operations():
 
 
 @pytest.mark.asyncio
+async def test_definition_capabilities_are_requested_from_adapter_and_drive_task_operations():
+    adapter = CapabilityAdapter()
+    registry = RuntimeRegistry(adapters=[adapter])
+
+    task_definition = _definition(supports_long_running_tasks=True)
+    task_capabilities = await capabilities_for_definition(task_definition, registry=registry)
+    assert task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
+    assert task_capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is True
+
+    non_task_definition = _definition(supports_long_running_tasks=False)
+    non_task_capabilities = await capabilities_for_definition(non_task_definition, registry=registry)
+    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
+    resolved = await resolve_capabilities(non_task_definition, registry=registry, run=SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    ))
+    assert resolved.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
+
+
+@pytest.mark.asyncio
 async def test_hermes_live_steering_remains_disabled_at_all_capability_levels():
     registry = RuntimeRegistry(adapters=[HermesCapabilityAdapter()])
     definition = AgentDefinition(
@@ -146,6 +176,8 @@ async def test_terminal_run_disables_active_controls_without_mutating_source():
     cancel = capabilities.operations[RuntimeOperationId.RUN_CANCEL.value]
     assert cancel.enabled is False
     assert cancel.disabled_reason == "run_terminal"
+    assert capabilities.operations[RuntimeOperationId.RUN_APPROVAL_RESPOND.value].disabled_reason == "run_terminal"
+    assert capabilities.operations[RuntimeOperationId.INTERRUPT_RESPOND.value].disabled_reason == "run_terminal"
     assert run.status == "completed"
     assert run.pending_interrupt_json == {"interrupt_id": "i-1"}
 
@@ -236,3 +268,102 @@ async def test_task_lifecycle_operations_require_task_definition_and_eligible_st
     capabilities = await resolve_capabilities(non_task_definition, registry=registry, run=running)
     assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].disabled_reason == "definition_not_task_runtime"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt_status", ["resolved", "rejected", "expired"])
+async def test_only_explicit_pending_interrupts_enable_the_declared_response_operation(interrupt_status):
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    definition = _definition()
+    run = SimpleNamespace(
+        status="awaiting_human",
+        pending_interrupt_json={
+            "status": interrupt_status,
+            "response_operation": RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+        },
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+
+    capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+
+    for operation in (
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+        RuntimeOperationId.INTERRUPT_RESPOND,
+    ):
+        assert capabilities.operations[operation.value].enabled is False
+        assert capabilities.operations[operation.value].disabled_reason == "no_pending_interrupt"
+
+
+@pytest.mark.asyncio
+async def test_pending_interrupt_enables_only_its_valid_response_operation():
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    run = SimpleNamespace(
+        status="awaiting_human",
+        pending_interrupt_json={
+            "status": "pending",
+            "response_operation": RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+        },
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+
+    capabilities = await resolve_capabilities(_definition(), registry=registry, run=run)
+
+    assert capabilities.operations[RuntimeOperationId.RUN_APPROVAL_RESPOND.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.RUN_RESUME.value].disabled_reason == "no_pending_interrupt"
+    assert capabilities.operations[RuntimeOperationId.INTERRUPT_RESPOND.value].disabled_reason == "no_pending_interrupt"
+
+
+@pytest.mark.asyncio
+async def test_completed_run_with_stale_pending_payload_disables_all_active_controls():
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    run = SimpleNamespace(
+        status="completed",
+        pending_interrupt_json={
+            "status": "pending",
+            "response_operation": RuntimeOperationId.RUN_RESUME.value,
+        },
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+
+    capabilities = await resolve_capabilities(_definition(), registry=registry, run=run)
+
+    for operation in (
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+        RuntimeOperationId.INTERRUPT_RESPOND,
+    ):
+        assert capabilities.operations[operation.value].disabled_reason == "run_terminal"
+
+
+class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
+    framework = "inherited"
+    builder_id = "unsupported"
+
+    async def capabilities(self, definition):
+        return RuntimeCapabilities(operations={
+            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
+        })
+
+    async def validate(self, definition, spec, *, options=None):
+        raise NotImplementedError
+
+    async def start(self, request, *, context, event_sink=None):
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsupported_method():
+    adapter = InheritedUnsupportedAdapter()
+    capabilities, error = await discover_adapter_capabilities(
+        adapter,
+        AgentDefinition("definition-1", adapter.framework, adapter.builder_id),
+    )
+
+    assert error is None
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"

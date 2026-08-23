@@ -12,6 +12,7 @@ from app.runtime.contracts import (
     RuntimeOperationDescriptor,
     RuntimeSupportLevel,
 )
+from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 
@@ -33,6 +34,14 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_UPDATE_STATE.value,
     RuntimeOperationId.RUN_CONTINUE.value,
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
+    RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+    RuntimeOperationId.INTERRUPT_RESPOND.value,
+})
+
+RESPONSE_OPERATIONS = frozenset({
+    RuntimeOperationId.RUN_RESUME.value,
+    RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+    RuntimeOperationId.INTERRUPT_RESPOND.value,
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
@@ -102,8 +111,22 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await adapter.deployment_capabilities()
+    capabilities = await adapter.capabilities(definition)
     return apply_definition_policy(capabilities, definition)
+
+
+def pending_interrupt_response_operation(run: Any) -> RuntimeOperationId | None:
+    """Return the explicitly declared response operation for a pending run interrupt."""
+
+    if str(getattr(run, "status", "") or "") != "awaiting_human":
+        return None
+    payload = getattr(run, "pending_interrupt_json", None)
+    if not isinstance(payload, Mapping) or payload.get("status") != "pending":
+        return None
+    value = payload.get("response_operation")
+    if not isinstance(value, str) or value not in RESPONSE_OPERATIONS:
+        return None
+    return RuntimeOperationId(value)
 
 
 async def resolve_capabilities(
@@ -123,8 +146,7 @@ async def resolve_capabilities(
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
     status = str(getattr(run, "status", "") or "")
-    pending = getattr(run, "pending_interrupt_json", None)
-    has_pending = isinstance(pending, Mapping) and bool(pending)
+    pending_operation = pending_interrupt_response_operation(run)
     binding = getattr(run, "runtime_binding_json", None)
     binding_available = bool(binding) and str(getattr(run, "runtime_binding_status", "active")) == "active"
 
@@ -133,8 +155,8 @@ async def resolve_capabilities(
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], "run_terminal")
     else:
-        for operation in (RuntimeOperationId.RUN_RESUME.value, RuntimeOperationId.RUN_APPROVAL_RESPOND.value, RuntimeOperationId.INTERRUPT_RESPOND.value):
-            if operation in operations and not has_pending:
+        for operation in RESPONSE_OPERATIONS:
+            if operation in operations and operation != (pending_operation.value if pending_operation else None):
                 operations[operation] = _disabled(operations[operation], "no_pending_interrupt")
 
     if status not in TERMINAL_RUN_STATES and RuntimeOperationId.RUN_PAUSE.value in operations and status not in {"queued", "running"}:
@@ -223,7 +245,9 @@ async def discover_adapter_capabilities(
             if descriptor is None or not descriptor.enabled:
                 continue
             method = getattr(adapter, method_name, None)
-            if method is None:
+            declared_method = getattr(type(adapter), method_name, None)
+            base_method = getattr(AgentRuntimeAdapter, method_name, None)
+            if method is None or declared_method is None or declared_method is base_method:
                 operations[operation_id] = _disabled(descriptor, "adapter_operation_unimplemented")
         return replace(capabilities, operations=operations), None
     except RuntimeError as exc:
