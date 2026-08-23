@@ -55,6 +55,16 @@ class AgentRuntimeAdapter(ABC):
     @abstractmethod
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities: ...
 
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
+        """Discover capabilities owned by this concrete deployment."""
+        return await self.capabilities(
+            AgentDefinition(
+                definition_id=f"deployment:{self.framework}:{self.builder_id}",
+                framework=self.framework,
+                builder_id=self.builder_id,
+            )
+        )
+
     @abstractmethod
     async def validate(
         self,

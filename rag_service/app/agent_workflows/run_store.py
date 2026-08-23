@@ -54,14 +54,13 @@ async def create_run(
     workflow_id: str,
     workflow_version_id: Optional[str] = None,
     workflow_version: Optional[int] = None,
-    framework: str = "langgraph",
-    builder_id: str = "langgraph_graph",
+    framework: str,
+    builder_id: str,
     definition_category: Optional[str] = None,
     resolved_spec_json: Dict[str, Any],
     user_id: Optional[str] = None,
     checkpoint_thread_id: Optional[str] = None,
     runtime_binding_json: Optional[Dict[str, Any]] = None,
-    runtime_binding_version: int = 1,
     running_status: str = "running",
     run_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> AgentRun:
@@ -76,13 +75,11 @@ async def create_run(
     default_runtime_binding = (
         {
             "binding_type": "langgraph_checkpoint",
-            "binding_version": runtime_binding_version,
             "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
         }
         if is_langgraph
         else {
             "binding_type": f"{framework}_session",
-            "binding_version": runtime_binding_version,
             "payload": {},
         }
     )
@@ -94,7 +91,6 @@ async def create_run(
         framework=framework,
         builder_id=builder_id,
         definition_category=definition_category,
-        runtime_binding_version=runtime_binding_version,
         run_metadata_json=run_metadata,
         resolved_spec_json=resolved_spec_json,
         status=running_status,

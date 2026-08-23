@@ -2,6 +2,8 @@
   "builtin_key": "orchestrator_worker_rag_agent",
   "description": "A bounded orchestrator-worker workflow that plans typed retrieval work, executes read-only workers concurrently, deterministically aggregates evidence, and synthesizes a final response.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "name": "Orchestrator-Worker Agent",
   "spec_json": {
     "config": {

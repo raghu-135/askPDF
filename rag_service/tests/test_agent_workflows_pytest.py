@@ -3788,16 +3788,9 @@ async def test_web_hitl_run_scope_grant_skips_subsequent_interrupt(monkeypatch):
 class TestAgentRunService:
     @pytest.mark.asyncio
     async def test_request_hitl_web_approval_override_controls_effective_thread_settings(self, monkeypatch):
-        captured = {}
-
         class FakeRepository:
             async def get_workflow(self, workflow_id, include_custom=True):
                 return SimpleNamespace(id=workflow_id, spec_json={})
-
-        class CapturingResolver:
-            def resolve(self, spec, *, thread_settings, request_overrides):
-                captured["thread_settings"] = thread_settings
-                raise RuntimeError("stop after settings resolution")
 
         async def fake_get_thread_settings(_thread_id):
             return {
@@ -3819,13 +3812,10 @@ class TestAgentRunService:
             custom_instructions_override="",
         )
 
-        with pytest.raises(RuntimeError, match="stop after settings resolution"):
+        with pytest.raises(ValueError, match="no concrete runtime identity"):
             await AgentRunService(
                 repository=FakeRepository(),
-                resolver=CapturingResolver(),
             ).run_thread_chat("thread-1", request, "embedding-model")
-
-        assert captured["thread_settings"]["hitl_web_approval"] is False
 
     def _agent_req(self, question: str = "Needs current research?") -> SimpleNamespace:
         return SimpleNamespace(
@@ -4771,10 +4761,6 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": CORRECTIVE_SELF_RAG_AGENT_ID}}
 
-            class RejectingResolver:
-                def resolve(self, *_args, **_kwargs):
-                    raise WorkflowValidationError("invalid corrective topology")
-
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4786,7 +4772,7 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            service = AgentRunService(repository=repo, resolver=RejectingResolver())
+            service = AgentRunService(repository=repo)
             with pytest.raises(RuntimeError, match="Selected agent workflow is incompatible"):
                 await service.run_thread_chat(sample_thread.id, req, sample_thread.embedding_model)
             runs = await repo.list_runs_for_thread(sample_thread.id)

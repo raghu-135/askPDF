@@ -3,8 +3,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
+from app.runtime.capability_resolver import OPERATION_METHODS
 from app.runtime.errors import RuntimeError
-from app.runtime.catalog import definition_from_workflow
+from app.runtime.catalog import (
+    continuation_from_run,
+    definition_from_run,
+    definition_from_workflow,
+    event_from_source,
+    request_from_run,
+    result_to_product_payload,
+)
 from app.runtime.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
@@ -20,12 +28,6 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
     RuntimeArtifact,
     RuntimeTaskContext,
-)
-from app.runtime.langgraph_compat import (
-    continuation_from_run,
-    event_from_legacy,
-    request_for_run,
-    result_from_legacy,
 )
 from app.runtime.observability import normalize_runtime_event
 
@@ -75,6 +77,12 @@ def test_runtime_operation_descriptor_rejects_invalid_enabled_states():
         RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, True)
     with pytest.raises(ValueError):
         RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, False)
+
+
+def test_advertised_operations_have_concrete_adapter_methods():
+    assert OPERATION_METHODS["run.start"] == "start"
+    for method_name in OPERATION_METHODS.values():
+        assert callable(getattr(AgentRuntimeAdapter, method_name, None)), method_name
 
 
 @pytest.mark.asyncio
@@ -136,7 +144,6 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
 def test_runtime_event_can_carry_an_opaque_continuation_binding():
     binding = ContinuationBinding(
         binding_type="hermes_session",
-        runtime_version="hermes-gateway-1",
         payload={"session_id": "session-1", "upstream_run_id": "hermes-run-7"},
     )
     event = AgentRuntimeEvent(
@@ -170,7 +177,7 @@ def test_catalog_identity_is_concrete_and_category_is_metadata_only():
     assert definition.capabilities == {"supports_replans": False}
 
 
-def test_langgraph_compat_round_trips_legacy_run_and_continuation():
+def test_run_identity_and_typed_projection_round_trip():
     run = SimpleNamespace(
         id="run-1",
         thread_id="thread-1",
@@ -180,23 +187,17 @@ def test_langgraph_compat_round_trips_legacy_run_and_continuation():
         task_id=None,
         parent_run_id=None,
         checkpoint_thread_id="checkpoint-1",
-        runtime_binding_version=1,
         runtime_binding_json={
             "binding_type": "langgraph_checkpoint",
-            "binding_version": 1,
             "payload": {"checkpoint_thread_id": "checkpoint-1"},
         },
         run_metadata_json={},
     )
 
     binding = continuation_from_run(run)
-    request = request_for_run(run, input={"question": "hello"})
-    result = result_from_legacy({
-        "status": "clarification",
-        "clarification_options": ["one", "two"],
-        "agent_run_id": "run-1",
-    })
-    event = event_from_legacy(
+    request = request_from_run(run, input={"question": "hello"})
+    result = AgentRuntimeResult(status="clarification", clarification={"options": ["one", "two"]})
+    event = event_from_source(
         {"event": "run.completed", "data": {"event_id": "runtime-event-1"}},
         run_id="run-1",
         sequence=2,
@@ -207,9 +208,41 @@ def test_langgraph_compat_round_trips_legacy_run_and_continuation():
     assert request.continuation == binding
     assert request.input == {"question": "hello"}
     assert result.status == "clarification"
-    assert result.clarification == {"options": ["one", "two"]}
+    assert result_to_product_payload(result)["clarification_options"] == ["one", "two"]
     assert event.event_id == "runtime-event-1"
     assert event.terminal is True
+
+
+def test_workflow_and_run_definition_metadata_are_identical():
+    spec = {
+        "runtime": {"features": {"supports_replans": False}},
+        "config": {
+            "allowed_tool_ids": ["search_documents"],
+            "task_policy": {"profiles": ["research"]},
+        },
+    }
+    workflow = SimpleNamespace(
+        id="router_rag_agent",
+        name="Router Agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        category="router",
+        metadata_json={},
+        spec_json=spec,
+    )
+    run = SimpleNamespace(
+        id="run-1",
+        workflow_id="router_rag_agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        definition_category="router",
+        resolved_spec_json=spec,
+    )
+
+    workflow_definition = definition_from_workflow(workflow)
+    run_definition = definition_from_run(run)
+    assert run_definition.definition_metadata == workflow_definition.definition_metadata
+    assert run_definition.capabilities == workflow_definition.capabilities
 
 
 def test_validation_contract_is_json_compatible():

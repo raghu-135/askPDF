@@ -9,7 +9,6 @@
   "category": "deep",
   "spec_json": {
     "schema_version": 2,
-    "definition_version": 2,
     "version": 2,
     "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": true, "supports_artifacts": true}},
     "config": {

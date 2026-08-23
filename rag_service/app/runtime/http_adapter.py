@@ -134,7 +134,7 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             self._client = None
 
     def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
-        headers = {"accept": "application/json", "x-runtime-contract-version": str(request.contract_version if request else 1)}
+        headers = {"accept": "application/json"}
         if request is not None:
             headers["x-agent-run-id"] = request.run_id
             if request.trace_id:
@@ -174,8 +174,6 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
         if not isinstance(payload, Mapping):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response")
-        if int(payload.get("contract_version") or 1) != 1:
-            raise RuntimeError("runtime_contract_unsupported", "Agent runtime contract version is unsupported")
         if payload.get("error"):
             error = payload["error"]
             raise RuntimeError(
@@ -203,16 +201,22 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         return validation_from_dict(value.get("validation") or value)
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
-        body = {"request": request.to_dict(), "context": context_to_dict(context), **dict(payload or {})}
+        body = {
+            "request": request.to_dict(),
+            "context": context_to_dict(context),
+            "operation_id": request.options.get("idempotency_key"),
+            **dict(payload or {}),
+        }
         seen: dict[str, str] = {}
         terminal: AgentRuntimeResult | None = None
         terminal_hash: str | None = None
         terminal_event_id: str | None = None
+        terminal_event_seen = False
         last_sequence = 0
         last_event_id: str | None = None
 
         async def consume(method: str, stream_path: str, *, replay: bool = False) -> None:
-            nonlocal terminal, terminal_hash, terminal_event_id, last_sequence
+            nonlocal terminal, terminal_hash, terminal_event_id, terminal_event_seen, last_sequence
             nonlocal last_event_id
             client = await self._client_for_request()
             headers = {**self._headers(request), "accept": "text/event-stream"}
@@ -245,16 +249,22 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     event = event_from_dict(event_payload)
                     if event.run_id != request.run_id:
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a mismatched run ID")
-                    if event.contract_version != request.contract_version:
-                        raise RuntimeError("runtime_contract_unsupported", "Agent runtime event contract version is unsupported")
                     event_hash = hashlib.sha256(json.dumps(event.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
                     if event.event_id in seen:
                         if seen[event.event_id] != event_hash:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting duplicate event IDs")
                         continue
+                    if terminal_event_seen:
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned an event after its terminal event")
                     seen[event.event_id] = event_hash
                     if event.sequence <= last_sequence:
                         raise RuntimeError("runtime_protocol_error", "Agent runtime event sequence is not monotonic")
+                    if event.terminal:
+                        if terminal_event_seen:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal event")
+                        terminal_event_seen = True
+                        if envelope.get("result") is None:
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime terminal event did not include a result")
                     last_sequence = event.sequence
                     last_event_id = event.event_id
                     if event_sink is not None:
@@ -269,9 +279,10 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                         resumable_boundary = (
                             isinstance(envelope.get("result"), Mapping)
                             and str(envelope["result"].get("status") or "") in {"awaiting_human", "paused"}
+                            and event.kind in {"approval.requested", "interrupt.requested", "run.paused"}
                         )
                         if not event.terminal and not resumable_boundary:
-                            raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to a nonterminal event")
+                            raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to an invalid nonterminal event")
                         if terminal_event_id is not None and event.event_id != terminal_event_id:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal result")
                         candidate = result_from_dict(envelope["result"])

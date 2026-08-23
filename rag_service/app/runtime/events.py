@@ -99,10 +99,8 @@ def create_runtime_event(
     occurred_at: str | None = None,
     terminal: bool | None = None,
     trace_id: str | None = None,
-    runtime_version: str | None = None,
     source_metadata: Mapping[str, Any] | None = None,
     continuation: Any = None,
-    contract_version: int = 1,
 ) -> AgentRuntimeEvent:
     if not str(event_id or "").strip():
         raise ValueError("runtime event_id is required")
@@ -126,10 +124,8 @@ def create_runtime_event(
         occurred_at=occurred_at or _now(),
         terminal=expected_terminal,
         trace_id=trace_id,
-        runtime_version=runtime_version,
         source_metadata=_bounded_value(normalized_source),
         continuation=continuation,
-        contract_version=int(contract_version),
     )
 
 

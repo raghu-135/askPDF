@@ -21,8 +21,6 @@ BUILTIN_DISCOVERY_CATEGORIES = {
     "hermes_rag_agent": "deep",
 }
 
-DEFAULT_FRAMEWORK = "langgraph"
-DEFAULT_BUILDER_ID = "langgraph_graph"
 HERMES_RUNTIME_KIND = "hermes_agent"
 
 
@@ -39,7 +37,9 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         if not isinstance(spec_json, dict) or spec_json.get("schema_version") != 2:
             raise ValueError(f"Builtin workflow file {path} must contain schema_version 2 spec_json")
         runtime = spec_json.get("runtime")
-        framework = str(payload.get("framework") or DEFAULT_FRAMEWORK)
+        framework = str(payload.get("framework") or "").strip()
+        if not framework:
+            raise ValueError(f"Builtin workflow file {path} is missing framework identity")
         if framework == "langgraph":
             if not isinstance(runtime, dict) or runtime.get("kind") not in SUPPORTED_RUNTIME_KINDS:
                 raise ValueError(f"Builtin workflow file {path} must contain supported spec_json.runtime")
@@ -52,7 +52,9 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         else:
             raise ValueError(f"Builtin workflow file {path} has unsupported framework {framework!r}")
         payload["framework"] = framework
-        payload["builder_id"] = str(payload.get("builder_id") or DEFAULT_BUILDER_ID)
+        payload["builder_id"] = str(payload.get("builder_id") or "").strip()
+        if not payload["builder_id"]:
+            raise ValueError(f"Builtin workflow file {path} is missing builder identity")
         payload["category"] = str(payload.get("category") or BUILTIN_DISCOVERY_CATEGORIES.get(builtin_key) or "router")
         payloads.append(payload)
     return tuple(payloads)

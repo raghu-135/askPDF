@@ -3,6 +3,8 @@
   "name": "Deep Research Agent",
   "description": "A durable, bounded long-running research workflow with typed todos, isolated subagents, artifact offloading, and checkpointed continuation.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "visibility": "builtin",
   "spec_json": {
     "schema_version": 2,

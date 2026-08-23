@@ -108,6 +108,39 @@ async def test_terminal_request_conflict_requires_explicit_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operation_id_replays_identical_request_and_rejects_conflict() -> None:
+    store = ExecutionStore()
+    first = await store.create(
+        "run-idempotent",
+        "start",
+        {"run_id": "run-idempotent", "input": {"question": "one"}},
+        {"request": {"run_id": "run-idempotent"}},
+        operation_id="op-1",
+    )
+    await store.set_status("run-idempotent", "completed", result={"status": "completed", "output": "done"})
+    replay = await store.create(
+        "run-idempotent",
+        "start",
+        {"run_id": "run-idempotent", "input": {"question": "one"}},
+        {"request": {"run_id": "run-idempotent"}},
+        operation_id="op-1",
+    )
+
+    assert first.attempt == replay.attempt == 1
+    assert replay.replay_only is True
+    assert replay.result == {"status": "completed", "output": "done"}
+
+    with pytest.raises(ExecutionConflictError):
+        await store.create(
+            "run-idempotent",
+            "start",
+            {"run_id": "run-idempotent", "input": {"question": "two"}},
+            {"request": {"run_id": "run-idempotent"}},
+            operation_id="op-1",
+        )
+
+
+@pytest.mark.asyncio
 async def test_resume_transport_retry_is_read_only_after_terminal_completion() -> None:
     store = ExecutionStore()
     await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})
@@ -132,8 +165,6 @@ async def test_event_round_trip_preserves_neutral_continuation_metadata() -> Non
     continuation = {
         "binding_type": "langgraph_checkpoint",
         "payload": {"checkpoint_id": "checkpoint-1"},
-        "binding_version": 2,
-        "runtime_version": "runtime-7",
     }
     await store.append(
         "run-3",
@@ -143,8 +174,6 @@ async def test_event_round_trip_preserves_neutral_continuation_metadata() -> Non
             "payload": {"reason": "human_input"},
             "occurred_at": "2026-08-17T12:00:00Z",
             "trace_id": "trace-3",
-            "runtime_version": "runtime-7",
-            "contract_version": 1,
             "continuation": continuation,
             "terminal": True,
         },
@@ -154,8 +183,6 @@ async def test_event_round_trip_preserves_neutral_continuation_metadata() -> Non
     record = await store.get("run-3")
     assert events[0]["continuation"] == continuation
     assert events[0]["trace_id"] == "trace-3"
-    assert events[0]["runtime_version"] == "runtime-7"
-    assert events[0]["contract_version"] == 1
     assert record.continuation == continuation
 
 
@@ -176,8 +203,6 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
         continuation = {
             "binding_type": "langgraph_checkpoint",
             "payload": {"checkpoint_id": "postgres-checkpoint"},
-            "binding_version": 1,
-            "runtime_version": "runtime-pg",
         }
         await store.append(
             run_id,
@@ -186,8 +211,6 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
                 "kind": "run.interrupted",
                 "payload": {"reason": "human_input"},
                 "trace_id": "trace-pg",
-                "runtime_version": "runtime-pg",
-                "contract_version": 1,
                 "continuation": continuation,
                 "terminal": True,
             },

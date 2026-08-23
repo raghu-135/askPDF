@@ -171,8 +171,8 @@ class AgentWorkflowRepository:
         workflow_id: str,
         name: str,
         spec_json: Dict[str, Any],
-        framework: str = "langgraph",
-        builder_id: str = "langgraph_graph",
+        framework: str,
+        builder_id: str,
         description: str = "",
         visibility: str = "internal",
         changelog: str = "",
@@ -313,14 +313,13 @@ class AgentWorkflowRepository:
         workflow_id: str,
         workflow_version_id: Optional[str] = None,
         workflow_version: Optional[int] = None,
-        framework: str = "langgraph",
-        builder_id: str = "langgraph_graph",
+        framework: str,
+        builder_id: str,
         definition_category: Optional[str] = None,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
         runtime_binding_json: Optional[Dict[str, Any]] = None,
-        runtime_binding_version: int = 1,
         run_metadata_json: Optional[Dict[str, Any]] = None,
     ) -> AgentRun:
         session = await self._get_session()
@@ -337,7 +336,6 @@ class AgentWorkflowRepository:
             user_id=user_id,
             checkpoint_thread_id=checkpoint_thread_id,
             runtime_binding_json=runtime_binding_json,
-            runtime_binding_version=runtime_binding_version,
             running_status=RUN_STATUS_RUNNING,
             run_metadata_json=run_metadata_json,
         )
@@ -762,7 +760,6 @@ class AgentWorkflowRepository:
                     return None
                 value = binding.to_dict() if hasattr(binding, "to_dict") else dict(binding or {})
                 replace_jsonb_field(run, "runtime_binding_json", value)
-                run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
                 run.runtime_binding_status = status
                 return run
         finally:

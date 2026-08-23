@@ -193,6 +193,8 @@ class ExecutionStore:
                     operation text not null,
                     request_fingerprint text not null,
                     attempt integer not null,
+                    status text not null default 'queued',
+                    result jsonb,
                     created_at timestamptz not null default now(),
                     primary key (run_id, operation_id)
                 );
@@ -205,8 +207,6 @@ class ExecutionStore:
                     payload jsonb not null,
                     occurred_at text,
                     trace_id text,
-                    runtime_version text,
-                    contract_version integer,
                     continuation jsonb,
                     terminal boolean not null default false,
                     result jsonb,
@@ -216,9 +216,9 @@ class ExecutionStore:
                 );
                 alter table runtime_events add column if not exists occurred_at text;
                 alter table runtime_events add column if not exists trace_id text;
-                alter table runtime_events add column if not exists runtime_version text;
-                alter table runtime_events add column if not exists contract_version integer;
                 alter table runtime_events add column if not exists continuation jsonb;
+                alter table runtime_operations add column if not exists status text not null default 'queued';
+                alter table runtime_operations add column if not exists result jsonb;
                 alter table runtime_executions add column if not exists attempt integer not null default 1;
                 alter table runtime_events add column if not exists attempt integer not null default 1;
                 alter table runtime_executions add column if not exists owner_id text;
@@ -254,6 +254,15 @@ class ExecutionStore:
         fingerprint = request_fingerprint(operation, request)
         record = ExecutionRecord(run_id, operation, dict(request), dict(payload), request_fingerprint=fingerprint, last_operation_id=operation_id, retry_source_attempt=source_attempt)
         if self._pool is None:
+            if operation_id:
+                prior = self._operations.get((run_id, operation_id))
+                if prior is not None:
+                    if prior.get("fingerprint") != fingerprint:
+                        raise ExecutionConflictError("operation_id was reused with different input")
+                    existing = self._records.get(run_id)
+                    if existing is None:
+                        raise ExecutionConflictError("idempotent operation record has no execution")
+                    return replace(existing, attempt=int(prior["attempt"]), replay_only=True)
             if run_id in self._records:
                 existing = self._records[run_id]
                 if operation == "retry":
@@ -290,10 +299,27 @@ class ExecutionStore:
                 return existing
             self._records[run_id] = record
             self._events.setdefault(run_id, [])
+            if operation_id:
+                self._operations[(run_id, operation_id)] = {
+                    "attempt": record.attempt,
+                    "fingerprint": fingerprint,
+                    "status": record.status,
+                    "result": None,
+                }
             return record
         replay_attempt: int | None = None
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                if operation_id:
+                    prior = await connection.fetchrow(
+                        "select attempt, request_fingerprint from runtime_operations where run_id=$1 and operation_id=$2 for update",
+                        run_id,
+                        operation_id,
+                    )
+                    if prior is not None:
+                        if str(prior["request_fingerprint"]) != fingerprint:
+                            raise ExecutionConflictError("operation_id was reused with different input")
+                        replay_attempt = int(prior["attempt"])
                 existing = await connection.fetchrow(
                     "select operation, request, status, attempt, continuation, request_fingerprint from runtime_executions where run_id=$1 for update",
                     run_id,
@@ -327,8 +353,19 @@ class ExecutionStore:
                 elif existing is None:
                     await connection.execute(
                         """insert into runtime_executions(run_id, operation, request, payload, status, request_fingerprint, last_operation_id, retry_source_attempt)
-                           values($1,$2,$3::jsonb,$4::jsonb,'queued',$5,$6,$7)""",
+                           values($1,$2,$3::jsonb,$4::jsonb,'queued',$5,$6,$7)
+                           on conflict (run_id) do nothing""",
                         run_id, operation, json.dumps(_json_safe(dict(request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
+                    )
+                if operation_id and replay_attempt is None:
+                    await connection.execute(
+                        """insert into runtime_operations(run_id, operation_id, operation, request_fingerprint, attempt, status)
+                           values($1,$2,$3,$4,(select attempt from runtime_executions where run_id=$1),'queued')
+                           on conflict (run_id, operation_id) do nothing""",
+                        run_id,
+                        operation_id,
+                        operation,
+                        fingerprint,
                     )
         current = await self.get(run_id)
         if current is None:
@@ -413,6 +450,11 @@ class ExecutionStore:
             if owner_id is not None and (record.owner_id != owner_id or record.fencing_token != fencing_token):
                 raise LeaseLostError(f"lost runtime lease for {run_id}")
             record.status, record.result, record.error, record.updated_at = status, dict(result) if result else None, dict(error) if error else None, _now()
+            if record.last_operation_id:
+                operation_record = self._operations.get((run_id, record.last_operation_id))
+                if operation_record is not None:
+                    operation_record["status"] = status
+                    operation_record["result"] = dict(result) if result else None
             if status in TERMINAL_STATUSES:
                 record.cancel_requested = False
             return
@@ -426,6 +468,13 @@ class ExecutionStore:
         )
         if not result_status.endswith("1"):
             raise LeaseLostError(f"lost runtime lease for {run_id}")
+        await self._pool.execute(
+            """update runtime_operations set status=$2, result=coalesce($3::jsonb, result)
+               where run_id=$1 and operation_id=(select last_operation_id from runtime_executions where run_id=$1)""",
+            run_id,
+            status,
+            json.dumps(_json_safe(dict(result))) if result else None,
+        )
 
     async def request_cancel(self, run_id: str) -> CancellationOutcome:
         if self._pool is None:
@@ -495,9 +544,9 @@ class ExecutionStore:
                 inserted = await connection.fetchrow(
                     """insert into runtime_events(
                            run_id, sequence, attempt, event_id, kind, payload, occurred_at,
-                           trace_id, runtime_version, contract_version,
+                           trace_id,
                            continuation, terminal, result
-                       ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb)
+                       ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb,$10,$11::jsonb)
                        on conflict (run_id, event_id) do nothing
                        returning *""",
                     run_id,
@@ -508,8 +557,6 @@ class ExecutionStore:
                     json.dumps(_json_safe(item.get("payload") or {})),
                     item.get("occurred_at"),
                     item.get("trace_id"),
-                    item.get("runtime_version"),
-                    item.get("contract_version"),
                     json.dumps(_json_safe(continuation)) if continuation is not None else None,
                     bool(item.get("terminal")),
                     json.dumps(_json_safe(dict(result))) if result else None,
@@ -534,6 +581,46 @@ class ExecutionStore:
                         run_id,
                     )
         return item
+
+    async def set_event_result(
+        self,
+        run_id: str,
+        event_id: str,
+        result: Mapping[str, Any],
+        *,
+        owner_id: str | None = None,
+        fencing_token: int | None = None,
+    ) -> None:
+        """Attach the sole terminal result to an already-journaled terminal event."""
+        if self._pool is None:
+            record = self._records[run_id]
+            if owner_id is not None and (record.owner_id != owner_id or record.fencing_token != fencing_token):
+                raise LeaseLostError(f"lost runtime lease for {run_id}")
+            for item in self._events.get(run_id, []):
+                if item.get("event_id") == event_id:
+                    if item.get("result") not in (None, dict(result)):
+                        raise ExecutionConflictError("terminal event already has a conflicting result")
+                    item["result"] = dict(result)
+                    return
+            raise ExecutionConflictError("terminal event was not found")
+        async with self._pool.acquire() as connection:
+            updated = await connection.execute(
+                """update runtime_events as events set result=$3::jsonb
+                   where events.run_id=$1 and events.event_id=$2 and events.terminal=true
+                     and exists (
+                       select 1 from runtime_executions executions
+                       where executions.run_id=events.run_id
+                         and executions.owner_id=$4 and executions.fencing_token=$5
+                         and (executions.lease_expires_at is null or executions.lease_expires_at > now())
+                     )""",
+                run_id,
+                event_id,
+                json.dumps(_json_safe(dict(result))),
+                owner_id,
+                fencing_token,
+            )
+            if not updated.endswith("1"):
+                raise ExecutionConflictError("terminal event was not found")
 
     async def events_after(self, run_id: str, sequence: int = 0, *, attempt: int | None = None) -> list[dict[str, Any]]:
         if attempt is None:

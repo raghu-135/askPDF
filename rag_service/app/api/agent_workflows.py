@@ -76,12 +76,12 @@ async def stream_builder_test(*args: Any, **kwargs: Any):
 async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
     from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
     return await implementation(*args, **kwargs)
-from app.runtime.catalog import catalog_payload, definition_from_workflow, definition_metadata_from_spec
+from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition, RuntimeOperationId
 from app.runtime.capability_resolver import (
-    apply_definition_policy,
+    capabilities_for_definition,
     capability_envelope,
     deployment_id,
     discover_adapter_capabilities,
@@ -123,8 +123,8 @@ async def _require_ready_thread(thread_id: str):
 
 class WorkflowValidationRequest(BaseModel):
     spec: Dict[str, Any] = Field(default_factory=dict)
-    framework: str = "langgraph"
-    builder_id: str = "langgraph_graph"
+    framework: str = Field(..., min_length=1)
+    builder_id: str = Field(..., min_length=1)
 
 
 class ThreadAgentConfigValidationRequest(BaseModel):
@@ -259,8 +259,8 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
     return {
         "id": str((workflow.metadata_json or {}).get("version_id") or f"{workflow.id}:v{workflow.version}"),
         "workflow_id": workflow.id,
-        "framework": getattr(workflow, "framework", "langgraph"),
-        "builder_id": getattr(workflow, "builder_id", "langgraph_graph"),
+        "framework": getattr(workflow, "framework", None),
+        "builder_id": getattr(workflow, "builder_id", None),
         "category": getattr(workflow, "category", None),
         "version": workflow.version,
         "schema_version": workflow.schema_version,
@@ -327,8 +327,8 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,
-        "framework": getattr(run, "framework", "langgraph"),
-        "builder_id": getattr(run, "builder_id", "langgraph_graph"),
+        "framework": getattr(run, "framework", None),
+        "builder_id": getattr(run, "builder_id", None),
         "definition_category": getattr(run, "definition_category", None),
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
@@ -337,7 +337,6 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
-        "runtime_binding_version": getattr(run, "runtime_binding_version", 1),
         "runtime_binding_status": getattr(run, "runtime_binding_status", "active"),
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
@@ -566,9 +565,12 @@ async def get_agent_workflow_capabilities(workflow_id: str):
             definition_id=definition.definition_id,
             error={"code": "runtime_selection_failed", "message": str(exc)},
         )
-    capabilities, error = await discover_adapter_capabilities(adapter, definition)
-    if capabilities is not None:
-        capabilities = apply_definition_policy(capabilities, definition)
+    try:
+        capabilities = await capabilities_for_definition(definition, registry=registry)
+        error = None
+    except (RuntimeError, RuntimeSelectionError) as exc:
+        capabilities = None
+        error = exc.to_dict()
     return capability_envelope(
         capabilities=capabilities,
         resource="definition",
@@ -592,18 +594,7 @@ async def get_agent_run_capabilities(
     if run is None or run.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent run not found")
 
-    resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
-    runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), dict) else {}
-    features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
-    definition = AgentDefinition(
-        definition_id=str(run.workflow_id),
-        framework=str(getattr(run, "framework", None) or "langgraph"),
-        builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-        category=getattr(run, "definition_category", None),
-        capabilities=dict(features),
-        definition_metadata=definition_metadata_from_spec(resolved_spec),
-        runtime_version=str(runtime.get("version")) if runtime.get("version") else None,
-    )
+    definition = definition_from_run(run)
     registry = get_runtime_registry()
     try:
         adapter = registry.get(definition)
@@ -767,8 +758,8 @@ async def get_builtin_agent_workflow_source(builtin_key: str):
         raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
     definition = AgentDefinition(
         definition_id=builtin_key,
-        framework=str(workflow.get("framework") or "langgraph"),
-        builder_id=str(workflow.get("builder_id") or "langgraph_graph"),
+        framework=str(workflow.get("framework") or "").strip(),
+        builder_id=str(workflow.get("builder_id") or "").strip(),
     )
     try:
         return dict(await builder_for_definition(definition).source(builtin_key))
@@ -801,7 +792,7 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Base agent workflow not found")
-    if getattr(workflow, "framework", "langgraph") != "langgraph":
+    if getattr(workflow, "framework", None) != "langgraph":
         raise HTTPException(status_code=409, detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this runtime"})
     if req.use_web_search and not req.allow_external_tools:
         raise HTTPException(
@@ -1014,8 +1005,8 @@ async def delete_internal_agent_workflow(workflow_id: str):
 
 @router.get("/internal/agent-workflows/catalog")
 async def get_internal_agent_workflow_catalog(
-    framework: str = Query("langgraph"),
-    builder_id: str = Query("langgraph_graph"),
+    framework: str = Query(..., min_length=1),
+    builder_id: str = Query(..., min_length=1),
 ):
     definition = AgentDefinition(
         definition_id="catalog",

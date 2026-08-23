@@ -46,6 +46,20 @@ an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,
 `AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS`, and
 `AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS` bound this recovery.
 
+The runtime contract is intentionally unversioned. Runtime identity is taken
+from the persisted deployment and definition binding; missing identity is an
+error, not a default. Capability responses are layered: deployment discovery
+is narrowed by definition policy and then by the persisted run state and
+pending interaction.
+
+Run operations accept an idempotency operation ID. The runtime store records
+the request fingerprint, attempt, status, and result transactionally. An
+identical retry replays the original operation without invoking the adapter;
+reusing the ID with different input returns a structured conflict. Capability
+and dependency rejection happens before this record is created. A run has one
+terminal event, and its result is attached to that event for both the initial
+stream and replayed streams.
+
 ## Hermes runtime integration
 
 The upstream contract is pinned to NousResearch/hermes-agent commit
@@ -61,8 +75,7 @@ Supported upstream events are `message.delta`, `tool.started`,
 `run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown events are
 retained as bounded `runtime.event` records for forward compatibility.
 
-Hermes definitions use `definition_version: 1`. The Hermes builder resolves
-them into a deterministic `profile_version: 1` managed profile containing MCP
+Hermes definitions resolve into a deterministic managed profile containing MCP
 and tool policy, model/provider policy, skills, memory, delegation, and limits.
 The profile hash is reproducible. API keys, tokens, passwords, credentials, and
 other provider secrets are rejected from definitions and must be supplied via

@@ -21,8 +21,13 @@ from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
-from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
+from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult
+from app.runtime.catalog import (
+    continuation_from_run,
+    definition_from_run,
+    definition_from_workflow,
+    result_to_product_payload,
+)
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.hermes_config import hermes_model_context_length
@@ -158,12 +163,7 @@ async def ensure_task_run(task_id: str):
         raise RuntimeError("deep_research_workflow_unavailable")
 
     thread_settings = await get_thread_settings(task.thread_id)
-    definition = AgentDefinition(
-        definition_id=str(workflow.id),
-        framework=str(getattr(workflow, "framework", None) or "langgraph"),
-        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
-        category=getattr(workflow, "category", None),
-    )
+    definition = definition_from_workflow(workflow)
     provider = builder_for_definition(definition)
     resolved = await provider.resolve(
         definition,
@@ -285,12 +285,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         if workflow is None:
             raise RuntimeError("deep_research_workflow_unavailable")
         thread_settings = await get_thread_settings(task.thread_id)
-        definition = AgentDefinition(
-            definition_id=str(workflow.id),
-            framework=str(getattr(workflow, "framework", None) or "langgraph"),
-            builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
-            category=getattr(workflow, "category", None),
-        )
+        definition = definition_from_workflow(workflow)
         provider = builder_for_definition(definition)
         resolved = await provider.resolve(
             definition,
@@ -361,12 +356,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return await tasks.task_cancel_requested(task.id) or await tasks.active_runtime_budget_exhausted(task.id)
 
     try:
-        definition = AgentDefinition(
-            definition_id=str(run.workflow_id),
-            framework=str(getattr(run, "framework", None) or "langgraph"),
-            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-            category=getattr(run, "definition_category", None),
-        )
+        definition = definition_from_run(run)
         adapter = adapter_for_definition(definition)
         # Task runs created before the external runtime was introduced may
         # contain a materialized graph without the v2 envelope marker.  Keep
@@ -452,9 +442,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         else:
             runtime_result = await adapter.continue_run(runtime_request, context=runtime_context, event_sink=runtime_event_sink)
         if runtime_result is None:
-            # A continuation is optional at the runtime boundary.  A missing
-            # checkpoint is a terminal runtime outcome, not a legacy result
-            # object and must not reach legacy_result_from_runtime(None).
+            # A continuation is optional at the runtime boundary. A missing
+            # checkpoint is a terminal runtime outcome.
             runtime_result = AgentRuntimeResult(
                 status="failed",
                 error={
@@ -465,7 +454,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             )
         if runtime_result.continuation is not None:
             await repository.update_runtime_binding(run.id, runtime_result.continuation)
-        result = legacy_result_from_runtime(runtime_result)
+        result = result_to_product_payload(runtime_result)
         # Runtime artifacts are data, not product records. Project them in
         # rag-service after the stream completes and translate deterministic
         # runtime IDs to the persisted artifact IDs used by task APIs.

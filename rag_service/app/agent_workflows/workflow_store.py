@@ -66,8 +66,10 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
         for workflow_def in load_builtin_workflows():
             spec_json = workflow_def["spec_json"]
             builtin_key = workflow_def["builtin_key"]
-            framework = str(workflow_def.get("framework") or "langgraph")
-            builder_id = str(workflow_def.get("builder_id") or "langgraph_graph")
+            framework = str(workflow_def.get("framework") or "").strip()
+            builder_id = str(workflow_def.get("builder_id") or "").strip()
+            if not framework or not builder_id:
+                raise ValueError(f"Builtin workflow {builtin_key} is missing runtime identity")
             definition = AgentDefinition(
                 definition_id=builtin_key,
                 framework=framework,
@@ -253,8 +255,10 @@ async def save_custom_workflow(
         except (TypeError, ValueError):
             next_version = 1
         workflow_key = workflow_id or spec_json.get("workflow_id") or name
-        framework = stored_framework or str(framework or "langgraph")
-        builder_id = stored_builder_id or str(builder_id or "langgraph_graph")
+        framework = stored_framework or str(framework or "").strip()
+        builder_id = stored_builder_id or str(builder_id or "").strip()
+        if not framework or not builder_id:
+            raise ValueError("Agent workflow runtime identity is required")
         definition = AgentDefinition(
             definition_id=str(workflow_key),
             framework=framework,

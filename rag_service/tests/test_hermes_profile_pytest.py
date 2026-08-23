@@ -15,7 +15,6 @@ from app.runtime.hermes_profile import (
 
 def _spec() -> dict:
     return {
-        "definition_version": 1,
         "config": {
             "system_prompt": "Use evidence.",
             "mcp_server": "askpdf",
@@ -45,13 +44,6 @@ def test_profile_rejects_persisted_credentials_at_any_depth(secret: str) -> None
     spec = _spec()
     spec["config"]["provider_config"] = {secret: "do-not-store"}
     with pytest.raises(ValueError, match="cannot persist credentials"):
-        resolve_hermes_profile(spec)
-
-
-def test_profile_version_is_required() -> None:
-    spec = _spec()
-    spec.pop("definition_version")
-    with pytest.raises(ValueError, match="definition_version"):
         resolve_hermes_profile(spec)
 
 

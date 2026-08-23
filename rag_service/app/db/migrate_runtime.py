@@ -10,7 +10,7 @@ from sqlalchemy.pool import NullPool
 
 
 BASELINE_REVISION = "9b4d6e2f1a7c"
-RUNTIME_HEAD_REVISION = "1e8f3a7c5b2d"
+RUNTIME_HEAD_REVISION = "h3c8d5e0f2a4"
 
 
 def _async_database_url(database_url: str) -> str:

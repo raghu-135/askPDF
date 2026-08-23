@@ -18,10 +18,14 @@ from app.agent_workflows.workflow_runtime import (
     workflow_is_chat_eligible,
 )
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.catalog import definition_from_workflow
+from app.runtime.catalog import (
+    continuation_from_run,
+    definition_from_run,
+    definition_from_workflow,
+    result_to_product_payload,
+)
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.capability_resolver import require_capability
-from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
@@ -65,32 +69,14 @@ def _workflow_version_info(workflow: Any) -> SimpleNamespace:
     )
 
 
-def _definition_for_run(run: Any) -> AgentDefinition:
-    resolved_spec = run.resolved_spec_json if isinstance(getattr(run, "resolved_spec_json", None), dict) else {}
-    runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), dict) else {}
-    features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
-    return AgentDefinition(
-        definition_id=str(run.workflow_id),
-        framework=str(getattr(run, "framework", None) or "langgraph"),
-        builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
-        category=getattr(run, "definition_category", None),
-        capabilities=dict(features),
-        runtime_version=str(runtime.get("version")) if runtime.get("version") else None,
-    )
-
-
 class AgentRunService:
     """Runs the selected agent workflow, defaulting to the compiled Router graph."""
 
     def __init__(
         self,
         repository: Optional[AgentWorkflowRepository] = None,
-        resolver: Optional[Any] = None,
     ):
         self.repository = repository or AgentWorkflowRepository()
-        # Kept for constructor compatibility with existing callers. New run
-        # preparation resolves through the concrete builder provider.
-        self.resolver = resolver
         self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
@@ -105,7 +91,7 @@ class AgentRunService:
         run = await self.repository.get_run(run_id)
         if run is None or run.thread_id != thread_id:
             return None
-        definition = _definition_for_run(run)
+        definition = definition_from_run(run)
         await require_capability(definition, RuntimeOperationId.RUN_CANCEL, registry=get_runtime_registry(), run=run)
         adapter = adapter_for_definition(definition)
         request = AgentRuntimeRequest(
@@ -119,7 +105,7 @@ class AgentRunService:
         return await adapter.cancel(request)
 
     async def inspect_agent_run(self, run: Any) -> Dict[str, Any]:
-        definition = _definition_for_run(run)
+        definition = definition_from_run(run)
         await require_capability(definition, RuntimeOperationId.RUN_INSPECT_STATE, registry=get_runtime_registry(), run=run)
         adapter = adapter_for_definition(definition)
         request = AgentRuntimeRequest(
@@ -141,7 +127,7 @@ class AgentRunService:
         update: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        definition = _definition_for_run(run)
+        definition = definition_from_run(run)
         adapter = adapter_for_definition(definition)
         await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
         request = AgentRuntimeRequest(
@@ -237,23 +223,12 @@ class AgentRunService:
                 request_overrides,
                 reject_unsupported=False,
             )
-            if self.resolver is not None:
-                # Preserve the explicit test/integration injection seam while
-                # production selection remains provider-based.
-                resolved_spec = self.resolver.resolve(
-                    workflow.spec_json,
-                    thread_settings=thread_settings,
-                    request_overrides=provider_request_overrides,
-                )
-            else:
-                resolved_spec = await provider.resolve(
-                    definition,
-                    workflow.spec_json,
-                    thread_settings=thread_settings,
-                    request_overrides=provider_request_overrides,
-                )
-            # Normalize again at the persistence boundary so injected/custom
-            # resolvers cannot bypass the selected provider's final contract.
+            resolved_spec = await provider.resolve(
+                definition,
+                workflow.spec_json,
+                thread_settings=thread_settings,
+                request_overrides=provider_request_overrides,
+            )
             stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
         except ValueError as exc:
             logger.exception(
@@ -278,8 +253,8 @@ class AgentRunService:
             resolved_spec_json=stored_resolved_spec,
             run_metadata_json={
                 "executed_workflow_id": workflow.id,
-                "framework": str(getattr(workflow, "framework", None) or "langgraph"),
-                "builder_id": str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+                "framework": definition.framework,
+                "builder_id": definition.builder_id,
             },
         )
 
@@ -349,7 +324,7 @@ class AgentRunService:
             )
             if runtime_result.continuation is not None:
                 await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
-            result = legacy_result_from_runtime(runtime_result)
+            result = result_to_product_payload(runtime_result)
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             _attach_parallel_projection(result, execution_event_sink)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
@@ -570,7 +545,7 @@ class AgentRunService:
         ):
             operation = RuntimeOperationId(str(pending_interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
             await require_capability(
-                _definition_for_run(current_run),
+                definition_from_run(current_run),
                 operation,
                 registry=get_runtime_registry(),
                 run=current_run,
@@ -629,7 +604,7 @@ class AgentRunService:
 
             response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
             if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
-                definition = _definition_for_run(resolution.run)
+                definition = definition_from_run(resolution.run)
                 await require_capability(
                     definition,
                     RuntimeOperationId.RUN_APPROVAL_RESPOND,
@@ -690,7 +665,7 @@ class AgentRunService:
                 execution_event_sink.bind_runtime_event_persister(resolution.run.id, self.repository.append_run_event)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
                 execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
-            definition = _definition_for_run(resolution.run)
+            definition = definition_from_run(resolution.run)
             await require_capability(
                 definition,
                 RuntimeOperationId.RUN_RESUME,
@@ -716,7 +691,7 @@ class AgentRunService:
                 ),
                 event_sink=execution_event_sink,
             )
-            result = legacy_result_from_runtime(runtime_result)
+            result = result_to_product_payload(runtime_result)
             _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {

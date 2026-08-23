@@ -10,7 +10,7 @@ from hermes_runtime.profile_manager import RunProfileManager, configured_context
 
 def _managed(profile: str, tools: list[str], model: str, provider: str, context: int) -> dict:
     return {
-        "profile_version": 2, "profile_id": "policy-id", "instructions": "research",
+        "profile_id": "policy-id", "instructions": "research",
         "mcp": {"server": "askpdf", "runtime_profile": profile, "allowed_tool_ids": tools},
         "model_policy": {"model": model, "provider": provider}, "skills": {"enabled": []},
         "memory": {"persistent": False}, "delegation": {"enabled": True},

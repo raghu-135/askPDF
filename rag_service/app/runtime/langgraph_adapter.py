@@ -7,6 +7,7 @@ from typing import Any, Mapping, Optional
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
+    AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
@@ -14,7 +15,35 @@ from app.runtime.contracts import (
     RuntimeValidationIssue,
     RuntimeValidationResult,
 )
-from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
+from app.runtime.events import create_runtime_event
+
+
+def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
+    status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
+    return AgentRuntimeResult(
+        status=status,
+        output=result.get("answer") if "answer" in result else result.get("final_output"),
+        clarification={"options": list(result["clarification_options"])} if result.get("clarification_options") else None,
+        interruption=result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None,
+        usage=dict(result.get("usage") or result.get("metrics") or {}),
+        runtime_metadata={key: result[key] for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id") if key in result},
+        error=result.get("agent_error") if isinstance(result.get("agent_error"), Mapping) else None,
+    )
+
+
+def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -> AgentRuntimeEvent:
+    data = dict(event.get("data") or {})
+    kind = str(event.get("event") or event.get("kind") or "runtime.event")
+    return create_runtime_event(
+        event_id=str(data.get("event_id") or f"{run_id}:{sequence}"),
+        run_id=run_id,
+        sequence=sequence,
+        kind=kind,
+        payload=data,
+        occurred_at=data.get("occurred_at") or data.get("timestamp"),
+        trace_id=data.get("trace_id"),
+        source_metadata={"framework": "langgraph", "source_event": kind},
+    )
 from app.runtime.errors import RuntimeError
 from app.runtime.langgraph_capabilities import langgraph_capabilities
 from app.runtime.langgraph import checkpointing, router_runtime
@@ -64,7 +93,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             },
         )
 
-    def _legacy_context(self, request: AgentRuntimeRequest, context: RuntimeExecutionContext) -> dict[str, Any]:
+    def _execution_context(self, request: AgentRuntimeRequest, context: RuntimeExecutionContext) -> dict[str, Any]:
         return {
             **dict(context.agent_run_context or {}),
             "agent_run_id": request.run_id,
@@ -86,14 +115,14 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 context.request,
                 context.embedding_model,
                 resolved_spec=dict(context.resolved_spec),
-                agent_run_context=self._legacy_context(request, context),
+                agent_run_context=self._execution_context(request, context),
                 trace_recorder=context.trace_recorder,
                 checkpointer=checkpointer,
                 execution_event_sink=event_sink,
                 cancellation_checker=context.cancellation_checker,
                 persist_product_records=False,
             )
-        return result_from_legacy(result)
+        return _result_from_graph(result)
 
     async def resume(
         self,
@@ -121,7 +150,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             result = await router_runtime.resume_compiled_rag_chat(
                 run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
             )
-        return result_from_legacy(result)
+        return _result_from_graph(result)
 
     async def continue_run(
         self,
@@ -136,9 +165,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         if run is None:
             raise ValueError("LangGraph continuation requires the persisted AgentRun in execution context")
         # The HTTP transport carries the authoritative execution snapshot in
-        # context.resolved_spec. Inject it into the legacy run-shaped object
-        # consumed by continue_compiled_rag_chat; otherwise a serialized
-        # SQLModel/namespace may contain only identity fields and compile {}.
+        # context.resolved_spec. Keep the runtime execution snapshot complete
+        # before invoking the graph continuation.
         if context.resolved_spec:
             run.resolved_spec_json = dict(context.resolved_spec)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
@@ -150,7 +178,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 cancellation_checker=context.cancellation_checker,
                 persist_product_records=False,
             )
-        return result_from_legacy(result) if result is not None else None
+        return _result_from_graph(result) if result is not None else None
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any:
         from app.agent_workflows import chat_cancellation
@@ -216,6 +244,6 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         context: RuntimeExecutionContext | None = None,
     ) -> list[Any]:
         return [
-            event_from_legacy(event, run_id=run_id, sequence=index)
+            _event_from_graph(event, run_id=run_id, sequence=index)
             for index, event in enumerate(events, start=1)
         ]

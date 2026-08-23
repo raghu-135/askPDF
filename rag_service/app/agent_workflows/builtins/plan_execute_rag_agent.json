@@ -2,6 +2,8 @@
   "builtin_key": "plan_execute_rag_agent",
   "description": "A scoped compiled RAG workflow that loads context, plans a bounded set of retrieval workers, executes them in a fixed safe order, then synthesizes a final response.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "name": "Plan-and-Execute Agent",
   "spec_json": {
     "config": {

@@ -9,7 +9,7 @@ from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
 from app.runtime.errors import RuntimeError
-from app.runtime.langgraph_compat import legacy_result_from_runtime
+from app.runtime.catalog import result_to_product_payload
 
 
 def _request() -> AgentRuntimeRequest:
@@ -34,8 +34,8 @@ def test_runtime_error_is_raiseable_and_keeps_wire_shape():
         assert caught.to_dict()["safe_message"] == "Agent runtime timed out"
 
 
-def test_legacy_projection_keeps_absent_interaction_fields_null():
-    projected = legacy_result_from_runtime(AgentRuntimeResult(status="completed", output="answer"))
+def test_typed_projection_keeps_absent_interaction_fields_null():
+    projected = result_to_product_payload(AgentRuntimeResult(status="completed", output="answer"))
     assert projected["clarification_options"] is None
     assert projected["pending_interrupt"] is None
 
@@ -79,11 +79,11 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
         if request.url.path == "/v1/capabilities":
             assert request.method == "POST"
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
-            return httpx.Response(200, json={"contract_version": 1, "capabilities": {"operations": {
+            return httpx.Response(200, json={"capabilities": {"operations": {
                 "run.events": {"support": "native", "enabled": True},
                 "run.resume": {"support": "conditional", "enabled": True, "semantics": "resume_from_interrupt"},
             }}})
-        return httpx.Response(200, json={"contract_version": 1, "validation": {"valid": True, "issues": []}})
+        return httpx.Response(200, json={"validation": {"valid": True, "issues": []}})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -141,7 +141,6 @@ async def test_http_adapter_preserves_dependency_admission_error():
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={
-            "contract_version": 1,
             "status": "failed",
             "error": {
                 "code": "runtime_dependency_unavailable",
@@ -166,9 +165,9 @@ async def test_http_adapter_preserves_dependency_admission_error():
 @pytest.mark.parametrize(
     ("status", "payload", "expected_code", "expected_retryable"),
     [
-        (400, {"contract_version": 1, "error": {"code": "invalid_request", "safe_message": "bad request", "retryable": False}}, "invalid_request", False),
+        (400, {"error": {"code": "invalid_request", "safe_message": "bad request", "retryable": False}}, "invalid_request", False),
         (409, {"detail": {"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False}}, "runtime_operation_conflict", False),
-        (503, {"contract_version": 1, "error": {"code": "runtime_dependency_unavailable", "safe_message": "dependency unavailable", "retryable": True}}, "runtime_dependency_unavailable", True),
+        (503, {"error": {"code": "runtime_dependency_unavailable", "safe_message": "dependency unavailable", "retryable": True}}, "runtime_dependency_unavailable", True),
     ],
 )
 async def test_http_adapter_preserves_structured_json_http_errors(status, payload, expected_code, expected_retryable):

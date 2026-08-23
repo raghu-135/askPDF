@@ -2,6 +2,8 @@
   "builtin_key": "corrective_self_rag_agent",
   "description": "A bounded Corrective/Self-RAG workflow that grades retrieval, runs targeted corrective waves, and verifies claim-level citation support before finalization.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "name": "Corrective/Self-RAG Agent",
   "spec_json": {
     "schema_version": 2,

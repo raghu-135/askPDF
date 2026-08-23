@@ -105,7 +105,7 @@ def test_neutral_runtime_modules_have_no_framework_imports():
         import_lines = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
         assert not any(token in line for line in import_lines for token in forbidden), name
 @pytest.mark.asyncio
-async def test_langgraph_adapter_start_projects_legacy_result(monkeypatch):
+async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
     import app.runtime.langgraph_adapter as module
 
     class Checkpointer:

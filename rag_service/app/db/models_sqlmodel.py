@@ -377,7 +377,6 @@ class AgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, default=dict),
     )
-    runtime_binding_version: int = Field(default=1)
     runtime_binding_status: str = Field(default="active", index=True)
     run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,

@@ -2,6 +2,8 @@
   "builtin_key": "router_rag_agent",
   "description": "A fast routing workflow that uses one retrieval task when possible and escalates compound requests to a bounded serial plan.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "name": "Router Agent",
   "spec_json": {
     "config": {

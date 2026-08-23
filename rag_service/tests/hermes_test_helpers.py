@@ -24,7 +24,6 @@ def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[
         },
         "context": {
             "resolved_spec": {
-                "definition_version": 1,
                 "config": {
                     "mcp_server": "askpdf",
                     "allowed_tool_ids": ["document_evidence", "clarify_intent"],

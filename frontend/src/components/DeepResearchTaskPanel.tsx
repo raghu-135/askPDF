@@ -349,7 +349,7 @@ export default function DeepResearchTaskPanel({
           setCapabilityError('');
         } else {
           setRunCapabilities(null);
-          setCapabilityError('Run controls are temporarily unavailable. They will be retried automatically.');
+          setCapabilityError('Run controls are temporarily unavailable. Refresh the run to retry.');
         }
       });
     return () => { active = false; };

@@ -17,7 +17,6 @@ from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRunti
 from app.runtime.events import create_runtime_event
 from app.runtime.errors import RuntimeError
 from app.runtime.transport import (
-    WIRE_VERSION,
     definition_from_dict,
     event_from_dict,
     request_from_dict,
@@ -58,9 +57,8 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         run_context["run"] = _namespace(run_context["run"])
     resolved_spec = dict(value.get("resolved_spec") or {})
     if resolved_spec and run_context.get("run") is not None:
-        # Continuation code consumes the legacy run-shaped object. Keep its
-        # graph snapshot synchronized with the explicit neutral context field
-        # rather than relying on ORM/model serialization details.
+        # Keep the persisted execution snapshot synchronized with the explicit
+        # neutral context field rather than relying on ORM serialization.
         run_context["run"].resolved_spec_json = resolved_spec
     request_payload = value.get("request_payload")
     request_values = {
@@ -68,8 +66,8 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         **dict(request.input or {}),
         **dict(request.options or {}),
     }
-    # Only the top-level request needs attribute access for the legacy node
-    # functions. Preserve nested options as ordinary dict/list values because
+    # Only the top-level request needs attribute access for graph execution.
+    # Preserve nested options as ordinary dict/list values because
     # they may be copied into LangGraph state and must remain checkpointable.
     return RuntimeExecutionContext(
         request=SimpleNamespace(**request_values),
@@ -100,10 +98,8 @@ class _QueueSink:
                 attempt=source.attempt,
                 occurred_at=source.occurred_at,
                 trace_id=source.trace_id,
-                runtime_version=source.runtime_version,
                 source_metadata=source.source_metadata,
                 continuation=source.continuation,
-                contract_version=source.contract_version,
             )
         else:
             kind = str(args[0]) if args else "runtime.event"
@@ -255,7 +251,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         )
 
     def get_adapter() -> Any:
-        """Load legacy execution code only when an execution operation is called."""
+        """Load the concrete execution implementation only when needed."""
         nonlocal adapter
         if adapter is None:
             from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
@@ -356,6 +352,9 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             return cancellation_event.is_set() or await execution_store.is_cancel_requested(run_id)
 
         class DurableSink:
+            def __init__(self) -> None:
+                self.terminal_event_id: str | None = None
+
             async def emit(self, *args: Any) -> None:
                 if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
                     source = args[0]
@@ -368,10 +367,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         attempt=source.attempt,
                         occurred_at=source.occurred_at,
                         trace_id=source.trace_id,
-                        runtime_version=source.runtime_version,
                         source_metadata=source.source_metadata,
                         continuation=source.continuation,
-                        contract_version=source.contract_version,
                     )
                 else:
                     kind = str(args[0]) if args else "runtime.event"
@@ -382,7 +379,50 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         kind=kind,
                         payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
                     )
+                if event.terminal:
+                    if self.terminal_event_id is not None and self.terminal_event_id != event.event_id:
+                        raise RuntimeError("runtime_protocol_error", "Runtime emitted more than one terminal event")
+                    self.terminal_event_id = event.event_id
                 await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+
+        durable_sink = DurableSink()
+
+        async def finalize(result: AgentRuntimeResult, *, error: Mapping[str, Any] | None = None) -> None:
+            terminal_kind = "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
+            if durable_sink.terminal_event_id is None:
+                terminal = create_runtime_event(
+                    event_id=f"{run_id}:terminal",
+                    run_id=run_id,
+                    sequence=1,
+                    kind=terminal_kind,
+                    payload={"status": result.status, **({"error": dict(error)} if error else {})},
+                    continuation=result.continuation,
+                )
+                stored_terminal = await execution_store.append(
+                    run_id,
+                    terminal.to_dict(),
+                    result=result.to_dict(),
+                    attempt=attempt,
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+                durable_sink.terminal_event_id = str(stored_terminal["event_id"])
+            else:
+                await execution_store.set_event_result(
+                    run_id,
+                    durable_sink.terminal_event_id,
+                    result.to_dict(),
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+            await execution_store.set_status(
+                run_id,
+                result.status,
+                result=result.to_dict(),
+                error=dict(error) if error else None,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
 
         await execution_store.set_status(run_id, "running", owner_id=owner_id, fencing_token=fencing_token)
         heartbeat_stop = asyncio.Event()
@@ -400,53 +440,39 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
         context = _context(payload, request, cancellation_checker=cancellation_probe)
         try:
-            framework = str(getattr(request, "framework", None) or "langgraph")
+            framework = str(getattr(request, "framework", None) or "").strip()
+            if not framework:
+                raise RuntimeError("invalid_runtime_identity", "Runtime request is missing framework identity")
             execution_timeout = float(deep_agent_budgets(framework)["max_duration_seconds"])
             result = await asyncio.wait_for(
                 getattr(get_adapter(), operation)(
                     request,
                     **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
                     context=context,
-                    event_sink=DurableSink(),
+                    event_sink=durable_sink,
                 ),
                 timeout=execution_timeout,
             )
             if result is None:
                 result = AgentRuntimeResult(status="no_continuation", runtime_metadata={"continuation_available": False})
             result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
-            terminal_kind = "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
-            terminal = create_runtime_event(
-                event_id=f"{run_id}:terminal",
-                run_id=run_id,
-                sequence=1,
-                kind=terminal_kind,
-                payload={"status": result.status},
-                continuation=result.continuation,
-            )
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
-            await execution_store.set_status(run_id, result.status, result=result.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+            await finalize(result)
         except LeaseLostError:
             logger.warning("Runtime worker lost its lease; abandoning execution | run_id=%s", run_id)
             return
         except asyncio.TimeoutError:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
-            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+            await finalize(result, error=error.to_dict())
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
             result = AgentRuntimeResult(status="failed", error=exc.to_dict())
-            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": exc.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=exc.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+            await finalize(result, error=exc.to_dict())
         except Exception as exc:
             logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
             error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
-            terminal = create_runtime_event(event_id=f"{run_id}:terminal", run_id=run_id, sequence=1, kind="run.failed", payload={"error": error.to_dict()})
-            await execution_store.append(run_id, terminal.to_dict(), result=result.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
-            await execution_store.set_status(run_id, "failed", result=result.to_dict(), error=error.to_dict(), owner_id=owner_id, fencing_token=fencing_token)
+            await finalize(result, error=error.to_dict())
         finally:
             heartbeat_stop.set()
             heartbeat_task.cancel()
@@ -466,6 +492,21 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         source_attempt: int | None = None,
     ) -> AsyncIterator[str]:
         request = request_from_dict(payload["request"])
+        operation_id_by_endpoint = {
+            "start": "run.start",
+            "resume": "run.resume",
+            "continue_run": "run.resume",
+            "retry": "run.start",
+        }
+        capability_id = operation_id_by_endpoint.get(operation)
+        if capability_id and allow_start:
+            definition = definition_from_dict(payload["definition"])
+            descriptor = langgraph_capabilities(definition).operations.get(capability_id)
+            if descriptor is None or not descriptor.enabled:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "runtime_capability_unsupported", "operation": capability_id, "safe_message": "The requested runtime operation is unavailable", "retryable": False},
+                )
         if expected_run_id and request.run_id != expected_run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         if runtime_state["draining"]:
@@ -481,7 +522,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         operation,
                         request.to_dict(),
                         payload,
-                        operation_id=operation_id,
+                        operation_id=operation_id or payload.get("operation_id"),
                         source_attempt=source_attempt,
                     )
                 except ExecutionConflictError as exc:
@@ -513,11 +554,23 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 task.add_done_callback(_remove_finished)
             attempt = record.attempt
         last_sequence = after_sequence
+        terminal_seen = False
         while True:
             events = await execution_store.events_after(request.run_id, last_sequence, attempt=attempt)
             for item in events:
                 event = event_from_dict(item)
                 result = result_from_dict(item["result"]) if item.get("result") else None
+                if event.terminal:
+                    if terminal_seen:
+                        raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Multiple terminal events were persisted", "retryable": False})
+                    if result is None:
+                        raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Terminal events must include a result", "retryable": False})
+                    terminal_seen = True
+                elif result is not None and not (
+                    event.kind in {"approval.requested", "interrupt.requested", "run.paused"}
+                    and result.status in {"awaiting_human", "paused"}
+                ):
+                    raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Only terminal or resumable events may include results", "retryable": False})
                 yield sse_encode(event, result=result)
                 last_sequence = max(last_sequence, event.sequence)
                 if event.terminal:
@@ -533,7 +586,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         request = request_from_dict(payload["request"])
         await _preflight_operation(request.run_id, payload, "start")
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "start"), media_type="text/event-stream")
+        return StreamingResponse(stream_operation(payload, "start", operation_id=payload.get("operation_id")), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")
     async def events(run_id: str, after_sequence: int = 0) -> StreamingResponse:
@@ -556,13 +609,13 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "resume")
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "resume", run_id), media_type="text/event-stream")
+        return StreamingResponse(stream_operation(payload, "resume", run_id, operation_id=payload.get("operation_id")), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/continue")
     async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "continue_run")
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "continue_run", run_id), media_type="text/event-stream")
+        return StreamingResponse(stream_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id")), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/retry")
     async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:

@@ -35,13 +35,11 @@ from hermes_runtime.profile_manager import (
 )
 
 
-WIRE_VERSION = 1
 logger = logging.getLogger(__name__)
 
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
     return {
-        "contract_version": WIRE_VERSION,
         "request_id": request_id,
         "status": status,
         "result": dict(result or {}),
@@ -151,7 +149,6 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
         "payload": dict(payload or {}),
         "terminal": terminal,
         "source_metadata": {"framework": "hermes", "source_event": source_event_id} if source_event_id else {"framework": "hermes"},
-        "contract_version": WIRE_VERSION,
     }
     if continuation is not None:
         event["continuation"] = dict(continuation)
@@ -557,8 +554,6 @@ def create_app() -> FastAPI:
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                 },
-                "runtime_version": os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"),
-                "contract_version": WIRE_VERSION,
             }},
         )
 
@@ -571,8 +566,6 @@ def create_app() -> FastAPI:
             issues.append({"code": "invalid_runtime_identity", "message": "Hermes runtime requires framework=hermes and builder_id=hermes_agent"})
         if spec.get("schema_version") != 2:
             issues.append({"code": "unsupported_schema_version", "message": "Hermes definitions must use schema_version 2"})
-        if spec.get("definition_version") not in {1, 2}:
-            issues.append({"code": "unsupported_definition_version", "message": "Hermes definitions must use definition_version 1 or 2"})
         config = spec.get("config")
         if not isinstance(config, Mapping):
             issues.append({"code": "missing_config", "message": "Hermes spec requires config"})
@@ -611,18 +604,17 @@ def create_app() -> FastAPI:
         context = dict(payload.get("context") or {})
         question = str(input_data.get("question") or context.get("request_payload", {}).get("question") or "")
         resolved_spec = dict(context.get("resolved_spec") or {})
-        definition_version = int(resolved_spec.get("definition_version") or 1)
         managed_profile = resolved_spec.get("managed_profile") or {}
         config = resolved_spec.get("config") or {}
         managed_mcp = managed_profile.get("mcp") or {}
         runtime_profile = str(managed_mcp.get("runtime_profile") or "").strip()
         managed_limits = managed_profile.get("limits") or {}
-        effective_limits = managed_limits if definition_version >= 2 else config
+        effective_limits = managed_limits
         max_events = max(1, int(effective_limits.get("max_event_count") or 200))
         max_output_chars = max(1, int(effective_limits.get("max_output_chars") or 12000))
         max_duration_seconds = max(1, int(effective_limits.get("max_duration_seconds") or 3600))
         deadline = time.monotonic() + max_duration_seconds
-        system_prompt = str((managed_profile.get("instructions") if definition_version >= 2 else config.get("system_prompt")) or "").strip()
+        system_prompt = str(managed_profile.get("instructions") or "").strip()
         task_context = input_data.get("task_context")
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
@@ -630,8 +622,8 @@ def create_app() -> FastAPI:
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,
-            "model": ((managed_profile.get("model_policy") or {}).get("model") if definition_version >= 2 else options.get("llm_model") or config.get("model")) or "",
-            "provider": ((managed_profile.get("model_policy") or {}).get("provider") if definition_version >= 2 else options.get("llm_provider") or config.get("provider")) or "custom",
+            "model": ((managed_profile.get("model_policy") or {}).get("model")) or "",
+            "provider": ((managed_profile.get("model_policy") or {}).get("provider")) or "custom",
             "metadata": {
                 "askpdf_run_id": run_id,
                 "askpdf_thread_id": neutral_request.get("thread_id"),
@@ -729,8 +721,8 @@ def create_app() -> FastAPI:
                     "runtime_metadata": {
                         "session_id": session_id,
                         "upstream_run_id": upstream_run_id,
-                        "mcp_server": managed_mcp.get("server") if definition_version >= 2 else config.get("mcp_server"),
-                        "allowed_tool_ids": list(managed_mcp.get("allowed_tool_ids") or []) if definition_version >= 2 else list(config.get("allowed_tool_ids") or []),
+                        "mcp_server": managed_mcp.get("server"),
+                        "allowed_tool_ids": list(managed_mcp.get("allowed_tool_ids") or []),
                         "policy_fingerprint": managed_profile.get("profile_id"),
                     },
                     "continuation": continuation,
@@ -773,7 +765,7 @@ def create_app() -> FastAPI:
         execution_profile = str(binding_payload.get("runtime_profile") or "")
         run_profile: RunProfile | None = None
         try:
-            if definition_version >= 2 and not profile_manager.is_reusable(execution_profile):
+            if not profile_manager.is_reusable(execution_profile):
                 run_profile = profile_manager.create(
                     run_id=run_id,
                     managed_profile=managed_profile,
@@ -906,8 +898,6 @@ def create_app() -> FastAPI:
                 headers["X-Hermes-Run-Id"] = upstream_run_id
                 continuation = {
                     "binding_type": "hermes_session",
-                    "binding_version": 1,
-                    "runtime_version": HERMES_REVISION,
                     "payload": {
                         "session_id": session_id,
                         "upstream_run_id": upstream_run_id,

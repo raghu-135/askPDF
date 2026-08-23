@@ -306,9 +306,9 @@ class LangGraphBuilderProvider:
             if event_sink is not None:
                 await event_sink.emit(event)
             if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
-                from app.runtime.langgraph_compat import result_from_legacy
+                from app.runtime.langgraph_adapter import _result_from_graph
 
-                result = result_from_legacy(event.get("data") or {})
+                result = _result_from_graph(event.get("data") or {})
         if result is None:
             raise RuntimeError("LangGraph builder test ended without a terminal result")
         return result
@@ -333,9 +333,9 @@ class LangGraphBuilderProvider:
             if event_sink is not None:
                 await event_sink.emit(event)
             if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
-                from app.runtime.langgraph_compat import result_from_legacy
+                from app.runtime.langgraph_adapter import _result_from_graph
 
-                result = result_from_legacy(event.get("data") or {})
+                result = _result_from_graph(event.get("data") or {})
         if result is None:
             raise RuntimeError("LangGraph builder resume ended without a terminal result")
         return result

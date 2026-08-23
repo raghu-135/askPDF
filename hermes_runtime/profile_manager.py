@@ -164,7 +164,7 @@ class RunProfileManager:
             raise RuntimeError("Hermes run-profile secrets must be single-line values")
         if policy_profile not in HERMES_PROFILE_NAMES:
             raise RuntimeError("Unsupported Hermes managed profile")
-        required = {"profile_version", "profile_id", "instructions", "skills", "memory", "delegation", "task_policy"}
+        required = {"profile_id", "instructions", "skills", "memory", "delegation", "task_policy"}
         missing = sorted(required - set(policy))
         if missing:
             raise RuntimeError(f"Hermes managed profile is incomplete: {', '.join(missing)}")

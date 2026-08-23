@@ -24,12 +24,8 @@ from app.runtime.contracts import (
 from app.runtime.events import create_runtime_event
 
 
-WIRE_VERSION = 1
-
-
 def json_envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None, runtime_metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return {
-        "contract_version": WIRE_VERSION,
         "request_id": request_id,
         "status": status,
         "result": dict(result or {}),
@@ -44,8 +40,6 @@ def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
     return ContinuationBinding(
         binding_type=str(value.get("binding_type") or "unknown"),
         payload=dict(value.get("payload") or {}),
-        binding_version=int(value.get("binding_version") or 1),
-        runtime_version=value.get("runtime_version"),
     )
 
 
@@ -64,7 +58,6 @@ def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
         trace_id=value.get("trace_id"),
         authentication=dict(value.get("authentication") or {}),
         permissions=dict(value.get("permissions") or {}),
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 
 
@@ -77,9 +70,6 @@ def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
         display_name=value.get("display_name"),
         capabilities=dict(value.get("capabilities") or {}),
         definition_metadata=dict(value.get("definition_metadata") or {}),
-        definition_version=value.get("definition_version"),
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
-        runtime_version=value.get("runtime_version"),
     )
 
 
@@ -94,9 +84,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
         occurred_at=value.get("occurred_at"),
         trace_id=value.get("trace_id"),
         source_metadata=dict(value.get("source_metadata") or {}),
-        runtime_version=value.get("runtime_version"),
         continuation=_binding(value.get("continuation")),
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 
 
@@ -111,7 +99,6 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         runtime_metadata=dict(value.get("runtime_metadata") or {}),
         continuation=_binding(value.get("continuation")),
         error=dict(value["error"]) if isinstance(value.get("error"), Mapping) else None,
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 
 
@@ -131,7 +118,6 @@ def validation_from_dict(value: Mapping[str, Any]) -> RuntimeValidationResult:
         ),
         normalized_spec=value.get("normalized_spec"),
         runtime_metadata=dict(value.get("runtime_metadata") or {}),
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 
 
@@ -227,8 +213,6 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
         operations=operations,
         features=features,
         deployment=dict(deployment),
-        runtime_version=value.get("runtime_version"),
-        contract_version=int(value.get("contract_version") or WIRE_VERSION),
     )
 
 
@@ -239,7 +223,6 @@ class ServerEnvelope:
     result: Mapping[str, Any] | None = None
     error: Mapping[str, Any] | None = None
     runtime_metadata: Mapping[str, Any] | None = None
-    contract_version: int = WIRE_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -248,7 +231,6 @@ class ServerEnvelope:
             "result": dict(self.result or {}),
             "error": dict(self.error or {}),
             "runtime_metadata": dict(self.runtime_metadata or {}),
-            "contract_version": self.contract_version,
         }
 
 

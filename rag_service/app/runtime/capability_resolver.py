@@ -40,6 +40,31 @@ TASK_ONLY_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RETRY.value,
 })
 
+OPERATION_METHODS = {
+    "run.start": "start",
+    "run.get": "get_run",
+    "run.list": "list_runs",
+    "run.wait": "wait",
+    "run.events": "stream_events",
+    "run.resume": "resume",
+    "run.cancel": "cancel",
+    "run.pause": "pause",
+    "run.send_followup": "send_followup",
+    "run.interrupt_with_input": "interrupt_with_input",
+    "run.steer_live": "steer_live",
+    "run.inspect_state": "inspect_state",
+    "run.update_state": "update_state",
+    "run.replay": "replay",
+    "run.fork": "fork",
+    "run.approval.respond": "respond_to_approval",
+    "interrupt.respond": "respond_to_interrupt",
+    "subagent.list": "list_subagents",
+    "subagent.send": "send_to_subagent",
+    "subagent.cancel": "cancel_subagent",
+    "artifact.list": "list_artifacts",
+    "run.continuation.cleanup": "delete_continuation",
+}
+
 
 def deployment_id(adapter: Any) -> str:
     return f"{adapter.framework}:{adapter.builder_id}"
@@ -77,7 +102,7 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await adapter.capabilities(definition)
+    capabilities = await adapter.deployment_capabilities()
     return apply_definition_policy(capabilities, definition)
 
 
@@ -191,7 +216,16 @@ async def discover_adapter_capabilities(
     definition: AgentDefinition,
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
-        return await adapter.capabilities(definition), None
+        capabilities = await adapter.deployment_capabilities()
+        operations = dict(capabilities.operations)
+        for operation_id, method_name in OPERATION_METHODS.items():
+            descriptor = operations.get(operation_id)
+            if descriptor is None or not descriptor.enabled:
+                continue
+            method = getattr(adapter, method_name, None)
+            if method is None:
+                operations[operation_id] = _disabled(descriptor, "adapter_operation_unimplemented")
+        return replace(capabilities, operations=operations), None
     except RuntimeError as exc:
         return None, exc.to_dict()
     except Exception as exc:

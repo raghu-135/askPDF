@@ -6,8 +6,7 @@ import hashlib
 import json
 from typing import Any, Mapping
 from app.runtime.hermes_compatibility import (
-    HERMES_DEFINITION_VERSION, HERMES_EXTERNAL_PROFILE, HERMES_OFFLINE_PROFILE,
-    HERMES_PROFILE_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS,
+    HERMES_EXTERNAL_PROFILE, HERMES_OFFLINE_PROFILE,
 )
 from app.runtime.budgets import configured_budget_value
 HERMES_BASE_TOOL_IDS = (
@@ -45,9 +44,6 @@ def _reject_secrets(value: Any, path: str = "config") -> None:
 
 
 def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
-    definition_version = int(spec.get("definition_version") or 0)
-    if definition_version not in HERMES_SUPPORTED_DEFINITION_VERSIONS:
-        raise ValueError(f"Hermes definition_version must be one of {sorted(HERMES_SUPPORTED_DEFINITION_VERSIONS)}")
     config = spec.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("Hermes definitions require config")
@@ -64,7 +60,6 @@ def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
     runtime_profile = HERMES_EXTERNAL_PROFILE if external_enabled else HERMES_OFFLINE_PROFILE
     skills = tuple(sorted(set(str(item) for item in config.get("skills") or [])))
     profile = {
-        "profile_version": HERMES_PROFILE_VERSION if definition_version == HERMES_DEFINITION_VERSION else 1,
         "instructions": str(config.get("system_prompt") or ""),
         "mcp": {
             "server": str(config.get("mcp_server") or ""),

@@ -13,7 +13,6 @@ class RuntimeError(Exception):
     retryable: bool = False
     details: Mapping[str, Any] = field(default_factory=dict)
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
-    contract_version: int = 1
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.safe_message)

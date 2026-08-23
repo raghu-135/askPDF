@@ -42,8 +42,6 @@ async def test_seed_restart_recovery_record() -> None:
         upstream_status = status.json()
     binding = {
         "binding_type": "hermes_session",
-        "binding_version": 1,
-        "runtime_version": "hermes-gateway-1",
         "payload": {"upstream_run_id": upstream["run_id"], "session_id": upstream_status["session_id"]},
     }
     store = HermesExecutionStore(os.environ["HERMES_RUNTIME_STATE_PATH"])

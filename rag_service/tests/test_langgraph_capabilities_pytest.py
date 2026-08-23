@@ -128,12 +128,12 @@ def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app()) as client:
-        response = client.post("/v1/capabilities", json={"definition": _definition(runtime_version="1").to_dict()})
+        response = client.post("/v1/capabilities", json={"definition": _definition().to_dict()})
 
     assert response.status_code == 200
     payload = response.json()["result"]["capabilities"]
     expected = langgraph_capabilities(
-        _definition(runtime_version="1"),
+        _definition(),
         profile=LangGraphDeploymentProfile.from_environment(),
     ).to_dict()
     assert payload == expected

@@ -1243,8 +1243,6 @@ export interface RuntimeCapabilities {
     runtime_available?: boolean;
     configuration_error?: string | null;
   };
-  runtime_version?: string | null;
-  contract_version: number;
 }
 
 export interface AgentRuntimeCapabilityResponse {

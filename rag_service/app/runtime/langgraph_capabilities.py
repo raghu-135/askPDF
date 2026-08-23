@@ -248,5 +248,4 @@ def langgraph_capabilities(
         operations=operations,
         features=_deep_agents_features(definition),
         deployment=profile.deployment_metadata(),
-        runtime_version=definition.runtime_version or os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
     )

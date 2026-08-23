@@ -18,7 +18,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_provider
-from app.runtime.hermes_profile import HERMES_DEFINITION_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS, resolve_hermes_profile
+from app.runtime.hermes_profile import resolve_hermes_profile
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
@@ -35,8 +35,6 @@ class HermesBuilderProvider:
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
-        if spec.get("definition_version") not in HERMES_SUPPORTED_DEFINITION_VERSIONS:
-            issues.append(RuntimeValidationIssue("unsupported_definition_version", f"Hermes definitions must use one of {sorted(HERMES_SUPPORTED_DEFINITION_VERSIONS)}", "definition_version"))
         if spec.get("schema_version") != 2:
             issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 2", "schema_version"))
         runtime = spec.get("runtime")

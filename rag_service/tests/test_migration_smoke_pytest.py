@@ -57,15 +57,13 @@ def test_historical_migrations_upgrade_and_latest_downgrade(test_database_url: s
     # Alembic-managed functions or its version table. Use a guarded test-only
     # schema reset before treating the shared database as an empty target.
     _reset_test_schema(test_database_url)
-    _alembic(test_database_url, "upgrade", "head")
+    _alembic(test_database_url, "upgrade", "g2b7c9d4e1f3")
     current = _alembic(test_database_url, "current")
-    # 9b4d6e2f1a7c is the runtime-identity migration, not the application
-    # head. The application branch now ends at the observability revision.
-    assert "2a6c8e1f4b9d" in current.stdout
+    assert "g2b7c9d4e1f3" in current.stdout
 
     try:
         _alembic(test_database_url, "downgrade", "-1")
         downgraded = _alembic(test_database_url, "current")
-        assert "1e8f3a7c5b2d" in downgraded.stdout
+        assert "f1a9c7e3b5d2" in downgraded.stdout
     finally:
-        _alembic(test_database_url, "upgrade", "head")
+        _alembic(test_database_url, "upgrade", "g2b7c9d4e1f3")

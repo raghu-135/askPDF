@@ -2,6 +2,8 @@
   "builtin_key": "evaluator_replanner_rag_agent",
   "description": "A bounded compiled RAG workflow that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
   "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
   "name": "Evaluator/Replanner Agent",
   "spec_json": {
     "config": {

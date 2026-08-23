@@ -12,7 +12,6 @@ from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
 
-CONTRACT_VERSION = 1
 RUNTIME_OPERATION_EVENT_KINDS = frozenset({
     "operation.started",
     "operation.completed",
@@ -114,9 +113,6 @@ class AgentDefinition:
     display_name: Optional[str] = None
     capabilities: Mapping[str, Any] = field(default_factory=dict)
     definition_metadata: Mapping[str, Any] = field(default_factory=dict)
-    definition_version: Optional[str] = None
-    contract_version: int = CONTRACT_VERSION
-    runtime_version: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -128,8 +124,6 @@ class ContinuationBinding:
 
     binding_type: str
     payload: Mapping[str, Any] = field(default_factory=dict)
-    binding_version: int = 1
-    runtime_version: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -150,7 +144,6 @@ class AgentRuntimeRequest:
     trace_id: Optional[str] = None
     authentication: Mapping[str, Any] = field(default_factory=dict)
     permissions: Mapping[str, Any] = field(default_factory=dict)
-    contract_version: int = CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -171,9 +164,7 @@ class AgentRuntimeEvent:
     terminal: bool = False
     trace_id: Optional[str] = None
     source_metadata: Mapping[str, Any] = field(default_factory=dict)
-    runtime_version: Optional[str] = None
     continuation: Optional[ContinuationBinding] = None
-    contract_version: int = CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -283,8 +274,6 @@ class RuntimeCapabilities:
     operations: Mapping[str, RuntimeOperationDescriptor] = field(default_factory=dict)
     features: Mapping[str, RuntimeFeatureDescriptor] = field(default_factory=dict)
     deployment: Mapping[str, Any] = field(default_factory=dict)
-    runtime_version: Optional[str] = None
-    contract_version: int = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
         for operation, descriptor in self.operations.items():
@@ -313,8 +302,6 @@ class RuntimeCapabilities:
                 for feature, descriptor in sorted(self.features.items(), key=lambda item: item[0])
             },
             "deployment": dict(self.deployment),
-            "runtime_version": self.runtime_version,
-            "contract_version": self.contract_version,
         }
 
 
@@ -355,7 +342,6 @@ class RuntimeValidationResult:
     issues: tuple[RuntimeValidationIssue, ...] = ()
     normalized_spec: Optional[Mapping[str, Any]] = None
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
-    contract_version: int = CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -374,7 +360,6 @@ class AgentRuntimeResult:
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     continuation: Optional[ContinuationBinding] = None
     error: Optional[Mapping[str, Any]] = None
-    contract_version: int = CONTRACT_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
