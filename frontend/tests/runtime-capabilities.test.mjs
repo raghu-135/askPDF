@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   isRuntimeOperationEnabled,
+  runtimeInterruptResponseOperation,
   runtimeOperationAvailability,
 } from '../src/lib/runtime-capabilities.ts';
 
@@ -72,4 +73,11 @@ test('distinct runtime interactions are evaluated independently', () => {
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.interrupt_with_input'), true);
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.steer_live'), false);
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.update_state'), false);
+});
+
+test('interrupt response operations fail closed when missing or unknown', () => {
+  assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.resume' }), 'run.resume');
+  assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.approval.respond' }), 'run.approval.respond');
+  assert.equal(runtimeInterruptResponseOperation({}), undefined);
+  assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.continue' }), undefined);
 });

@@ -153,6 +153,9 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
     assert capabilities.features["subagent_orchestration"].enabled is True
     assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
     assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].owner.value == "product"
+    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].owner.value == "product"
+    assert capabilities.operations[RuntimeOperationId.RUN_START.value].owner.value == "runtime"
 
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):

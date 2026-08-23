@@ -34,6 +34,11 @@ from app.runtime.hermes_config import (
     validate_hermes_model_compatibility,
 )
 from app.runtime.budgets import apply_deep_agent_env_overrides
+from app.runtime.capability_resolver import require_capability
+from app.runtime.catalog import definition_from_workflow
+from app.runtime.contracts import RuntimeOperationId
+from app.runtime.errors import RuntimeError as AgentRuntimeError
+from app.runtime.registry import get_runtime_registry
 
 
 router = APIRouter(tags=["agent-tasks"])
@@ -174,6 +179,7 @@ def _run_payload(run: Any) -> dict[str, Any]:
         "parent_run_id": run.parent_run_id,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
+        "runtime_binding_status": run.runtime_binding_status,
         "pending_interrupt": dict(run.pending_interrupt_json or {}) or None,
         "metrics": dict(run.metrics_json or {}),
         "error": dict(run.error_json or {}) or None,
@@ -196,6 +202,27 @@ async def _owned_task(task_id: str, thread_id: str, *, include_deleted: bool = F
     if task is None or await get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail={"code": "agent_task_not_found"})
     return task
+
+
+async def _require_task_start(task: Any) -> None:
+    workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=True)
+    if workflow is None:
+        raise HTTPException(status_code=409, detail={"code": "agent_workflow_unavailable"})
+    try:
+        await require_capability(
+            definition_from_workflow(workflow),
+            RuntimeOperationId.RUN_START,
+            registry=get_runtime_registry(),
+        )
+    except AgentRuntimeError as exc:
+        logger.warning(
+            "Agent task start admission rejected | task_id=%s workflow=%s code=%s details=%s",
+            task.id,
+            task.workflow_id,
+            exc.code,
+            dict(exc.details or {}),
+        )
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
 
 
 def _conflict(exc: repository.AgentTaskConflict) -> HTTPException:
@@ -269,6 +296,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
     payload["web_access"] = await repository.get_task_web_access(task.id)
     payload["active_run"] = None if run is None else {
         "id": run.id, "status": run.status, "checkpoint_thread_id": run.checkpoint_thread_id,
+        "runtime_binding_status": run.runtime_binding_status,
         "pending_interrupt": dict(run.pending_interrupt_json or {}) or None,
     }
     payload["plan"] = None if plan is None else {
@@ -290,6 +318,8 @@ async def command_agent_task(
     if action not in {"start", "pause", "resume", "cancel", "retry"}:
         raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
     task = await _owned_task(task_id, thread_id)
+    if action in {"start", "retry"}:
+        await _require_task_start(task)
     try:
         task, command, duplicate = await repository.apply_command(
             task.id, action=action, idempotency_key=idempotency_key,

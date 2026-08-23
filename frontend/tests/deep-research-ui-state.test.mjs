@@ -8,15 +8,16 @@ import {
   shouldPollAgentTask,
 } from '../src/lib/deep-research-ui-state.ts';
 
-test('authoritative active-run interrupt replaces a stale task run projection', () => {
+test('authoritative active-run state and binding replace a stale task run projection', () => {
   const interrupt = { interrupt_id: 'interrupt-1', status: 'pending', allowed_actions: ['approve', 'reject'] };
-  const task = { status: 'awaiting_approval', active_run: { id: 'run-1', status: 'awaiting_human', pending_interrupt: interrupt } };
-  const runs = [{ id: 'run-1', status: 'queued', pending_interrupt: null }, { id: 'run-0', status: 'failed' }];
+  const task = { status: 'awaiting_approval', active_run: { id: 'run-1', status: 'awaiting_human', runtime_binding_status: 'active', pending_interrupt: interrupt } };
+  const runs = [{ id: 'run-1', status: 'queued', runtime_binding_status: 'unbound', pending_interrupt: null }, { id: 'run-0', status: 'failed' }];
 
   const merged = mergeActiveAgentTaskRun(task, runs);
 
   assert.equal(merged[0].status, 'awaiting_human');
   assert.equal(merged[0].pending_interrupt, interrupt);
+  assert.equal(merged[0].runtime_binding_status, 'active');
   assert.equal(merged[1], runs[1]);
 });
 

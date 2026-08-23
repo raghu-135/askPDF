@@ -1102,7 +1102,7 @@ export interface AgentRunPendingInterrupt {
   node_id?: string | null;
   type?: string | null;
   kind?: 'approval' | 'interrupt' | string | null;
-  response_operation?: 'run.resume' | 'run.approval.respond' | string | null;
+  response_operation: 'run.resume' | 'run.approval.respond';
   response_schema?: Record<string, any>;
   status?: InterruptStatusValue | string;
   requested_at?: string | null;
@@ -1142,6 +1142,7 @@ export interface AgentRunDetails {
   parent_run_id?: string | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
+  runtime_binding_status?: string;
   metrics_json?: Record<string, any>;
   parallel_summary?: {
     dispatch_id?: string;
@@ -1214,6 +1215,7 @@ export type RuntimeSupportLevel = 'native' | 'emulated' | 'conditional' | 'unsup
 
 export interface RuntimeOperationDescriptor {
   support: RuntimeSupportLevel;
+  owner: 'product' | 'runtime';
   enabled: boolean;
   disabled_reason?: string | null;
   modes?: string[];
@@ -2106,7 +2108,7 @@ export interface AgentTaskSummary {
   configuration: Record<string, any>;
   created_at: string;
   updated_at: string;
-  active_run?: { id: string; status: string; checkpoint_thread_id?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
+  active_run?: { id: string; status: string; checkpoint_thread_id?: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
   plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
 }
 
@@ -2148,6 +2150,7 @@ export interface AgentTaskRun {
   parent_run_id?: string | null;
   status: string;
   checkpoint_thread_id?: string | null;
+  runtime_binding_status?: string;
   pending_interrupt?: AgentRunPendingInterrupt | null;
   metrics: Record<string, any>;
   error?: Record<string, any> | null;

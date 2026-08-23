@@ -15,6 +15,15 @@ export type RuntimeControlOperation =
   | 'run.steer_live'
   | 'run.update_state';
 
+export type RuntimeInterruptResponseOperation = 'run.resume' | 'run.approval.respond';
+
+export function runtimeInterruptResponseOperation(
+  interrupt: { response_operation?: unknown } | null | undefined,
+): RuntimeInterruptResponseOperation | undefined {
+  const operation = interrupt?.response_operation;
+  return operation === 'run.resume' || operation === 'run.approval.respond' ? operation : undefined;
+}
+
 export type RuntimeOperationAvailability = {
   descriptor?: RuntimeOperationDescriptor;
   visible: boolean;

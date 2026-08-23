@@ -10,6 +10,7 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeOperationId,
     RuntimeOperationDescriptor,
+    RuntimeOperationOwner,
     RuntimeSupportLevel,
 )
 from app.runtime.adapter import AgentRuntimeAdapter
@@ -57,7 +58,6 @@ OPERATION_METHODS = {
     "run.events": "stream_events",
     "run.resume": "resume",
     "run.cancel": "cancel",
-    "run.pause": "pause",
     "run.send_followup": "send_followup",
     "run.interrupt_with_input": "interrupt_with_input",
     "run.steer_live": "steer_live",
@@ -240,9 +240,12 @@ async def discover_adapter_capabilities(
     try:
         capabilities = await adapter.deployment_capabilities()
         operations = dict(capabilities.operations)
-        for operation_id, method_name in OPERATION_METHODS.items():
-            descriptor = operations.get(operation_id)
-            if descriptor is None or not descriptor.enabled:
+        for operation_id, descriptor in operations.items():
+            if not descriptor.enabled or descriptor.owner is RuntimeOperationOwner.PRODUCT:
+                continue
+            method_name = OPERATION_METHODS.get(operation_id)
+            if method_name is None:
+                operations[operation_id] = _disabled(descriptor, "adapter_operation_unmapped")
                 continue
             method = getattr(adapter, method_name, None)
             declared_method = getattr(type(adapter), method_name, None)

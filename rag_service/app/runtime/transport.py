@@ -15,6 +15,7 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
+    RuntimeOperationOwner,
     RuntimeSupportLevel,
     RuntimeApprovalResponse,
     RuntimeSteeringInput,
@@ -136,6 +137,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
             raise ValueError(f"runtime capability descriptor for {operation!r} must be an object")
         try:
             support = RuntimeSupportLevel(raw_descriptor["support"])
+            owner = RuntimeOperationOwner(raw_descriptor["owner"])
             enabled = raw_descriptor["enabled"]
             disabled_reason = raw_descriptor.get("disabled_reason")
             raw_modes = raw_descriptor.get("modes", ())
@@ -163,6 +165,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 raise ValueError("requires_runtime_binding must be a bool")
             descriptor = RuntimeOperationDescriptor(
                 support=support,
+                owner=owner,
                 enabled=enabled,
                 disabled_reason=disabled_reason,
                 modes=modes,

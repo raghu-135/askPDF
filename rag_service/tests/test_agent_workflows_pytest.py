@@ -3250,6 +3250,7 @@ class TestAgentWorkflowRepository:
             run.id,
             {
                 "interrupt_id": "interrupt-1",
+                "response_operation": "run.resume",
                 "gate_id": "before_web",
                 "node_id": "web_worker",
                 "type": "tool_approval",
@@ -3298,6 +3299,7 @@ class TestAgentWorkflowRepository:
             run.id,
             {
                 "interrupt_id": "interrupt-approve",
+                "response_operation": "run.resume",
                 "allowed_actions": ["approve", "reject"],
                 "resume_token": "resume-token",
                 "resume_version": 3,
@@ -3364,6 +3366,7 @@ class TestAgentWorkflowRepository:
             run.id,
             {
                 "interrupt_id": "interrupt-stale",
+                "response_operation": "run.resume",
                 "allowed_actions": ["approve", "reject"],
                 "resume_version": 1,
             },
@@ -3404,6 +3407,7 @@ class TestAgentWorkflowRepository:
             run_id,
             {
                 "interrupt_id": "interrupt-choice",
+                "response_operation": "run.resume",
                 "type": "option_review",
                 "mode": "choice",
                 "allowed_actions": ["approve_selected", "continue_without"],
@@ -3450,7 +3454,7 @@ class TestAgentWorkflowRepository:
         )
         await repo.mark_run_awaiting_human(
             run.id,
-            {"interrupt_id": "interrupt-reject", "allowed_actions": ["approve", "reject"]},
+            {"interrupt_id": "interrupt-reject", "response_operation": "run.resume", "allowed_actions": ["approve", "reject"]},
         )
 
         result = await repo.resolve_pending_interrupt(
@@ -3734,6 +3738,7 @@ class TestAgentWorkflowRepository:
             awaiting.id,
             {
                 "interrupt_id": "interrupt-expired",
+                "response_operation": "run.resume",
                 "allowed_actions": ["approve", "reject"],
                 "expires_at": iso_utc_z(now - timedelta(minutes=1)),
             },
@@ -5889,6 +5894,7 @@ class TestAgentRunService:
                 run.id,
                 {
                     "interrupt_id": "interrupt-1",
+                    "response_operation": "run.resume",
                     "allowed_actions": ["approve", "reject"],
                     "checkpoint_resume": True,
                     "checkpoint_thread_id": run.checkpoint_thread_id,
@@ -5992,6 +5998,7 @@ class TestAgentRunService:
                 run.id,
                 {
                     "interrupt_id": "duplicate-interrupt",
+                    "response_operation": "run.resume",
                     "allowed_actions": ["approve", "reject"],
                     "checkpoint_resume": True,
                     "checkpoint_thread_id": run.checkpoint_thread_id,
@@ -7931,6 +7938,7 @@ class TestAgentWorkflowApi:
                 awaiting.id,
                 {
                     "interrupt_id": "api-list-interrupt",
+                    "response_operation": "run.resume",
                     "allowed_actions": ["approve", "reject"],
                     "title": "Approve web search?",
                 },
@@ -7972,6 +7980,7 @@ class TestAgentWorkflowApi:
                 run.id,
                 {
                     "interrupt_id": "api-resume-interrupt",
+                    "response_operation": "run.resume",
                     "allowed_actions": ["approve", "reject"],
                     "resume_token": "api-token",
                     "resume_version": 2,
@@ -8038,6 +8047,7 @@ class TestAgentWorkflowApi:
                 run.id,
                 {
                     "interrupt_id": "api-thread-boundary-interrupt",
+                    "response_operation": "run.resume",
                     "allowed_actions": ["approve", "reject"],
                     "resume_version": 1,
                 },

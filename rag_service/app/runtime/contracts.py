@@ -100,6 +100,11 @@ class RuntimeSupportLevel(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class RuntimeOperationOwner(str, Enum):
+    PRODUCT = "product"
+    RUNTIME = "runtime"
+
+
 def _dict(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return dict(value or {})
 
@@ -176,6 +181,7 @@ class AgentRuntimeEvent:
 @dataclass(frozen=True)
 class RuntimeOperationDescriptor:
     support: RuntimeSupportLevel
+    owner: RuntimeOperationOwner
     enabled: bool
     disabled_reason: Optional[str] = None
     modes: tuple[str, ...] = ()
@@ -189,6 +195,8 @@ class RuntimeOperationDescriptor:
     def __post_init__(self) -> None:
         if not isinstance(self.support, RuntimeSupportLevel):
             raise ValueError("support must be a RuntimeSupportLevel")
+        if not isinstance(self.owner, RuntimeOperationOwner):
+            raise ValueError("owner must be a RuntimeOperationOwner")
         if not isinstance(self.enabled, bool):
             raise TypeError("enabled must be a bool")
         if self.enabled and self.disabled_reason is not None:
@@ -212,6 +220,7 @@ class RuntimeOperationDescriptor:
     def to_dict(self) -> Dict[str, Any]:
         value: Dict[str, Any] = {
             "support": self.support.value,
+            "owner": self.owner.value,
             "enabled": self.enabled,
             "disabled_reason": self.disabled_reason,
         }

@@ -21,14 +21,16 @@ from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult
+from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId
+from app.runtime.capability_resolver import require_capability
+from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.catalog import (
     continuation_from_run,
     definition_from_run,
     definition_from_workflow,
     result_to_product_payload,
 )
-from app.runtime.registry import adapter_for_definition
+from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.hermes_config import hermes_model_context_length
 from app.runtime.budgets import deep_agent_budgets
@@ -44,6 +46,63 @@ HERMES_RESEARCH_EVIDENCE_TOOLS = frozenset({
     "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv",
     "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news",
 })
+
+
+async def _invoke_task_runtime(
+    *,
+    adapter: Any,
+    definition: Any,
+    run: Any,
+    runtime_request: AgentRuntimeRequest,
+    runtime_context: RuntimeExecutionContext,
+    runtime_event_sink: Any,
+    repository: AgentWorkflowRepository,
+) -> AgentRuntimeResult | None:
+    """Dispatch one task attempt using its explicit lifecycle contract."""
+
+    pending = dict(run.pending_interrupt_json or {})
+    if getattr(run, "_fresh_runtime_run", False):
+        await require_capability(
+            definition,
+            RuntimeOperationId.RUN_START,
+            registry=get_runtime_registry(),
+            run=run,
+        )
+        result = await adapter.start(
+            runtime_request,
+            context=runtime_context,
+            event_sink=runtime_event_sink,
+        )
+        await repository.mark_runtime_started(run.id)
+        return result
+
+    if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
+        response_operation = pending.get("response_operation")
+        if response_operation == RuntimeOperationId.RUN_RESUME.value:
+            return await adapter.resume(
+                runtime_request,
+                interrupt=pending,
+                context=runtime_context,
+                event_sink=runtime_event_sink,
+            )
+        if response_operation == RuntimeOperationId.RUN_APPROVAL_RESPOND.value:
+            return await adapter.continue_run(
+                runtime_request,
+                context=runtime_context,
+                event_sink=runtime_event_sink,
+            )
+        raise AgentRuntimeError(
+            code="interrupt_response_operation_invalid",
+            safe_message="The pending interrupt does not declare a supported response operation",
+            retryable=False,
+            details={"response_operation": response_operation},
+        )
+
+    return await adapter.continue_run(
+        runtime_request,
+        context=runtime_context,
+        event_sink=runtime_event_sink,
+    )
 
 
 def _hermes_grounding_summary(events: list[Any], *, documents_present: bool) -> dict[str, Any]:
@@ -412,7 +471,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_id=task.id,
             continuation=continuation_from_run(run),
         )
-        pending = dict(run.pending_interrupt_json or {})
         runtime_context = RuntimeExecutionContext(
             request=request,
             embedding_model=thread.embedding_model,
@@ -429,18 +487,15 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             runtime_event_sink.bind_trace_recorder(trace)
             runtime_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
             runtime_event_sink.bind_runtime_event_persister(run.id, repository.append_run_event)
-        if getattr(run, "_fresh_runtime_run", False):
-            runtime_result = await adapter.start(runtime_request, context=runtime_context, event_sink=runtime_event_sink)
-            await repository.mark_runtime_started(run.id)
-        elif pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
-            runtime_result = await adapter.resume(
-                runtime_request,
-                interrupt=pending,
-                context=runtime_context,
-                event_sink=runtime_event_sink,
-            )
-        else:
-            runtime_result = await adapter.continue_run(runtime_request, context=runtime_context, event_sink=runtime_event_sink)
+        runtime_result = await _invoke_task_runtime(
+            adapter=adapter,
+            definition=definition,
+            run=run,
+            runtime_request=runtime_request,
+            runtime_context=runtime_context,
+            runtime_event_sink=runtime_event_sink,
+            repository=repository,
+        )
         if runtime_result is None:
             # A continuation is optional at the runtime boundary. A missing
             # checkpoint is a terminal runtime outcome.
@@ -644,7 +699,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             await tasks.complete_task(task.id, status=AgentTaskStatus.FAILED.value, reason=str((error or {}).get("code") or status))
     except Exception as exc:
         logger.exception("Deep research task execution failed | task_id=%s run_id=%s", task.id, run.id)
-        terminal_error = {
+        terminal_error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
             "code": "deep_research_execution_failed",
             "type": type(exc).__name__,
             "raw_message": str(exc)[:1000],
@@ -659,7 +714,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             result={"agent_error": terminal_error},
             error=terminal_error,
         )
-        await tasks.complete_task(task.id, status=AgentTaskStatus.FAILED.value, reason="deep_research_execution_failed")
+        await tasks.complete_task(
+            task.id,
+            status=AgentTaskStatus.FAILED.value,
+            reason=str(terminal_error.get("code") or "deep_research_execution_failed"),
+        )
     finally:
         heartbeat.cancel()
         with suppress(asyncio.CancelledError):

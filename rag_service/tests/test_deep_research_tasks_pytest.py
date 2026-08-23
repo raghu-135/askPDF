@@ -31,6 +31,8 @@ from app.services.content_store import SharedVolumeContentStore, set_content_sto
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
 from app.runtime.errors import RuntimeError as AgentRuntimeError
+from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
 
 
 def _spec() -> dict:
@@ -53,6 +55,112 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
             "profile_id": profile,
         }],
     })
+
+
+@pytest.mark.asyncio
+async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypatch):
+    rejection = AgentRuntimeError.capability_unavailable(
+        operation_id="run.start",
+        framework="hermes",
+        builder_id="hermes_agent",
+        support_level="conditional",
+        disabled_reason="runtime_unavailable",
+    )
+    require = AsyncMock(side_effect=rejection)
+    monkeypatch.setattr(agent_task_runtime, "require_capability", require)
+    adapter = SimpleNamespace(start=AsyncMock())
+    repository = SimpleNamespace(mark_runtime_started=AsyncMock())
+    run = SimpleNamespace(
+        id="run-1",
+        status="running",
+        pending_interrupt_json={},
+        runtime_binding_json={},
+        runtime_binding_status="active",
+        _fresh_runtime_run=True,
+    )
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    request = AgentRuntimeRequest("run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id)
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await agent_task_runtime._invoke_task_runtime(
+            adapter=adapter,
+            definition=definition,
+            run=run,
+            runtime_request=request,
+            runtime_context=RuntimeExecutionContext(),
+            runtime_event_sink=None,
+            repository=repository,
+        )
+
+    assert caught.value is rejection
+    adapter.start.assert_not_awaited()
+    repository.mark_runtime_started.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hermes_resolved_approval_continues_without_runtime_resume():
+    result = AgentRuntimeResult(status="completed", output="approved")
+    adapter = SimpleNamespace(
+        continue_run=AsyncMock(return_value=result),
+        resume=AsyncMock(),
+    )
+    run = SimpleNamespace(
+        id="run-1",
+        pending_interrupt_json={
+            "interrupt_id": "approval-1",
+            "status": "resumed",
+            "response_operation": "run.approval.respond",
+            "decision": {"action": "approve"},
+        },
+        _fresh_runtime_run=False,
+    )
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    request = AgentRuntimeRequest("run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id)
+
+    actual = await agent_task_runtime._invoke_task_runtime(
+        adapter=adapter,
+        definition=definition,
+        run=run,
+        runtime_request=request,
+        runtime_context=RuntimeExecutionContext(),
+        runtime_event_sink=None,
+        repository=SimpleNamespace(),
+    )
+
+    assert actual is result
+    adapter.continue_run.assert_awaited_once()
+    adapter.resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_start_admission_rejection_does_not_create_command_or_run(monkeypatch):
+    task = SimpleNamespace(id="task-1", thread_id="thread-1", workflow_id="hermes_rag_agent", version=3)
+    monkeypatch.setattr(agent_tasks_api, "_owned_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(
+        agent_tasks_api,
+        "_require_task_start",
+        AsyncMock(side_effect=agent_tasks_api.HTTPException(
+            status_code=409,
+            detail={"code": "runtime_capability_unavailable"},
+        )),
+    )
+    apply_command = AsyncMock()
+    ensure_run = AsyncMock()
+    monkeypatch.setattr(agent_tasks_api.repository, "apply_command", apply_command)
+    monkeypatch.setattr(agent_tasks_api, "ensure_task_run", ensure_run)
+
+    with pytest.raises(agent_tasks_api.HTTPException) as caught:
+        await agent_tasks_api.command_agent_task(
+            task.id,
+            "start",
+            agent_tasks_api.AgentTaskCommandRequest(expected_version=task.version),
+            thread_id=task.thread_id,
+            idempotency_key="start-1",
+        )
+
+    assert caught.value.detail["code"] == "runtime_capability_unavailable"
+    apply_command.assert_not_awaited()
+    ensure_run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -685,10 +793,14 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
         id="run-trace",
         thread_id=task.thread_id,
         workflow_id="deep_research_agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        definition_category="deep",
         workflow_version=1,
         checkpoint_thread_id="run-trace",
         resolved_spec_json=_spec(),
         pending_interrupt_json={},
+        runtime_binding_json={},
         metrics_json={},
         debug_trace_json=None,
         status="running",
@@ -712,7 +824,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", lambda: workflow_repository)
     monkeypatch.setattr(
         "app.runtime.langgraph.router_runtime.continue_compiled_rag_chat",
-        AsyncMock(return_value={"status": "completed", "final_answer": "Grounded report", "node_events": [], "tool_events": []}),
+        AsyncMock(return_value={"status": "completed", "answer": "Grounded report", "node_events": [], "tool_events": []}),
     )
     monkeypatch.setattr(
         agent_task_runtime,
@@ -728,8 +840,9 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
 
     await agent_task_runtime.execute_claimed_task(task.id, "worker-trace")
 
-    workflow_repository.set_run_debug_trace.assert_awaited_once()
-    debug_payload = workflow_repository.set_run_debug_trace.await_args.args[1]
+    workflow_repository.complete_run.assert_awaited_once()
+    assert not workflow_repository.complete_run.await_args.kwargs["error_json"]
+    debug_payload = workflow_repository.complete_run.await_args.kwargs["debug_trace_json"]
     assert debug_payload["trace"]["run_id"] == run.id
     assert debug_payload["trace"]["status"] == "completed"
     assert debug_payload["summary"]["usedNodeCount"] == 0
@@ -1472,7 +1585,7 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_runs_maintenance_before_processing_a_busy_queue(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claim = AsyncMock(side_effect=[SimpleNamespace(id="task-1"), None])
+    claim = AsyncMock(side_effect=[SimpleNamespace(id="task-1", workflow_id="deep_research_agent"), None])
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", maintenance)
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
@@ -1502,7 +1615,7 @@ async def test_task_worker_honors_pre_signalled_shutdown(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_stops_after_active_claim_without_claiming_more(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claim = AsyncMock(return_value=SimpleNamespace(id="task-1"))
+    claim = AsyncMock(return_value=SimpleNamespace(id="task-1", workflow_id="deep_research_agent"))
     stop_event = asyncio.Event()
 
     async def execute(_task_id, _worker_id):

@@ -9,6 +9,7 @@ import {
     Tooltip,
     Chip,
     CircularProgress,
+    Alert,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -62,7 +63,7 @@ import {
     type ThreadChatResponse,
     type AgentRuntimeCapabilityResponse,
 } from '../lib/api';
-import { isRuntimeOperationEnabled, runtimeOperationAvailability } from '../lib/runtime-capabilities';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
@@ -770,7 +771,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (active) setHumanReviewCapabilities(result.success ? result.data || null : null);
             });
         return () => { active = false; };
-    }, [activeThread?.id, pendingHumanReview?.interrupt.resume_version, pendingHumanReview?.runId]);
+    }, [
+        activeThread?.id,
+        pendingHumanReview?.interrupt.interrupt_id,
+        pendingHumanReview?.interrupt.status,
+        pendingHumanReview?.interrupt.resume_version,
+        pendingHumanReview?.interrupt.response_operation,
+        pendingHumanReview?.runId,
+    ]);
 
     useEffect(() => {
         let active = true;
@@ -1548,7 +1556,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
-        const responseOperation = (interrupt.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
+        const responseOperation = runtimeInterruptResponseOperation(interrupt);
+        if (!responseOperation) {
+            setHumanReviewError('This human-input request has an invalid runtime response contract.');
+            return false;
+        }
         if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
@@ -2424,8 +2436,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
-    const pendingReviewOperation = (pendingReviewInterrupt?.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
-    const pendingReviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation);
+    const pendingReviewOperation = runtimeInterruptResponseOperation(pendingReviewInterrupt);
+    const pendingReviewAvailability = pendingReviewOperation
+        ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
+        : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2578,6 +2592,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                 customPlaceholder="Ask or explain it in your own words"
                             />
                     </ResizableDecisionPanel>
+            ) : pendingReviewInterrupt && !pendingReviewOperation ? (
+                <Alert severity="error">This human-input request has an invalid runtime response contract.</Alert>
             ) : pendingReviewInterrupt ? (
                 <HumanReviewDecisionPanel
                     interrupt={pendingReviewInterrupt}

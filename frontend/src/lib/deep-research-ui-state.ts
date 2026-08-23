@@ -8,6 +8,7 @@ export function mergeActiveAgentTaskRun(task: AgentTaskSummary, runs: AgentTaskR
   return runs.map((run) => run.id === activeRun.id ? {
     ...run,
     status: activeRun.status || run.status,
+    runtime_binding_status: activeRun.runtime_binding_status ?? run.runtime_binding_status,
     pending_interrupt: activeRun.pending_interrupt ?? run.pending_interrupt,
   } : run);
 }

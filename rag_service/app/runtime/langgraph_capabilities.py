@@ -13,6 +13,7 @@ from app.runtime.contracts import (
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
+    RuntimeOperationOwner,
     RuntimeSupportLevel,
 )
 
@@ -106,6 +107,7 @@ class LangGraphDeploymentProfile:
 def _unsupported() -> RuntimeOperationDescriptor:
     return RuntimeOperationDescriptor(
         RuntimeSupportLevel.UNSUPPORTED,
+        RuntimeOperationOwner.RUNTIME,
         False,
         disabled_reason="runtime_capability_unsupported",
     )
@@ -173,6 +175,7 @@ def langgraph_capabilities(
             return descriptor
         return RuntimeOperationDescriptor(
             descriptor.support,
+            descriptor.owner,
             False,
             disabled_reason=deployment_reason,
             modes=descriptor.modes,
@@ -185,10 +188,11 @@ def langgraph_capabilities(
         )
 
     operations: dict[str, RuntimeOperationDescriptor] = {
-        RuntimeOperationId.RUN_START.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True)),
-        RuntimeOperationId.RUN_EVENTS.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True)),
+        RuntimeOperationId.RUN_START.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True)),
+        RuntimeOperationId.RUN_EVENTS.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True)),
         RuntimeOperationId.RUN_CANCEL.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.NATIVE,
+            RuntimeOperationOwner.RUNTIME,
             True,
             modes=("interrupt",),
             confirmation="asynchronous",
@@ -196,18 +200,21 @@ def langgraph_capabilities(
         )),
         RuntimeOperationId.RUN_PAUSE.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.PRODUCT,
             task_runtime,
             semantics="product_task_pause",
             disabled_reason=None if task_runtime else "definition_not_task_runtime",
         )),
         RuntimeOperationId.RUN_RETRY.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.PRODUCT,
             task_runtime,
             semantics="product_task_retry",
             disabled_reason=None if task_runtime else "definition_not_task_runtime",
         )),
         RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.RUNTIME,
             checkpoint,
             semantics="resume_from_interrupt",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
@@ -215,6 +222,7 @@ def langgraph_capabilities(
         ),
         RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.RUNTIME,
             checkpoint,
             semantics="checkpoint_state_inspection",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
@@ -222,6 +230,7 @@ def langgraph_capabilities(
         ),
         RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.RUNTIME,
             checkpoint,
             semantics="checkpoint_boundary_update",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
@@ -229,6 +238,7 @@ def langgraph_capabilities(
         ),
         RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.RUNTIME,
             checkpoint,
             semantics="checkpoint_thread_cleanup",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",

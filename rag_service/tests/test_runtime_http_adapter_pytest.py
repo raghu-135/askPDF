@@ -80,8 +80,8 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
             assert request.method == "POST"
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
             return httpx.Response(200, json={"capabilities": {"operations": {
-                "run.events": {"support": "native", "enabled": True},
-                "run.resume": {"support": "conditional", "enabled": True, "semantics": "resume_from_interrupt"},
+                "run.events": {"support": "native", "owner": "runtime", "enabled": True},
+                "run.resume": {"support": "conditional", "owner": "runtime", "enabled": True, "semantics": "resume_from_interrupt"},
             }}})
         return httpx.Response(200, json={"validation": {"valid": True, "issues": []}})
 
@@ -105,7 +105,11 @@ def test_capability_parser_rejects_flat_or_malformed_payloads():
     with pytest.raises(ValueError):
         capabilities_from_dict({"operations": {"run.start": {"support": "unknown", "enabled": True}}})
     with pytest.raises(ValueError):
-        capabilities_from_dict({"operations": {"run.start": {"support": "native", "enabled": False}}})
+        capabilities_from_dict({"operations": {"run.start": {"support": "native", "owner": "runtime", "enabled": False}}})
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"operations": {"run.start": {"support": "native", "enabled": True}}})
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"operations": {"run.start": {"support": "native", "owner": "adapter", "enabled": True}}})
 
 
 @pytest.mark.asyncio

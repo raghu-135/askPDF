@@ -23,6 +23,7 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
+    RuntimeOperationOwner,
     RuntimeSupportLevel,
     RuntimeValidationIssue,
     RuntimeValidationResult,
@@ -30,6 +31,7 @@ from app.runtime.contracts import (
     RuntimeTaskContext,
 )
 from app.runtime.observability import normalize_runtime_event
+from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():
@@ -56,10 +58,12 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
     capabilities = RuntimeCapabilities(operations={
         RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
             support=RuntimeSupportLevel.NATIVE,
+            owner=RuntimeOperationOwner.RUNTIME,
             enabled=True,
         ),
         RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
             support=RuntimeSupportLevel.CONDITIONAL,
+            owner=RuntimeOperationOwner.RUNTIME,
             enabled=True,
             semantics="resume_from_interrupt",
         ),
@@ -69,14 +73,34 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
     assert result.to_dict()["status"] == "completed"
     assert event.to_dict()["terminal"] is True
     assert capabilities.to_dict()["operations"]["run.resume"]["support"] == "conditional"
+    assert capabilities.to_dict()["operations"]["run.resume"]["owner"] == "runtime"
     assert list(capabilities.to_dict()["operations"]) == ["run.events", "run.resume"]
 
 
 def test_runtime_operation_descriptor_rejects_invalid_enabled_states():
     with pytest.raises(ValueError):
-        RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, True)
+        RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, True)
     with pytest.raises(ValueError):
-        RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, False)
+        RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, False)
+
+
+def test_runtime_operation_descriptor_requires_a_typed_owner():
+    with pytest.raises(TypeError):
+        RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, enabled=True)
+    with pytest.raises(ValueError):
+        RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, "runtime", True)
+
+
+@pytest.mark.parametrize("response_operation", [None, "", "run.continue", "interrupt.respond"])
+def test_pending_interrupt_requires_an_implemented_response_operation(response_operation):
+    payload = {"interrupt_id": "interrupt-1"}
+    if response_operation is not None:
+        payload["response_operation"] = response_operation
+
+    with pytest.raises(AgentRunInterruptError) as caught:
+        normalize_pending_interrupt_payload(payload)
+
+    assert caught.value.code == "interrupt_response_operation_invalid"
 
 
 def test_advertised_operations_have_concrete_adapter_methods():

@@ -13,6 +13,7 @@ from app.runtime.contracts import (
     AgentDefinition,
     RuntimeCapabilities,
     RuntimeOperationId,
+    RuntimeOperationOwner,
     RuntimeOperationDescriptor,
     RuntimeSupportLevel,
 )
@@ -30,18 +31,19 @@ class CapabilityAdapter:
 
     async def capabilities(self, definition):
         operations = {
-                RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.INTERRUPT_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
-                RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
-                RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, False, disabled_reason="runtime_capability_unsupported"),
-                RuntimeOperationId.RUN_REPLAY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, False, disabled_reason="runtime_capability_unsupported"),
+                RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.INTERRUPT_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
+                RuntimeOperationId.RUN_REPLAY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
                 RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
                     RuntimeSupportLevel.UNSUPPORTED,
+                    RuntimeOperationOwner.RUNTIME,
                     False,
                     disabled_reason="runtime_capability_unsupported",
                 ),
@@ -49,6 +51,7 @@ class CapabilityAdapter:
         for operation in self.unsupported:
             operations[operation] = RuntimeOperationDescriptor(
                 RuntimeSupportLevel.UNSUPPORTED,
+                RuntimeOperationOwner.RUNTIME,
                 False,
                 disabled_reason="runtime_capability_unsupported",
             )
@@ -346,7 +349,8 @@ class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
 
     async def capabilities(self, definition):
         return RuntimeCapabilities(operations={
-            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
+            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+            RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
         })
 
     async def validate(self, definition, spec, *, options=None):
@@ -367,3 +371,4 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert error is None
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
+    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True

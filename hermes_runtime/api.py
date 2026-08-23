@@ -501,56 +501,56 @@ def create_app() -> FastAPI:
             result={"capabilities": {
                 "operations": {
                     "run.approval.respond": {
-                        "support": "native", "enabled": True,
+                        "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
                     },
                     "run.cancel": {
-                        "support": "native", "enabled": True,
+                        "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
                         "modes": ["cooperative"],
                         "confirmation": "asynchronous",
                         "terminal_states": ["cancelled"],
                     },
                     "run.continuation.cleanup": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.events": {
-                        "support": "native", "enabled": True,
+                        "support": "native", "owner": "runtime", "enabled": True,
                     },
                     "run.inspect_state": {
-                        "support": "native", "enabled": True,
+                        "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
                     },
                     "run.resume": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.pause": {
-                        "support": "conditional", "enabled": True,
+                        "support": "conditional", "owner": "product", "enabled": True,
                         "semantics": "product_task_pause",
                     },
                     "run.retry": {
-                        "support": "conditional", "enabled": True,
+                        "support": "conditional", "owner": "product", "enabled": True,
                         "semantics": "product_task_retry",
                     },
                     "run.start": {
-                        "support": "native", "enabled": True,
+                        "support": "native", "owner": "runtime", "enabled": True,
                     },
                     "run.steer_live": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.send_followup": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.interrupt_with_input": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.update_state": {
-                        "support": "unsupported", "enabled": False,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                 },

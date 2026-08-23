@@ -42,6 +42,7 @@ def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(mon
     descriptor = capabilities.json()["result"]["capabilities"]["operations"]["run.steer_live"]
     assert descriptor == {
         "support": "unsupported",
+        "owner": "runtime",
         "enabled": False,
         "disabled_reason": "runtime_capability_unsupported",
     }

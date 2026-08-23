@@ -29,6 +29,7 @@ PENDING_INTERRUPT_LIST_LIMIT = 20
 PENDING_INTERRUPT_DICT_LIMIT = 50
 SUPPORTED_SPEC_SCHEMA_VERSION = 2
 INTERRUPT_RESUME_GUARD_SCHEMA_VERSION = 1
+PENDING_INTERRUPT_RESPONSE_OPERATIONS = frozenset({"run.resume", "run.approval.respond"})
 
 
 class AgentRunInterruptError(ValueError):
@@ -84,8 +85,11 @@ def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at
     normalized["requested_at"] = str(normalized.get("requested_at") or iso_utc_z(now))
 
     response_operation = normalized.get("response_operation")
-    if response_operation not in {"run.resume", "run.approval.respond"}:
-        response_operation = "run.resume"
+    if response_operation not in PENDING_INTERRUPT_RESPONSE_OPERATIONS:
+        raise AgentRunInterruptError(
+            "interrupt_response_operation_invalid",
+            "The pending interrupt must declare a supported response operation.",
+        )
     normalized["response_operation"] = response_operation
     response_schema = normalized.get("response_schema")
     normalized["response_schema"] = dict(response_schema) if isinstance(response_schema, dict) else {}

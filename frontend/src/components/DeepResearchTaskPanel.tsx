@@ -38,7 +38,7 @@ import {
   type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
-import { isRuntimeOperationEnabled, runtimeOperationAvailability, type RuntimeControlOperation } from '../lib/runtime-capabilities';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability, type RuntimeControlOperation } from '../lib/runtime-capabilities';
 import { withRetry } from '../lib/retry-utils';
 import {
   deriveConversationSentences,
@@ -353,7 +353,17 @@ export default function DeepResearchTaskPanel({
         }
       });
     return () => { active = false; };
-  }, [selectedRun?.id, selectedRun?.pending_interrupt?.interrupt_id, selectedRun?.pending_interrupt?.resume_version, selectedRun?.status, task?.version, threadId]);
+  }, [
+    selectedRun?.id,
+    selectedRun?.status,
+    selectedRun?.runtime_binding_status,
+    selectedRun?.pending_interrupt?.interrupt_id,
+    selectedRun?.pending_interrupt?.status,
+    selectedRun?.pending_interrupt?.resume_version,
+    selectedRun?.pending_interrupt?.response_operation,
+    task?.version,
+    threadId,
+  ]);
 
   useEffect(() => {
     if (!selectedTaskId || !selectedRun) return;
@@ -408,7 +418,11 @@ export default function DeepResearchTaskPanel({
   ) => {
     const pending = selectedRun?.pending_interrupt;
     if (!selectedRun || !pending) return;
-    const responseOperation = (pending.response_operation || 'run.resume') as RuntimeControlOperation;
+    const responseOperation = runtimeInterruptResponseOperation(pending);
+    if (!responseOperation) {
+      setDecisionError('This approval request has an invalid runtime response contract.');
+      return;
+    }
     if (!isRuntimeOperationEnabled(runCapabilities, responseOperation)) return;
     setDecisionSubmitting(action);
     setDecisionError('');
@@ -471,7 +485,8 @@ export default function DeepResearchTaskPanel({
       .filter((item) => item.availability.visible);
   }, [runCapabilities]);
   const stateUpdateAvailability = runtimeOperationAvailability(runCapabilities, 'run.update_state');
-  const responseOperation = (pendingInterrupt?.response_operation || 'run.resume') as RuntimeControlOperation;
+  const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
+  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation);
   useEffect(() => {
     if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
       setInteractionOperation(interactionDescriptors[0].id);
@@ -555,7 +570,7 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={pendingInterrupt && isApprovalInterrupt ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -563,7 +578,7 @@ export default function DeepResearchTaskPanel({
         <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>
       </Stack>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
-    </Box> : pendingInterrupt ? <HumanReviewDecisionPanel
+    </Box> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}

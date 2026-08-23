@@ -242,6 +242,22 @@ class AgentRunService:
             ) from exc
         workflow_version = _workflow_version_info(workflow)
 
+        try:
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_START,
+                registry=get_runtime_registry(),
+            )
+        except RuntimeError as exc:
+            logger.warning(
+                "Agent run start admission rejected | thread_id=%s workflow=%s code=%s details=%s",
+                thread_id,
+                workflow.id,
+                exc.code,
+                dict(exc.details or {}),
+            )
+            raise
+
         run = await self.repository.create_run(
             thread_id=thread_id,
             workflow_id=workflow.id,
@@ -544,11 +560,14 @@ class AgentRunService:
             and isinstance(pending_interrupt, dict)
             and pending_interrupt.get("status") == "pending"
         ):
-            operation_value = pending_interrupt.get("response_operation")
-            operation = pending_operation or str(operation_value or "")
+            if pending_operation is None:
+                raise AgentRunInterruptError(
+                    "interrupt_response_operation_invalid",
+                    "The pending interrupt does not declare a supported response operation.",
+                )
             await require_capability(
                 definition_from_run(current_run),
-                operation,
+                pending_operation,
                 registry=get_runtime_registry(),
                 run=current_run,
             )

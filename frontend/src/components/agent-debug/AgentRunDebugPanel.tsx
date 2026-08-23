@@ -6,7 +6,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { getAgentRun, getAgentRunCapabilities, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentRuntimeCapabilityResponse, type AgentTraceRefs } from '../../lib/api';
-import { isRuntimeOperationEnabled, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
@@ -59,8 +59,10 @@ function AgentRunDebugPanel({
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
-  const responseOperation = (pendingInterrupt?.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
-  const responseAvailability = runtimeOperationAvailability(runCapabilities, responseOperation);
+  const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
+  const responseAvailability = responseOperation
+    ? runtimeOperationAvailability(runCapabilities, responseOperation)
+    : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
   const executionTraceView = useMemo(
     () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
@@ -109,7 +111,7 @@ function AgentRunDebugPanel({
         setRunCapabilities(result.success ? result.data || null : null);
       });
     return () => { active = false; };
-  }, [pendingInterrupt?.interrupt_id, pendingInterrupt?.resume_version, runDetails?.status, runDetails?.thread_id, runId]);
+  }, [pendingInterrupt?.interrupt_id, pendingInterrupt?.status, pendingInterrupt?.resume_version, pendingInterrupt?.response_operation, runDetails?.status, runDetails?.runtime_binding_status, runDetails?.thread_id, runId]);
 
   useEffect(() => {
     if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
@@ -167,6 +169,10 @@ function AgentRunDebugPanel({
 
   const handleResume = async (action: AgentRunResumeAction) => {
     if (!runDetails || !pendingInterrupt?.interrupt_id) return;
+    if (!responseOperation) {
+      setResumeError('This human-input request has an invalid runtime response contract.');
+      return;
+    }
     const submissionKey = `${runId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
     if (resumeSubmissionKeyRef.current) return;
     resumeSubmissionKeyRef.current = submissionKey;
@@ -461,6 +467,11 @@ function AgentRunDebugPanel({
           )}
           {interruptStatus === InterruptStatus.Pending && (
             <>
+              {!responseOperation && (
+                <Typography variant="caption" color="error">
+                  This human-input request has an invalid runtime response contract.
+                </Typography>
+              )}
               {responseAvailability.visible && !responseAvailability.enabled && (
                 <Typography variant="caption" color="text.secondary">
                   Human input is currently unavailable: {responseAvailability.disabledReason}
@@ -493,7 +504,7 @@ function AgentRunDebugPanel({
                   ))}
                 </Box>
               )}
-              {!isTaskOwnedRun && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              {!isTaskOwnedRun && responseOperation && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
                 {renderInterruptAction(AgentRunResumeActionValue.Approve, 'Approve', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ApproveForScope, 'Approve for this run', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ApproveSelected, 'Approve selected', <CheckIcon fontSize="inherit" />)}

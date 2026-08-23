@@ -12,6 +12,7 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
+    RuntimeOperationOwner,
     RuntimeSupportLevel,
 )
 from app.runtime.errors import RuntimeError
@@ -28,15 +29,16 @@ class RecordingAdapter:
 
     async def capabilities(self, definition):
         operations = {
-            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-            RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-            RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, True),
-            RuntimeOperationId.RUN_SEND_FOLLOWUP.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, True),
-            RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, False, disabled_reason="runtime_capability_unsupported"),
+            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+            RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+            RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.RUNTIME, True),
+            RuntimeOperationId.RUN_SEND_FOLLOWUP.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
+            RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
         }
         for operation in self.unsupported:
             operations[operation] = RuntimeOperationDescriptor(
                 RuntimeSupportLevel.UNSUPPORTED,
+                RuntimeOperationOwner.RUNTIME,
                 False,
                 disabled_reason="runtime_capability_unsupported",
             )

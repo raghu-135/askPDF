@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from typing import Any, Dict, List, Optional
 
 from app.agent_workflows.trace_payloads import (
@@ -83,8 +84,13 @@ def finalize_and_merge_debug_payload(
     """Finalize one execution phase and merge it with an earlier persisted phase."""
 
     status = run_status or getattr(run, "status", None)
+    final_run = copy(run)
+    if run_status is not None:
+        setattr(final_run, "status", run_status)
+    if completed_at is not None:
+        setattr(final_run, "completed_at", completed_at)
     incoming = recorder.finalize(
-        run=run,
+        run=final_run,
         chat_turn_id=chat_turn_id,
         metrics=metrics,
         route=route,
