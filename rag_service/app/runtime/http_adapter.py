@@ -16,6 +16,7 @@ from typing import Any, Mapping
 import httpx
 
 from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeExecutionContext
+from app.runtime.budgets import deep_agent_budgets
 from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
@@ -120,7 +121,7 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             connect=connect_timeout or float(os.getenv("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS", "5")),
             write=float(os.getenv("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS", "10")),
         )
-        self._execution_timeout = float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600"))
+        self._execution_timeout = float(deep_agent_budgets(self.framework)["max_duration_seconds"])
 
     async def _client_for_request(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -187,7 +188,11 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         return payload.get("result") if "result" in payload else payload
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        value = await self._json("GET", "/v1/capabilities")
+        value = await self._json(
+            "POST",
+            "/v1/capabilities",
+            json={"definition": definition.to_dict()},
+        )
         try:
             return capabilities_from_dict(value.get("capabilities") or value)
         except (TypeError, ValueError) as exc:

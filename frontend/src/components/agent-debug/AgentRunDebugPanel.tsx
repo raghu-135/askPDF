@@ -13,6 +13,7 @@ import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
+import { withRetry } from '../../lib/retry-utils';
 
 function AgentRunDebugPanel({
   runId,
@@ -58,7 +59,7 @@ function AgentRunDebugPanel({
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
-  const responseOperation = pendingInterrupt?.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+  const responseOperation = (pendingInterrupt?.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
   const responseAvailability = runtimeOperationAvailability(runCapabilities, responseOperation);
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
   const executionTraceView = useMemo(
@@ -102,12 +103,10 @@ function AgentRunDebugPanel({
     const threadId = runDetails?.thread_id;
     setRunCapabilities(null);
     if (!threadId) return () => { active = false; };
-    void getAgentRunCapabilities(runId, threadId)
-      .then((capabilities) => {
-        if (active) setRunCapabilities(capabilities);
-      })
-      .catch(() => {
-        if (active) setRunCapabilities(null);
+    void withRetry(() => getAgentRunCapabilities(runId, threadId), { maxRetries: 3, baseDelay: 500 })
+      .then((result) => {
+        if (!active) return;
+        setRunCapabilities(result.success ? result.data || null : null);
       });
     return () => { active = false; };
   }, [pendingInterrupt?.interrupt_id, pendingInterrupt?.resume_version, runDetails?.status, runDetails?.thread_id, runId]);

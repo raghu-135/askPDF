@@ -127,22 +127,6 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
     assert "http://unavailable" not in response.text
 
 
-def test_legacy_strict_readiness_can_gate_on_dependencies(monkeypatch):
-    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://unavailable/mcp")
-    monkeypatch.setenv("LLM_API_URL", "")
-    monkeypatch.setenv("AGENT_RUNTIME_LEGACY_STRICT_READINESS", "true")
-
-    async def unavailable_probe(*_args, **_kwargs):
-        return {"ok": False, "reason": "ConnectError"}
-
-    monkeypatch.setattr("runtime_service.dependencies.probe_mcp", unavailable_probe)
-    with TestClient(create_app()) as client:
-        response = client.get("/readyz")
-    assert response.status_code == 503
-    assert response.json()["checks"]["mcp"]["state"] == "unavailable"
-
-
 def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")

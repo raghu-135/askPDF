@@ -10,7 +10,7 @@ from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
 
 
 def _default_langgraph_adapter() -> AgentRuntimeAdapter:
-    """Select transport at process startup while retaining an emergency fallback."""
+    """Select the configured transport at process startup."""
 
     if agent_runtime_mode() is AgentRuntimeMode.EXTERNAL:
         from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter

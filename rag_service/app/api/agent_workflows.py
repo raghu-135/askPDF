@@ -149,8 +149,9 @@ class AgentRunResumeRequest(BaseModel):
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
     thread_id: str = Field(..., min_length=1)
-    runtime_approval_choice: Optional[Literal["once", "session", "always", "deny"]] = None
-    resolve_all: bool = False
+    approval_scope: Optional[Literal["once", "session", "always"]] = None
+    approval_feedback: Optional[str] = None
+    approval_modifications: Optional[Dict[str, Any]] = None
 
 
 class AgentRunCancelRequest(BaseModel):
@@ -1290,8 +1291,9 @@ async def resume_agent_run(
             resume_version=req.resume_version,
             expected_thread_id=req.thread_id,
             execution_event_sink=event_sink,
-            runtime_approval_choice=req.runtime_approval_choice,
-            resolve_all=req.resolve_all,
+            approval_scope=req.approval_scope,
+            approval_feedback=req.approval_feedback,
+            approval_modifications=req.approval_modifications,
         )
 
     if "text/event-stream" in str(accept or "").lower():

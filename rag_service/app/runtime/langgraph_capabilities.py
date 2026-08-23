@@ -181,6 +181,7 @@ def langgraph_capabilities(
             terminal_states=descriptor.terminal_states,
             preserves_run_id=descriptor.preserves_run_id,
             preserves_session_id=descriptor.preserves_session_id,
+            requires_runtime_binding=descriptor.requires_runtime_binding,
         )
 
     operations: dict[str, RuntimeOperationDescriptor] = {
@@ -210,24 +211,28 @@ def langgraph_capabilities(
             checkpoint,
             semantics="resume_from_interrupt",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
             checkpoint,
             semantics="checkpoint_state_inspection",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
             checkpoint,
             semantics="checkpoint_boundary_update",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
             checkpoint,
             semantics="checkpoint_thread_cleanup",
             disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_APPROVAL_RESPOND.value: _unsupported(),
         RuntimeOperationId.RUN_STEER_LIVE.value: _unsupported(),

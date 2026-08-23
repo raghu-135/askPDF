@@ -413,7 +413,6 @@ class TestAgentCheckpointing:
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
         monkeypatch.delenv("AGENT_CHECKPOINT_DATABASE_URL", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
 
         with pytest.raises(RuntimeError, match="requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL"):
             async with open_agent_checkpointer():
@@ -4188,7 +4187,7 @@ class TestAgentRunService:
                 fake_handle_router_rag_chat,
             )
             monkeypatch.setattr(
-                "app.agent_workflows.service.delete_agent_checkpoints",
+                "app.runtime.langgraph.checkpointing.delete_agent_checkpoints",
                 fake_delete_agent_checkpoints,
             )
 
@@ -4290,7 +4289,7 @@ class TestAgentRunService:
                 fake_handle_router_rag_chat,
             )
             monkeypatch.setattr(
-                "app.agent_workflows.service.delete_agent_checkpoints",
+                "app.runtime.langgraph.checkpointing.delete_agent_checkpoints",
                 fake_delete_agent_checkpoints,
             )
 
@@ -5789,7 +5788,6 @@ class TestAgentRunService:
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
         monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", test_database_url)
-        monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)

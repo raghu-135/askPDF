@@ -118,19 +118,9 @@ async def resolve_capabilities(
         operations[RuntimeOperationId.RUN_RETRY.value] = _disabled(operations[RuntimeOperationId.RUN_RETRY.value], "run_not_retryable")
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
-        for operation in (
-            RuntimeOperationId.RUN_CANCEL.value,
-            RuntimeOperationId.RUN_RESUME.value,
-            RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
-            RuntimeOperationId.INTERRUPT_RESPOND.value,
-            RuntimeOperationId.RUN_INSPECT_STATE.value,
-            RuntimeOperationId.RUN_UPDATE_STATE.value,
-            RuntimeOperationId.RUN_CONTINUE.value,
-            RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
-            RuntimeOperationId.TRACE_PROJECT.value,
-        ):
-            if operation in operations:
-                operations[operation] = _disabled(operations[operation], "runtime_binding_unavailable")
+        for operation, descriptor in operations.items():
+            if descriptor.requires_runtime_binding:
+                operations[operation] = _disabled(descriptor, "runtime_binding_unavailable")
 
     return replace(capabilities, operations=operations)
 

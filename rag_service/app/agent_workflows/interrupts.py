@@ -83,6 +83,13 @@ def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at
     normalized["status"] = str(normalized.get("status") or INTERRUPT_STATUS_PENDING)
     normalized["requested_at"] = str(normalized.get("requested_at") or iso_utc_z(now))
 
+    response_operation = normalized.get("response_operation")
+    if response_operation not in {"run.resume", "run.approval.respond"}:
+        response_operation = "run.resume"
+    normalized["response_operation"] = response_operation
+    response_schema = normalized.get("response_schema")
+    normalized["response_schema"] = dict(response_schema) if isinstance(response_schema, dict) else {}
+
     allowed_actions = normalized.get("allowed_actions")
     if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
         allowed_actions = [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.REJECT.value]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -14,15 +13,6 @@ from app.runtime.observability import normalize_runtime_event, project_event_to_
 
 
 _background_tasks: set[asyncio.Task[Any]] = set()
-
-
-def _canonical_projection_enabled() -> bool:
-    return os.getenv("AGENT_CANONICAL_EVENT_PROJECTION_ENABLED", "true").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
 
 
 class AgentExecutionEventSink:
@@ -92,12 +82,15 @@ class AgentExecutionEventSink:
             self._sequence += 1
             normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
             source_metadata = dict(normalized_payload.get("source_metadata") or {})
+            source_sequence = normalized_payload.pop("sequence", None)
+            if source_sequence is not None:
+                source_metadata.setdefault("source_sequence", source_sequence)
             if normalized_kind != event:
                 source_metadata.setdefault("source_event", event)
             canonical = create_runtime_event(
                 event_id=event_id or f"{self._run_id or 'run'}:{self._sequence}",
                 run_id=self._run_id or str(normalized_payload.get("run_id") or ""),
-                sequence=int(normalized_payload.get("sequence") or self._sequence),
+                sequence=self._sequence,
                 attempt=int(normalized_payload.get("attempt") or 1),
                 kind=normalized_kind,
                 payload=normalized_payload,
@@ -107,9 +100,9 @@ class AgentExecutionEventSink:
             )
             validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
             self._canonical_events.append(canonical)
-            if _canonical_projection_enabled() and self._runtime_event_persister is not None and canonical.run_id:
+            if self._runtime_event_persister is not None and canonical.run_id:
                 await self._runtime_event_persister(canonical.run_id, canonical)
-            if _canonical_projection_enabled() and self._trace_recorder is not None:
+            if self._trace_recorder is not None:
                 project_event_to_trace_recorder(self._trace_recorder, canonical.kind, canonical.payload)
             if event.startswith(PARALLEL_EVENT_PREFIXES):
                 self._parallel_events.append(envelope)
@@ -146,12 +139,15 @@ class AgentExecutionEventSink:
             self._sequence += 1
             normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
             source_metadata = dict(normalized_payload.get("source_metadata") or {})
+            source_sequence = normalized_payload.pop("sequence", None)
+            if source_sequence is not None:
+                source_metadata.setdefault("source_sequence", source_sequence)
             if normalized_kind != event:
                 source_metadata.setdefault("source_event", event)
             canonical = create_runtime_event(
                 event_id=event_id or f"{self._run_id or 'run'}:{self._sequence}",
                 run_id=self._run_id or str(normalized_payload.get("run_id") or ""),
-                sequence=int(normalized_payload.get("sequence") or self._sequence),
+                sequence=self._sequence,
                 attempt=int(normalized_payload.get("attempt") or 1),
                 kind=normalized_kind,
                 payload=normalized_payload,
@@ -161,9 +157,9 @@ class AgentExecutionEventSink:
             )
             validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
             self._canonical_events.append(canonical)
-            if _canonical_projection_enabled() and self._trace_recorder is not None:
+            if self._trace_recorder is not None:
                 project_event_to_trace_recorder(self._trace_recorder, canonical.kind, canonical.payload)
-            if _canonical_projection_enabled() and self._runtime_event_persister is not None and canonical.run_id:
+            if self._runtime_event_persister is not None and canonical.run_id:
                 retain_background_task(asyncio.create_task(self._runtime_event_persister(canonical.run_id, canonical)))
             self.queue.put_nowait(envelope)
 

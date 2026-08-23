@@ -69,7 +69,21 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         self._ensure_enabled()
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
             raise RuntimeError("runtime_binding_missing", "Hermes approval requires an upstream run binding")
-        value = await self._json("POST", f"/v1/runs/{request.run_id}/approval", request=request, json={"request": request.to_dict(), "continuation": request.continuation.to_dict(), "response": response.to_dict()})
+        if response.decision not in {"approve", "reject"}:
+            raise RuntimeError("invalid_approval_response", "Hermes approvals support approve or reject")
+        choice = response.scope if response.decision == "approve" else "deny"
+        if choice not in {"once", "session", "always", "deny"}:
+            raise RuntimeError("invalid_approval_response", "Hermes approval scope is invalid")
+        value = await self._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/approval",
+            request=request,
+            json={
+                "request": request.to_dict(),
+                "continuation": request.continuation.to_dict(),
+                "response": {"choice": choice, "resolve_all": choice in {"session", "always"}},
+            },
+        )
         return dict(value or {})
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:

@@ -28,10 +28,6 @@ def _postgres_checkpoint_url() -> str:
     return checkpoint_database_url(os.environ)
 
 
-def _memory_fallback_allowed() -> bool:
-    return _truthy_env("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK")
-
-
 @asynccontextmanager
 async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     """Yield a LangGraph checkpointer.
@@ -39,8 +35,7 @@ async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     Production can opt into LangGraph's Postgres saver with
     ASKPDF_AGENT_CHECKPOINTER=postgres. Tests and local dev use one process-wide
     in-memory saver so a run can pause in one service call and resume in another.
-    An explicit Postgres mode fails closed unless
-    ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true is set.
+    An explicit Postgres mode fails closed when the configured saver is unavailable.
     """
 
     mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", AgentCheckpointerMode.MEMORY.value).strip().lower()
@@ -53,21 +48,10 @@ async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     except Exception as exc:
-        if _memory_fallback_allowed():
-            logger.warning(
-                "LangGraph Postgres checkpointer unavailable; falling back to in-memory checkpointer: %s",
-                exc,
-            )
-            yield _MEMORY_CHECKPOINTER
-            return
         raise RuntimeError("LangGraph Postgres checkpointer is required but unavailable") from exc
 
     checkpoint_url = _postgres_checkpoint_url()
     if not checkpoint_url:
-        if _memory_fallback_allowed():
-            logger.warning("No Postgres URL configured for agent checkpointer; falling back to in-memory checkpointer")
-            yield _MEMORY_CHECKPOINTER
-            return
         raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL")
 
     async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:

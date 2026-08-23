@@ -505,9 +505,11 @@ def create_app() -> FastAPI:
                 "operations": {
                     "run.approval.respond": {
                         "support": "native", "enabled": True,
+                        "requires_runtime_binding": True,
                     },
                     "run.cancel": {
                         "support": "native", "enabled": True,
+                        "requires_runtime_binding": True,
                         "modes": ["cooperative"],
                         "confirmation": "asynchronous",
                         "terminal_states": ["cancelled"],
@@ -521,6 +523,7 @@ def create_app() -> FastAPI:
                     },
                     "run.inspect_state": {
                         "support": "native", "enabled": True,
+                        "requires_runtime_binding": True,
                     },
                     "run.resume": {
                         "support": "unsupported", "enabled": False,
@@ -617,7 +620,7 @@ def create_app() -> FastAPI:
         effective_limits = managed_limits if definition_version >= 2 else config
         max_events = max(1, int(effective_limits.get("max_event_count") or 200))
         max_output_chars = max(1, int(effective_limits.get("max_output_chars") or 12000))
-        max_duration_seconds = max(1, int(effective_limits.get("max_duration_seconds") or 300))
+        max_duration_seconds = max(1, int(effective_limits.get("max_duration_seconds") or 3600))
         deadline = time.monotonic() + max_duration_seconds
         system_prompt = str((managed_profile.get("instructions") if definition_version >= 2 else config.get("system_prompt")) or "").strip()
         task_context = input_data.get("task_context")
@@ -702,6 +705,9 @@ def create_app() -> FastAPI:
                     "pending_interrupt": {
                         "interrupt_id": interrupt_id,
                         "type": "hermes_approval",
+                        "kind": "approval",
+                        "response_operation": "run.approval.respond",
+                        "response_schema": {"decision": ["approve", "reject"], "scope": ["once", "session", "always"]},
                         "title": str(event_payload.get("title") or "Hermes tool approval required"),
                         "description": str(event_payload.get("command") or event_payload.get("description") or ""),
                         "allowed_actions": ["approve", "reject"],

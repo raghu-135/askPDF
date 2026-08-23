@@ -30,14 +30,6 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
-# Kept as a compatibility seam for existing tests and integrations while the
-# adapter owns normal production checkpoint cleanup.
-async def _default_delete_agent_checkpoints(*args: Any, **kwargs: Any):
-    from app.agent_workflows.checkpointing import delete_agent_checkpoints as implementation
-    return await implementation(*args, **kwargs)
-
-
-delete_agent_checkpoints = _default_delete_agent_checkpoints
 
 
 def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
@@ -102,10 +94,6 @@ class AgentRunService:
         self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
-        if delete_agent_checkpoints is not _default_delete_agent_checkpoints and binding is not None:
-            checkpoint_id = binding.payload.get("checkpoint_thread_id")
-            if checkpoint_id:
-                return await delete_agent_checkpoints([str(checkpoint_id)])
         try:
             return await adapter.delete_continuation(binding)
         except Exception as exc:
@@ -564,8 +552,9 @@ class AgentRunService:
         resume_version: Optional[int] = None,
         expected_thread_id: Optional[str] = None,
         execution_event_sink: Any = None,
-        runtime_approval_choice: Optional[str] = None,
-        resolve_all: bool = False,
+        approval_scope: Optional[str] = None,
+        approval_feedback: Optional[str] = None,
+        approval_modifications: Optional[Dict[str, Any]] = None,
     ) -> Optional[InterruptResolutionResult]:
         current_run = await self.repository.get_run(run_id)
         if current_run is None or (
@@ -579,12 +568,7 @@ class AgentRunService:
             and isinstance(pending_interrupt, dict)
             and pending_interrupt.get("checkpoint_resume") is True
         ):
-            operation = (
-                RuntimeOperationId.RUN_APPROVAL_RESPOND
-                if str(getattr(current_run, "framework", "")) == "hermes"
-                and pending_interrupt.get("type") == "hermes_approval"
-                else RuntimeOperationId.RUN_RESUME
-            )
+            operation = RuntimeOperationId(str(pending_interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
             await require_capability(
                 _definition_for_run(current_run),
                 operation,
@@ -643,10 +627,8 @@ class AgentRunService:
                 set_task_web_access,
             )
 
-            if str(getattr(resolution.run, "framework", "")) == "hermes" and resolution.interrupt.get("type") == "hermes_approval":
-                choice = runtime_approval_choice or ("deny" if action == AgentRunResumeAction.REJECT.value else "once")
-                if choice not in {"once", "session", "always", "deny"}:
-                    raise ValueError("Invalid Hermes approval choice")
+            response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation") or RuntimeOperationId.RUN_RESUME.value))
+            if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
                 definition = _definition_for_run(resolution.run)
                 await require_capability(
                     definition,
@@ -661,7 +643,13 @@ class AgentRunService:
                     continuation=continuation_from_run(resolution.run),
                 )
                 await adapter_for_definition(definition).respond_to_approval(
-                    request, RuntimeApprovalResponse(choice, resolve_all=resolve_all),
+                    request,
+                    RuntimeApprovalResponse(
+                        decision="reject" if action == AgentRunResumeAction.REJECT.value else "approve",
+                        modifications=approval_modifications,
+                        feedback=approval_feedback,
+                        scope=approval_scope or "once",
+                    ),
                 )
             if _is_web_approval_interrupt(resolution.interrupt):
                 if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:

@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Mapping
 
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.runtime.events import create_runtime_event
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,15 +44,13 @@ async def persist_tool_audit(
         error = getattr(result, "error", None)
         if error is not None:
             data["error"] = {"code": str(getattr(error, "code", "tool_failed")), "retryable": bool(getattr(error, "retryable", True))}
-    event = create_runtime_event(
-        event_id=f"mcp:{request_id}:{phase}",
-        run_id=run_id,
-        sequence=max(1, int(time.time() * 1000) % 2_000_000_000),
-        kind=f"tool.{phase}",
-        payload=data,
-        source_metadata={"framework": "askpdf_mcp", "source_event": f"tool.{phase}"},
-    )
     try:
-        await AgentWorkflowRepository().append_run_event(run_id, event)
+        await AgentWorkflowRepository().append_run_event_payload(
+            run_id=run_id,
+            event_id=f"mcp:{request_id}:{phase}",
+            kind=f"tool.{phase}",
+            payload_json=data,
+            source_metadata_json={"framework": "askpdf_mcp", "source_event": f"tool.{phase}"},
+        )
     except Exception:
         logger.exception("Unable to persist MCP tool audit event run_id=%s tool=%s phase=%s", run_id, tool_name, phase)

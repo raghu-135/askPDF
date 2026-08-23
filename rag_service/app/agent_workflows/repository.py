@@ -659,6 +659,33 @@ class AgentWorkflowRepository:
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
 
     async def append_run_event(self, run_id: str, event: Any) -> bool:
+        return await self.append_run_event_payload(
+            run_id=run_id,
+            event_id=str(getattr(event, "event_id", None) or ""),
+            sequence=int(getattr(event, "sequence", 0) or 0),
+            attempt=int(getattr(event, "attempt", 1) or 1),
+            kind=str(getattr(event, "kind", None) or "runtime.event"),
+            payload_json=dict(getattr(event, "payload", None) or {}),
+            occurred_at=getattr(event, "occurred_at", None),
+            trace_id=getattr(event, "trace_id", None),
+            terminal=bool(getattr(event, "terminal", False)),
+            source_metadata_json=dict(getattr(event, "source_metadata", None) or {}),
+        )
+
+    async def append_run_event_payload(
+        self,
+        *,
+        run_id: str,
+        event_id: str,
+        kind: str,
+        payload_json: Dict[str, Any],
+        sequence: Optional[int] = None,
+        attempt: int = 1,
+        occurred_at: Any = None,
+        trace_id: Optional[str] = None,
+        terminal: bool = False,
+        source_metadata_json: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         # Event sinks may persist asynchronously while the control-plane
         # request is completing. Never share the request session with those
         # writes because concurrent transactions on one session can close or
@@ -668,15 +695,15 @@ class AgentWorkflowRepository:
             return await run_store_append_run_event(
                 session,
                 run_id=run_id,
-                event_id=str(getattr(event, "event_id", None) or ""),
-                sequence=int(getattr(event, "sequence", 0) or 0),
-                attempt=int(getattr(event, "attempt", 1) or 1),
-                kind=str(getattr(event, "kind", None) or "runtime.event"),
-                payload_json=dict(getattr(event, "payload", None) or {}),
-                occurred_at=getattr(event, "occurred_at", None),
-                trace_id=getattr(event, "trace_id", None),
-                terminal=bool(getattr(event, "terminal", False)),
-                source_metadata_json=dict(getattr(event, "source_metadata", None) or {}),
+                event_id=event_id,
+                sequence=sequence,
+                attempt=attempt,
+                kind=kind,
+                payload_json=payload_json,
+                occurred_at=occurred_at,
+                trace_id=trace_id,
+                terminal=terminal,
+                source_metadata_json=source_metadata_json,
             )
         finally:
             await session.close()

@@ -71,7 +71,6 @@ class RuntimeOperationId(str, Enum):
     RUN_GET = "run.get"
     RUN_LIST = "run.list"
     RUN_WAIT = "run.wait"
-    RUN_STREAM_EVENTS = "run.stream_events"
     RUN_RESUME = "run.resume"
     RUN_CANCEL = "run.cancel"
     RUN_PAUSE = "run.pause"
@@ -194,6 +193,7 @@ class RuntimeOperationDescriptor:
     terminal_states: tuple[str, ...] = ()
     preserves_run_id: Optional[bool] = None
     preserves_session_id: Optional[bool] = None
+    requires_runtime_binding: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.support, RuntimeSupportLevel):
@@ -215,6 +215,8 @@ class RuntimeOperationDescriptor:
         for value, field_name in ((self.preserves_run_id, "preserves_run_id"), (self.preserves_session_id, "preserves_session_id")):
             if value is not None and not isinstance(value, bool):
                 raise ValueError(f"{field_name} must be a bool or null")
+        if not isinstance(self.requires_runtime_binding, bool):
+            raise TypeError("requires_runtime_binding must be a bool")
 
     def to_dict(self) -> Dict[str, Any]:
         value: Dict[str, Any] = {
@@ -234,6 +236,8 @@ class RuntimeOperationDescriptor:
             value["preserves_run_id"] = self.preserves_run_id
         if self.preserves_session_id is not None:
             value["preserves_session_id"] = self.preserves_session_id
+        if self.requires_runtime_binding:
+            value["requires_runtime_binding"] = True
         return value
 
 
@@ -316,8 +320,10 @@ class RuntimeCapabilities:
 
 @dataclass(frozen=True)
 class RuntimeApprovalResponse:
-    choice: str
-    resolve_all: bool = False
+    decision: str
+    modifications: Optional[Mapping[str, Any]] = None
+    feedback: Optional[str] = None
+    scope: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

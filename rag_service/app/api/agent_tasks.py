@@ -33,6 +33,7 @@ from app.runtime.hermes_config import (
     hermes_runtime_enabled,
     validate_hermes_model_compatibility,
 )
+from app.runtime.budgets import apply_deep_agent_env_overrides
 
 
 router = APIRouter(tags=["agent-tasks"])
@@ -232,6 +233,7 @@ async def create_agent_task(
         # client or stale UI capability response to select a per-task value.
         config["context_window"] = hermes_context_length
     config["use_web_search"] = req.web_search_mode != "off"
+    config["limits"] = apply_deep_agent_env_overrides(config["limits"], req.engine)
     contract_limits = contract["limits"]
     config["limits"]["max_concurrency"] = min(
         config["limits"]["max_concurrency"], int(contract_limits["max_concurrency"]),

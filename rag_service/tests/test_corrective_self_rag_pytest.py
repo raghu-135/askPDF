@@ -31,6 +31,7 @@ from app.agent_workflows.parallel_runtime import worker_terminal_delta
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.graph import NodeRegistry
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
+from app.runtime.contracts import AgentRuntimeEvent
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.state import merge_corrective_wave_records
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
@@ -594,6 +595,24 @@ async def test_corrective_runtime_events_dedupe_by_stable_event_id():
     await sink.emit("corrective.query_rewrite", payload)
     assert [item["event"] for item in sink.parallel_events()] == ["corrective.query_rewrite"]
     assert sink.queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_source_sequences_do_not_control_canonical_order():
+    sink = AgentExecutionEventSink(include_details=True)
+    async def persist(*_args):
+        return None
+    sink.bind_runtime_event_persister("run-1", persist)
+    await sink.emit_runtime_event(AgentRuntimeEvent(
+        event_id="runtime:100",
+        run_id="run-1",
+        sequence=100,
+        kind="output.delta",
+        payload={"text": "first"},
+    ))
+    await sink.emit("output.completed", {"event_id": "product:1"})
+    assert [event.sequence for event in sink.canonical_events()] == [1, 2]
+    assert sink.canonical_events()[0].source_metadata["source_sequence"] == 100
 
 
 def test_corrective_metrics_preserve_per_wave_outcomes_and_source_expansion():

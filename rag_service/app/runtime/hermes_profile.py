@@ -9,6 +9,7 @@ from app.runtime.hermes_compatibility import (
     HERMES_DEFINITION_VERSION, HERMES_EXTERNAL_PROFILE, HERMES_OFFLINE_PROFILE,
     HERMES_PROFILE_VERSION, HERMES_SUPPORTED_DEFINITION_VERSIONS,
 )
+from app.runtime.budgets import configured_budget_value
 HERMES_BASE_TOOL_IDS = (
     "get_thread_shape",
     "search_document_by_id",
@@ -75,9 +76,9 @@ def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
         "memory": {"persistent": bool(config.get("allow_persistent_memory", False))},
         "delegation": {"enabled": bool(config.get("allow_subagents", False))},
         "limits": {
-            "max_output_chars": int(config.get("max_output_chars") or 12000),
-            "max_duration_seconds": int(config.get("max_duration_seconds") or 300),
-            "max_event_count": int(config.get("max_event_count") or 200),
+            "max_output_chars": configured_budget_value(config, "max_output_chars", "hermes"),
+            "max_duration_seconds": configured_budget_value(config, "max_duration_seconds", "hermes"),
+            "max_event_count": configured_budget_value(config, "max_event_count", "hermes"),
         },
         "context_window": int(config.get("context_window") or 0) or None,
         "task_policy": dict(config.get("task_policy") or {}),

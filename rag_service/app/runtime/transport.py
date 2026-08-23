@@ -172,6 +172,9 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 field_value = raw_descriptor.get(field_name)
                 if field_value is not None and not isinstance(field_value, bool):
                     raise ValueError(f"{field_name} must be a bool or null")
+            requires_runtime_binding = raw_descriptor.get("requires_runtime_binding", False)
+            if not isinstance(requires_runtime_binding, bool):
+                raise ValueError("requires_runtime_binding must be a bool")
             descriptor = RuntimeOperationDescriptor(
                 support=support,
                 enabled=enabled,
@@ -182,6 +185,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 terminal_states=terminal_states,
                 preserves_run_id=raw_descriptor.get("preserves_run_id"),
                 preserves_session_id=raw_descriptor.get("preserves_session_id"),
+                requires_runtime_binding=requires_runtime_binding,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid runtime capability descriptor for {operation!r}") from exc

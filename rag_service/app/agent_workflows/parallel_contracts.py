@@ -5,6 +5,7 @@ from typing import Any, Dict, Mapping
 
 from app.agent_workflows.enums import EvidenceKind, WorkflowNodeType
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from app.runtime.budgets import deep_agent_budgets
 
 
 PARALLEL_REFERENCE_WORKFLOW_ID = "orchestrator_worker_rag_agent"
@@ -36,9 +37,13 @@ PARALLEL_POLICY_FIELDS: Dict[str, Dict[str, Any]] = {
     "continue_on_insufficient_successes": {"type": "boolean", "default": False, "label": "Continue when no worker succeeds"},
 }
 
+_LANGGRAPH_BUDGETS = deep_agent_budgets("langgraph")
 DEFAULT_PARALLEL_POLICY: Dict[str, Any] = {
     key: descriptor["default"] for key, descriptor in PARALLEL_POLICY_FIELDS.items()
 }
+DEFAULT_PARALLEL_POLICY["dispatch_timeout_ms"] = _LANGGRAPH_BUDGETS["dispatch_timeout_ms"]
+DEFAULT_PARALLEL_POLICY["default_worker_timeout_ms"] = _LANGGRAPH_BUDGETS["worker_timeout_ms"]
+DEFAULT_PARALLEL_POLICY["web_worker_timeout_ms"] = _LANGGRAPH_BUDGETS["web_worker_timeout_ms"]
 PARALLEL_POLICY_LIMITS = {
     key: (int(descriptor["minimum"]), int(descriptor["maximum"]))
     for key, descriptor in PARALLEL_POLICY_FIELDS.items()

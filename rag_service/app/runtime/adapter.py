@@ -100,7 +100,7 @@ class AgentRuntimeAdapter(ABC):
         *,
         after_sequence: int = 0,
     ) -> AsyncIterator[Any]:
-        self._unsupported("run.stream_events", "This runtime does not expose independent event streaming")
+        self._unsupported("run.events", "This runtime does not expose independent event streaming")
 
     async def resume(
         self,

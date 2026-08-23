@@ -26,13 +26,13 @@ from app.runtime.langgraph_compat import continuation_from_run, legacy_result_fr
 from app.runtime.registry import adapter_for_definition
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.hermes_config import hermes_model_context_length
+from app.runtime.budgets import deep_agent_budgets
 from app.tools.context import ToolInvocationContext
 
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
-WAKE_RUNTIME_LIMIT_SECONDS = 15 * 60
 HERMES_DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_documents", "search_document_by_id"})
 HERMES_RESEARCH_EVIDENCE_TOOLS = frozenset({
     *HERMES_DOCUMENT_EVIDENCE_TOOLS,
@@ -695,7 +695,9 @@ async def run_task_worker(
         task = await tasks.claim_next_task(worker_id, lease_seconds=LEASE_SECONDS)
         if task is not None:
             try:
-                await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=WAKE_RUNTIME_LIMIT_SECONDS)
+                framework = "hermes" if task.workflow_id == "hermes_rag_agent" else "langgraph"
+                wake_limit = deep_agent_budgets(framework)["wake_limit_seconds"]
+                await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)
             except asyncio.TimeoutError:
                 if await tasks.active_runtime_budget_exhausted(task.id):
                     await tasks.complete_task(

@@ -312,7 +312,7 @@ async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     monkeypatch.setattr(adapter, "_json", fake_json)
     binding = ContinuationBinding("hermes_session", {"session_id": "session-1", "upstream_run_id": "upstream-1"})
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent", continuation=binding)
-    await adapter.respond_to_approval(request, RuntimeApprovalResponse("session", resolve_all=True))
+    await adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="session"))
     with pytest.raises(RuntimeError) as error:
         await adapter.steer_live(request, RuntimeSteeringInput("Use the newer evidence"))
     assert calls[0][1] == "/v1/runs/run-1/approval"

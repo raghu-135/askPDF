@@ -17,8 +17,6 @@ from app.runtime.contracts import (
 from app.runtime.langgraph_compat import event_from_legacy, result_from_legacy
 from app.runtime.errors import RuntimeError
 from app.runtime.langgraph_capabilities import langgraph_capabilities
-# Module-level compatibility aliases keep the Phase 5 monkeypatch seam stable
-# while the provider owns builder selection in Phase 6.
 from app.runtime.langgraph import checkpointing, router_runtime
 
 
@@ -120,19 +118,9 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         if event_sink is not None:
             kwargs["execution_event_sink"] = event_sink
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            try:
-                result = await router_runtime.resume_compiled_rag_chat(
-                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
-                )
-            except TypeError as exc:
-                # Preserve the staged-migration monkeypatch seam for callers
-                # that still provide the pre-Phase-4 function signature.
-                if "persist_product_records" not in str(exc):
-                    raise
-                kwargs.pop("persist_product_records", None)
-                result = await router_runtime.resume_compiled_rag_chat(
-                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
-                )
+            result = await router_runtime.resume_compiled_rag_chat(
+                run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
+            )
         return result_from_legacy(result)
 
     async def continue_run(

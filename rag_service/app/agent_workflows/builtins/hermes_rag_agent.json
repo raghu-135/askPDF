@@ -19,7 +19,7 @@
       "mcp_server": "askpdf",
       "allowed_tool_ids": ["get_thread_shape", "search_documents", "search_document_by_id", "search_thread_conversation_history", "search_thread_events", "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv", "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news"],
       "max_output_chars": 12000,
-      "max_duration_seconds": 300,
+      "max_duration_seconds": 3600,
       "max_event_count": 200,
       "allow_subagents": true,
       "allow_persistent_memory": false,

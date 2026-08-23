@@ -765,12 +765,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!runId || !activeThread) {
             return () => { active = false; };
         }
-        void getAgentRunCapabilities(runId, activeThread.id)
-            .then((capabilities) => {
-                if (active) setHumanReviewCapabilities(capabilities);
-            })
-            .catch(() => {
-                if (active) setHumanReviewCapabilities(null);
+        void withRetry(() => getAgentRunCapabilities(runId, activeThread.id), { maxRetries: 3, baseDelay: 500 })
+            .then((result) => {
+                if (active) setHumanReviewCapabilities(result.success ? result.data || null : null);
             });
         return () => { active = false; };
     }, [activeThread?.id, pendingHumanReview?.interrupt.resume_version, pendingHumanReview?.runId]);
@@ -782,12 +779,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!runId || !activeThread) {
             return () => { active = false; };
         }
-        void getAgentRunCapabilities(runId, activeThread.id)
-            .then((capabilities) => {
-                if (active) setLiveRunCapabilities(capabilities);
-            })
-            .catch(() => {
-                if (active) setLiveRunCapabilities(null);
+        void withRetry(() => getAgentRunCapabilities(runId, activeThread.id), { maxRetries: 3, baseDelay: 500 })
+            .then((result) => {
+                if (active) setLiveRunCapabilities(result.success ? result.data || null : null);
             });
         return () => { active = false; };
     }, [activeThread?.id, liveExecution?.canceling, liveExecution?.runId, liveExecution?.running, testRuntime]);
@@ -1554,7 +1548,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
-        const responseOperation = interrupt.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+        const responseOperation = (interrupt.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
         if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
@@ -2430,7 +2424,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
-    const pendingReviewOperation = pendingReviewInterrupt?.type === 'hermes_approval' ? 'run.approval.respond' as const : 'run.resume' as const;
+    const pendingReviewOperation = (pendingReviewInterrupt?.response_operation || 'run.resume') as 'run.approval.respond' | 'run.resume';
     const pendingReviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation);
     return (
         <ConversationPanelTemplate

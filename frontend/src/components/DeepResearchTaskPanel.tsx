@@ -39,6 +39,7 @@ import {
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
 import { isRuntimeOperationEnabled, runtimeOperationAvailability, type RuntimeControlOperation } from '../lib/runtime-capabilities';
+import { withRetry } from '../lib/retry-utils';
 import {
   deriveConversationSentences,
   type ConversationSentence,
@@ -340,9 +341,17 @@ export default function DeepResearchTaskPanel({
       setRunCapabilities(null);
       return () => { active = false; };
     }
-    void getAgentRunCapabilities(selectedRun.id, threadId)
-      .then((value) => { if (active) setRunCapabilities(value); })
-      .catch((value) => { if (active) setCapabilityError(String(value)); });
+    void withRetry(() => getAgentRunCapabilities(selectedRun.id, threadId), { maxRetries: 3, baseDelay: 500 })
+      .then((result) => {
+        if (!active) return;
+        if (result.success) {
+          setRunCapabilities(result.data || null);
+          setCapabilityError('');
+        } else {
+          setRunCapabilities(null);
+          setCapabilityError('Run controls are temporarily unavailable. They will be retried automatically.');
+        }
+      });
     return () => { active = false; };
   }, [selectedRun?.id, selectedRun?.pending_interrupt?.interrupt_id, selectedRun?.pending_interrupt?.resume_version, selectedRun?.status, task?.version, threadId]);
 
@@ -395,13 +404,11 @@ export default function DeepResearchTaskPanel({
 
   const decide = async (
     action: AgentRunResumeAction,
-    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown>; runtimeApprovalChoice?: 'once' | 'session' | 'always' | 'deny' },
+    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown>; approvalScope?: 'once' | 'session' | 'always' | 'deny' },
   ) => {
     const pending = selectedRun?.pending_interrupt;
     if (!selectedRun || !pending) return;
-    const responseOperation: RuntimeControlOperation = pending.type === 'hermes_approval'
-      ? 'run.approval.respond'
-      : 'run.resume';
+    const responseOperation = (pending.response_operation || 'run.resume') as RuntimeControlOperation;
     if (!isRuntimeOperationEnabled(runCapabilities, responseOperation)) return;
     setDecisionSubmitting(action);
     setDecisionError('');
@@ -415,7 +422,7 @@ export default function DeepResearchTaskPanel({
         selected_option_ids: options?.selectedOptionIds,
         edited_payload: options?.editedPayload,
         client_metadata: { source: 'deep_research_task_panel' },
-        runtime_approval_choice: options?.runtimeApprovalChoice,
+        approval_scope: options?.approvalScope === 'deny' ? undefined : options?.approvalScope,
       });
       await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
@@ -443,7 +450,7 @@ export default function DeepResearchTaskPanel({
       : configuredWebMode;
   const requestedWebUnavailable = !frozen && webSearchMode !== 'off' && webCapability !== true;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
-  const isApprovalInterrupt = pendingInterrupt?.type === 'hermes_approval';
+  const isApprovalInterrupt = pendingInterrupt?.kind === 'approval';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
     : [];
@@ -464,7 +471,7 @@ export default function DeepResearchTaskPanel({
       .filter((item) => item.availability.visible);
   }, [runCapabilities]);
   const stateUpdateAvailability = runtimeOperationAvailability(runCapabilities, 'run.update_state');
-  const responseOperation: RuntimeControlOperation = isApprovalInterrupt ? 'run.approval.respond' : 'run.resume';
+  const responseOperation = (pendingInterrupt?.response_operation || 'run.resume') as RuntimeControlOperation;
   useEffect(() => {
     if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
       setInteractionOperation(interactionDescriptors[0].id);
@@ -549,11 +556,11 @@ export default function DeepResearchTaskPanel({
       }}
     />)}</ConversationTranscriptFrame>}
     decision={pendingInterrupt && isApprovalInterrupt ? <Box sx={{ p: 2 }}>
-      <Typography variant="subtitle2">{pendingInterrupt.title || 'Hermes approval required'}</Typography>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">
-        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('approve', { runtimeApprovalChoice: choice })}>Approve {choice}</Button>)}
-        <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('reject', { runtimeApprovalChoice: 'deny' })}>Deny</Button>
+        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('approve', { approvalScope: choice })}>Approve {choice}</Button>)}
+        <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>
       </Stack>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
     </Box> : pendingInterrupt ? <HumanReviewDecisionPanel

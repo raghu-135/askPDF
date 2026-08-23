@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db.jsonb_utils import replace_jsonb_field
@@ -167,7 +168,7 @@ async def append_run_event(
     *,
     run_id: str,
     event_id: str,
-    sequence: int,
+    sequence: Optional[int],
     attempt: int,
     kind: str,
     payload_json: Dict[str, Any],
@@ -176,24 +177,42 @@ async def append_run_event(
     terminal: bool = False,
     source_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    values = {
-        "id": str(uuid.uuid4()),
-        "agent_run_id": run_id,
-        "event_id": event_id,
-        "sequence": max(1, int(sequence or 0)),
-        "attempt": max(1, int(attempt or 1)),
-        "kind": kind,
-        "payload_json": dict(payload_json or {}),
-        "occurred_at": parse_datetime_utc(occurred_at) if occurred_at else None,
-        "trace_id": trace_id,
-        "terminal": bool(terminal),
-        "source_metadata_json": dict(source_metadata_json or {}),
-        "created_at": utc_now(),
-    }
-    statement = pg_insert(AgentRunEvent).values(**values).on_conflict_do_nothing(
-        constraint="uq_agent_run_events_run_event"
-    )
     async with session.begin():
+        run = await session.execute(
+            select(AgentRun.id).where(AgentRun.id == run_id).with_for_update()
+        )
+        if run.scalar_one_or_none() is None:
+            return False
+        existing = await session.execute(
+            select(AgentRunEvent.id).where(
+                AgentRunEvent.agent_run_id == run_id,
+                AgentRunEvent.event_id == event_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            return False
+        current = await session.execute(
+            select(func.max(AgentRunEvent.sequence)).where(AgentRunEvent.agent_run_id == run_id)
+        )
+        canonical_sequence = max(0, int(current.scalar_one_or_none() or 0)) + 1
+        source_metadata = dict(source_metadata_json or {})
+        if sequence:
+            source_metadata.setdefault("source_sequence", int(sequence))
+        values = {
+            "id": str(uuid.uuid4()),
+            "agent_run_id": run_id,
+            "event_id": event_id,
+            "sequence": canonical_sequence,
+            "attempt": max(1, int(attempt or 1)),
+            "kind": kind,
+            "payload_json": dict(payload_json or {}),
+            "occurred_at": parse_datetime_utc(occurred_at) if occurred_at else None,
+            "trace_id": trace_id,
+            "terminal": bool(terminal),
+            "source_metadata_json": source_metadata,
+            "created_at": utc_now(),
+        }
+        statement = pg_insert(AgentRunEvent).values(**values)
         result = await session.execute(statement)
         return bool(result.rowcount)
 

@@ -16,7 +16,6 @@ class FakeAdapter:
 
 def test_runtime_mode_defaults_to_external(monkeypatch):
     monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
-    monkeypatch.delenv("AGENT_RUNTIME_EXTERNAL_ENABLED", raising=False)
     assert agent_runtime_mode() is AgentRuntimeMode.EXTERNAL
 
 
@@ -27,23 +26,6 @@ def test_runtime_mode_defaults_to_external(monkeypatch):
 def test_runtime_mode_accepts_explicit_values(monkeypatch, value, expected):
     monkeypatch.setenv("AGENT_RUNTIME_MODE", value)
     assert agent_runtime_mode() is expected
-
-
-def test_runtime_mode_takes_precedence_over_legacy_boolean(monkeypatch):
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
-    monkeypatch.setenv("AGENT_RUNTIME_EXTERNAL_ENABLED", "false")
-    assert agent_runtime_mode() is AgentRuntimeMode.EXTERNAL
-
-
-@pytest.mark.parametrize(
-    ("legacy", "expected"),
-    [("true", AgentRuntimeMode.EXTERNAL), ("false", AgentRuntimeMode.IN_PROCESS)],
-)
-def test_runtime_mode_preserves_legacy_boolean_with_warning(monkeypatch, caplog, legacy, expected):
-    monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
-    monkeypatch.setenv("AGENT_RUNTIME_EXTERNAL_ENABLED", legacy)
-    assert agent_runtime_mode() is expected
-    assert "deprecated" in caplog.text
 
 
 def test_runtime_mode_rejects_invalid_value(monkeypatch):

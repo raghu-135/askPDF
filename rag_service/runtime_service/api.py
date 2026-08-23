@@ -26,6 +26,7 @@ from app.runtime.transport import (
     json_envelope,
 )
 from app.runtime.langgraph_capabilities import langgraph_capabilities
+from app.runtime.budgets import deep_agent_budgets
 from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
 from runtime_service.dependencies import (
     DependencyMonitor,
@@ -308,9 +309,6 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             }
         except Exception as exc:
             checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}
-        if os.getenv("AGENT_RUNTIME_LEGACY_STRICT_READINESS", "false").strip().lower() in {"1", "true", "yes", "on"}:
-            for name, value in dependency_monitor.snapshot().items():
-                checks[name] = {"status": "ok" if value["state"] == "available" else "failed", "state": value["state"]}
         healthy = all(value.get("status") == "ok" for value in checks.values())
         runtime_state["readiness"] = checks
         return JSONResponse({"status": "ok" if healthy else "not_ready", "checks": checks}, status_code=200 if healthy else 503)
@@ -324,14 +322,12 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
         )
 
-    @app.get("/v1/capabilities")
-    async def capabilities(request: Request) -> dict[str, Any]:
-        definition = AgentDefinition(
-            definition_id="runtime:langgraph:langgraph_graph",
-            framework="langgraph",
-            builder_id="langgraph_graph",
-            runtime_version=os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
-        )
+    @app.post("/v1/capabilities")
+    async def capabilities(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        try:
+            definition = definition_from_dict(payload["definition"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail={"code": "invalid_definition", "message": "A valid definition is required"}) from exc
         return json_envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
@@ -404,7 +400,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
         context = _context(payload, request, cancellation_checker=cancellation_probe)
         try:
-            execution_timeout = max(1.0, float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600")))
+            framework = str(getattr(request, "framework", None) or "langgraph")
+            execution_timeout = float(deep_agent_budgets(framework)["max_duration_seconds"])
             result = await asyncio.wait_for(
                 getattr(get_adapter(), operation)(
                     request,

@@ -365,6 +365,9 @@ async def hitl_gate_node(
             "phase": phase,
             "mode": mode,
             "type": interrupt_type,
+            "kind": "approval" if mode == HitlMode.APPROVAL.value else "interrupt",
+            "response_operation": "run.resume",
+            "response_schema": {},
             "title": gate_policy.get("title") or ("Choose approved options" if mode == HitlMode.CHOICE.value else "Human review requested"),
             "prompt": gate_policy.get("prompt")
             or gate_policy.get("body")

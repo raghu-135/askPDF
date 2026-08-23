@@ -1101,6 +1101,9 @@ export interface AgentRunPendingInterrupt {
   gate_id?: string | null;
   node_id?: string | null;
   type?: string | null;
+  kind?: 'approval' | 'interrupt' | string | null;
+  response_operation?: 'run.resume' | 'run.approval.respond' | string | null;
+  response_schema?: Record<string, any>;
   status?: InterruptStatusValue | string;
   requested_at?: string | null;
   expires_at?: string | null;
@@ -2042,8 +2045,9 @@ export interface AgentRunResumePayload {
   resume_token?: string;
   resume_version?: number;
   thread_id?: string;
-  runtime_approval_choice?: 'once' | 'session' | 'always' | 'deny';
-  resolve_all?: boolean;
+  approval_scope?: 'once' | 'session' | 'always';
+  approval_feedback?: string;
+  approval_modifications?: Record<string, any>;
 }
 
 export interface AgentRunResumeResponse {

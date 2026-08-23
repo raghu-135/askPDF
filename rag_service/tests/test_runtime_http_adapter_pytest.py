@@ -77,6 +77,8 @@ async def test_runtime_cancellation_probe_is_awaitable():
 async def test_http_adapter_round_trips_capabilities_and_validation():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/capabilities":
+            assert request.method == "POST"
+            assert json.loads(request.content)["definition"]["definition_id"] == "router"
             return httpx.Response(200, json={"contract_version": 1, "capabilities": {"operations": {
                 "run.events": {"support": "native", "enabled": True},
                 "run.resume": {"support": "conditional", "enabled": True, "semantics": "resume_from_interrupt"},
