@@ -5,14 +5,31 @@ import type {
 
 export type RuntimeControlOperation =
   | 'run.cancel'
-  | 'run.pause'
   | 'run.resume'
-  | 'run.retry'
   | 'run.approval.respond'
   | 'run.send_followup'
   | 'run.interrupt_with_input'
   | 'run.steer_live'
-  | 'run.update_state';
+  | 'run.update_state'
+  | 'task.start'
+  | 'task.pause'
+  | 'task.resume'
+  | 'task.cancel'
+  | 'task.retry';
+
+export type TaskControlAction = 'start' | 'pause' | 'resume' | 'cancel' | 'retry';
+
+export const TASK_CONTROL_CATALOG: ReadonlyArray<{
+  action: TaskControlAction;
+  operation: Extract<RuntimeControlOperation, `task.${string}`>;
+  label: string;
+}> = [
+  { action: 'start', operation: 'task.start', label: 'start' },
+  { action: 'pause', operation: 'task.pause', label: 'pause' },
+  { action: 'resume', operation: 'task.resume', label: 'resume' },
+  { action: 'cancel', operation: 'task.cancel', label: 'cancel' },
+  { action: 'retry', operation: 'task.retry', label: 'retry' },
+];
 
 export type RuntimeInterruptResponseOperation = 'run.resume' | 'run.approval.respond';
 

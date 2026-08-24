@@ -36,8 +36,11 @@ class CapabilityAdapter:
                 RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
                 RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
                 RuntimeOperationId.RUN_REPLAY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
@@ -172,20 +175,20 @@ async def test_definition_capabilities_are_requested_from_adapter_and_drive_task
 
     task_definition = _definition(supports_long_running_tasks=True)
     task_capabilities = await capabilities_for_definition(task_definition, registry=registry)
-    assert task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
-    assert task_capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is True
+    assert task_capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
+    assert task_capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
 
     non_task_definition = _definition(supports_long_running_tasks=False)
     non_task_capabilities = await capabilities_for_definition(non_task_definition, registry=registry)
-    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is False
-    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
+    assert non_task_capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
+    assert non_task_capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     resolved = await resolve_capabilities(non_task_definition, registry=registry, run=SimpleNamespace(
         status="running",
         pending_interrupt_json=None,
         runtime_binding_json={"binding_type": "fake"},
         runtime_binding_status="active",
     ))
-    assert resolved.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
+    assert resolved.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     assert "run.continue" not in task_capabilities.operations
 
 
@@ -304,9 +307,9 @@ async def test_task_lifecycle_operations_require_task_definition_and_eligible_st
         runtime_binding_status="active",
     )
     capabilities = await resolve_capabilities(task_definition, registry=registry, run=running)
-    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
-    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is False
-    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].disabled_reason == "run_not_retryable"
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].disabled_reason == "task_not_retryable"
 
     failed = SimpleNamespace(
         status="failed",
@@ -315,14 +318,15 @@ async def test_task_lifecycle_operations_require_task_definition_and_eligible_st
         runtime_binding_status="active",
     )
     capabilities = await resolve_capabilities(task_definition, registry=registry, run=failed)
-    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is False
-    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "run_terminal"
-    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "task_terminal"
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].disabled_reason == "task_terminal"
 
     non_task_definition = _definition()
     capabilities = await resolve_capabilities(non_task_definition, registry=registry, run=running)
-    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
-    assert capabilities.operations[RuntimeOperationId.RUN_RETRY.value].disabled_reason == "definition_not_task_runtime"
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "definition_not_task_runtime"
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].disabled_reason == "definition_not_task_runtime"
 
 
 @pytest.mark.asyncio
@@ -399,7 +403,7 @@ class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
     async def capabilities(self, definition):
         return RuntimeCapabilities(operations={
             RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+                RuntimeOperationId.TASK_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
         })
 
     async def validate(self, definition, spec, *, options=None):
@@ -420,4 +424,4 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert error is None
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
-    assert capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True

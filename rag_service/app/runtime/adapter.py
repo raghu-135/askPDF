@@ -122,9 +122,6 @@ class AgentRuntimeAdapter(ABC):
     ) -> AgentRuntimeResult:
         self._unsupported("run.resume", "This runtime does not expose run resumption")
 
-    async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        self._unsupported("run.pause", "This runtime does not expose run pausing")
-
     async def continue_run(
         self,
         request: AgentRuntimeRequest,

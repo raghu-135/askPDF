@@ -132,7 +132,6 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
         ("run.wait", lambda: adapter.wait(request)),
         ("run.events", lambda: adapter.stream_events(request)),
         ("run.resume", lambda: adapter.resume(request, interrupt={}, context=RuntimeExecutionContext())),
-        ("run.pause", lambda: adapter.pause(request)),
         ("runtime_continuation_unavailable", lambda: adapter.continue_run(request, context=RuntimeExecutionContext())),
         ("run.cancel", lambda: adapter.cancel(request)),
         ("run.approval.respond", lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="once"))),

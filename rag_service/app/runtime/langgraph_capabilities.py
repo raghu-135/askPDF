@@ -212,14 +212,35 @@ def langgraph_capabilities(
             confirmation="asynchronous",
             terminal_states=("cancelled", "interrupted"),
         )),
-        RuntimeOperationId.RUN_PAUSE.value: enabled_descriptor(RuntimeOperationDescriptor(
+        RuntimeOperationId.TASK_START.value: enabled_descriptor(RuntimeOperationDescriptor(
+            RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.PRODUCT,
+            task_runtime,
+            semantics="product_task_start",
+            disabled_reason=None if task_runtime else "definition_not_task_runtime",
+        )),
+        RuntimeOperationId.TASK_PAUSE.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
             RuntimeOperationOwner.PRODUCT,
             task_runtime,
             semantics="product_task_pause",
             disabled_reason=None if task_runtime else "definition_not_task_runtime",
         )),
-        RuntimeOperationId.RUN_RETRY.value: enabled_descriptor(RuntimeOperationDescriptor(
+        RuntimeOperationId.TASK_RESUME.value: enabled_descriptor(RuntimeOperationDescriptor(
+            RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.PRODUCT,
+            task_runtime,
+            semantics="product_task_resume",
+            disabled_reason=None if task_runtime else "definition_not_task_runtime",
+        )),
+        RuntimeOperationId.TASK_CANCEL.value: enabled_descriptor(RuntimeOperationDescriptor(
+            RuntimeSupportLevel.CONDITIONAL,
+            RuntimeOperationOwner.PRODUCT,
+            task_runtime,
+            semantics="product_task_cancel",
+            disabled_reason=None if task_runtime else "definition_not_task_runtime",
+        )),
+        RuntimeOperationId.TASK_RETRY.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,
             RuntimeOperationOwner.PRODUCT,
             task_runtime,

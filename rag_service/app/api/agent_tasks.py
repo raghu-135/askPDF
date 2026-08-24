@@ -204,15 +204,26 @@ async def _owned_task(task_id: str, thread_id: str, *, include_deleted: bool = F
     return task
 
 
-async def _require_task_start(task: Any) -> None:
+async def _require_task_capability(task: Any, action: str) -> None:
     workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=409, detail={"code": "agent_workflow_unavailable"})
+    operation = {
+        "start": RuntimeOperationId.TASK_START,
+        "pause": RuntimeOperationId.TASK_PAUSE,
+        "resume": RuntimeOperationId.TASK_RESUME,
+        "cancel": RuntimeOperationId.TASK_CANCEL,
+        "retry": RuntimeOperationId.TASK_RETRY,
+    }.get(action)
+    if operation is None:
+        raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
+    run = await repository.get_task_run(task.id)
     try:
         await require_capability(
             definition_from_workflow(workflow),
-            RuntimeOperationId.RUN_START,
+            operation,
             registry=get_runtime_registry(),
+            run=run,
         )
     except AgentRuntimeError as exc:
         logger.warning(
@@ -318,8 +329,7 @@ async def command_agent_task(
     if action not in {"start", "pause", "resume", "cancel", "retry"}:
         raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
     task = await _owned_task(task_id, thread_id)
-    if action in {"start", "retry"}:
-        await _require_task_start(task)
+    await _require_task_capability(task, action)
     try:
         task, command, duplicate = await repository.apply_command(
             task.id, action=action, idempotency_key=idempotency_key,
@@ -679,7 +689,7 @@ async def stream_agent_task_events(
                     event_payload = row.payload_json if isinstance(row.payload_json, dict) else {}
                     event_id = getattr(row, "event_id", None)
                     occurred_at = getattr(row, "occurred_at", None)
-                    terminal = getattr(row, "terminal", False)
+                    terminal = bool(getattr(row, "terminal", False))
                     source_metadata = getattr(row, "source_metadata_json", {})
                     payload = {
                         "id": row.id, "event_id": event_id, "sequence": row.sequence, "type": row.event_type,
@@ -690,6 +700,8 @@ async def stream_agent_task_events(
                         "source_metadata": dict(source_metadata or {}),
                     }
                     yield f"id: {sequence}\nevent: task_event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                    if terminal:
+                        return
             else:
                 idle += 1
                 if idle >= 12:

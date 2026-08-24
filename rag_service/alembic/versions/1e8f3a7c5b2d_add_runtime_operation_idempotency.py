@@ -36,11 +36,15 @@ def upgrade() -> None:
             operation text not null,
             request_fingerprint text not null,
             attempt integer not null,
+            status text not null default 'queued',
+            result jsonb,
             created_at timestamptz not null default now(),
             primary key (run_id, operation_id)
         );
         """
     )
+    op.execute("ALTER TABLE runtime_operations ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'queued'")
+    op.execute("ALTER TABLE runtime_operations ADD COLUMN IF NOT EXISTS result jsonb")
 
 
 def downgrade() -> None:

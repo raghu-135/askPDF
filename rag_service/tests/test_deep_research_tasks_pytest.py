@@ -320,7 +320,7 @@ async def test_task_start_admission_rejection_does_not_create_command_or_run(mon
     monkeypatch.setattr(agent_tasks_api, "_owned_task", AsyncMock(return_value=task))
     monkeypatch.setattr(
         agent_tasks_api,
-        "_require_task_start",
+        "_require_task_capability",
         AsyncMock(side_effect=agent_tasks_api.HTTPException(
             status_code=409,
             detail={"code": "runtime_capability_unavailable"},

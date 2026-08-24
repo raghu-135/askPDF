@@ -34,8 +34,8 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
         "capabilities": {
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
-                "run.pause": {"support": "conditional", "owner": "product", "enabled": True},
-                "run.retry": {"support": "conditional", "owner": "product", "enabled": True},
+                "task.pause": {"support": "conditional", "owner": "product", "enabled": True},
+                "task.retry": {"support": "conditional", "owner": "product", "enabled": True},
             }
         }
     })
@@ -45,9 +45,9 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     registry = RuntimeRegistry(adapters=[adapter])
     definition = await capabilities_for_definition(agent_definition, registry=registry)
 
-    assert deployment.operations["run.pause"].enabled is True
-    assert definition.operations["run.pause"].enabled is False
-    assert definition.operations["run.pause"].disabled_reason == "definition_not_task_runtime"
+    assert deployment.operations["task.pause"].enabled is True
+    assert definition.operations["task.pause"].enabled is False
+    assert definition.operations["task.pause"].disabled_reason == "definition_not_task_runtime"
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,14 @@ and dependency rejection happens before this record is created. A run has one
 terminal event, and its result is attached to that event for both the initial
 stream and replayed streams.
 
+Product task lifecycle operations use the `task.*` namespace: `task.start`,
+`task.pause`, `task.resume`, `task.cancel`, and `task.retry`. Runtime execution
+operations remain under `run.*`; `run.resume` is reserved for runtime
+interrupt or approval continuation and is not used for resuming a paused
+product task. The task event stream closes after emitting the terminal event
+for its requested scope and resumes incremental queries from the last event
+sequence.
+
 ## Hermes runtime integration
 
 The upstream contract is pinned to NousResearch/hermes-agent commit

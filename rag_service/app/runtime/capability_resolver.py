@@ -27,8 +27,6 @@ TERMINAL_RUN_STATES = frozenset({
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CANCEL.value,
-    RuntimeOperationId.RUN_PAUSE.value,
-    RuntimeOperationId.RUN_RESUME.value,
     RuntimeOperationId.RUN_SEND_FOLLOWUP.value,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value,
     RuntimeOperationId.RUN_STEER_LIVE.value,
@@ -43,8 +41,11 @@ RESPONSE_OPERATIONS = frozenset({
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
-    RuntimeOperationId.RUN_PAUSE.value,
-    RuntimeOperationId.RUN_RETRY.value,
+    RuntimeOperationId.TASK_START.value,
+    RuntimeOperationId.TASK_PAUSE.value,
+    RuntimeOperationId.TASK_RESUME.value,
+    RuntimeOperationId.TASK_CANCEL.value,
+    RuntimeOperationId.TASK_RETRY.value,
 })
 
 OPERATION_METHODS = {
@@ -207,32 +208,48 @@ async def resolve_capabilities(
     capabilities = await _declaration_for_adapter(adapter)
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = apply_definition_policy(capabilities, definition)
-    if run is None:
-        return capabilities
-
     operations = dict(capabilities.operations)
+    if run is None:
+        for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START.value}:
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "task_run_not_created")
+        return replace(capabilities, operations=operations)
+
     if RuntimeOperationId.RUN_START.value in operations and not getattr(run, "_fresh_runtime_run", False):
         operations[RuntimeOperationId.RUN_START.value] = _disabled(
             operations[RuntimeOperationId.RUN_START.value], "run_already_created"
         )
     status = str(getattr(run, "status", "") or "")
+    if RuntimeOperationId.TASK_START.value in operations:
+        operations[RuntimeOperationId.TASK_START.value] = _disabled(
+            operations[RuntimeOperationId.TASK_START.value], "task_already_started"
+        )
     pending_operation = pending_interrupt_response_operation(run, include_resolved=include_resolved_response)
     binding = getattr(run, "runtime_binding_json", None)
     binding_available = bool(binding) and str(getattr(run, "runtime_binding_status", "active")) == "active"
 
     if status in TERMINAL_RUN_STATES:
-        for operation in ACTIVE_RUN_OPERATIONS:
+        for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS:
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], "run_terminal")
+        for operation in TASK_ONLY_OPERATIONS:
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "task_terminal")
     else:
         for operation in RESPONSE_OPERATIONS:
             if operation in operations and operation != (pending_operation.value if pending_operation else None):
                 operations[operation] = _disabled(operations[operation], "no_pending_interrupt")
 
-    if status not in TERMINAL_RUN_STATES and RuntimeOperationId.RUN_PAUSE.value in operations and status not in {"queued", "running"}:
-        operations[RuntimeOperationId.RUN_PAUSE.value] = _disabled(operations[RuntimeOperationId.RUN_PAUSE.value], "run_not_pauseable")
-    if RuntimeOperationId.RUN_RETRY.value in operations and status not in {"failed", "expired"}:
-        operations[RuntimeOperationId.RUN_RETRY.value] = _disabled(operations[RuntimeOperationId.RUN_RETRY.value], "run_not_retryable")
+    if status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE.value in operations and status not in {"queued", "running"}:
+        operations[RuntimeOperationId.TASK_PAUSE.value] = _disabled(operations[RuntimeOperationId.TASK_PAUSE.value], "task_not_pauseable")
+    pending = getattr(run, "pending_interrupt_json", None)
+    pending_type = str(pending.get("type") or "") if isinstance(pending, Mapping) else ""
+    if RuntimeOperationId.TASK_RESUME.value in operations and status not in {"paused", "awaiting_human"}:
+        operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
+    elif RuntimeOperationId.TASK_RESUME.value in operations and status == "awaiting_human" and pending_type != "task_pause":
+        operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
+    if RuntimeOperationId.TASK_RETRY.value in operations and status not in {"failed", "expired"}:
+        operations[RuntimeOperationId.TASK_RETRY.value] = _disabled(operations[RuntimeOperationId.TASK_RETRY.value], "task_not_retryable")
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation, descriptor in operations.items():

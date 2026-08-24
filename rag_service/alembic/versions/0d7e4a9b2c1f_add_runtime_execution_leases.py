@@ -60,8 +60,6 @@ def upgrade() -> None:
                 payload jsonb not null,
                 occurred_at text,
                 trace_id text,
-                runtime_version text,
-                contract_version integer,
                 continuation jsonb,
                 terminal boolean not null default false,
                 result jsonb,
@@ -88,8 +86,6 @@ def upgrade() -> None:
                     ADD COLUMN IF NOT EXISTS attempt integer NOT NULL DEFAULT 1,
                     ADD COLUMN IF NOT EXISTS occurred_at text,
                     ADD COLUMN IF NOT EXISTS trace_id text,
-                    ADD COLUMN IF NOT EXISTS runtime_version text,
-                    ADD COLUMN IF NOT EXISTS contract_version integer,
                     ADD COLUMN IF NOT EXISTS continuation jsonb;
             END IF;
         END $$;
@@ -105,8 +101,6 @@ def downgrade() -> None:
             IF to_regclass('public.runtime_events') IS NOT NULL THEN
                 ALTER TABLE runtime_events
                     DROP COLUMN IF EXISTS continuation,
-                    DROP COLUMN IF EXISTS contract_version,
-                    DROP COLUMN IF EXISTS runtime_version,
                     DROP COLUMN IF EXISTS trace_id,
                     DROP COLUMN IF EXISTS occurred_at,
                     DROP COLUMN IF EXISTS attempt;

@@ -38,7 +38,7 @@ import {
   type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
-import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability, type RuntimeControlOperation } from '../lib/runtime-capabilities';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
 import { withRetry } from '../lib/retry-utils';
 import {
   deriveConversationSentences,
@@ -398,7 +398,7 @@ export default function DeepResearchTaskPanel({
     finally { setBusy(false); }
   };
 
-  const command = async (action: 'pause' | 'resume' | 'cancel' | 'retry') => {
+  const command = async (action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry') => {
     if (!task) return;
     setBusy(true); setError('');
     try { setTask(await commandAgentTask(task.id, threadId, action, task.version)); await refresh(); }
@@ -443,14 +443,10 @@ export default function DeepResearchTaskPanel({
     finally { setDecisionSubmitting(null); }
   };
 
-  const actions = useMemo(() => {
-    if (!task) return [] as Array<'pause' | 'resume' | 'cancel' | 'retry'>;
-    if (task.status === 'running' || task.status === 'queued') return ['pause', 'cancel'] as const;
-    if (task.status === 'paused') return ['resume', 'cancel'] as const;
-    if (task.status === 'awaiting_approval') return ['cancel'] as const;
-    if (task.status === 'failed' || task.status === 'expired') return ['retry'] as const;
-    return [] as Array<'pause' | 'resume' | 'cancel' | 'retry'>;
-  }, [task]);
+  const taskControls = useMemo(() => TASK_CONTROL_CATALOG.map((control) => ({
+    ...control,
+    availability: runtimeOperationAvailability(runCapabilities, control.operation),
+  })).filter((control) => control.availability.visible), [runCapabilities]);
   const frozen = Boolean(selectedRun);
   const frozenEngine: DeepResearchEngine = task?.workflow_id === 'hermes_rag_agent' ? 'hermes' : 'langgraph';
   const displayedContextWindow = frozen
@@ -530,16 +526,7 @@ export default function DeepResearchTaskPanel({
           <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
           <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
           <Box sx={{ flex: 1 }} />
-          {actions.map((action) => {
-            const operation: RuntimeControlOperation = action === 'pause'
-              ? 'run.pause'
-              : action === 'resume'
-                ? 'run.resume'
-                : action === 'cancel'
-                  ? 'run.cancel'
-                  : 'run.retry';
-            const availability = runtimeOperationAvailability(runCapabilities, operation);
-            if (!availability.visible) return null;
+          {taskControls.map(({ action, label, availability }) => {
             return <Button
               key={action}
               size="small"
@@ -547,7 +534,7 @@ export default function DeepResearchTaskPanel({
               disabled={busy || !availability.enabled}
               title={availability.disabledReason}
               onClick={() => void command(action)}
-            >{action}</Button>;
+            >{label}</Button>;
           })}
           <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
         </Stack>
