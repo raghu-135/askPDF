@@ -30,7 +30,7 @@ from app.runtime.catalog import (
     definition_from_workflow,
     result_to_product_payload,
 )
-from app.runtime.registry import adapter_for_definition, get_runtime_registry
+from app.runtime.registry import RuntimeRegistry, adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.hermes_config import hermes_model_context_length
 from app.runtime.budgets import deep_agent_budgets
@@ -57,6 +57,7 @@ async def _invoke_task_runtime(
     runtime_context: RuntimeExecutionContext,
     runtime_event_sink: Any,
     repository: AgentWorkflowRepository,
+    registry: RuntimeRegistry,
 ) -> AgentRuntimeResult | None:
     """Dispatch one task attempt using its explicit lifecycle contract."""
 
@@ -65,7 +66,7 @@ async def _invoke_task_runtime(
         await require_capability(
             definition,
             RuntimeOperationId.RUN_START,
-            registry=get_runtime_registry(),
+            registry=registry,
             run=run,
         )
         result = await adapter.start(
@@ -79,6 +80,13 @@ async def _invoke_task_runtime(
     if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
         response_operation = pending.get("response_operation")
         if response_operation == RuntimeOperationId.RUN_RESUME.value:
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_RESUME,
+                registry=registry,
+                run=run,
+                include_resolved_response=True,
+            )
             return await adapter.resume(
                 runtime_request,
                 interrupt=pending,
@@ -89,7 +97,9 @@ async def _invoke_task_runtime(
             await require_capability(
                 definition,
                 RuntimeOperationId.RUN_APPROVAL_RESPOND,
-                registry=get_runtime_registry(),
+                registry=registry,
+                run=run,
+                include_resolved_response=True,
             )
             return await adapter.continue_run(
                 runtime_request,
@@ -210,13 +220,56 @@ async def ensure_task_run(task_id: str):
         raise ValueError("task_not_found")
     active = await tasks.get_task_run(task_id)
     if active is not None and active.status in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
-        # An existing active run may have a checkpoint to continue after a
-        # worker restart.  Mark it explicitly so a newly-created run is not
-        # mistaken for a continuation merely because LangGraph reserves its
-        # checkpoint thread ID at creation time.
         metadata = dict(active.run_metadata_json or {})
-        setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
-        return active
+        binding = dict(active.runtime_binding_json or {})
+        binding_payload = dict(binding.get("payload") or {})
+        # Hermes can commit the provider run before the caller receives the
+        # first SSE frame.  If that caller is interrupted, runtime_started is
+        # still false even though the product run owns an upstream execution.
+        # Do not replay a fresh start under the same runtime ID: Hermes
+        # deliberately rejects changed start semantics for an existing ID.
+        # Retire the partial product attempt (after stopping its provider run)
+        # and let the normal path allocate a new immutable run identity.
+        if (
+            metadata.get("runtime_started") is False
+            and active.framework == "hermes"
+            and binding_payload.get("upstream_run_id")
+        ):
+            definition = definition_from_run(active)
+            adapter = adapter_for_definition(definition)
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_CANCEL,
+                registry=get_runtime_registry(),
+                run=active,
+            )
+            cancel_request = AgentRuntimeRequest(
+                run_id=active.id,
+                thread_id=active.thread_id,
+                definition_id=definition.definition_id,
+                framework=definition.framework,
+                builder_id=definition.builder_id,
+                task_id=task.id,
+                continuation=continuation_from_run(active),
+            )
+            await adapter.cancel(cancel_request)
+            await AgentWorkflowRepository().complete_run(
+                active.id,
+                status=AgentRunStatus.CANCELLED.value,
+                error_json={
+                    "code": "runtime_start_interrupted",
+                    "retryable": True,
+                    "details": {"replaced_by_new_attempt": True},
+                },
+            )
+            active = None
+        else:
+            # An existing active run may have a checkpoint to continue after
+            # a worker restart.  Mark it explicitly so a newly-created run is
+            # not mistaken for a continuation merely because LangGraph
+            # reserves its checkpoint thread ID at creation time.
+            setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
+            return active
 
     repository = AgentWorkflowRepository()
     workflow = await repository.get_workflow(task.workflow_id, include_custom=False)
@@ -500,6 +553,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             runtime_context=runtime_context,
             runtime_event_sink=runtime_event_sink,
             repository=repository,
+            registry=get_runtime_registry(),
         )
         if runtime_result is None:
             # A continuation is optional at the runtime boundary. A missing

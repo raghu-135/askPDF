@@ -48,26 +48,35 @@ TASK_ONLY_OPERATIONS = frozenset({
 })
 
 OPERATION_METHODS = {
-    "run.start": "start",
-    "run.get": "get_run",
-    "run.list": "list_runs",
-    "run.wait": "wait",
-    "run.events": "stream_events",
-    "run.resume": "resume",
-    "run.cancel": "cancel",
-    "run.send_followup": "send_followup",
-    "run.interrupt_with_input": "interrupt_with_input",
-    "run.steer_live": "steer_live",
-    "run.inspect_state": "inspect_state",
-    "run.update_state": "update_state",
-    "run.replay": "replay",
-    "run.fork": "fork",
-    "run.approval.respond": "respond_to_approval",
-    "subagent.list": "list_subagents",
-    "subagent.send": "send_to_subagent",
-    "subagent.cancel": "cancel_subagent",
-    "artifact.list": "list_artifacts",
-    "run.continuation.cleanup": "delete_continuation",
+    RuntimeOperationId.RUN_START.value: "start",
+    RuntimeOperationId.RUN_GET.value: "get_run",
+    RuntimeOperationId.RUN_LIST.value: "list_runs",
+    RuntimeOperationId.RUN_WAIT.value: "wait",
+    RuntimeOperationId.RUN_RESUME.value: "resume",
+    RuntimeOperationId.RUN_CANCEL.value: "cancel",
+    RuntimeOperationId.RUN_SEND_FOLLOWUP.value: "send_followup",
+    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value: "interrupt_with_input",
+    RuntimeOperationId.RUN_STEER_LIVE.value: "steer_live",
+    RuntimeOperationId.RUN_INSPECT_STATE.value: "inspect_state",
+    RuntimeOperationId.RUN_UPDATE_STATE.value: "update_state",
+    RuntimeOperationId.RUN_REPLAY.value: "replay",
+    RuntimeOperationId.RUN_FORK.value: "fork",
+    RuntimeOperationId.RUN_APPROVAL_RESPOND.value: "respond_to_approval",
+    RuntimeOperationId.SUBAGENT_LIST.value: "list_subagents",
+    RuntimeOperationId.SUBAGENT_SEND.value: "send_to_subagent",
+    RuntimeOperationId.SUBAGENT_CANCEL.value: "cancel_subagent",
+    RuntimeOperationId.ARTIFACT_LIST.value: "list_artifacts",
+    RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: "delete_continuation",
+}
+
+
+PRODUCT_OPERATIONS = {
+    RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
+        RuntimeSupportLevel.NATIVE,
+        RuntimeOperationOwner.PRODUCT,
+        True,
+        semantics="persisted_product_event_journal",
+    ),
 }
 
 
@@ -99,11 +108,59 @@ def apply_definition_policy(
         else descriptor
         for operation, descriptor in capabilities.operations.items()
     }
-    if not bool(definition.capabilities.get("supports_long_running_tasks")):
+    if bool(definition.capabilities.get("supports_long_running_tasks")):
+        for operation in TASK_ONLY_OPERATIONS:
+            descriptor = operations.get(operation)
+            if descriptor is not None and descriptor.disabled_reason == "definition_not_task_runtime":
+                operations[operation] = replace(descriptor, enabled=True, disabled_reason=None)
+    else:
         for operation in TASK_ONLY_OPERATIONS:
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
+
+    features = dict(capabilities.features)
+    if definition.framework == "langgraph":
+        from app.runtime.langgraph_capabilities import langgraph_definition_features
+
+        features.update(langgraph_definition_features(definition))
+    return replace(capabilities, operations=operations, features=features)
+
+
+def _reconcile_implementation(
+    capabilities: RuntimeCapabilities,
+    adapter: Any,
+) -> RuntimeCapabilities:
+    """Disable declared runtime operations without a concrete adapter method."""
+
+    operations = dict(capabilities.operations)
+    for operation_id, descriptor in operations.items():
+        if not descriptor.enabled or descriptor.owner is RuntimeOperationOwner.PRODUCT:
+            continue
+        operation_key = (
+            operation_id.value
+            if isinstance(operation_id, RuntimeOperationId)
+            else str(operation_id)
+        )
+        method_name = OPERATION_METHODS.get(operation_key)
+        if method_name is None:
+            operations[operation_id] = _disabled(descriptor, "adapter_operation_unmapped")
+            continue
+        method = getattr(adapter, method_name, None)
+        declared_method = getattr(type(adapter), method_name, None)
+        base_method = getattr(AgentRuntimeAdapter, method_name, None)
+        if method is None or declared_method is None or declared_method is base_method:
+            operations[operation_id] = _disabled(descriptor, "adapter_operation_unimplemented")
     return replace(capabilities, operations=operations)
+
+
+def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabilities:
+    operations = dict(capabilities.operations)
+    operations.update(PRODUCT_OPERATIONS)
+    return replace(capabilities, operations=operations)
+
+
+async def _declaration_for_adapter(adapter: Any) -> RuntimeCapabilities:
+    return _with_product_operations(await adapter.deployment_capabilities())
 
 
 async def capabilities_for_definition(
@@ -112,17 +169,26 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await adapter.capabilities(definition)
+    capabilities = await _declaration_for_adapter(adapter)
+    capabilities = _reconcile_implementation(capabilities, adapter)
     return apply_definition_policy(capabilities, definition)
 
 
-def pending_interrupt_response_operation(run: Any) -> RuntimeOperationId | None:
+def pending_interrupt_response_operation(
+    run: Any,
+    *,
+    include_resolved: bool = False,
+) -> RuntimeOperationId | None:
     """Return the explicitly declared response operation for a pending run interrupt."""
 
-    if str(getattr(run, "status", "") or "") != "awaiting_human":
+    run_status = str(getattr(run, "status", "") or "")
+    if run_status != "awaiting_human" and not include_resolved:
         return None
     payload = getattr(run, "pending_interrupt_json", None)
-    if not isinstance(payload, Mapping) or payload.get("status") != "pending":
+    if not isinstance(payload, Mapping):
+        return None
+    pending_status = str(payload.get("status") or "")
+    if pending_status != "pending" and not (include_resolved and pending_status in {"resumed", "resolved"}):
         return None
     value = payload.get("response_operation")
     if not isinstance(value, str) or value not in RESPONSE_OPERATIONS:
@@ -135,18 +201,22 @@ async def resolve_capabilities(
     *,
     registry: RuntimeRegistry,
     run: Any | None = None,
+    include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
-    capabilities = await capabilities_for_definition(definition, registry=registry)
+    adapter = registry.get(definition)
+    capabilities = await _declaration_for_adapter(adapter)
+    capabilities = _reconcile_implementation(capabilities, adapter)
+    capabilities = apply_definition_policy(capabilities, definition)
     if run is None:
         return capabilities
 
     operations = dict(capabilities.operations)
-    if RuntimeOperationId.RUN_START.value in operations:
+    if RuntimeOperationId.RUN_START.value in operations and not getattr(run, "_fresh_runtime_run", False):
         operations[RuntimeOperationId.RUN_START.value] = _disabled(
             operations[RuntimeOperationId.RUN_START.value], "run_already_created"
         )
     status = str(getattr(run, "status", "") or "")
-    pending_operation = pending_interrupt_response_operation(run)
+    pending_operation = pending_interrupt_response_operation(run, include_resolved=include_resolved_response)
     binding = getattr(run, "runtime_binding_json", None)
     binding_available = bool(binding) and str(getattr(run, "runtime_binding_status", "active")) == "active"
 
@@ -178,11 +248,17 @@ async def require_capability(
     *,
     registry: RuntimeRegistry,
     run: Any | None = None,
+    include_resolved_response: bool = False,
 ) -> RuntimeOperationDescriptor:
     """Resolve one operation and fail before an adapter call when unavailable."""
 
     operation_id = operation.value if isinstance(operation, RuntimeOperationId) else str(operation)
-    capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+    capabilities = await resolve_capabilities(
+        definition,
+        registry=registry,
+        run=run,
+        include_resolved_response=include_resolved_response,
+    )
     descriptor = capabilities.operations.get(operation_id)
     if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         raise RuntimeError.capability_unsupported(
@@ -233,32 +309,25 @@ def capability_envelope(
     return value
 
 
+def capability_discovery_error(exc: BaseException, adapter: Any) -> dict[str, Any]:
+    if isinstance(exc, RuntimeError):
+        return exc.to_dict()
+    return RuntimeError.from_exception(
+        exc,
+        code="runtime_capability_discovery_failed",
+        safe_message="Runtime capability discovery failed",
+        details={"framework": adapter.framework, "builder_id": adapter.builder_id},
+    ).to_dict()
+
+
 async def discover_adapter_capabilities(
     adapter: Any,
     definition: AgentDefinition,
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
-        capabilities = await adapter.deployment_capabilities()
-        operations = dict(capabilities.operations)
-        for operation_id, descriptor in operations.items():
-            if not descriptor.enabled or descriptor.owner is RuntimeOperationOwner.PRODUCT:
-                continue
-            method_name = OPERATION_METHODS.get(operation_id)
-            if method_name is None:
-                operations[operation_id] = _disabled(descriptor, "adapter_operation_unmapped")
-                continue
-            method = getattr(adapter, method_name, None)
-            declared_method = getattr(type(adapter), method_name, None)
-            base_method = getattr(AgentRuntimeAdapter, method_name, None)
-            if method is None or declared_method is None or declared_method is base_method:
-                operations[operation_id] = _disabled(descriptor, "adapter_operation_unimplemented")
-        return replace(capabilities, operations=operations), None
+        capabilities = await _declaration_for_adapter(adapter)
+        return _reconcile_implementation(capabilities, adapter), None
     except RuntimeError as exc:
-        return None, exc.to_dict()
+        return None, capability_discovery_error(exc, adapter)
     except Exception as exc:
-        return None, RuntimeError.from_exception(
-            exc,
-            code="runtime_capability_discovery_failed",
-            safe_message="Runtime capability discovery failed",
-            details={"framework": adapter.framework, "builder_id": adapter.builder_id},
-        ).to_dict()
+        return None, capability_discovery_error(exc, adapter)

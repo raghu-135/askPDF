@@ -4,6 +4,7 @@ import pytest
 
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.capability_resolver import (
+    OPERATION_METHODS,
     capabilities_for_definition,
     discover_adapter_capabilities,
     require_capability,
@@ -56,9 +57,18 @@ class CapabilityAdapter:
             )
         return RuntimeCapabilities(operations=operations)
 
+    async def deployment_capabilities(self):
+        return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
+
     async def cancel(self, request):
         self.calls["cancel"] += 1
         return {"status": "cancel_requested"}
+
+    async def start(self, request, *, context=None, event_sink=None):
+        return None
+
+    async def respond_to_approval(self, request, response):
+        return None
 
     async def resume(self, request, *, interrupt, context, event_sink=None):
         self.calls["resume"] += 1
@@ -111,6 +121,12 @@ async def test_definition_policy_and_run_state_gate_operations():
     assert capabilities.operations[RuntimeOperationId.RUN_RESUME.value].disabled_reason == "no_pending_interrupt"
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].support is RuntimeSupportLevel.UNSUPPORTED
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_EVENTS.value].owner is RuntimeOperationOwner.PRODUCT
+
+
+def test_operation_method_mapping_uses_runtime_operation_values():
+    assert OPERATION_METHODS[RuntimeOperationId.RUN_START.value] == "start"
+    assert OPERATION_METHODS[RuntimeOperationId.RUN_APPROVAL_RESPOND.value] == "respond_to_approval"
 
 
 @pytest.mark.asyncio
@@ -129,6 +145,24 @@ async def test_run_capabilities_disable_start_for_an_existing_run():
     descriptor = capabilities.operations[RuntimeOperationId.RUN_START.value]
     assert descriptor.enabled is False
     assert descriptor.disabled_reason == "run_already_created"
+
+
+@pytest.mark.asyncio
+async def test_run_capabilities_keep_start_enabled_for_a_fresh_task_run():
+    capabilities = await resolve_capabilities(
+        _definition(),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=SimpleNamespace(
+            status="running",
+            pending_interrupt_json=None,
+            runtime_binding_json={},
+            runtime_binding_status="active",
+            _fresh_runtime_run=True,
+        ),
+    )
+
+    descriptor = capabilities.operations[RuntimeOperationId.RUN_START.value]
+    assert descriptor.enabled is True
 
 
 @pytest.mark.asyncio

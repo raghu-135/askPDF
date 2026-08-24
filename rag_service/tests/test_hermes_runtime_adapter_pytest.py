@@ -9,10 +9,12 @@ from fastapi.testclient import TestClient
 
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
-from app.runtime.capability_resolver import discover_adapter_capabilities
+from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
 from app.runtime.errors import RuntimeError
+from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
 from hermes_runtime.compatibility import HERMES_REVISION
+from hermes_runtime.execution_store import HermesExecutionStore
 
 
 @pytest.mark.asyncio
@@ -39,7 +41,9 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     })
 
     deployment = await adapter.deployment_capabilities()
-    definition = await adapter.capabilities(AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent"))
+    agent_definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    registry = RuntimeRegistry(adapters=[adapter])
+    definition = await capabilities_for_definition(agent_definition, registry=registry)
 
     assert deployment.operations["run.pause"].enabled is True
     assert definition.operations["run.pause"].enabled is False
@@ -101,6 +105,55 @@ def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(mon
         "disabled_reason": "runtime_capability_unsupported",
     }
     assert steer.status_code == 404
+
+
+def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    state_path = tmp_path / "state.json"
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
+    payload = {
+        "request": {
+            "run_id": "run-conflict",
+            "definition_id": "hermes_rag_agent",
+            "framework": "hermes",
+            "builder_id": "hermes_agent",
+            "input": {"question": "original"},
+            "options": {},
+        },
+        "context": {"resolved_spec": {"config": {}}},
+    }
+    store = HermesExecutionStore(str(state_path))
+    store.create("run-conflict", payload)
+    continuation = {
+        "binding_type": "hermes_session",
+        "payload": {
+            "session_id": "session-1",
+            "upstream_run_id": "upstream-1",
+            "runtime_profile": "profile-1",
+        },
+    }
+    store.update("run-conflict", status="running", continuation=continuation)
+    stop = AsyncMock(return_value={"confirmed": True, "status": "cancelled", "acknowledged_status": "stopping"})
+    monkeypatch.setattr(hermes_api, "_stop_and_confirm_upstream_run", stop)
+
+    client = TestClient(hermes_api.create_app())
+    response = client.post(
+        "/v1/runs/start",
+        json={
+            **payload,
+            "request": {**payload["request"], "input": {"question": "replacement"}},
+        },
+    )
+
+    assert response.status_code == 409
+    stop.assert_awaited_once_with(
+        "http://hermes.test",
+        "profile-1",
+        "upstream-1",
+        {"X-Hermes-Session-Id": "session-1"},
+    )
+    result = HermesExecutionStore(str(state_path)).records["run-conflict"]
+    assert result["status"] == "cancelled"
 
 
 def test_hermes_continuation_binding_is_opaque():

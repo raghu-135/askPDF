@@ -24,7 +24,7 @@ from app.runtime.transport import (
     sse_encode,
     json_envelope,
 )
-from app.runtime.langgraph_capabilities import langgraph_capabilities
+from app.runtime.langgraph_capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from app.runtime.budgets import deep_agent_budgets
 from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
 from runtime_service.dependencies import (
@@ -327,9 +327,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         return json_envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
-            result={"capabilities": langgraph_capabilities(
-                definition,
-            ).to_dict()},
+            result={"capabilities": langgraph_deployment_capabilities().to_dict()},
             runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
         )
 

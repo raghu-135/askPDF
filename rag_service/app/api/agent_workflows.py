@@ -84,6 +84,7 @@ from app.runtime.contracts import AgentDefinition, RuntimeOperationId
 from app.runtime.capability_resolver import (
     capabilities_for_definition,
     capability_envelope,
+    capability_discovery_error,
     deployment_id,
     discover_adapter_capabilities,
     resolve_capabilities,
@@ -98,7 +99,7 @@ from app.services.embedding_model_service import (
     EmbeddingModelUnavailableError,
     require_thread_embedding_ready,
 )
-from app.time_utils import iso_utc_z
+from app.time_utils import iso_utc_z, maybe_iso_utc_z
 
 
 router = APIRouter(tags=["agent-workflows"])
@@ -571,14 +572,21 @@ async def get_agent_workflow_capabilities(workflow_id: str):
             framework=definition.framework,
             builder_id=definition.builder_id,
             definition_id=definition.definition_id,
-            error={"code": "runtime_selection_failed", "message": str(exc)},
+            error=RuntimeError(
+                "runtime_selection_failed",
+                "No compatible runtime deployment is available",
+                details={"framework": definition.framework, "builder_id": definition.builder_id},
+            ).to_dict(),
         )
     try:
         capabilities = await capabilities_for_definition(definition, registry=registry)
         error = None
     except (RuntimeError, RuntimeSelectionError) as exc:
         capabilities = None
-        error = exc.to_dict()
+        error = capability_discovery_error(exc, adapter)
+    except Exception as exc:
+        capabilities = None
+        error = capability_discovery_error(exc, adapter)
     return capability_envelope(
         capabilities=capabilities,
         resource="definition",
@@ -588,6 +596,52 @@ async def get_agent_workflow_capabilities(workflow_id: str):
         definition_id=definition.definition_id,
         error=error,
     )
+
+
+@router.get("/agent-runs/{run_id}/events")
+async def stream_agent_run_events(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+    after_sequence: int = Query(default=0, ge=0),
+):
+    run = await _owned_run_for_operation(run_id, thread_id)
+    repository = AgentWorkflowRepository()
+
+    async def events():
+        sequence = after_sequence
+        idle = 0
+        while True:
+            rows = await repository.list_run_events(run.id)
+            rows = [row for row in rows if int(getattr(row, "sequence", 0) or 0) > sequence]
+            if rows:
+                idle = 0
+                for row in rows:
+                    sequence = int(getattr(row, "sequence", sequence) or sequence)
+                    payload = dict(getattr(row, "payload_json", None) or {})
+                    terminal = bool(payload.get("terminal")) or str(getattr(row, "kind", "")) in {
+                        "run.completed", "run.failed", "run.cancelled",
+                    }
+                    value = {
+                        "id": getattr(row, "id", None),
+                        "event_id": getattr(row, "event_id", None),
+                        "run_id": run.id,
+                        "sequence": sequence,
+                        "attempt": getattr(row, "attempt", 1),
+                        "kind": getattr(row, "kind", "runtime.event"),
+                        "payload": payload,
+                        "occurred_at": maybe_iso_utc_z(getattr(row, "occurred_at", None)),
+                        "created_at": maybe_iso_utc_z(getattr(row, "created_at", None)),
+                        "terminal": terminal,
+                    }
+                    yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
+            else:
+                idle += 1
+                if idle >= 12:
+                    yield f": heartbeat {sequence}\n\n"
+                    idle = 0
+            await asyncio.sleep(1)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/agent-runs/{run_id}/capabilities")
@@ -611,20 +665,17 @@ async def get_agent_run_capabilities(
     except RuntimeSelectionError as exc:
         adapter = None
         capabilities = None
-        error = {"code": "runtime_selection_failed", "message": str(exc)}
-    except RuntimeError as exc:
-        adapter = registry.get(definition)
-        capabilities = None
-        error = exc.to_dict()
-    except Exception as exc:
-        adapter = registry.get(definition)
-        capabilities = None
-        error = RuntimeError.from_exception(
-            exc,
-            code="runtime_capability_discovery_failed",
-            safe_message="Runtime capability discovery failed",
-            details={"framework": adapter.framework, "builder_id": adapter.builder_id},
+        error = RuntimeError(
+            "runtime_selection_failed",
+            "No compatible runtime deployment is available",
+            details={"framework": definition.framework, "builder_id": definition.builder_id},
         ).to_dict()
+    except RuntimeError as exc:
+        capabilities = None
+        error = capability_discovery_error(exc, adapter)
+    except Exception as exc:
+        capabilities = None
+        error = capability_discovery_error(exc, adapter)
     return capability_envelope(
         capabilities=capabilities,
         resource="run",

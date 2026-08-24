@@ -6,7 +6,6 @@ import os
 from typing import Any, Mapping
 
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeApprovalResponse, RuntimeCapabilities
-from app.runtime.capability_resolver import apply_definition_policy
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -41,7 +40,7 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         return await super().start(request, context=context, event_sink=event_sink)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        return apply_definition_policy(await self.deployment_capabilities(), definition)
+        return await self.deployment_capabilities()
 
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         self._ensure_enabled()

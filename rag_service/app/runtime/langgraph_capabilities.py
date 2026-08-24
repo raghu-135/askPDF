@@ -160,13 +160,28 @@ def _deep_agents_features(definition: AgentDefinition) -> dict[str, RuntimeFeatu
     }
 
 
+def langgraph_definition_features(definition: AgentDefinition) -> dict[str, RuntimeFeatureDescriptor]:
+    """Return definition-owned Deep Agent features for central reconciliation."""
+
+    return _deep_agents_features(definition)
+
+
+def langgraph_deployment_capabilities(
+    *,
+    profile: LangGraphDeploymentProfile | None = None,
+) -> RuntimeCapabilities:
+    """Return deployment declarations without definition or run policy."""
+
+    return langgraph_capabilities(None, profile=profile)
+
+
 def langgraph_capabilities(
-    definition: AgentDefinition,
+    definition: AgentDefinition | None,
     *,
     profile: LangGraphDeploymentProfile | None = None,
 ) -> RuntimeCapabilities:
     profile = profile or LangGraphDeploymentProfile.from_environment()
-    task_runtime = bool(definition.capabilities.get("supports_long_running_tasks"))
+    task_runtime = bool(definition and definition.capabilities.get("supports_long_running_tasks"))
     checkpoint = profile.checkpoint_available
     deployment_reason = "runtime_configuration_invalid" if profile.configuration_error else "runtime_unavailable"
 
@@ -189,7 +204,6 @@ def langgraph_capabilities(
 
     operations: dict[str, RuntimeOperationDescriptor] = {
         RuntimeOperationId.RUN_START.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True)),
-        RuntimeOperationId.RUN_EVENTS.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True)),
         RuntimeOperationId.RUN_CANCEL.value: enabled_descriptor(RuntimeOperationDescriptor(
             RuntimeSupportLevel.NATIVE,
             RuntimeOperationOwner.RUNTIME,
@@ -256,6 +270,6 @@ def langgraph_capabilities(
     }
     return RuntimeCapabilities(
         operations=operations,
-        features=_deep_agents_features(definition),
+        features=_deep_agents_features(definition) if definition is not None else {},
         deployment=profile.deployment_metadata(),
     )

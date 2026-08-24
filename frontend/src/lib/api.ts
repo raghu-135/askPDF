@@ -2023,6 +2023,18 @@ export async function getAgentRunCapabilities(
   return res.json();
 }
 
+export function agentRunEventsUrl(
+  runId: string,
+  threadId: string,
+  afterSequence = 0,
+): string {
+  const params = new URLSearchParams({
+    thread_id: threadId,
+    after_sequence: String(afterSequence),
+  });
+  return `${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/events?${params.toString()}`;
+}
+
 export async function cancelChatAgentRun(
   runId: string,
   threadId: string,

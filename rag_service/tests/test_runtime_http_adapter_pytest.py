@@ -80,7 +80,6 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
             assert request.method == "POST"
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
             return httpx.Response(200, json={"capabilities": {"operations": {
-                "run.events": {"support": "native", "owner": "runtime", "enabled": True},
                 "run.resume": {"support": "conditional", "owner": "runtime", "enabled": True, "semantics": "resume_from_interrupt"},
             }}})
         return httpx.Response(200, json={"validation": {"valid": True, "issues": []}})
@@ -89,7 +88,7 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     capabilities = await adapter.capabilities(AgentDefinition("router", "langgraph", "langgraph_graph"))
     validation = await adapter.validate(AgentDefinition("router", "langgraph", "langgraph_graph"), {"nodes": []})
-    assert capabilities.operations["run.events"].enabled
+    assert "run.events" not in capabilities.operations
     assert capabilities.operations["run.resume"].support.value == "conditional"
     assert validation.valid
     await client.aclose()

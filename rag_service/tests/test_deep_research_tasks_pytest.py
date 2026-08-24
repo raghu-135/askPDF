@@ -21,6 +21,7 @@ from app.agent_workflows.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api
+from app.api import agent_workflows as agent_workflows_api
 from app.db.models_sqlmodel import AgentRun, AgentTaskTodo, AgentWorkflow
 from app.models.deep_research import DeepResearchPlanProposal, DeepResearchSubagentResult
 from app.services import agent_task_repository as repository
@@ -32,7 +33,17 @@ from app.services.task_artifact_service import artifact_ownership_key, persist_t
 from app.time_utils import utc_now
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
+from app.runtime.contracts import (
+    AgentDefinition,
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    RuntimeOperationDescriptor,
+    RuntimeOperationId,
+    RuntimeOperationOwner,
+    RuntimeSupportLevel,
+    RuntimeCapabilities,
+)
+from app.runtime.registry import RuntimeRegistry
 
 
 def _spec() -> dict:
@@ -55,6 +66,50 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
             "profile_id": profile,
         }],
     })
+
+
+class TaskInvocationAdapter:
+    framework = "hermes"
+    builder_id = "hermes_agent"
+
+    def __init__(self, *, resume_enabled: bool = True):
+        self.resume_calls = 0
+        self.start_calls = 0
+        self.resume_enabled = resume_enabled
+
+    async def capabilities(self, definition):
+        resume = RuntimeOperationDescriptor(
+            RuntimeSupportLevel.NATIVE if self.resume_enabled else RuntimeSupportLevel.UNSUPPORTED,
+            RuntimeOperationOwner.RUNTIME,
+            self.resume_enabled,
+            disabled_reason=None if self.resume_enabled else "runtime_capability_unsupported",
+        )
+        return RuntimeCapabilities(operations={
+            RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(
+                RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True,
+            ),
+            RuntimeOperationId.RUN_RESUME.value: resume,
+            RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(
+                RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True,
+            ),
+        })
+
+    async def deployment_capabilities(self):
+        return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
+
+    async def start(self, request, *, context, event_sink=None):
+        self.start_calls += 1
+        return AgentRuntimeResult(status="completed")
+
+    async def resume(self, request, *, interrupt, context, event_sink=None):
+        self.resume_calls += 1
+        return AgentRuntimeResult(status="completed", output="resumed")
+
+    async def continue_run(self, request, *, context, event_sink=None):
+        return AgentRuntimeResult(status="completed", output="continued")
+
+    async def respond_to_approval(self, request, response):
+        return {"status": "accepted"}
 
 
 @pytest.mark.asyncio
@@ -88,8 +143,9 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
             run=run,
             runtime_request=request,
             runtime_context=RuntimeExecutionContext(),
-            runtime_event_sink=None,
-            repository=repository,
+        runtime_event_sink=None,
+        repository=repository,
+        registry=RuntimeRegistry(adapters=[]),
         )
 
     assert caught.value is rejection
@@ -100,12 +156,14 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
 @pytest.mark.asyncio
 async def test_hermes_resolved_approval_continues_without_runtime_resume():
     result = AgentRuntimeResult(status="completed", output="approved")
-    adapter = SimpleNamespace(
-        continue_run=AsyncMock(return_value=result),
-        resume=AsyncMock(),
-    )
+    adapter = TaskInvocationAdapter()
+    adapter.continue_run = AsyncMock(return_value=result)
+    adapter.resume = AsyncMock()
     run = SimpleNamespace(
         id="run-1",
+        status="running",
+        runtime_binding_json={"binding_type": "hermes_session"},
+        runtime_binding_status="active",
         pending_interrupt_json={
             "interrupt_id": "approval-1",
             "status": "resumed",
@@ -116,6 +174,7 @@ async def test_hermes_resolved_approval_continues_without_runtime_resume():
     )
     definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
     request = AgentRuntimeRequest("run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id)
+    registry = RuntimeRegistry(adapters=[adapter])
 
     actual = await agent_task_runtime._invoke_task_runtime(
         adapter=adapter,
@@ -125,11 +184,109 @@ async def test_hermes_resolved_approval_continues_without_runtime_resume():
         runtime_context=RuntimeExecutionContext(),
         runtime_event_sink=None,
         repository=SimpleNamespace(),
+        registry=registry,
     )
 
     assert actual is result
     adapter.continue_run.assert_awaited_once()
     adapter.resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_runtime_resume_is_rejected_by_real_registry_before_adapter_call():
+    adapter = TaskInvocationAdapter(resume_enabled=False)
+    registry = RuntimeRegistry(adapters=[adapter])
+    run = SimpleNamespace(
+        id="run-1",
+        status="running",
+        runtime_binding_json={"binding_type": "hermes_session"},
+        runtime_binding_status="active",
+        pending_interrupt_json={
+            "status": "resumed",
+            "response_operation": RuntimeOperationId.RUN_RESUME.value,
+            "decision": {"action": "approve"},
+        },
+        _fresh_runtime_run=False,
+    )
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    request = AgentRuntimeRequest("run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id)
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await agent_task_runtime._invoke_task_runtime(
+            adapter=adapter,
+            definition=definition,
+            run=run,
+            runtime_request=request,
+            runtime_context=RuntimeExecutionContext(),
+            runtime_event_sink=None,
+            repository=SimpleNamespace(),
+            registry=registry,
+        )
+
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert adapter.resume_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_interrupted_hermes_prestart_gets_new_product_run(monkeypatch):
+    task = SimpleNamespace(
+        id="task-1", thread_id="thread-1", workflow_id="hermes_rag_agent",
+        user_id="user-1", config_json={}, objective="research",
+    )
+    active = SimpleNamespace(
+        id="old-run", thread_id="thread-1", framework="hermes", builder_id="hermes_agent",
+        definition_id="hermes_rag_agent", status="running",
+        run_metadata_json={"runtime_started": False},
+        runtime_binding_json={
+            "binding_type": "hermes_session",
+            "payload": {"upstream_run_id": "upstream-1", "runtime_profile": "profile-1"},
+        },
+        runtime_binding_status="active",
+    )
+    replacement = SimpleNamespace(id="new-run", status="running")
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    adapter = SimpleNamespace(framework="hermes", builder_id="hermes_agent", cancel=AsyncMock())
+    workflow = SimpleNamespace(
+        id="hermes_rag_agent", spec_json={}, metadata_json={"version": 1},
+        schema_version=1, category=None,
+    )
+
+    class FakeRepository:
+        async def get_workflow(self, workflow_id, *, include_custom=False):
+            return workflow
+
+        async def create_run(self, **kwargs):
+            return replacement
+
+        async def complete_run(self, *args, **kwargs):
+            return active
+
+    class FakeBuilder:
+        async def resolve(self, *args, **kwargs):
+            return {"config": {}}
+
+        async def normalize(self, definition_value, resolved):
+            return resolved
+
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=active))
+    monkeypatch.setattr(agent_task_runtime.tasks, "attach_run", AsyncMock(return_value=replacement))
+    monkeypatch.setattr(agent_task_runtime, "get_thread_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime, "definition_from_run", lambda run: definition)
+    monkeypatch.setattr(agent_task_runtime, "definition_from_workflow", lambda value: definition)
+    monkeypatch.setattr(agent_task_runtime, "adapter_for_definition", lambda value: adapter)
+    monkeypatch.setattr(agent_task_runtime, "get_runtime_registry", lambda: RuntimeRegistry(adapters=[adapter]))
+    monkeypatch.setattr(agent_task_runtime, "require_capability", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime, "builder_for_definition", lambda value: FakeBuilder())
+    monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", FakeRepository)
+
+    result = await agent_task_runtime.ensure_task_run(task.id)
+
+    assert result is replacement
+    adapter.cancel.assert_awaited_once()
+    agent_task_runtime.require_capability.assert_awaited_once()
+    assert agent_task_runtime.require_capability.await_args.kwargs["run"] is active
+    assert agent_task_runtime.tasks.attach_run.await_args.args[0] == task.id
 
 
 @pytest.mark.asyncio
@@ -1487,6 +1644,46 @@ async def test_selected_run_event_stream_advances_cursor_across_filtered_events(
     assert "id: 3" in chunk
     assert '"run_id":"run-selected"' in chunk
     assert "event-1" not in chunk and "event-2" not in chunk
+
+
+@pytest.mark.asyncio
+async def test_product_run_event_stream_reads_persisted_run_journal(monkeypatch):
+    run = SimpleNamespace(id="run-selected")
+    row = SimpleNamespace(
+        id="journal-1",
+        event_id="event-1",
+        sequence=3,
+        attempt=1,
+        kind="run.completed",
+        payload_json={"answer": "done"},
+        occurred_at=utc_now(),
+        created_at=utc_now(),
+    )
+    calls: list[str] = []
+
+    class Repository:
+        async def list_run_events(self, run_id):
+            calls.append(run_id)
+            return [row]
+
+    monkeypatch.setattr(agent_workflows_api, "_owned_run_for_operation", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_workflows_api, "AgentWorkflowRepository", Repository)
+    monkeypatch.setattr(agent_workflows_api.asyncio, "sleep", AsyncMock())
+    response = await agent_workflows_api.stream_agent_run_events(
+        run.id,
+        thread_id="thread-1",
+        after_sequence=0,
+    )
+    iterator = response.body_iterator
+    try:
+        chunk = await iterator.__anext__()
+    finally:
+        await iterator.aclose()
+
+    assert calls == [run.id]
+    assert "event: run_event" in chunk
+    assert '"event_id":"event-1"' in chunk
+    assert '"terminal":true' in chunk
 
 
 @pytest.mark.asyncio

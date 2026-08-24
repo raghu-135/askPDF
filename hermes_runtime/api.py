@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
@@ -293,6 +293,27 @@ async def _confirm_upstream_stop(
 ) -> dict[str, Any]:
     """Wait for Hermes' cooperative stop to reach an actual terminal state."""
 
+    return await _confirm_upstream_terminal(
+        hermes_api_url,
+        runtime_profile,
+        upstream_run_id,
+        headers,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+
+async def _confirm_upstream_terminal(
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+    *,
+    timeout_seconds: float | None = None,
+    poll_interval_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Wait until an upstream run reports a terminal state."""
+
     timeout = max(
         0.0,
         float(
@@ -514,9 +535,6 @@ def create_app() -> FastAPI:
                     "run.continuation.cleanup": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.events": {
-                        "support": "native", "owner": "runtime", "enabled": True,
                     },
                     "run.inspect_state": {
                         "support": "native", "owner": "runtime", "enabled": True,
@@ -902,6 +920,11 @@ def create_app() -> FastAPI:
                         **(run_profile.continuation_metadata() if run_profile is not None else {}),
                     },
                 }
+                # Persist the upstream binding before publishing the first
+                # frame. A concurrent/retried start must be able to stop the
+                # provider run even if the subscriber disconnects before it
+                # receives that frame.
+                store.update(run_id, continuation=continuation)
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
                 sequence += 1
                 yield _sse(_neutral_event(run_id, sequence, "operation.started", {
@@ -1054,7 +1077,30 @@ def create_app() -> FastAPI:
             # Approval is a resumable boundary. Keep the credential-bearing
             # profile active until a terminal result, cancellation, or expiry.
             if terminal_seen and not retain_profile:
-                profile_manager.retire(run_profile or execution_profile)
+                try:
+                    upstream_terminal = await _confirm_upstream_terminal(
+                        hermes_api_url,
+                        execution_profile,
+                        upstream_run_id,
+                        headers,
+                        timeout_seconds=float(os.getenv("HERMES_TERMINAL_CONFIRM_TIMEOUT_SECONDS", "5")),
+                    ) if upstream_run_id and execution_profile else {"confirmed": True}
+                    if not upstream_terminal["confirmed"]:
+                        stop_result = await _stop_and_confirm_upstream_run(
+                            hermes_api_url,
+                            execution_profile,
+                            upstream_run_id,
+                            headers,
+                        )
+                        if not stop_result["confirmed"]:
+                            retain_profile = True
+                except httpx.HTTPError:
+                    # Keep the profile and its credential available for a
+                    # later reconciler/cancellation attempt when upstream
+                    # terminal state cannot be verified safely.
+                    retain_profile = True
+                if not retain_profile:
+                    profile_manager.retire(run_profile or execution_profile)
     async def _background_run(payload: Mapping[str, Any], request: Request | None) -> None:
         run_id = str((payload.get("request") or {}).get("run_id") or "")
         try:
@@ -1152,12 +1198,62 @@ def create_app() -> FastAPI:
             try:
                 record = state["store"].create(run_id, payload)
             except HermesExecutionConflictError as exc:
+                existing = state["store"].records.get(run_id) or {}
+                cleanup: dict[str, Any] = {"status": "not_attempted"}
+                continuation = existing.get("continuation")
+                binding = continuation if isinstance(continuation, Mapping) else None
+                binding_payload = (binding or {}).get("payload") or {}
+                upstream_run_id = str(binding_payload.get("upstream_run_id") or "")
+                runtime_profile = str(binding_payload.get("runtime_profile") or "")
+                session_id = str(binding_payload.get("session_id") or "")
+                if upstream_run_id and runtime_profile:
+                    try:
+                        stop_result = await _stop_and_confirm_upstream_run(
+                            hermes_api_url,
+                            runtime_profile,
+                            upstream_run_id,
+                            upstream_headers(session_id),
+                        )
+                        cleanup = {
+                            "status": "confirmed" if stop_result["confirmed"] else "unconfirmed",
+                            "upstream_status": stop_result.get("status"),
+                            "upstream_run_id": upstream_run_id,
+                        }
+                        if stop_result["confirmed"]:
+                            task = state["active"].get(run_id)
+                            if task is not None and not task.done():
+                                task.cancel()
+                                with suppress(asyncio.CancelledError):
+                                    await task
+                            record = state["store"].records.get(run_id) or {}
+                            if record.get("status") not in {"completed", "failed", "cancelled"}:
+                                sequence = state["store"].next_sequence(run_id)
+                                event = _neutral_event(
+                                    run_id,
+                                    sequence,
+                                    "run.cancelled",
+                                    {"reason": "conflicting_start"},
+                                    terminal=True,
+                                    continuation=continuation,
+                                )
+                                state["store"].finalize(
+                                    run_id,
+                                    _sse(event, {"status": "cancelled", "continuation": continuation}),
+                                    status="cancelled",
+                                )
+                    except httpx.HTTPError as stop_exc:
+                        cleanup = {
+                            "status": "failed",
+                            "upstream_run_id": upstream_run_id,
+                            "error_type": type(stop_exc).__name__,
+                        }
                 raise HTTPException(
                     status_code=409,
                     detail=_error(
                         "runtime_operation_conflict",
                         str(exc),
                         retryable=False,
+                        details={"conflict_cleanup": cleanup},
                     ),
                 ) from exc
             task = state["active"].get(run_id)

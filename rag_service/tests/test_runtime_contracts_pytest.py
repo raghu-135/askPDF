@@ -58,7 +58,7 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
     capabilities = RuntimeCapabilities(operations={
         RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
             support=RuntimeSupportLevel.NATIVE,
-            owner=RuntimeOperationOwner.RUNTIME,
+            owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
         ),
         RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(

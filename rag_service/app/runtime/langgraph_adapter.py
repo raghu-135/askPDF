@@ -45,7 +45,7 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
         source_metadata={"framework": "langgraph", "source_event": kind},
     )
 from app.runtime.errors import RuntimeError
-from app.runtime.langgraph_capabilities import langgraph_capabilities
+from app.runtime.langgraph_capabilities import langgraph_deployment_capabilities
 from app.runtime.langgraph import checkpointing, router_runtime
 
 
@@ -54,7 +54,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     builder_id = "langgraph_graph"
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        return langgraph_capabilities(definition)
+        return langgraph_deployment_capabilities()
 
     async def validate(
         self,
