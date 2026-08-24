@@ -112,7 +112,7 @@ def test_capability_parser_rejects_flat_or_malformed_payloads():
 
 
 @pytest.mark.asyncio
-async def test_http_adapter_preserves_event_identity_and_terminal_result():
+async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_terminal_internal():
     request = _request()
     event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}
     terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
@@ -149,7 +149,7 @@ async def test_http_adapter_preserves_event_identity_and_terminal_result():
     result = await adapter.start(request, context=RuntimeExecutionContext(resolved_spec={"nodes": []}), event_sink=Sink())
     assert result.status == "completed"
     assert result.output == "ok"
-    assert [item.event_id for item in received] == ["evt-1", "evt-terminal"]
+    assert [item.event_id for item in received] == ["evt-1"]
     await client.aclose()
 
 

@@ -268,27 +268,17 @@ async def thread_chat_endpoint(
                     event = str(item.get("event") or "message")
                     data = item.get("data") or {}
                     if event == "__result__":
-                        status = str(data.get("status") or "completed")
-                        terminal_event = (
-                            "interrupt.requested"
-                            if status == "awaiting_human"
-                            else "run.cancelled"
-                            if status == "cancelled"
-                            else "run.failed"
-                            if status in {"failed", "error"} or data.get("agent_error")
-                            else "run.completed"
-                        )
-                        sequence += 1
-                        yield _chat_sse({"event": terminal_event, "data": {"run_id": data.get("agent_run_id"), "status": status, "response": data}}, sequence)
                         break
                     if event == "__error__":
                         sequence += 1
-                        yield _chat_sse({"event": "run.failed", "data": data}, sequence)
+                        yield _chat_sse({"event": "stream.error", "data": data}, sequence)
                         break
                     sequence += 1
                     yield _chat_sse(item, sequence)
+                    if event in {"run.completed", "run.failed", "run.cancelled"}:
+                        break
             finally:
-                sink.close()
+                sink.detach_delivery()
 
         return StreamingResponse(
             events(),

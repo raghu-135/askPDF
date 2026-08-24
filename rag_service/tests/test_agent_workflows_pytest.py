@@ -4262,13 +4262,12 @@ class TestAgentRunService:
         assert retained_turns == []
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("run_delete_fails", "with_event_sink"), [(False, False), (False, True), (True, True)])
-    async def test_run_thread_chat_discards_canceled_run_and_checkpoint(
+    @pytest.mark.parametrize("with_event_sink", [False, True])
+    async def test_run_thread_chat_retains_canceled_run_and_discards_checkpoint(
         self,
         engine,
         sample_thread,
         monkeypatch,
-        run_delete_fails,
         with_event_sink,
     ):
         session_factory = async_sessionmaker(
@@ -4283,14 +4282,6 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            original_delete_run = repo.delete_run
-
-            async def fake_delete_run(run_id):
-                cleanup_events.append(("run", run_id))
-                if run_delete_fails:
-                    raise RuntimeError("simulated canceled-run cleanup failure")
-                return await original_delete_run(run_id)
-
             async def fake_get_thread_settings(_thread_id):
                 return {}
 
@@ -4327,7 +4318,6 @@ class TestAgentRunService:
             async def fake_cancel_requested(_run_id):
                 return True
 
-            monkeypatch.setattr(repo, "delete_run", fake_delete_run)
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr("app.agent_workflows.service.chat_run_cancel_requested", fake_cancel_requested)
             monkeypatch.setattr(
@@ -4349,19 +4339,13 @@ class TestAgentRunService:
             retained_turns = await repo.list_chat_turns_for_run(captured_run_id)
 
         assert result["status"] == "cancelled"
-        assert result["agent_run_id"] is None
+        assert result["agent_run_id"] == captured_run_id
         assert result["user_message_id"] is None
         assert result["assistant_message_id"] is None
-        assert result["node_events"] == []
-        assert cleanup_events == [
-            ("checkpoint", captured_run_id),
-            ("run", captured_run_id),
-        ]
-        if run_delete_fails:
-            assert retained_run is not None
-            assert retained_run.status == "cancelled"
-        else:
-            assert retained_run is None
+        assert "node_events" not in result
+        assert cleanup_events == [("checkpoint", captured_run_id)]
+        assert retained_run is not None
+        assert retained_run.status == "cancelled"
         assert retained_turns == []
 
     @pytest.mark.asyncio
@@ -7055,7 +7039,7 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
                     "detail": {"checkpoint_before": {"secret": "must-not-stream"}},
                     "reasoning": "must-not-stream",
                 })
-            return {
+            result = {
                 "answer": "done",
                 "status": "completed",
                 "agent_run_id": "run-stream",
@@ -7064,6 +7048,11 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
                 "used_chat_ids": [],
                 "document_sources": [],
             }
+            await execution_event_sink.finish(
+                "run.completed",
+                {"run_id": "run-stream", "status": "completed", "response": result},
+            )
+            return result
 
     async def fake_require_thread_embedding_ready(_thread_id):
         return SimpleNamespace(
@@ -7104,7 +7093,7 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
 
     assert response.media_type == "text/event-stream"
     assert "event: run.started" in payload
-    assert "event: node.completed" in payload
+    assert "event: operation.completed" in payload
     assert "event: run.completed" in payload
     assert '"answer": "done"' in payload
     assert "must-not-stream" not in payload
@@ -7120,10 +7109,10 @@ async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
                 "node.completed",
                 {"node_id": "router", "node_type": "router", "visit_index": 1},
             )
-            return {
+            result = {
                 "answer": "",
                 "status": "cancelled",
-                "agent_run_id": None,
+                "agent_run_id": "run-cancel",
                 "user_message_id": None,
                 "assistant_message_id": None,
                 "used_chat_ids": [],
@@ -7131,6 +7120,11 @@ async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
                 "web_sources": [],
                 "clarification_options": None,
             }
+            await execution_event_sink.finish(
+                "run.cancelled",
+                {"run_id": "run-cancel", "status": "cancelled", "response": result},
+            )
+            return result
 
     async def fake_require_thread_embedding_ready(_thread_id):
         return SimpleNamespace(
@@ -7173,10 +7167,10 @@ async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
     payload = "".join(chunks)
 
-    assert payload.count("event: run.canceled") == 1
-    assert "event: node.completed" in payload
+    assert payload.count("event: run.cancelled") == 1
+    assert "event: operation.completed" in payload
     assert '"status": "cancelled"' in payload
-    assert '"agent_run_id": null' in payload
+    assert '"agent_run_id": "run-cancel"' in payload
 
 
 @pytest.mark.asyncio
@@ -7227,7 +7221,7 @@ async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse
 
     class FakeService:
         async def run_thread_chat(self, thread_id, req, embedding_model, *, execution_event_sink=None):
-            return {
+            result = {
                 "answer": "I need a bit more clarification.",
                 "status": "clarification_required",
                 "agent_run_id": None,
@@ -7241,6 +7235,13 @@ async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse
                     "What risks did we discuss earlier in this thread?",
                 ],
             }
+            if execution_event_sink is not None:
+                await execution_event_sink.emit(
+                    "interrupt.requested",
+                    {"run_id": None, "status": "clarification_required", "response": result},
+                )
+                await execution_event_sink.finish_boundary()
+            return result
 
     async def fake_require_thread_embedding_ready(_thread_id):
         return SimpleNamespace(
@@ -7292,7 +7293,8 @@ async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse
     assert json_result["agent_run_id"] is None
     assert json_result["user_message_id"] is None
     assert json_result["assistant_message_id"] is None
-    assert "event: run.completed" in payload
+    assert "event: interrupt.requested" in payload
+    assert "event: run.completed" not in payload
     assert '"status": "clarification_required"' in payload
     assert '"run_id": null' in payload
     assert "What risks are described in the uploaded report?" in payload
@@ -7315,6 +7317,7 @@ async def test_compact_execution_sink_omits_full_invocation_fields():
         "visit_index": 1,
         "output_preview": {"route": "document"},
     }
+    await sink.finish_boundary()
 
 
 @pytest.mark.asyncio
@@ -7334,6 +7337,10 @@ async def test_agent_run_resume_content_negotiation_streams_progress(monkeypatch
             sink = kwargs.get("execution_event_sink")
             await sink.emit("run.started", {"run_id": run_id, "resumed": True})
             await sink.emit("node.completed", {"node_id": "finalizer", "visit_index": 2, "detail": {"prompt": "hidden"}})
+            await sink.finish(
+                "run.completed",
+                {"run_id": run_id, "status": "completed", "outcome": "resumed"},
+            )
             return SimpleNamespace(run=run, interrupt={"interrupt_id": "interrupt-1"}, outcome="resumed", duplicate=False)
 
     async def fake_require_ready_thread(_thread_id):
@@ -7357,6 +7364,9 @@ async def test_agent_run_resume_content_negotiation_streams_progress(monkeypatch
         selected_option_ids=None,
         resume_token="token",
         resume_version=1,
+        approval_scope=None,
+        approval_feedback=None,
+        approval_modifications=None,
     )
 
     response = await agent_workflows_api.resume_agent_run("run-resume-stream", request, accept="text/event-stream")
@@ -7366,7 +7376,7 @@ async def test_agent_run_resume_content_negotiation_streams_progress(monkeypatch
     payload = "".join(chunks)
 
     assert "event: run.started" in payload
-    assert "event: node.completed" in payload
+    assert "event: operation.completed" in payload
     assert "event: run.completed" in payload
     assert '"outcome": "resumed"' in payload
     assert "hidden" not in payload

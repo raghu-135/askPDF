@@ -281,7 +281,7 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     last_event_id = event.event_id
                     if event_sink is not None:
                         emit = getattr(event_sink, "emit", None)
-                        if emit is not None:
+                        if emit is not None and not event.terminal:
                             await self._emit_to_sink(emit, event)
                         if event.continuation is not None:
                             persist_binding = getattr(event_sink, "persist_runtime_binding", None)

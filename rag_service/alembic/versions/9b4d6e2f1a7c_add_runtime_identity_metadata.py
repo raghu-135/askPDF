@@ -35,6 +35,7 @@ def upgrade() -> None:
             server_default=sa.text("'{}'::jsonb"),
         ),
     )
+    op.add_column("agent_runs", sa.Column("runtime_binding_version", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("agent_runs", sa.Column("runtime_binding_status", sa.String(), nullable=False, server_default="active"))
     op.create_index("ix_agent_runs_framework", "agent_runs", ["framework"], unique=False)
     op.create_index("ix_agent_runs_builder_id", "agent_runs", ["builder_id"], unique=False)
@@ -98,6 +99,7 @@ def downgrade() -> None:
     op.drop_index("ix_agent_runs_definition_category", table_name="agent_runs")
     op.drop_index("ix_agent_runs_builder_id", table_name="agent_runs")
     op.drop_index("ix_agent_runs_framework", table_name="agent_runs")
+    op.drop_column("agent_runs", "runtime_binding_version")
     op.drop_column("agent_runs", "runtime_binding_status")
     op.drop_column("agent_runs", "runtime_binding_json")
     op.drop_column("agent_runs", "definition_category")

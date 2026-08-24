@@ -47,6 +47,7 @@ from app.api.agent_workflows import router as agent_workflows_router
 from app.api.agent_tasks import router as agent_tasks_router
 from app.api.tools import router as tools_router
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.execution_stream import drain_retained_executions
 from app.db import ensure_default_project
 from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import close_vector_db, get_vector_db
@@ -64,6 +65,7 @@ from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_mo
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
+RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS = 30
 MCP_HTTP_APP = get_http_app()
 HERMES_OFFLINE_MCP_APP = get_http_app(
     allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
@@ -184,6 +186,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("--- RAG Service Shutting Down ---")
+        try:
+            await drain_retained_executions(RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS)
+        except Exception:
+            logger.exception("Error draining retained agent executions")
         for mcp_lifespan in reversed(mcp_lifespans):
             try:
                 await mcp_lifespan.__aexit__(None, None, None)

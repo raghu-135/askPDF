@@ -1398,22 +1398,20 @@ async def resume_agent_run(
                     data = item.get("data") or {}
                     if event == "__missing__":
                         sequence += 1
-                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, "error": {"code": "agent_run_not_found", "raw_message": "Agent run not found", "retryable": False}}}, sequence)
+                        yield _sse({"event": "stream.error", "data": {"run_id": run_id, "error": {"code": "agent_run_not_found", "raw_message": "Agent run not found", "retryable": False}}}, sequence)
                         break
                     if event == "__error__":
                         sequence += 1
-                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, **data}}, sequence)
+                        yield _sse({"event": "stream.error", "data": {"run_id": run_id, **data}}, sequence)
                         break
                     if event == "__result__":
-                        status = str((data.get("agent_run") or {}).get("status") or "completed")
-                        terminal_event = "interrupt.requested" if status == AgentRunStatus.AWAITING_HUMAN.value else "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
-                        sequence += 1
-                        yield _sse({"event": terminal_event, "data": {"run_id": run_id, "status": status, "response": data}}, sequence)
                         break
                     sequence += 1
                     yield _sse(item, sequence)
+                    if event in {"run.completed", "run.failed", "run.cancelled"}:
+                        break
             finally:
-                sink.close()
+                sink.detach_delivery()
 
         return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

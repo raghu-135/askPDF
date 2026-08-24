@@ -55,7 +55,8 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert set(scripts.get_heads()) == {"j4d9e6f1b3c5"}
+    assert set(scripts.get_heads()) == {"k5e2a8c4d7f1"}
+    assert scripts.get_revision("k5e2a8c4d7f1").down_revision == "j4d9e6f1b3c5"
     assert scripts.get_revision("9b4d6e2f1a7c").down_revision == "a8d3f1c6e4b2"
     assert scripts.get_revision("a8d3f1c6e4b2").down_revision == "e7c4a1b9d2f6"
     assert scripts.get_revision("e7c4a1b9d2f6").down_revision == "d5f1a2b3c4e6"

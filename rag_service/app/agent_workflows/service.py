@@ -389,6 +389,7 @@ class AgentRunService:
             # Non-streaming callers still need the same durable runtime event
             # journal and retained trace projection as SSE callers.
             execution_event_sink = AgentExecutionEventSink(include_details=False)
+            execution_event_sink.detach_delivery()
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
             execution_event_sink.bind_trace_recorder(trace_recorder)
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
@@ -398,7 +399,11 @@ class AgentRunService:
             and hasattr(execution_event_sink, "bind_runtime_event_persister")
             and hasattr(self.repository, "append_run_event")
         ):
-            execution_event_sink.bind_runtime_event_persister(run.id, self.repository.append_run_event)
+            execution_event_sink.bind_runtime_event_persister(
+                run.id,
+                self.repository.append_run_event,
+                initial_sequence=0,
+            )
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -447,6 +452,8 @@ class AgentRunService:
                 ),
                 event_sink=execution_event_sink,
             )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
+                await execution_event_sink.flush()
             if runtime_result.continuation is not None:
                 await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
             result = result_to_product_payload(runtime_result)
@@ -475,44 +482,37 @@ class AgentRunService:
             result.pop("_corrective_wave_records", None)
             result.pop("_corrective_metrics_state", None)
             if status == AgentRunStatus.CANCELLED.value:
-                try:
-                    await self.repository.complete_run(
-                        run.id,
-                        status=AgentRunStatus.CANCELLED.value,
-                        metrics_json=metrics,
-                        error_json=error_json,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Could not mark temporary canceled chat run terminal before cleanup | "
-                        "thread_id=%s run_id=%s",
-                        thread_id,
-                        run.id,
-                    )
-                try:
-                    await self._delete_continuation(adapter, continuation_from_run(run))
-                    deleted = await self.repository.delete_run(run.id)
-                    if not deleted:
-                        raise RuntimeError(f"Canceled chat Agent Run {run.id} was not found during cleanup")
-                except Exception:
-                    logger.exception(
-                        "Canceled chat cleanup failed; terminal run remains eligible for pruning | "
-                        "thread_id=%s run_id=%s checkpoint_thread_id=%s",
-                        thread_id,
-                        run.id,
-                        run.checkpoint_thread_id,
-                    )
+                cancelled_run = await self.repository.complete_run(
+                    run.id,
+                    status=AgentRunStatus.CANCELLED.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                await self._delete_continuation(adapter, continuation_from_run(run))
                 result.update(
                     {
-                        "agent_run_id": None,
+                        "agent_run_id": run.id,
+                        "user_message_id": None,
+                        "assistant_message_id": None,
                         "checkpoint_thread_id": None,
-                        "agent_trace_refs": None,
                         "agent_workflow_id": workflow.id,
                         "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
-                        "node_events": [],
-                        "tool_events": [],
                     }
                 )
+                if cancelled_run is not None:
+                    debug_payload = trace_recorder.finalize(
+                        run=cancelled_run,
+                        chat_turn_id=None,
+                        metrics=metrics,
+                        error=error_json,
+                        result=result,
+                    )
+                    await self.repository.set_run_debug_trace(run.id, debug_payload)
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                    await execution_event_sink.finish(
+                        "run.cancelled",
+                        {"run_id": run.id, "status": AgentRunStatus.CANCELLED.value, "response": result},
+                    )
                 return result
             if status == CLARIFICATION_REQUIRED_STATUS:
                 # Keep a terminal record only as a cleanup fallback. The normal path removes
@@ -555,6 +555,13 @@ class AgentRunService:
                         "tool_events": [],
                     }
                 )
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit(
+                        "interrupt.requested",
+                        {"run_id": None, "status": status, "response": result},
+                    )
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
+                    await execution_event_sink.finish_boundary()
                 return result
             if status == AgentRunStatus.AWAITING_HUMAN.value:
                 if hasattr(trace_recorder, "record_interrupted_snapshot"):
@@ -594,6 +601,8 @@ class AgentRunService:
                 if paused_run is not None:
                     result["pending_interrupt"] = paused_run.pending_interrupt_json
                 result.update(context)
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
+                    await execution_event_sink.finish_boundary()
                 return result
             completed_run = await self.repository.complete_run(
                 run.id,
@@ -613,6 +622,12 @@ class AgentRunService:
                 )
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
             result.update(context)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                terminal_kind = "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                await execution_event_sink.finish(
+                    terminal_kind,
+                    {"run_id": run.id, "status": status, "response": result},
+                )
             return result
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -637,6 +652,11 @@ class AgentRunService:
                     result={"agent_error": error_json},
                 )
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                await execution_event_sink.finish(
+                    "run.failed",
+                    {"run_id": run.id, "status": AgentRunStatus.FAILED.value, "error": error_json},
+                )
             raise
 
     async def resume_agent_run(
@@ -693,26 +713,6 @@ class AgentRunService:
         )
         if resolution is None:
             return None
-        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
-            execution_event_sink = AgentExecutionEventSink(include_details=False)
-        if (
-            hasattr(execution_event_sink, "bind_runtime_event_persister")
-            and hasattr(self.repository, "append_run_event")
-        ):
-            execution_event_sink.bind_runtime_event_persister(
-                resolution.run.id,
-                self.repository.append_run_event,
-            )
-        if execution_event_sink is not None:
-            await execution_event_sink.emit(
-                "run.started",
-                {
-                    "run_id": resolution.run.id,
-                    "workflow_id": resolution.run.workflow_id,
-                    "status": resolution.run.status,
-                    "resumed": True,
-                },
-            )
         if (
             resolution.duplicate
             or resolution.outcome != InterruptStatus.RESUMED.value
@@ -779,6 +779,31 @@ class AgentRunService:
             )
             return resolution
 
+        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
+            execution_event_sink = AgentExecutionEventSink(include_details=False)
+            execution_event_sink.detach_delivery()
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_event_persister"):
+            existing_events = await self.repository.list_run_events(resolution.run.id)
+            initial_sequence = max(
+                (int(getattr(event, "sequence", 0) or 0) for event in existing_events),
+                default=0,
+            )
+            execution_event_sink.bind_runtime_event_persister(
+                resolution.run.id,
+                self.repository.append_run_event,
+                initial_sequence=initial_sequence,
+            )
+        if execution_event_sink is not None:
+            await execution_event_sink.emit(
+                "run.started",
+                {
+                    "run_id": resolution.run.id,
+                    "workflow_id": resolution.run.workflow_id,
+                    "status": resolution.run.status,
+                    "resumed": True,
+                },
+            )
+
         definition = definition_from_run(resolution.run)
         adapter = adapter_for_definition(definition)
         runtime_request = AgentRuntimeRequest(
@@ -807,12 +832,6 @@ class AgentRunService:
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
-            if (
-                execution_event_sink is not None
-                and hasattr(execution_event_sink, "bind_runtime_event_persister")
-                and hasattr(self.repository, "append_run_event")
-            ):
-                execution_event_sink.bind_runtime_event_persister(resolution.run.id, self.repository.append_run_event)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
                 execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
             runtime_context = RuntimeExecutionContext(
@@ -833,6 +852,8 @@ class AgentRunService:
                     context=runtime_context,
                     event_sink=execution_event_sink,
                 )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
+                await execution_event_sink.flush()
             result = result_to_product_payload(runtime_result)
             _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
@@ -904,12 +925,16 @@ class AgentRunService:
                     debug_trace_json=debug_payload,
                 )
                 if paused_run is not None:
+                    if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
+                        await execution_event_sink.finish_boundary()
                     return InterruptResolutionResult(
                         run=paused_run,
                         outcome=resolution.outcome,
                         interrupt=paused_run.pending_interrupt_json or resolution.interrupt,
                         duplicate=False,
                     )
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
+                    await execution_event_sink.finish_boundary()
                 return resolution
 
             completed_run = await self.repository.complete_run(
@@ -942,6 +967,17 @@ class AgentRunService:
                 completed_run = await self.repository.set_run_debug_trace(completed_run.id, debug_payload) or completed_run
             else:
                 completed_run = await self.repository.set_run_debug_trace(completed_run.id, resume_debug_payload) or completed_run
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                terminal_kind = "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                await execution_event_sink.finish(
+                    terminal_kind,
+                    {
+                        "run_id": completed_run.id,
+                        "status": status,
+                        "outcome": resolution.outcome,
+                        "response": result,
+                    },
+                )
             return InterruptResolutionResult(
                 run=completed_run,
                 outcome=resolution.outcome,
@@ -961,4 +997,17 @@ class AgentRunService:
                     "retryable": True,
                 },
             )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                await execution_event_sink.finish(
+                    "run.failed",
+                    {
+                        "run_id": resolution.run.id,
+                        "status": AgentRunStatus.FAILED.value,
+                        "error": {
+                            "code": "agent_run_resume_failed",
+                            "raw_message": str(exc),
+                            "retryable": True,
+                        },
+                    },
+                )
             raise
