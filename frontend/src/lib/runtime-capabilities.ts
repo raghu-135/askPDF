@@ -76,3 +76,14 @@ export function runtimeOperationDisabledReason(
 ): string | undefined {
   return runtimeOperationAvailability(response, operation).disabledReason;
 }
+
+export function isCurrentRuntimeCapabilityRequest(requestId: number, currentRequestId: number): boolean {
+  return requestId === currentRequestId;
+}
+
+export function runtimeCapabilityResponseMatchesRun(
+  response: AgentRuntimeCapabilityResponse | null | undefined,
+  runId: string,
+): boolean {
+  return response?.resource === 'run' && response.run_id === runId;
+}

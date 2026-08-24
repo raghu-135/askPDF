@@ -18,7 +18,7 @@ async def delete_run_continuation(run: Any) -> Any:
     if binding is None:
         return []
     adapter = adapter_for_definition(definition)
-    capabilities, _error = await discover_adapter_capabilities(adapter, definition)
+    capabilities, _error = await discover_adapter_capabilities(adapter)
     if capabilities is None:
         return []
     descriptor = capabilities.operations.get(RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value)

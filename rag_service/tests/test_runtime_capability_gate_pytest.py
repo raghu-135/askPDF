@@ -582,3 +582,48 @@ async def test_runtime_operation_adapter_failure_is_persisted(monkeypatch):
     assert caught.value.code == "adapter_failed"
     fail.assert_awaited_once()
     assert adapter.send_followup.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retryable_capability_failure_can_retry_same_idempotency_key(monkeypatch):
+    class FlakyCapabilityAdapter(RecordingAdapter):
+        def __init__(self):
+            super().__init__()
+            self.fail_capability_discovery = True
+
+        async def capabilities(self, definition):
+            if self.fail_capability_discovery:
+                raise RuntimeError(
+                    "runtime_capability_discovery_failed",
+                    "Runtime capability discovery failed",
+                    retryable=True,
+                )
+            return await super().capabilities(definition)
+
+    adapter = FlakyCapabilityAdapter()
+    run = _run()
+    service = _patch_runtime(monkeypatch, adapter, FakeRepository(run))
+    record = SimpleNamespace(id="operation-1", status="in_progress", result_json={}, error_json=None)
+    monkeypatch.setattr(service_module, "claim_runtime_operation", AsyncMock(return_value=record))
+    fail = service_module.fail_runtime_operation
+
+    with pytest.raises(RuntimeError) as first:
+        await service.operate_agent_run(
+            run,
+            RuntimeOperationId.RUN_SEND_FOLLOWUP,
+            input={"text": "retry me"},
+            idempotency_key="retryable-capability",
+        )
+    assert first.value.retryable is True
+    fail.assert_awaited_once()
+
+    adapter.fail_capability_discovery = False
+    result = await service.operate_agent_run(
+        run,
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        input={"text": "retry me"},
+        idempotency_key="retryable-capability",
+    )
+
+    assert result == {"status": "queued"}
+    assert adapter.calls["send_followup"] == 1

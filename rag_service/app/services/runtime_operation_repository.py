@@ -66,6 +66,11 @@ async def claim_runtime_operation(
                         "The runtime operation is already in progress",
                         operation=existing,
                     )
+                if existing.status == "failed" and bool((existing.error_json or {}).get("retryable")):
+                    existing.status = "in_progress"
+                    existing.error_json = None
+                    existing.result_json = {}
+                    existing.completed_at = None
                 return existing
 
             raise RuntimeOperationConflict(

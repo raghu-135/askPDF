@@ -5,6 +5,8 @@ import {
   isRuntimeOperationEnabled,
   runtimeInterruptResponseOperation,
   runtimeOperationAvailability,
+  isCurrentRuntimeCapabilityRequest,
+  runtimeCapabilityResponseMatchesRun,
   TASK_CONTROL_CATALOG,
 } from '../src/lib/runtime-capabilities.ts';
 
@@ -90,4 +92,11 @@ test('paused task resume uses task.resume rather than runtime run.resume', () =>
   assert.equal(resumeControl?.operation, 'task.resume');
   assert.equal(runtimeOperationAvailability(capabilities, resumeControl.operation).enabled, true);
   assert.equal(runtimeOperationAvailability(capabilities, 'run.resume').visible, false);
+});
+
+test('capability responses are applied only to their selected run', () => {
+  assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-2' }, 'run-1'), false);
+  assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-1' }, 'run-1'), true);
+  assert.equal(isCurrentRuntimeCapabilityRequest(3, 4), false);
+  assert.equal(isCurrentRuntimeCapabilityRequest(4, 4), true);
 });

@@ -34,8 +34,6 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
         "capabilities": {
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
-                "task.pause": {"support": "conditional", "owner": "product", "enabled": True},
-                "task.retry": {"support": "conditional", "owner": "product", "enabled": True},
             }
         }
     })
@@ -45,7 +43,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     registry = RuntimeRegistry(adapters=[adapter])
     definition = await capabilities_for_definition(agent_definition, registry=registry)
 
-    assert deployment.operations["task.pause"].enabled is True
+    assert "task.pause" not in deployment.operations
     assert definition.operations["task.pause"].enabled is False
     assert definition.operations["task.pause"].disabled_reason == "definition_not_task_runtime"
 
@@ -71,7 +69,7 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
     adapter._json = AsyncMock()
     definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
 
-    capabilities, error = await discover_adapter_capabilities(adapter, definition)
+    capabilities, error = await discover_adapter_capabilities(adapter)
 
     assert capabilities is None
     assert error["code"] == "runtime_disabled"

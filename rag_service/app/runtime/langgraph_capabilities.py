@@ -181,7 +181,6 @@ def langgraph_capabilities(
     profile: LangGraphDeploymentProfile | None = None,
 ) -> RuntimeCapabilities:
     profile = profile or LangGraphDeploymentProfile.from_environment()
-    task_runtime = bool(definition and definition.capabilities.get("supports_long_running_tasks"))
     checkpoint = profile.checkpoint_available
     deployment_reason = "runtime_configuration_invalid" if profile.configuration_error else "runtime_unavailable"
 
@@ -211,41 +210,6 @@ def langgraph_capabilities(
             modes=("interrupt",),
             confirmation="asynchronous",
             terminal_states=("cancelled", "interrupted"),
-        )),
-        RuntimeOperationId.TASK_START.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.PRODUCT,
-            task_runtime,
-            semantics="product_task_start",
-            disabled_reason=None if task_runtime else "definition_not_task_runtime",
-        )),
-        RuntimeOperationId.TASK_PAUSE.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.PRODUCT,
-            task_runtime,
-            semantics="product_task_pause",
-            disabled_reason=None if task_runtime else "definition_not_task_runtime",
-        )),
-        RuntimeOperationId.TASK_RESUME.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.PRODUCT,
-            task_runtime,
-            semantics="product_task_resume",
-            disabled_reason=None if task_runtime else "definition_not_task_runtime",
-        )),
-        RuntimeOperationId.TASK_CANCEL.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.PRODUCT,
-            task_runtime,
-            semantics="product_task_cancel",
-            disabled_reason=None if task_runtime else "definition_not_task_runtime",
-        )),
-        RuntimeOperationId.TASK_RETRY.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.PRODUCT,
-            task_runtime,
-            semantics="product_task_retry",
-            disabled_reason=None if task_runtime else "definition_not_task_runtime",
         )),
         RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
             RuntimeSupportLevel.CONDITIONAL,

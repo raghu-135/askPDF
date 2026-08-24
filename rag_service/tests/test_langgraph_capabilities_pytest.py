@@ -157,6 +157,10 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
     assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].owner.value == "product"
     assert capabilities.operations[RuntimeOperationId.RUN_START.value].owner.value == "runtime"
 
+    deployment = langgraph_capabilities(definition)
+    assert RuntimeOperationId.TASK_PAUSE.value not in deployment.operations
+    assert RuntimeOperationId.TASK_RETRY.value not in deployment.operations
+
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")

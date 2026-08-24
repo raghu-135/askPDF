@@ -241,6 +241,57 @@ async def test_terminal_run_disables_active_controls_without_mutating_source():
 
 
 @pytest.mark.asyncio
+async def test_clarification_run_is_terminal_for_runtime_controls():
+    capabilities = await resolve_capabilities(
+        _definition(),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=SimpleNamespace(
+            status="clarification",
+            pending_interrupt_json=None,
+            runtime_binding_json={"binding_type": "fake"},
+            runtime_binding_status="active",
+        ),
+    )
+
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "run_terminal"
+
+
+@pytest.mark.asyncio
+async def test_task_and_run_states_are_resolved_independently():
+    task_definition = _definition(supports_long_running_tasks=True)
+    capabilities = await resolve_capabilities(
+        task_definition,
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=SimpleNamespace(
+            status="completed",
+            pending_interrupt_json=None,
+            runtime_binding_json={},
+            runtime_binding_status="active",
+        ),
+        task=SimpleNamespace(status="running"),
+    )
+
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "run_terminal"
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
+
+    capabilities = await resolve_capabilities(
+        task_definition,
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=SimpleNamespace(
+            status="running",
+            pending_interrupt_json=None,
+            runtime_binding_json={"binding_type": "fake"},
+            runtime_binding_status="active",
+        ),
+        task=SimpleNamespace(status="failed"),
+    )
+
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "task_terminal"
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
+
+
+@pytest.mark.asyncio
 async def test_require_capability_rejects_unsupported_operation_before_adapter_call():
     with pytest.raises(RuntimeError) as caught:
         await require_capability(
@@ -418,7 +469,6 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     adapter = InheritedUnsupportedAdapter()
     capabilities, error = await discover_adapter_capabilities(
         adapter,
-        AgentDefinition("definition-1", adapter.framework, adapter.builder_id),
     )
 
     assert error is None

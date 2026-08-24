@@ -38,7 +38,7 @@ import {
   type DeepResearchEngine,
 } from '../lib/api';
 import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
-import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
+import { isCurrentRuntimeCapabilityRequest, isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
 import { withRetry } from '../lib/retry-utils';
 import {
   deriveConversationSentences,
@@ -248,11 +248,13 @@ export default function DeepResearchTaskPanel({
   const [engine, setEngine] = useState<DeepResearchEngine>('langgraph');
   const [hermesEnabled, setHermesEnabled] = useState(false);
   const [hermesMaxContext, setHermesMaxContext] = useState<number | null>(null);
-  const [capabilityError, setCapabilityError] = useState('');
+  const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
+  const [runtimeControlError, setRuntimeControlError] = useState('');
   const [runCapabilities, setRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
+  const capabilityRequestId = useRef(0);
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRun = runs[runIndex] || null;
@@ -287,7 +289,7 @@ export default function DeepResearchTaskPanel({
 
   useEffect(() => {
     let active = true;
-    setCapabilityError('');
+    setDeepResearchDiscoveryError('');
     void getDeepResearchCapabilities()
       .then((capabilities) => {
         if (!active) return;
@@ -298,7 +300,7 @@ export default function DeepResearchTaskPanel({
       .catch(() => {
         if (!active) return;
         setWebCapability(false);
-        setCapabilityError('Deep Research capabilities could not be loaded. Internet research is unavailable until the service recovers.');
+        setDeepResearchDiscoveryError('Deep Research capabilities could not be loaded. Internet research is unavailable until the service recovers.');
       });
     return () => { active = false; };
   }, []);
@@ -337,19 +339,27 @@ export default function DeepResearchTaskPanel({
 
   useEffect(() => {
     let active = true;
+    const requestId = capabilityRequestId.current + 1;
+    capabilityRequestId.current = requestId;
+    setRunCapabilities(null);
+    setRuntimeControlError('');
     if (!selectedRun) {
-      setRunCapabilities(null);
       return () => { active = false; };
     }
     void withRetry(() => getAgentRunCapabilities(selectedRun.id, threadId), { maxRetries: 3, baseDelay: 500 })
       .then((result) => {
-        if (!active) return;
+        if (!active || !isCurrentRuntimeCapabilityRequest(requestId, capabilityRequestId.current)) return;
         if (result.success) {
+          if (!runtimeCapabilityResponseMatchesRun(result.data, selectedRun.id)) {
+            setRunCapabilities(null);
+            setRuntimeControlError('Run controls are temporarily unavailable. Refresh the run to retry.');
+            return;
+          }
           setRunCapabilities(result.data || null);
-          setCapabilityError('');
+          setRuntimeControlError('');
         } else {
           setRunCapabilities(null);
-          setCapabilityError('Run controls are temporarily unavailable. Refresh the run to retry.');
+          setRuntimeControlError('Run controls are temporarily unavailable. Refresh the run to retry.');
         }
       });
     return () => { active = false; };
@@ -517,7 +527,8 @@ export default function DeepResearchTaskPanel({
     />}
     status={<>
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-      {capabilityError && <Alert severity="warning" sx={{ mb: 1 }}>{capabilityError}</Alert>}
+      {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
+      {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
       {task?.terminal_reason === 'required_evidence_unavailable' && <Alert severity="error" sx={{ mb: 1 }}>Hermes could not retrieve the evidence required for this report. The generated text was not published as a grounded result.</Alert>}
       {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">

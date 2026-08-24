@@ -559,26 +559,6 @@ def create_app() -> FastAPI:
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
-                    "task.start": {
-                        "support": "conditional", "owner": "product", "enabled": True,
-                        "semantics": "product_task_start",
-                    },
-                    "task.pause": {
-                        "support": "conditional", "owner": "product", "enabled": True,
-                        "semantics": "product_task_pause",
-                    },
-                    "task.resume": {
-                        "support": "conditional", "owner": "product", "enabled": True,
-                        "semantics": "product_task_resume",
-                    },
-                    "task.cancel": {
-                        "support": "conditional", "owner": "product", "enabled": True,
-                        "semantics": "product_task_cancel",
-                    },
-                    "task.retry": {
-                        "support": "conditional", "owner": "product", "enabled": True,
-                        "semantics": "product_task_retry",
-                    },
                     "run.start": {
                         "support": "native", "owner": "runtime", "enabled": True,
                     },

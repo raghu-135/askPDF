@@ -99,6 +99,7 @@ from app.services.embedding_model_service import (
     EmbeddingModelUnavailableError,
     require_thread_embedding_ready,
 )
+from app.services.agent_task_repository import get_task
 from app.time_utils import iso_utc_z, maybe_iso_utc_z
 
 
@@ -511,7 +512,7 @@ async def list_agent_runtimes():
             framework=adapter.framework,
             builder_id=adapter.builder_id,
         )
-        capabilities, error = await discover_adapter_capabilities(adapter, definition)
+        capabilities, error = await discover_adapter_capabilities(adapter)
         deployments.append(
             capability_envelope(
                 capabilities=capabilities,
@@ -536,7 +537,7 @@ async def get_agent_runtime_capabilities(runtime_id: str):
         framework=adapter.framework,
         builder_id=adapter.builder_id,
     )
-    capabilities, error = await discover_adapter_capabilities(adapter, definition)
+    capabilities, error = await discover_adapter_capabilities(adapter)
     return capability_envelope(
         capabilities=capabilities,
         resource="deployment",
@@ -619,7 +620,7 @@ async def stream_agent_run_events(
                     sequence = int(getattr(row, "sequence", sequence) or sequence)
                     payload = dict(getattr(row, "payload_json", None) or {})
                     terminal = bool(payload.get("terminal")) or str(getattr(row, "kind", "")) in {
-                        "run.completed", "run.failed", "run.cancelled",
+                        "run.completed", "run.failed", "run.cancelled", "run.clarification",
                     }
                     value = {
                         "id": getattr(row, "id", None),
@@ -634,6 +635,8 @@ async def stream_agent_run_events(
                         "terminal": terminal,
                     }
                     yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
+                    if terminal:
+                        return
             else:
                 idle += 1
                 if idle >= 12:
@@ -658,9 +661,10 @@ async def get_agent_run_capabilities(
 
     definition = definition_from_run(run)
     registry = get_runtime_registry()
+    task = await get_task(run.task_id, thread_id=thread_id) if getattr(run, "task_id", None) else None
     try:
         adapter = registry.get(definition)
-        capabilities = await resolve_capabilities(definition, registry=registry, run=run)
+        capabilities = await resolve_capabilities(definition, registry=registry, run=run, task=task)
         error = None
     except RuntimeSelectionError as exc:
         adapter = None

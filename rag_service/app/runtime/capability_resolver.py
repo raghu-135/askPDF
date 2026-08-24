@@ -15,6 +15,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.errors import RuntimeError
+from app.runtime.product_capabilities import product_operation_descriptors
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 
 
@@ -24,6 +25,7 @@ TERMINAL_RUN_STATES = frozenset({
     "rejected",
     "expired",
     "cancelled",
+    "clarification",
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CANCEL.value,
@@ -68,16 +70,6 @@ OPERATION_METHODS = {
     RuntimeOperationId.SUBAGENT_CANCEL.value: "cancel_subagent",
     RuntimeOperationId.ARTIFACT_LIST.value: "list_artifacts",
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: "delete_continuation",
-}
-
-
-PRODUCT_OPERATIONS = {
-    RuntimeOperationId.RUN_EVENTS.value: RuntimeOperationDescriptor(
-        RuntimeSupportLevel.NATIVE,
-        RuntimeOperationOwner.PRODUCT,
-        True,
-        semantics="persisted_product_event_journal",
-    ),
 }
 
 
@@ -156,12 +148,12 @@ def _reconcile_implementation(
 
 def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabilities:
     operations = dict(capabilities.operations)
-    operations.update(PRODUCT_OPERATIONS)
+    operations.update(product_operation_descriptors())
     return replace(capabilities, operations=operations)
 
 
 async def _declaration_for_adapter(adapter: Any) -> RuntimeCapabilities:
-    return _with_product_operations(await adapter.deployment_capabilities())
+    return await adapter.deployment_capabilities()
 
 
 async def capabilities_for_definition(
@@ -172,6 +164,7 @@ async def capabilities_for_definition(
     adapter = registry.get(definition)
     capabilities = await _declaration_for_adapter(adapter)
     capabilities = _reconcile_implementation(capabilities, adapter)
+    capabilities = _with_product_operations(capabilities)
     return apply_definition_policy(capabilities, definition)
 
 
@@ -202,11 +195,13 @@ async def resolve_capabilities(
     *,
     registry: RuntimeRegistry,
     run: Any | None = None,
+    task: Any | None = None,
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
     capabilities = await _declaration_for_adapter(adapter)
     capabilities = _reconcile_implementation(capabilities, adapter)
+    capabilities = _with_product_operations(capabilities)
     capabilities = apply_definition_policy(capabilities, definition)
     operations = dict(capabilities.operations)
     if run is None:
@@ -232,24 +227,36 @@ async def resolve_capabilities(
         for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS:
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], "run_terminal")
-        for operation in TASK_ONLY_OPERATIONS:
-            if operation in operations:
-                operations[operation] = _disabled(operations[operation], "task_terminal")
     else:
         for operation in RESPONSE_OPERATIONS:
             if operation in operations and operation != (pending_operation.value if pending_operation else None):
                 operations[operation] = _disabled(operations[operation], "no_pending_interrupt")
 
-    if status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE.value in operations and status not in {"queued", "running"}:
+    task_status = str(getattr(task, "status", "") or status)
+    if task_status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE.value in operations and task_status not in {"queued", "running"}:
         operations[RuntimeOperationId.TASK_PAUSE.value] = _disabled(operations[RuntimeOperationId.TASK_PAUSE.value], "task_not_pauseable")
     pending = getattr(run, "pending_interrupt_json", None)
     pending_type = str(pending.get("type") or "") if isinstance(pending, Mapping) else ""
-    if RuntimeOperationId.TASK_RESUME.value in operations and status not in {"paused", "awaiting_human"}:
+    if RuntimeOperationId.TASK_RESUME.value in operations and task_status not in {"paused", "awaiting_human"}:
         operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
-    elif RuntimeOperationId.TASK_RESUME.value in operations and status == "awaiting_human" and pending_type != "task_pause":
+    elif RuntimeOperationId.TASK_RESUME.value in operations and task_status == "awaiting_human" and pending_type != "task_pause":
         operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
-    if RuntimeOperationId.TASK_RETRY.value in operations and status not in {"failed", "expired"}:
+    if RuntimeOperationId.TASK_RETRY.value in operations and task_status not in {"failed", "expired"}:
         operations[RuntimeOperationId.TASK_RETRY.value] = _disabled(operations[RuntimeOperationId.TASK_RETRY.value], "task_not_retryable")
+
+    if task is None and status in TERMINAL_RUN_STATES:
+        for operation in TASK_ONLY_OPERATIONS:
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "task_terminal")
+    elif task_status in TERMINAL_RUN_STATES:
+        for operation in (
+            RuntimeOperationId.TASK_START.value,
+            RuntimeOperationId.TASK_PAUSE.value,
+            RuntimeOperationId.TASK_RESUME.value,
+            RuntimeOperationId.TASK_CANCEL.value,
+        ):
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "task_terminal")
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation, descriptor in operations.items():
@@ -339,7 +346,6 @@ def capability_discovery_error(exc: BaseException, adapter: Any) -> dict[str, An
 
 async def discover_adapter_capabilities(
     adapter: Any,
-    definition: AgentDefinition,
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
         capabilities = await _declaration_for_adapter(adapter)
