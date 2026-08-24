@@ -9,7 +9,6 @@ export type RuntimeControlOperation =
   | 'run.resume'
   | 'run.retry'
   | 'run.approval.respond'
-  | 'interrupt.respond'
   | 'run.send_followup'
   | 'run.interrupt_with_input'
   | 'run.steer_live'

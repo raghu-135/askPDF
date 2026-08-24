@@ -86,6 +86,11 @@ async def _invoke_task_runtime(
                 event_sink=runtime_event_sink,
             )
         if response_operation == RuntimeOperationId.RUN_APPROVAL_RESPOND.value:
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_APPROVAL_RESPOND,
+                registry=get_runtime_registry(),
+            )
             return await adapter.continue_run(
                 runtime_request,
                 context=runtime_context,

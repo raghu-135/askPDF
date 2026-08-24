@@ -91,7 +91,7 @@ def test_runtime_operation_descriptor_requires_a_typed_owner():
         RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, "runtime", True)
 
 
-@pytest.mark.parametrize("response_operation", [None, "", "run.continue", "interrupt.respond"])
+@pytest.mark.parametrize("response_operation", [None, "", "interrupt.respond"])
 def test_pending_interrupt_requires_an_implemented_response_operation(response_operation):
     payload = {"interrupt_id": "interrupt-1"}
     if response_operation is not None:
@@ -133,9 +133,8 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
         ("run.events", lambda: adapter.stream_events(request)),
         ("run.resume", lambda: adapter.resume(request, interrupt={}, context=RuntimeExecutionContext())),
         ("run.pause", lambda: adapter.pause(request)),
-        ("run.continue", lambda: adapter.continue_run(request, context=RuntimeExecutionContext())),
+        ("runtime_continuation_unavailable", lambda: adapter.continue_run(request, context=RuntimeExecutionContext())),
         ("run.cancel", lambda: adapter.cancel(request)),
-        ("interrupt.respond", lambda: adapter.respond_to_interrupt(request, {})),
         ("run.approval.respond", lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="once"))),
         ("run.send_followup", lambda: adapter.send_followup(request, {})),
         ("run.interrupt_with_input", lambda: adapter.interrupt_with_input(request, {})),
@@ -154,6 +153,9 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
     for operation_id, invoke in operations:
         with pytest.raises(RuntimeError) as caught:
             await invoke()
+        if operation_id == "runtime_continuation_unavailable":
+            assert caught.value.code == operation_id
+            continue
         assert caught.value.code == "runtime_capability_unsupported"
         assert caught.value.retryable is False
         assert caught.value.details == {

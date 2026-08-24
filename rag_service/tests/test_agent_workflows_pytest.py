@@ -3352,6 +3352,57 @@ class TestAgentWorkflowRepository:
             )
 
     @pytest.mark.asyncio
+    async def test_failed_runtime_approval_is_restored_for_retry(self, repo, sample_thread):
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
+            framework="hermes",
+            builder_id="hermes_agent",
+            resolved_spec_json=builtin_router_rag_v2_spec(),
+        )
+        await repo.mark_run_awaiting_human(
+            run.id,
+            {
+                "interrupt_id": "runtime-approval-retry",
+                "response_operation": "run.approval.respond",
+                "allowed_actions": ["approve", "reject"],
+                "resume_version": 1,
+            },
+        )
+        first = await repo.resolve_pending_interrupt(
+            run.id,
+            interrupt_id="runtime-approval-retry",
+            action="approve",
+            resume_version=1,
+        )
+
+        restored = await repo.restore_pending_approval_after_runtime_failure(
+            run.id,
+            interrupt_id="runtime-approval-retry",
+            action="approve",
+        )
+        pending = await repo.get_run(run.id)
+        assert first.outcome == "resumed"
+        assert restored is True
+        assert pending.status == "awaiting_human"
+        assert pending.pending_interrupt_json["status"] == "pending"
+        assert "decision" not in pending.pending_interrupt_json
+
+        second = await repo.resolve_pending_interrupt(
+            run.id,
+            interrupt_id="runtime-approval-retry",
+            action="approve",
+            resume_version=1,
+        )
+
+        assert second.duplicate is False
+        assert second.outcome == "resumed"
+
+    @pytest.mark.asyncio
     async def test_resolve_pending_interrupt_rejects_stale_resume_guard(self, repo, sample_thread):
         await repo.seed_builtin_workflows()
         workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)

@@ -495,7 +495,6 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         operation_id_by_endpoint = {
             "start": "run.start",
             "resume": "run.resume",
-            "continue_run": "run.resume",
             "retry": "run.start",
         }
         capability_id = operation_id_by_endpoint.get(operation)

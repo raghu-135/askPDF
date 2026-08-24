@@ -6,6 +6,7 @@ import os
 from typing import Any, Mapping
 
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeApprovalResponse, RuntimeCapabilities
+from app.runtime.capability_resolver import apply_definition_policy
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -40,9 +41,16 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         return await super().start(request, context=context, event_sink=event_sink)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
+        return apply_definition_policy(await self.deployment_capabilities(), definition)
+
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
+        self._ensure_enabled()
         value = await self._json("GET", "/v1/capabilities")
         from app.runtime.transport import capabilities_from_dict
-        return capabilities_from_dict(value.get("capabilities") or value)
+        try:
+            return capabilities_from_dict(value.get("capabilities") or value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Hermes returned malformed capabilities") from exc
 
     async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
         self._unsupported("run.resume", "Hermes resume is not supported by the pinned runs API")

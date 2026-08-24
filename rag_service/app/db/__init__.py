@@ -31,6 +31,7 @@ from app.db.models_sqlmodel import (
     AgentTaskArtifact,
     AgentTaskEvent,
     AgentTaskCommand,
+    AgentRuntimeOperation,
     Memory,
     MemoryEvent,
     MemoryOverride,

@@ -57,13 +57,13 @@ def test_historical_migrations_upgrade_and_latest_downgrade(test_database_url: s
     # Alembic-managed functions or its version table. Use a guarded test-only
     # schema reset before treating the shared database as an empty target.
     _reset_test_schema(test_database_url)
-    _alembic(test_database_url, "upgrade", "g2b7c9d4e1f3")
+    _alembic(test_database_url, "upgrade", "j4d9e6f1b3c5")
     current = _alembic(test_database_url, "current")
-    assert "g2b7c9d4e1f3" in current.stdout
+    assert "j4d9e6f1b3c5" in current.stdout
 
     try:
         _alembic(test_database_url, "downgrade", "-1")
         downgraded = _alembic(test_database_url, "current")
-        assert "f1a9c7e3b5d2" in downgraded.stdout
+        assert "g2b7c9d4e1f3" in downgraded.stdout
     finally:
-        _alembic(test_database_url, "upgrade", "g2b7c9d4e1f3")
+        _alembic(test_database_url, "upgrade", "j4d9e6f1b3c5")

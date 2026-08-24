@@ -779,10 +779,6 @@ def create_app() -> FastAPI:
                         retryable=True,
                         details={"stage": "profile_identity", "reason": "fingerprint_mismatch", "profile_digest": run_profile.config_fingerprint},
                     ))
-            elif not execution_profile:
-                # Version-1 runs predate task-scoped MCP credentials. Preserve
-                # their frozen static profile instead of changing them in place.
-                execution_profile = runtime_profile
             async with httpx.AsyncClient(timeout=_upstream_timeout(max_duration_seconds)) as client:
                 if run_profile is not None:
                     preflight_url = profile_upstream_url(execution_profile) + "/v1/toolsets"

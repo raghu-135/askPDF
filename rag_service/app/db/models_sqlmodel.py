@@ -743,6 +743,29 @@ class AgentTaskCommand(SQLModel, table=True):
     )
 
 
+class AgentRuntimeOperation(SQLModel, table=True):
+    """Product-owned idempotency record for a runtime control operation."""
+    __tablename__ = "agent_runtime_operations"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    operation: str = Field(index=True)
+    idempotency_key: str
+    request_fingerprint: str
+    status: str = Field(default="in_progress", index=True)
+    result_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    error_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        CheckConstraint("status in ('in_progress', 'completed', 'failed')", name="ck_agent_runtime_operations_status"),
+        CheckConstraint("length(btrim(idempotency_key)) > 0", name="ck_agent_runtime_operations_key_nonempty"),
+        UniqueConstraint("run_id", "operation", "idempotency_key", name="uq_agent_runtime_operation_idempotency"),
+        Index("idx_agent_runtime_operations_run_operation", "run_id", "operation"),
+    )
+
+
 class Memory(SQLModel, table=True):
     """Canonical durable memory owned by the app, independent of agent framework."""
     __tablename__ = "memories"

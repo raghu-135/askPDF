@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import logging
 from types import SimpleNamespace
@@ -26,9 +28,16 @@ from app.runtime.catalog import (
 )
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.capability_resolver import pending_interrupt_response_operation, require_capability
+from app.runtime.errors import RuntimeError as RuntimeContractError
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
+from app.services.runtime_operation_repository import (
+    RuntimeOperationConflict,
+    claim_runtime_operation,
+    complete_runtime_operation,
+    fail_runtime_operation,
+)
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
@@ -43,6 +52,52 @@ def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
         and isinstance(proposed_tool, dict)
         and proposed_tool.get("name") == "search_web"
     )
+
+
+def _runtime_approval_response(
+    *,
+    action: str,
+    approval_scope: Optional[str],
+    approval_feedback: Optional[str],
+    approval_modifications: Optional[Dict[str, Any]],
+) -> RuntimeApprovalResponse:
+    return RuntimeApprovalResponse(
+        decision="reject" if action == AgentRunResumeAction.REJECT.value else "approve",
+        modifications=approval_modifications,
+        feedback=approval_feedback,
+        scope=approval_scope or "once",
+    )
+
+
+async def _submit_runtime_approval(
+    *,
+    repository: AgentWorkflowRepository,
+    adapter: Any,
+    request: AgentRuntimeRequest,
+    run_id: str,
+    interrupt_id: str,
+    action: str,
+    approval_scope: Optional[str],
+    approval_feedback: Optional[str],
+    approval_modifications: Optional[Dict[str, Any]],
+) -> None:
+    try:
+        await adapter.respond_to_approval(
+            request,
+            _runtime_approval_response(
+                action=action,
+                approval_scope=approval_scope,
+                approval_feedback=approval_feedback,
+                approval_modifications=approval_modifications,
+            ),
+        )
+    except Exception:
+        await repository.restore_pending_approval_after_runtime_failure(
+            run_id,
+            interrupt_id=interrupt_id,
+            action=action,
+        )
+        raise
 
 
 def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
@@ -129,7 +184,46 @@ class AgentRunService:
     ) -> Dict[str, Any]:
         definition = definition_from_run(run)
         adapter = adapter_for_definition(definition)
-        await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
+        if not idempotency_key:
+            raise RuntimeContractError(
+                "runtime_operation_idempotency_required",
+                "An Idempotency-Key is required for this runtime operation",
+            )
+        request_payload = {
+            "operation": operation.value,
+            "input": dict(input or {}),
+            "update": dict(update or {}),
+        }
+        request_fingerprint = hashlib.sha256(
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        try:
+            operation_record = await claim_runtime_operation(
+                run_id=run.id,
+                operation=operation.value,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        except RuntimeOperationConflict as exc:
+            details = {"operation_id": operation.value, "idempotency_key": idempotency_key}
+            if exc.operation is not None:
+                details["status"] = exc.operation.status
+            raise RuntimeContractError(exc.code, str(exc), details=details) from exc
+        if operation_record.status == "completed":
+            return dict(operation_record.result_json or {})
+        if operation_record.status == "failed":
+            stored_error = dict(operation_record.error_json or {})
+            raise RuntimeContractError(
+                str(stored_error.get("code") or "runtime_operation_failed"),
+                str(stored_error.get("safe_message") or "The runtime operation failed"),
+                retryable=bool(stored_error.get("retryable")),
+                details=dict(stored_error.get("details") or {}),
+            )
+        try:
+            await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
+        except RuntimeContractError as exc:
+            await fail_runtime_operation(operation_record.id, error=exc.to_dict())
+            raise
         request = AgentRuntimeRequest(
             run_id=run.id, thread_id=run.thread_id, definition_id=definition.definition_id,
             framework=definition.framework, builder_id=definition.builder_id,
@@ -141,16 +235,31 @@ class AgentRunService:
             },
             task_id=getattr(run, "task_id", None), continuation=continuation_from_run(run),
         )
-        if operation is RuntimeOperationId.RUN_SEND_FOLLOWUP:
-            return dict(await adapter.send_followup(request, dict(input or {})))
-        if operation is RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT:
-            return dict(await adapter.interrupt_with_input(request, dict(input or {})))
-        if operation is RuntimeOperationId.RUN_STEER_LIVE:
-            text = str((input or {}).get("text") or "").strip()
-            return dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
-        if operation is RuntimeOperationId.RUN_UPDATE_STATE:
-            return dict(await adapter.update_state(request, dict(update or {})))
-        raise ValueError(f"Unsupported runtime operation: {operation}")
+        try:
+            if operation is RuntimeOperationId.RUN_SEND_FOLLOWUP:
+                result = dict(await adapter.send_followup(request, dict(input or {})))
+            elif operation is RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT:
+                result = dict(await adapter.interrupt_with_input(request, dict(input or {})))
+            elif operation is RuntimeOperationId.RUN_STEER_LIVE:
+                text = str((input or {}).get("text") or "").strip()
+                result = dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
+            elif operation is RuntimeOperationId.RUN_UPDATE_STATE:
+                result = dict(await adapter.update_state(request, dict(update or {})))
+            else:
+                raise ValueError(f"Unsupported runtime operation: {operation}")
+            await complete_runtime_operation(operation_record.id, result=result)
+            return result
+        except RuntimeContractError as exc:
+            await fail_runtime_operation(operation_record.id, error=exc.to_dict())
+            raise
+        except Exception as exc:
+            error = RuntimeContractError.from_exception(
+                exc,
+                code="runtime_operation_failed",
+                safe_message="The runtime operation failed",
+            )
+            await fail_runtime_operation(operation_record.id, error=error.to_dict())
+            raise error from exc
 
     async def run_thread_chat(
         self,
@@ -632,14 +741,16 @@ class AgentRunService:
                     builder_id=definition.builder_id, task_id=resolution.run.task_id,
                     continuation=continuation_from_run(resolution.run),
                 )
-                await adapter_for_definition(definition).respond_to_approval(
-                    request,
-                    RuntimeApprovalResponse(
-                        decision="reject" if action == AgentRunResumeAction.REJECT.value else "approve",
-                        modifications=approval_modifications,
-                        feedback=approval_feedback,
-                        scope=approval_scope or "once",
-                    ),
+                await _submit_runtime_approval(
+                    repository=self.repository,
+                    adapter=adapter_for_definition(definition),
+                    request=request,
+                    run_id=resolution.run.id,
+                    interrupt_id=interrupt_id,
+                    action=action,
+                    approval_scope=approval_scope,
+                    approval_feedback=approval_feedback,
+                    approval_modifications=approval_modifications,
                 )
             if _is_web_approval_interrupt(resolution.interrupt):
                 if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
@@ -668,6 +779,30 @@ class AgentRunService:
             )
             return resolution
 
+        definition = definition_from_run(resolution.run)
+        adapter = adapter_for_definition(definition)
+        runtime_request = AgentRuntimeRequest(
+            run_id=resolution.run.id,
+            thread_id=resolution.run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            continuation=continuation_from_run(resolution.run),
+        )
+        response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
+        if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+            await _submit_runtime_approval(
+                repository=self.repository,
+                adapter=adapter,
+                request=runtime_request,
+                run_id=resolution.run.id,
+                interrupt_id=interrupt_id,
+                action=action,
+                approval_scope=approval_scope,
+                approval_feedback=approval_feedback,
+                approval_modifications=approval_modifications,
+            )
+
         try:
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
@@ -680,26 +815,24 @@ class AgentRunService:
                 execution_event_sink.bind_runtime_event_persister(resolution.run.id, self.repository.append_run_event)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
                 execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
-            definition = definition_from_run(resolution.run)
-            adapter = adapter_for_definition(definition)
-            runtime_request = AgentRuntimeRequest(
-                run_id=resolution.run.id,
-                thread_id=resolution.run.thread_id,
-                definition_id=definition.definition_id,
-                framework=definition.framework,
-                builder_id=definition.builder_id,
-                continuation=continuation_from_run(resolution.run),
+            runtime_context = RuntimeExecutionContext(
+                agent_run_context={"run": resolution.run},
+                trace_recorder=resume_trace_recorder,
+                cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
             )
-            runtime_result = await adapter.resume(
-                runtime_request,
-                interrupt=resolution.interrupt,
-                context=RuntimeExecutionContext(
-                    agent_run_context={"run": resolution.run},
-                    trace_recorder=resume_trace_recorder,
-                    cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
-                ),
-                event_sink=execution_event_sink,
-            )
+            if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+                runtime_result = await adapter.continue_run(
+                    runtime_request,
+                    context=runtime_context,
+                    event_sink=execution_event_sink,
+                )
+            else:
+                runtime_result = await adapter.resume(
+                    runtime_request,
+                    interrupt=resolution.interrupt,
+                    context=runtime_context,
+                    event_sink=execution_event_sink,
+                )
             result = result_to_product_payload(runtime_result)
             _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})

@@ -77,7 +77,6 @@ class RuntimeOperationId(str, Enum):
     RUN_EVENTS = "run.events"
     RUN_INSPECT_STATE = "run.inspect_state"
     RUN_APPROVAL_RESPOND = "run.approval.respond"
-    INTERRUPT_RESPOND = "interrupt.respond"
     RUN_SEND_FOLLOWUP = "run.send_followup"
     RUN_INTERRUPT_WITH_INPUT = "run.interrupt_with_input"
     RUN_STEER_LIVE = "run.steer_live"
@@ -88,7 +87,6 @@ class RuntimeOperationId(str, Enum):
     SUBAGENT_SEND = "subagent.send"
     SUBAGENT_CANCEL = "subagent.cancel"
     ARTIFACT_LIST = "artifact.list"
-    RUN_CONTINUE = "run.continue"
     RUN_CONTINUATION_CLEANUP = "run.continuation.cleanup"
     TRACE_PROJECT = "trace.project"
 

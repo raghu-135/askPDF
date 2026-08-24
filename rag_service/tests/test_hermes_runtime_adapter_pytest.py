@@ -2,12 +2,14 @@ import builtins
 import json
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
+from app.runtime.capability_resolver import discover_adapter_capabilities
 from app.runtime.errors import RuntimeError
 from hermes_runtime import api as hermes_api
 from hermes_runtime.compatibility import HERMES_REVISION
@@ -18,6 +20,58 @@ async def test_hermes_adapter_has_independent_identity():
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     assert adapter.framework == "hermes"
     assert adapter.builder_id == "hermes_agent"
+
+
+@pytest.mark.asyncio
+async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter._json = AsyncMock(return_value={
+        "capabilities": {
+            "operations": {
+                "run.start": {"support": "native", "owner": "runtime", "enabled": True},
+                "run.pause": {"support": "conditional", "owner": "product", "enabled": True},
+                "run.retry": {"support": "conditional", "owner": "product", "enabled": True},
+            }
+        }
+    })
+
+    deployment = await adapter.deployment_capabilities()
+    definition = await adapter.capabilities(AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent"))
+
+    assert deployment.operations["run.pause"].enabled is True
+    assert definition.operations["run.pause"].enabled is False
+    assert definition.operations["run.pause"].disabled_reason == "definition_not_task_runtime"
+
+
+@pytest.mark.asyncio
+async def test_hermes_malformed_capabilities_are_structured(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter._json = AsyncMock(return_value={"capabilities": {"operations": {"run.start": {"enabled": True}}}})
+
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.deployment_capabilities()
+
+    assert caught.value.code == "runtime_protocol_error"
+
+
+@pytest.mark.asyncio
+async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypatch):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter._json = AsyncMock()
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+
+    capabilities, error = await discover_adapter_capabilities(adapter, definition)
+
+    assert capabilities is None
+    assert error["code"] == "runtime_disabled"
+    adapter._json.assert_not_awaited()
 
 
 @pytest.mark.asyncio

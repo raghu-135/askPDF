@@ -33,16 +33,13 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value,
     RuntimeOperationId.RUN_STEER_LIVE.value,
     RuntimeOperationId.RUN_UPDATE_STATE.value,
-    RuntimeOperationId.RUN_CONTINUE.value,
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
     RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
-    RuntimeOperationId.INTERRUPT_RESPOND.value,
 })
 
 RESPONSE_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RESUME.value,
     RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
-    RuntimeOperationId.INTERRUPT_RESPOND.value,
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
@@ -66,7 +63,6 @@ OPERATION_METHODS = {
     "run.replay": "replay",
     "run.fork": "fork",
     "run.approval.respond": "respond_to_approval",
-    "interrupt.respond": "respond_to_interrupt",
     "subagent.list": "list_subagents",
     "subagent.send": "send_to_subagent",
     "subagent.cancel": "cancel_subagent",
@@ -93,15 +89,20 @@ def apply_definition_policy(
     definition: AgentDefinition,
 ) -> RuntimeCapabilities:
     disabled = definition.capabilities.get("disabled_operations", ())
-    if not isinstance(disabled, (list, tuple, set, frozenset)):
-        return capabilities
-    disabled_ids = {str(operation) for operation in disabled}
+    disabled_ids = {
+        str(operation)
+        for operation in disabled
+    } if isinstance(disabled, (list, tuple, set, frozenset)) else set()
     operations = {
         operation: _disabled(descriptor, "definition_policy")
         if (operation.value if isinstance(operation, RuntimeOperationId) else str(operation)) in disabled_ids
         else descriptor
         for operation, descriptor in capabilities.operations.items()
     }
+    if not bool(definition.capabilities.get("supports_long_running_tasks")):
+        for operation in TASK_ONLY_OPERATIONS:
+            if operation in operations:
+                operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
     return replace(capabilities, operations=operations)
 
 
@@ -140,11 +141,10 @@ async def resolve_capabilities(
         return capabilities
 
     operations = dict(capabilities.operations)
-    supports_long_running_tasks = bool(definition.capabilities.get("supports_long_running_tasks"))
-    if not supports_long_running_tasks:
-        for operation in TASK_ONLY_OPERATIONS:
-            if operation in operations:
-                operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
+    if RuntimeOperationId.RUN_START.value in operations:
+        operations[RuntimeOperationId.RUN_START.value] = _disabled(
+            operations[RuntimeOperationId.RUN_START.value], "run_already_created"
+        )
     status = str(getattr(run, "status", "") or "")
     pending_operation = pending_interrupt_response_operation(run)
     binding = getattr(run, "runtime_binding_json", None)

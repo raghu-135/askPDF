@@ -565,6 +565,40 @@ class AgentWorkflowRepository:
             await session.refresh(run)
             return InterruptResolutionResult(run=run, outcome=outcome, interrupt=interrupt)
 
+    async def restore_pending_approval_after_runtime_failure(
+        self,
+        run_id: str,
+        *,
+        interrupt_id: str,
+        action: str,
+    ) -> bool:
+        """Reopen only the exact approval decision whose runtime submission failed."""
+
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+            run = result.scalar_one_or_none()
+            if run is None:
+                return False
+            interrupt = dict(run.pending_interrupt_json or {})
+            if (
+                run.status != RUN_STATUS_RUNNING
+                or interrupt.get("status") != INTERRUPT_STATUS_RESUMED
+                or interrupt.get("response_operation") != "run.approval.respond"
+                or not terminal_decision_matches(interrupt, action=action, interrupt_id=interrupt_id)
+            ):
+                return False
+            interrupt["status"] = INTERRUPT_STATUS_PENDING
+            interrupt.pop("decision", None)
+            run.status = RUN_STATUS_AWAITING_HUMAN
+            run.completed_at = None
+            metrics = dict(run.metrics_json or {})
+            metrics["interrupt_resolution_count"] = max(0, int(metrics.get("interrupt_resolution_count") or 0) - 1)
+            metrics.pop("last_interrupt_action", None)
+            replace_jsonb_field(run, "metrics_json", metrics)
+            replace_jsonb_field(run, "pending_interrupt_json", interrupt)
+            return True
+
     async def expire_pending_interrupts(
         self,
         *,

@@ -27,7 +27,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
-    ChatTurn, ProcessStatus, MessageRole
+    ChatTurn, ProcessStatus, MessageRole, AgentRuntimeOperation
 )
 
 

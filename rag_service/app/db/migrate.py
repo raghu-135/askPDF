@@ -21,7 +21,7 @@ SIMPLIFIED_SCHEMA_REVISION = "a1f4c8d9e2b3"
 # The repository contains a separate runtime-database branch. Target the
 # application head explicitly so normal startup does not attempt runtime-only
 # migrations against the application database.
-HEAD_REVISION = "g2b7c9d4e1f3"
+HEAD_REVISION = "j4d9e6f1b3c5"
 BASELINE_TABLES = {
     "files",
     "thread_files",

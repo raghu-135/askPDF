@@ -35,7 +35,6 @@ class CapabilityAdapter:
                 RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.INTERRUPT_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
                 RuntimeOperationId.RUN_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
                 RuntimeOperationId.RUN_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
                 RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
@@ -115,6 +114,24 @@ async def test_definition_policy_and_run_state_gate_operations():
 
 
 @pytest.mark.asyncio
+async def test_run_capabilities_disable_start_for_an_existing_run():
+    capabilities = await resolve_capabilities(
+        _definition(),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=SimpleNamespace(
+            status="running",
+            pending_interrupt_json=None,
+            runtime_binding_json={"binding_type": "fake"},
+            runtime_binding_status="active",
+        ),
+    )
+
+    descriptor = capabilities.operations[RuntimeOperationId.RUN_START.value]
+    assert descriptor.enabled is False
+    assert descriptor.disabled_reason == "run_already_created"
+
+
+@pytest.mark.asyncio
 async def test_definition_capabilities_are_requested_from_adapter_and_drive_task_operations():
     adapter = CapabilityAdapter()
     registry = RuntimeRegistry(adapters=[adapter])
@@ -126,7 +143,8 @@ async def test_definition_capabilities_are_requested_from_adapter_and_drive_task
 
     non_task_definition = _definition(supports_long_running_tasks=False)
     non_task_capabilities = await capabilities_for_definition(non_task_definition, registry=registry)
-    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is True
+    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].enabled is False
+    assert non_task_capabilities.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     resolved = await resolve_capabilities(non_task_definition, registry=registry, run=SimpleNamespace(
         status="running",
         pending_interrupt_json=None,
@@ -134,6 +152,7 @@ async def test_definition_capabilities_are_requested_from_adapter_and_drive_task
         runtime_binding_status="active",
     ))
     assert resolved.operations[RuntimeOperationId.RUN_PAUSE.value].disabled_reason == "definition_not_task_runtime"
+    assert "run.continue" not in task_capabilities.operations
 
 
 @pytest.mark.asyncio
@@ -180,7 +199,6 @@ async def test_terminal_run_disables_active_controls_without_mutating_source():
     assert cancel.enabled is False
     assert cancel.disabled_reason == "run_terminal"
     assert capabilities.operations[RuntimeOperationId.RUN_APPROVAL_RESPOND.value].disabled_reason == "run_terminal"
-    assert capabilities.operations[RuntimeOperationId.INTERRUPT_RESPOND.value].disabled_reason == "run_terminal"
     assert run.status == "completed"
     assert run.pending_interrupt_json == {"interrupt_id": "i-1"}
 
@@ -293,7 +311,6 @@ async def test_only_explicit_pending_interrupts_enable_the_declared_response_ope
     for operation in (
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
-        RuntimeOperationId.INTERRUPT_RESPOND,
     ):
         assert capabilities.operations[operation.value].enabled is False
         assert capabilities.operations[operation.value].disabled_reason == "no_pending_interrupt"
@@ -316,7 +333,6 @@ async def test_pending_interrupt_enables_only_its_valid_response_operation():
 
     assert capabilities.operations[RuntimeOperationId.RUN_APPROVAL_RESPOND.value].enabled is True
     assert capabilities.operations[RuntimeOperationId.RUN_RESUME.value].disabled_reason == "no_pending_interrupt"
-    assert capabilities.operations[RuntimeOperationId.INTERRUPT_RESPOND.value].disabled_reason == "no_pending_interrupt"
 
 
 @pytest.mark.asyncio
@@ -338,7 +354,6 @@ async def test_completed_run_with_stale_pending_payload_disables_all_active_cont
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
-        RuntimeOperationId.INTERRUPT_RESPOND,
     ):
         assert capabilities.operations[operation.value].disabled_reason == "run_terminal"
 

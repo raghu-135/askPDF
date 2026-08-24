@@ -132,17 +132,13 @@ class AgentRuntimeAdapter(ABC):
         context: RuntimeExecutionContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> Optional[AgentRuntimeResult]:
-        self._unsupported("run.continue", "This runtime does not expose run continuation")
+        raise RuntimeError(
+            "runtime_continuation_unavailable",
+            "This runtime does not expose the internal approval continuation path",
+        )
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.cancel", "This runtime does not expose run cancellation")
-
-    async def respond_to_interrupt(
-        self,
-        request: AgentRuntimeRequest,
-        response: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
-        self._unsupported("interrupt.respond", "This runtime does not expose interrupt responses")
 
     async def respond_to_approval(
         self,
