@@ -29,11 +29,13 @@ def test_hermes_builtin_is_concrete_and_not_a_graph():
 
 def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
     prompt = _spec()["config"]["system_prompt"]
-    assert "tool_search" in prompt
-    assert "tool_describe" in prompt
-    assert "tool_call" in prompt
+    assert "tool_search searches only the deferred tool catalog" in prompt
+    assert "semantic search uploaded document file_hash" in prompt
+    assert "Every tool_search call must include a nonempty capability-oriented query" in prompt
+    assert "tool_describe" in prompt and "tool_call" in prompt
     assert "exact namespaced name" in prompt
     assert "do not invent a namespaced name" in prompt
+    assert "no matches means only that the catalog query did not match" in prompt
     assert "call search_document_by_id" not in prompt
 
 

@@ -37,6 +37,12 @@ from hermes_runtime.profile_manager import (
 
 logger = logging.getLogger(__name__)
 
+_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
+- `tool_search` searches the deferred tool catalog, not document contents. Search for the required capability, not the user's subject matter.
+- Start by calling `tool_search` with a nonempty capability query such as `semantic search uploaded document file_hash`.
+- Use the exact namespaced match with `tool_describe`, then invoke it with `tool_call` and schema-valid arguments.
+- Only the underlying document-retrieval `tool_call` result is evidence. No `tool_search` match means retry capability discovery; it does not mean the documents contain no evidence."""
+
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
     return {
@@ -71,6 +77,15 @@ def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
         else float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
     )
     return httpx.Timeout(read_timeout, connect=5, write=10)
+
+
+def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> str:
+    sections = [question.strip()]
+    documents = task_context.get("documents")
+    if isinstance(documents, list) and documents:
+        sections.append(_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE)
+    sections.append("askPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False))
+    return "\n\n".join(section for section in sections if section)
 
 
 def _rendered_model_context_length() -> int:
@@ -636,7 +651,7 @@ def create_app() -> FastAPI:
         task_context = input_data.get("task_context")
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
-            question = question + "\n\naskPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False)
+            question = _task_input_with_context(question, task_context)
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,

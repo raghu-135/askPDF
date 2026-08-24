@@ -65,13 +65,15 @@ def test_offline_profile_removes_external_tools() -> None:
     assert profile["mcp"]["allowed_tool_ids"] == ["search_documents"]
 
 
-def test_builtin_requires_retrieval_before_no_context_claim() -> None:
+def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
     definition = json.loads(
         (Path(__file__).parents[1] / "app/agent_workflows/builtins/hermes_rag_agent.json").read_text()
     )
     prompt = definition["spec_json"]["config"]["system_prompt"]
-    assert all(phrase in prompt for phrase in ("this paper", "the paper", "according to the context"))
-    assert "Never claim that a document or context is unavailable" in prompt
+    assert "tool_search searches only the deferred tool catalog" in prompt
+    assert "tool_search results" in prompt and "do not count as document evidence" in prompt
+    assert "only a successful underlying document-retrieval tool_call result does" in prompt
+    assert "If the underlying retrieval call fails or returns no evidence after valid attempts" in prompt
     assert {"get_thread_shape", "search_documents", "search_document_by_id"}.issubset(
         definition["spec_json"]["config"]["allowed_tool_ids"]
     )

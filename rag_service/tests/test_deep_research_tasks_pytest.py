@@ -243,9 +243,16 @@ async def test_interrupted_hermes_prestart_gets_new_product_run(monkeypatch):
         },
         runtime_binding_status="active",
     )
-    replacement = SimpleNamespace(id="new-run", status="running")
+    replacement = SimpleNamespace(
+        id="new-run", status="running", run_metadata_json={"runtime_started": False},
+        pending_interrupt_json={}, runtime_binding_json={"binding_type": "hermes_session", "payload": {}},
+        runtime_binding_status="active",
+    )
     definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
-    adapter = SimpleNamespace(framework="hermes", builder_id="hermes_agent", cancel=AsyncMock())
+    adapter = SimpleNamespace(
+        framework="hermes", builder_id="hermes_agent", cancel=AsyncMock(),
+        start=AsyncMock(return_value=AgentRuntimeResult(status="completed")),
+    )
     workflow = SimpleNamespace(
         id="hermes_rag_agent", spec_json={}, metadata_json={"version": 1},
         schema_version=1, category=None,
@@ -281,11 +288,29 @@ async def test_interrupted_hermes_prestart_gets_new_product_run(monkeypatch):
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", FakeRepository)
 
     result = await agent_task_runtime.ensure_task_run(task.id)
+    start_repository = SimpleNamespace(mark_runtime_started=AsyncMock())
+    await agent_task_runtime._invoke_task_runtime(
+        adapter=adapter,
+        definition=definition,
+        run=result,
+        runtime_request=AgentRuntimeRequest(
+            result.id, task.thread_id, definition.definition_id,
+            definition.framework, definition.builder_id,
+        ),
+        runtime_context=RuntimeExecutionContext(),
+        runtime_event_sink=None,
+        repository=start_repository,
+        registry=RuntimeRegistry(adapters=[adapter]),
+    )
 
     assert result is replacement
+    assert result._fresh_runtime_run is True
     adapter.cancel.assert_awaited_once()
-    agent_task_runtime.require_capability.assert_awaited_once()
-    assert agent_task_runtime.require_capability.await_args.kwargs["run"] is active
+    adapter.start.assert_awaited_once()
+    start_repository.mark_runtime_started.assert_awaited_once_with(result.id)
+    assert agent_task_runtime.require_capability.await_count == 2
+    assert agent_task_runtime.require_capability.await_args_list[0].kwargs["run"] is active
+    assert agent_task_runtime.require_capability.await_args_list[1].kwargs["run"] is replacement
     assert agent_task_runtime.tasks.attach_run.await_args.args[0] == task.id
 
 

@@ -321,9 +321,18 @@ async def ensure_task_run(task_id: str):
     )
     # create_run intentionally allocates the LangGraph checkpoint identity up
     # front.  That identity is not evidence that a checkpoint exists yet.
-    # Keep this process-local marker until the first start operation completes.
-    setattr(run, "_fresh_runtime_run", True)
-    return await tasks.attach_run(task.id, run, parent_run_id=active.id if active is not None else None)
+    # attach_run reloads the winning row in its own session, so apply the
+    # process-local marker to that returned instance rather than the detached
+    # create_run instance. This also handles a concurrent creator winning the
+    # task attachment while preserving the persisted runtime_started truth.
+    attached = await tasks.attach_run(
+        task.id,
+        run,
+        parent_run_id=active.id if active is not None else None,
+    )
+    attached_metadata = dict(attached.run_metadata_json or {})
+    setattr(attached, "_fresh_runtime_run", attached_metadata.get("runtime_started") is False)
+    return attached
 
 
 async def _heartbeat(task_id: str, worker_id: str) -> None:

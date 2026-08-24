@@ -161,6 +161,31 @@ def test_hermes_continuation_binding_is_opaque():
     assert binding.to_dict()["payload"]["session_id"] == "session-1"
 
 
+def test_document_task_context_reinforces_progressive_tool_disclosure():
+    value = hermes_api._task_input_with_context(
+        "Summarize the acknowledgement.",
+        {
+            "objective": "Summarize the acknowledgement.",
+            "documents": [{"file_hash": "file-1", "name": "paper.pdf"}],
+        },
+    )
+
+    assert "tool_search` searches the deferred tool catalog, not document contents" in value
+    assert "semantic search uploaded document file_hash" in value
+    assert "`limit`" not in value
+    assert value.index("Hermes bridge requirement") < value.index("askPDF task context:")
+
+
+def test_task_context_without_documents_does_not_require_document_discovery():
+    value = hermes_api._task_input_with_context(
+        "Research a topic.",
+        {"objective": "Research a topic.", "documents": []},
+    )
+
+    assert "Hermes bridge requirement" not in value
+    assert "askPDF task context:" in value
+
+
 @pytest.mark.parametrize(
     ("upstream", "neutral"),
     [
