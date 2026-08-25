@@ -1,9 +1,11 @@
+import time
 from types import SimpleNamespace
 
 from app.agent_workflows.canonical_trace import build_canonical_trace_projection
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from app.runtime.contracts import AgentRuntimeEvent
 from app.runtime.langgraph_adapter import _event_from_graph
+from app.agent_workflows.runtime_invocation import invoke_llm_for_node
 
 
 def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:
@@ -84,6 +86,70 @@ def test_tool_projection_records_argument_names_without_values() -> None:
     assert payload["provided_argument_names"] == ["authorization", "query"]
     assert "arguments" not in payload
     assert "private query" not in str(projection)
+
+
+def test_model_lifecycle_projection_is_correlated_and_summary_only() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "operation.started", {"operation_id": "planner", "operation_type": "deep_task_planner"}, "future"),
+            _event(2, "llm.started", {
+                "invocation_id": "llm-1",
+                "model_name": "test-model",
+                "operation_id": "planner",
+                "visit_index": 1,
+                "prompt": "private prompt",
+            }, "future"),
+            _event(3, "llm.completed", {
+                "invocation_id": "llm-1",
+                "model_name": "test-model",
+                "operation_id": "planner",
+                "visit_index": 1,
+                "status": "completed",
+                "duration_ms": 12,
+                "usage": {"total_tokens": 42},
+                "response": "private generated response",
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert [row["event_id"] for row in projection["models"]] == ["event-2", "event-3"]
+    assert projection["models"][0]["payload"]["operation_id"] == "planner"
+    assert "prompt" not in str(projection["models"])
+    assert "response" not in str(projection["models"])
+
+
+async def test_shared_model_invocation_emits_bounded_lifecycle_events() -> None:
+    class Sink:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def emit(self, kind, payload):
+            self.events.append((kind, payload))
+
+    sink = Sink()
+    response = SimpleNamespace(content="safe result", usage_metadata={"total_tokens": 9})
+
+    async def invoke(_messages):
+        return response
+
+    await invoke_llm_for_node(
+        invoke,
+        [],
+        state={"llm_model": "test-model", "agent_run_id": "run-1"},
+        config={"configurable": {"execution_event_sink": sink}},
+        node="planner",
+        started=time.perf_counter(),
+        retry_observer=lambda _event: None,
+        retry_attempts=[],
+        model_name="test-model",
+    )
+
+    assert [kind for kind, _payload in sink.events] == ["llm.started", "llm.completed"]
+    assert sink.events[0][1]["operation_id"] == "planner"
+    assert sink.events[1][1]["usage"]["total_tokens"] == 9
+    assert "messages" not in str(sink.events)
 
 
 def test_hermes_projection_keeps_generic_events_and_session_visualization() -> None:

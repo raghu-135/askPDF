@@ -320,6 +320,10 @@ function AgentExecutionView({
           const visitTools = traceView.tools.filter((tool) => (
             tool.callerNode === node.id && Number(tool.callerVisitIndex || 1) === visitRef.visitIndex
           ));
+          const visitModels = traceView.models.filter((model) => (
+            model.operation_id === node.id && Number(model.visit_index || 1) === visitRef.visitIndex
+          ));
+          const activeModel = [...visitModels].reverse().find((model) => model.status === 'started' || model.status === 'active');
           return (
             <Accordion
               key={`${key}:${index}`}
@@ -400,6 +404,7 @@ function AgentExecutionView({
                   <Tooltip title={<Box sx={{ maxWidth: 520, overflowWrap: 'anywhere' }}>{summary}</Box>} placement="top" arrow>
                     <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>{summary}</Typography>
                   </Tooltip>
+                  {activeModel && <Chip size="small" color="primary" variant="outlined" label={`Calling ${activeModel.model_name || 'model'}…`} sx={{ height: 21, flexShrink: 0 }} />}
                 </Stack>
               </AccordionSummary>
               {expanded === key && <AccordionDetails sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', px: 1, pt: 0.25, pb: 1 }}>
@@ -410,6 +415,7 @@ function AgentExecutionView({
                       {formattedDuration && <Chip size="small" variant="outlined" label={formattedDuration} sx={{ height: 21 }} />}
                       {route && <Chip size="small" color="primary" variant="outlined" label={route} aria-label={`Route: ${route}`} sx={{ height: 21 }} />}
                       {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21 }} />}
+                      {visitModels.length > 0 && <Chip size="small" variant="outlined" icon={<MemoryIcon />} label={`${visitModels.length} model${visitModels.length === 1 ? '' : 's'}`} sx={{ height: 21 }} />}
                       {node.warningCodes.length > 0 && <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={node.warningCodes.length} sx={{ height: 21 }} />}
                       {hasNodeError && <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label="1" sx={{ height: 21 }} />}
                     </Stack>
@@ -423,6 +429,30 @@ function AgentExecutionView({
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
                 {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
                 {detail && <AgentNodeExecutionDetails detail={detail} />}
+                {visitModels.length > 0 && (
+                  <Stack spacing={0.35} sx={{ mt: 0.7 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>Model activity</Typography>
+                    {visitModels.map((model) => (
+                      <Typography key={model.invocation_id || model.event_id} variant="caption" color={model.status === 'failed' ? 'error' : 'text.secondary'}>
+                        {model.status === 'started' || model.status === 'active' ? 'Calling' : model.status === 'failed' ? 'Failed' : 'Completed'} {model.model_name || 'model'}
+                        {model.duration_ms != null ? ` · ${formatDurationMs(model.duration_ms)}` : ''}
+                        {model.retry_count ? ` · ${model.retry_count} retries` : ''}
+                        {model.error?.message ? ` · ${model.error.message}` : ''}
+                      </Typography>
+                    ))}
+                  </Stack>
+                )}
+                {visitTools.length > 0 && (
+                  <Stack spacing={0.35} sx={{ mt: 0.7 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>Tool activity</Typography>
+                    {visitTools.map((tool) => (
+                      <Typography key={tool.id || `${tool.name}:${tool.callerVisitIndex}`} variant="caption" color={tool.status === 'failed' || tool.ok === false ? 'error' : 'text.secondary'}>
+                        {tool.status === 'started' || tool.status === 'progress' ? 'Calling' : tool.status === 'failed' || tool.ok === false ? 'Failed' : 'Completed'} {tool.displayName || tool.name}
+                        {tool.durationMs != null ? ` · ${formatDurationMs(tool.durationMs)}` : ''}
+                      </Typography>
+                    ))}
+                  </Stack>
+                )}
               </AccordionDetails>}
             </Accordion>
           );
@@ -457,10 +487,12 @@ function AgentExecutionView({
       <TraceVisualizationSlot
         traceView={traceView}
         resolvedSpec={resolvedSpec}
+        framework={framework}
         workflowId={workflowId}
         focusedTraceRefs={focusedTraceRefs}
         selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
         onGraphSelection={handleGraphSelection}
+        live={running}
       />
     </Stack>
   );

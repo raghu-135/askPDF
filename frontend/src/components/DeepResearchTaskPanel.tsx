@@ -12,6 +12,7 @@ import PsychologyIcon from '@mui/icons-material/Psychology';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import {
   API_BASE,
+  agentRunEventsUrl,
   commandAgentTask,
   createAgentTask,
   deleteAgentTask,
@@ -34,8 +35,10 @@ import {
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
   type AgentRunResumeAction,
+  type AgentRunDetails,
   type AgentRuntimeCapabilityResponse,
   type DeepResearchEngine,
+  type BuilderTestStreamEnvelope,
 } from '../lib/api';
 import {
   isRunOwnedBySelectedTask,
@@ -54,6 +57,7 @@ import {
   type ConversationSentenceCache,
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
+import { buildLiveTraceView } from './agent-debug/agent-trace-projection';
 import {
   ConversationComposer,
   ConversationArtifactList,
@@ -258,11 +262,15 @@ export default function DeepResearchTaskPanel({
   const [hermesMaxContext, setHermesMaxContext] = useState<number | null>(null);
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
   const [runtimeControlError, setRuntimeControlError] = useState('');
+  const [liveTraceEvents, setLiveTraceEvents] = useState<BuilderTestStreamEnvelope[]>([]);
+  const [traceLiveRequested, setTraceLiveRequested] = useState(false);
   const [runCapabilities, setRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
+  const liveTraceEventsRef = useRef<BuilderTestStreamEnvelope[]>([]);
+  const liveTraceRunDetailsRef = useRef<AgentRunDetails | undefined>(undefined);
   const capabilityRequestId = useRef(0);
   const taskContextRef = useRef(selectedTaskId);
   taskContextRef.current = selectedTaskId;
@@ -345,6 +353,8 @@ export default function DeepResearchTaskPanel({
     setTodos([]);
     setItems([]);
     setRunIndex(-1);
+    setTraceLiveRequested(false);
+    liveTraceRunDetailsRef.current = undefined;
     setError('');
     sequenceRunId.current = null;
     lastSequence.current = 0;
@@ -378,6 +388,73 @@ export default function DeepResearchTaskPanel({
     });
     return () => { active = false; };
   }, [selectedRun?.id, selectedTaskId, threadId]);
+
+  useEffect(() => {
+    if (!traceLiveRequested || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) {
+      liveTraceEventsRef.current = [];
+      setLiveTraceEvents([]);
+      return undefined;
+    }
+    let active = true;
+    let source: EventSource | null = null;
+    const runId = selectedRun.id;
+    let afterSequence = 0;
+    const connect = () => {
+      if (!active) return;
+      source = new EventSource(agentRunEventsUrl(runId, threadId, afterSequence));
+      source.addEventListener('run_event', (event) => {
+        let value: Record<string, any>;
+        try { value = JSON.parse((event as MessageEvent).data || '{}'); } catch { return; }
+        const sequence = Number(value.sequence || 0);
+        if (sequence > 0 && sequence <= afterSequence) return;
+        afterSequence = Math.max(afterSequence, sequence);
+        const kind = String(value.kind || 'runtime.event');
+        const data = {
+          ...(value.payload && typeof value.payload === 'object' ? value.payload : {}),
+          event_id: value.event_id,
+          sequence: value.sequence,
+          attempt: value.attempt,
+          occurred_at: value.occurred_at,
+        };
+        const envelope = { id: value.id || sequence, event: kind, data } as BuilderTestStreamEnvelope;
+        if (active) {
+          liveTraceEventsRef.current = [...liveTraceEventsRef.current, envelope];
+          setLiveTraceEvents(liveTraceEventsRef.current);
+          const liveTraceView = buildLiveTraceView(liveTraceEventsRef.current);
+          onOpenTrace?.({
+            id: runId,
+            threadId,
+            messageId: `agent-task:${selectedTaskId}:${runId}`,
+            label: `Deep Research · attempt ${selectedRun.attempt}`,
+            status: ['run.completed', 'run.failed', 'run.cancelled'].includes(kind) ? kind.slice(4) : 'running',
+            liveTraceView,
+            runDetails: liveTraceRunDetailsRef.current,
+            running: !['run.completed', 'run.failed', 'run.cancelled'].includes(kind),
+          });
+        }
+        if (['run.completed', 'run.failed', 'run.cancelled'].includes(kind)) {
+          active = false;
+          // The terminal event is the end of the live projection. Stop the
+          // subscription immediately; task polling will provide the retained
+          // authoritative trace without reopening the SSE stream from zero.
+          setTraceLiveRequested(false);
+          source?.close();
+          source = null;
+        }
+      });
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (active) window.setTimeout(connect, 2000);
+      };
+    };
+    connect();
+    return () => {
+      active = false;
+      source?.close();
+      source = null;
+    };
+  }, [onOpenTrace, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task, threadId, traceLiveRequested]);
 
   useEffect(() => {
     let active = true;
@@ -498,8 +575,10 @@ export default function DeepResearchTaskPanel({
 
   const openTrace = async () => {
     if (!selectedRun || !onOpenTrace) return;
+    setTraceLiveRequested(true);
     const details = await getAgentRun(selectedRun.id, threadId);
-    onOpenTrace({ id: selectedRun.id, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details });
+    liveTraceRunDetailsRef.current = details;
+    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired'].includes(selectedRun.status) });
   };
 
   const decide = async (

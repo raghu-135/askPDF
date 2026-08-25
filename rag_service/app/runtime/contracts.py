@@ -31,6 +31,9 @@ class RuntimeEventKind(str, Enum):
     RUN_CANCELLED = "run.cancelled"
     OUTPUT_DELTA = "output.delta"
     OUTPUT_COMPLETED = "output.completed"
+    LLM_STARTED = "llm.started"
+    LLM_COMPLETED = "llm.completed"
+    LLM_FAILED = "llm.failed"
     REASONING_AVAILABLE = "reasoning.available"
     INTERRUPT_REQUESTED = "interrupt.requested"
     INTERRUPT_RESPONDED = "interrupt.responded"
@@ -58,7 +61,7 @@ TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
     RuntimeEventKind.RUN_CANCELLED.value,
 })
 RUNTIME_EVENT_FAMILY_PREFIXES = (
-    "run.", "output.", "reasoning.", "interrupt.", "approval.",
+    "run.", "output.", "llm.", "reasoning.", "interrupt.", "approval.",
     "tool.", "subagent.", "artifact.", "operation.",
 )
 

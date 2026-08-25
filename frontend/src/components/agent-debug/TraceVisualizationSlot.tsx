@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Box, Chip, Paper, Stack, Typography } from '@mui/material';
 import type { AgentTraceVisualization } from '../../lib/api';
 import type { TraceRunView } from './agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from '../agent-graph/agent-graph-types';
+import { getAgentGraphSpec } from '../agent-graph/agent-graph-mapper';
 
 const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
 
@@ -11,10 +12,12 @@ export interface TraceVisualizationProps {
   descriptor: AgentTraceVisualization;
   traceView: TraceRunView;
   resolvedSpec?: Record<string, any>;
+  framework?: string;
   workflowId?: string;
   focusedTraceRefs?: AgentTraceRefs | null;
   selectedVisitRef?: AgentNodeVisitRef | null;
   onGraphSelection?: (selection: AgentGraphSelection) => void;
+  live?: boolean;
 }
 
 export interface TraceVisualizationProvider {
@@ -83,7 +86,30 @@ export const TRACE_VISUALIZATION_PROVIDERS: ReadonlyMap<string, TraceVisualizati
 ]);
 
 export default function TraceVisualizationSlot(props: Omit<TraceVisualizationProps, 'descriptor'>) {
-  const matches = Object.entries(props.traceView.visualizations)
+  const [visualizationTrace, setVisualizationTrace] = useState(props.traceView);
+  useEffect(() => {
+    if (!props.live) {
+      setVisualizationTrace(props.traceView);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setVisualizationTrace(props.traceView), 200);
+    return () => window.clearTimeout(timer);
+  }, [props.live, props.traceView]);
+  const visualizations = { ...visualizationTrace.visualizations };
+  const normalizedFramework = String(props.framework || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  // Keep the provider descriptor after termination as well. The retained
+  // payload is authoritative for final operation state, while the resolved
+  // definition remains the stable source of graph topology.
+  const graphSpec = getAgentGraphSpec(props.resolvedSpec, props.workflowId);
+  const canProjectLiveLangGraph = normalizedFramework === 'langgraph'
+    || normalizedFramework === 'deep_agents';
+  if (!visualizations['langgraph.graph'] && canProjectLiveLangGraph && graphSpec?.nodes?.length) {
+    // The topology is already available on the run definition. Publish only a
+    // lightweight provider descriptor here; live operation/tool state remains
+    // in the canonical trace view and is overlaid by the graph provider.
+    visualizations['langgraph.graph'] = { id: 'langgraph.graph' };
+  }
+  const matches = Object.entries(visualizations)
     .filter(([id]) => TRACE_VISUALIZATION_PROVIDERS.has(id));
   if (matches.length === 0) return null;
   return (
@@ -96,7 +122,7 @@ export default function TraceVisualizationSlot(props: Omit<TraceVisualizationPro
               <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
                 {id === 'langgraph.graph' ? 'Execution graph' : 'Hermes session'}
               </Box>
-              {provider.render({ ...props, descriptor })}
+                {provider.render({ ...props, traceView: visualizationTrace, descriptor, live: props.live })}
             </Box>
           </Paper>
         );

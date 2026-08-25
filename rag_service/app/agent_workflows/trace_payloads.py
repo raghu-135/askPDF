@@ -475,6 +475,7 @@ def merge_debug_payloads(
         "events": merged_events,
         "operations": merge_rows("operations", ("operation_id", "visit_index")),
         "tools": merge_rows("tools", ("event_id",)),
+        "models": merge_rows("models", ("event_id",)),
         "approvals": merge_rows("approvals", ("event_id",)),
         "subagents": merge_rows("subagents", ("event_id",)),
         "artifacts": merge_rows("artifacts", ("event_id",)),
@@ -498,7 +499,7 @@ def merge_debug_payloads(
     summary.pop("errors", None)
     base_trace.update({
         key: payload[key]
-        for key in ("events", "operations", "tools", "approvals", "subagents", "artifacts", "diagnostics", "visualizations")
+        for key in ("events", "operations", "tools", "models", "approvals", "subagents", "artifacts", "diagnostics", "visualizations")
     })
     detail_by_visit: Dict[tuple[str, int], Dict[str, Any]] = {}
     for detail in [*_as_list(base_payload.get("details")), *_as_list(incoming_payload.get("details"))]:

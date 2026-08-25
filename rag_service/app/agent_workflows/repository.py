@@ -742,7 +742,14 @@ class AgentWorkflowRepository:
 
     async def list_run_events(self, run_id: str) -> list[Any]:
         session = await self._get_session()
-        return await run_store_list_run_events(session, run_id)
+        try:
+            return await run_store_list_run_events(session, run_id)
+        finally:
+            # Polling SSE consumers close their request as soon as a terminal
+            # event arrives. Repository-owned sessions must be returned to the
+            # pool even when that cancellation interrupts the poll.
+            if self._session is None:
+                await session.close()
 
     async def update_runtime_projection(
         self,

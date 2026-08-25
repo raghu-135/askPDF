@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import time
 from uuid import uuid4
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from langchain_core.runnables import RunnableConfig
 
@@ -30,6 +31,56 @@ from app.mcp.errors import MCPUnavailableError
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _emit_progress_event(
+    config: RunnableConfig,
+    kind: str,
+    payload: Dict[str, Any],
+) -> None:
+    sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
+    if sink is None or not hasattr(sink, "emit"):
+        return
+    result = sink.emit(kind, payload)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _progress_context(config: RunnableConfig, *, state: Mapping[str, Any], node: str) -> Dict[str, Any]:
+    configurable = (config or {}).get("configurable") or {}
+    parent_id = configurable.get("parent_id") or configurable.get("parent_subagent_id")
+    subagent_id = configurable.get("subagent_id") or state.get("subagent_run_id")
+    return {
+        "operation_id": runtime_node_id(config, node),
+        "operation_type": runtime_node_type(config, node),
+        "visit_index": runtime_visit_index(config) or 1,
+        **({"parent_id": str(parent_id)} if parent_id else {}),
+        **({"subagent_id": str(subagent_id)} if subagent_id else {}),
+        "attempt": int(configurable.get("attempt") or state.get("task_attempt") or 1),
+    }
+
+
+def _usage_summary(response: Any) -> Dict[str, int]:
+    candidates = [getattr(response, "usage_metadata", None)]
+    metadata = getattr(response, "response_metadata", None)
+    if isinstance(metadata, dict):
+        candidates.extend([metadata.get("token_usage"), metadata.get("usage")])
+    usage: Dict[str, int] = {}
+    key_map = {
+        "input_tokens": "prompt_tokens",
+        "prompt_tokens": "prompt_tokens",
+        "output_tokens": "completion_tokens",
+        "completion_tokens": "completion_tokens",
+        "total_tokens": "total_tokens",
+    }
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for source, target in key_map.items():
+            value = candidate.get(source)
+            if isinstance(value, (int, float)) and target not in usage:
+                usage[target] = int(value)
+    return usage
 
 
 def append_event(
@@ -114,6 +165,14 @@ async def invoke_llm_for_node(
     model_name: Optional[str],
     failure_data: Optional[Dict[str, Any]] = None,
 ) -> Any:
+    invocation_id = f"llm:{uuid4().hex}"
+    progress = {
+        "invocation_id": invocation_id,
+        "model_name": model_name,
+        "status": "started",
+        **_progress_context(config, state=state, node=node),
+    }
+    await _emit_progress_event(config, "llm.started", progress)
     try:
         response = await invoke_with_retry(func, messages, retry_observer=retry_observer)
         cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
@@ -127,8 +186,23 @@ async def invoke_llm_for_node(
                 messages=messages,
                 response=response,
             )
+        await _emit_progress_event(config, "llm.completed", {
+            **progress,
+            "status": "completed",
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "response_chars": len(str(getattr(response, "content", "") or "")),
+            "usage": _usage_summary(response),
+            "retry_count": len(retry_attempts),
+        })
         return response
     except Exception as exc:
+        await _emit_progress_event(config, "llm.failed", {
+            **progress,
+            "status": "failed",
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "error": error_summary(exc, code=f"{node}_llm_failed"),
+            "retry_count": len(retry_attempts),
+        })
         llm_failure = {
             "llm_result_summary": {
                 "llm": {
@@ -158,6 +232,14 @@ async def invoke_tool_for_node(
     node: str,
     started: float,
 ) -> Any:
+    configurable = (config or {}).get("configurable") or {}
+    tool_call_id = str(configurable.get("tool_call_id") or f"tool:{uuid4().hex}")
+    progress = {
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "status": "started",
+        **_progress_context(config, state=state, node=node),
+    }
     try:
         cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
         await raise_if_chat_run_cancelled(cancellation_checker, state)
@@ -172,8 +254,23 @@ async def invoke_tool_for_node(
             caller_node=node,
             config=config,
         )
-        return await executor.ainvoke(tool_input, config=config)
+        await _emit_progress_event(config, "tool.started", progress)
+        result = await executor.ainvoke(tool_input, config=config)
+        await _emit_progress_event(config, "tool.completed", {
+            **progress,
+            "status": "completed",
+            "ok": True,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        })
+        return result
     except Exception as exc:
+        await _emit_progress_event(config, "tool.failed", {
+            **progress,
+            "status": "failed",
+            "ok": False,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "error": error_summary(exc, code=f"{tool_name}_failed"),
+        })
         append_failed_node_event(
             state,
             config,

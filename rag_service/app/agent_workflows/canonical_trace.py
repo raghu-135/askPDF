@@ -431,6 +431,7 @@ def build_canonical_trace_projection(
         "events": [_timeline_event(event, framework) for event in ordered],
         "operations": operations,
         "tools": _event_rows(ordered, "tool.", framework),
+        "models": _event_rows(ordered, "llm.", framework),
         "approvals": _event_rows(ordered, "approval.", framework),
         "subagents": _event_rows(ordered, "subagent.", framework),
         "artifacts": _event_rows(ordered, "artifact.", framework),

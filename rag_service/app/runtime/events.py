@@ -28,6 +28,15 @@ def _event_kind(kind: str, *, source_metadata: Mapping[str, Any] | None = None) 
         "interrupt.created": "interrupt.requested",
         "run.interrupted": "interrupt.requested",
     }
+    if value in {"model.started", "model.completed", "model.failed", "llm.start", "llm.complete"}:
+        source.setdefault("source_event", value)
+        value = {
+            "model.started": "llm.started",
+            "model.completed": "llm.completed",
+            "model.failed": "llm.failed",
+            "llm.start": "llm.started",
+            "llm.complete": "llm.completed",
+        }[value]
     if value in node_mapping:
         source.setdefault("source_event", value)
         value = node_mapping[value]

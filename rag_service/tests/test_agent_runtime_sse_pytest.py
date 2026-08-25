@@ -44,3 +44,30 @@ async def test_product_run_event_stream_closes_after_terminal_event(monkeypatch)
 
     assert len(payloads) == 1
     assert payloads[0]["terminal"] is True
+
+
+@pytest.mark.asyncio
+async def test_repository_closes_owned_event_poll_session(monkeypatch):
+    from app.agent_workflows import repository as repository_module
+
+    class Session:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    session = Session()
+    async def list_events(_session, _run_id):
+        return []
+
+    monkeypatch.setattr(repository_module, "run_store_list_run_events", list_events)
+
+    async def get_session():
+        return session
+
+    repo = repository_module.AgentWorkflowRepository()
+    repo._get_session = get_session
+
+    assert await repo.list_run_events("run-1") == []
+    assert session.closed is True

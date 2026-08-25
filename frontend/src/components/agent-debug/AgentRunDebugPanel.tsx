@@ -17,6 +17,7 @@ import { withRetry } from '../../lib/retry-utils';
 
 function AgentRunDebugPanel({
   runId,
+  threadId,
   routeReason,
   traceRefs,
   runDetails: providedRunDetails,
@@ -29,6 +30,7 @@ function AgentRunDebugPanel({
   onResumeAction,
 }: {
   runId: string;
+  threadId?: string;
   routeReason?: string;
   traceRefs?: AgentTraceRefs | null;
   runDetails?: AgentRunDetails;
@@ -103,6 +105,26 @@ function AgentRunDebugPanel({
     setRefreshedRunDetails(undefined);
     setTraceRefreshExhausted(false);
   }, [runId, providedRunDetails]);
+
+  useEffect(() => {
+    const metadataThreadId = threadId || runDetails?.thread_id;
+    if (runDetails || !metadataThreadId) return undefined;
+    let active = true;
+    void getAgentRun(runId, metadataThreadId)
+      .then((details) => {
+        if (!active) return;
+        setRefreshedRunDetails(details);
+        onRunDetailsChange?.(details);
+      })
+      .catch(() => {
+        // The live event projection remains usable when metadata is not yet
+        // available; the existing loading/retained-state handling reports the
+        // final result when polling catches up.
+      });
+    return () => {
+      active = false;
+    };
+  }, [onRunDetailsChange, runDetails, runId, threadId]);
 
   useEffect(() => {
     let active = true;

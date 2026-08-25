@@ -1036,6 +1036,7 @@ export interface AgentRunDebug {
   events?: AgentTraceTimelineEvent[];
   operations?: AgentTraceOperation[];
   tools?: AgentTraceTimelineEvent[];
+  models?: AgentTraceTimelineEvent[];
   approvals?: AgentTraceTimelineEvent[];
   subagents?: AgentTraceTimelineEvent[];
   artifacts?: AgentTraceTimelineEvent[];
@@ -1062,6 +1063,23 @@ export interface AgentTraceTimelineEvent {
   status?: string | null;
   payload?: Record<string, any>;
   framework_details?: Record<string, any>;
+}
+
+export interface AgentTraceModelInvocation {
+  event_id: string;
+  invocation_id?: string;
+  model_name?: string | null;
+  operation_id?: string | null;
+  operation_type?: string | null;
+  visit_index?: number;
+  subagent_id?: string | null;
+  parent_id?: string | null;
+  status?: string | null;
+  duration_ms?: number | null;
+  retry_count?: number;
+  response_chars?: number;
+  usage?: Record<string, number>;
+  error?: Record<string, any> | null;
 }
 
 export interface AgentTraceLocation {

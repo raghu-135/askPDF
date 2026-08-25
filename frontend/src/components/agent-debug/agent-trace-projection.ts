@@ -1,4 +1,4 @@
-import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceDiagnostics, AgentTraceFailure, AgentTraceLocation, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceDiagnostics, AgentTraceFailure, AgentTraceLocation, AgentTraceModelInvocation, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
 import {
   formatNodeInstanceLabel,
   formatNodeLabel,
@@ -54,10 +54,15 @@ export interface TraceToolView {
   callerNodeType?: string;
   callerVisitIndex?: number;
   ok: boolean;
+  status?: string;
   durationMs?: number;
   sourceCount?: number;
   warningCodes: string[];
   span?: Record<string, any>;
+  raw: Record<string, any>;
+}
+
+export interface TraceModelView extends AgentTraceModelInvocation {
   raw: Record<string, any>;
 }
 
@@ -79,6 +84,7 @@ export interface TraceRunView {
   visualizations: Record<string, AgentTraceVisualization>;
   operations: TraceOperationView[];
   tools: TraceToolView[];
+  models: TraceModelView[];
   usedOperationCount: number;
   availableOperationCount?: number;
   usedToolCount: number;
@@ -366,10 +372,10 @@ const operationViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentN
 };
 
 const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
-  const raw = { ...asObject(row.payload), ...asObject(row.raw) };
+  const raw = { ...row, ...asObject(row.payload), ...asObject(row.raw) };
   return {
     name: String(row.name || row.tool_name || raw.tool_name || 'tool'),
-    id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : undefined,
+    id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : typeof raw.tool_call_id === 'string' ? raw.tool_call_id : undefined,
     category: typeof row.category === 'string' ? row.category : typeof row.tool_category === 'string' ? row.tool_category : undefined,
     displayName: typeof row.displayName === 'string' ? row.displayName : typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
     callerNode: typeof row.callerNode === 'string' ? row.callerNode : typeof row.caller_node === 'string' ? row.caller_node : typeof raw.caller_node === 'string' ? raw.caller_node : undefined,
@@ -382,10 +388,32 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
           : undefined,
     callerVisitIndex: asNumber(row.callerVisitIndex ?? row.caller_visit_index ?? raw.caller_visit_index ?? raw.callerVisitIndex),
     ok: row.ok !== false,
+    status: asNonEmptyString(row.status || raw.status),
     durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
     sourceCount: asNumber(row.sourceCount ?? row.source_count),
     warningCodes: asStringArray(row.warningCodes ?? row.warnings),
     span: row.span && typeof row.span === 'object' ? row.span : undefined,
+    raw,
+  };
+};
+
+const modelViewFromSummary = (row: Record<string, any>): TraceModelView => {
+  const raw = { ...row, ...asObject(row.payload), ...asObject(row.raw) };
+  return {
+    event_id: String(row.event_id || raw.event_id || `model:${row.invocation_id || 'unknown'}`),
+    invocation_id: asNonEmptyString(row.invocation_id || raw.invocation_id),
+    model_name: asNonEmptyString(row.model_name || raw.model_name),
+    operation_id: asNonEmptyString(row.operation_id || raw.operation_id),
+    operation_type: asNonEmptyString(row.operation_type || raw.operation_type),
+    visit_index: asNumber(row.visit_index ?? raw.visit_index),
+    subagent_id: asNonEmptyString(row.subagent_id || raw.subagent_id),
+    parent_id: asNonEmptyString(row.parent_id || raw.parent_id),
+    status: asNonEmptyString(row.status || raw.status),
+    duration_ms: asNumber(row.duration_ms ?? raw.duration_ms),
+    retry_count: asNumber(row.retry_count ?? raw.retry_count),
+    response_chars: asNumber(row.response_chars ?? raw.response_chars),
+    usage: asObject(row.usage || raw.usage) as Record<string, number>,
+    error: row.error && typeof row.error === 'object' ? row.error : raw.error && typeof raw.error === 'object' ? raw.error : null,
     raw,
   };
 };
@@ -409,6 +437,15 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
       category,
       capabilities: asOptionalStringArray(node.capabilities) || asOptionalStringArray(catalogEntry.capabilities),
       observability: asObject(node.observability) || asObject(catalogEntry.observability),
+      // Visualization descriptors describe topology; runtime overlays are optional.
+      // Normalize the overlay fields here so a topology-only trace is still a
+      // valid graph model for the generic canvas.
+      toolSummaries: Array.isArray(node.toolSummaries) ? node.toolSummaries : [],
+      rawEvents: Array.isArray(node.rawEvents) ? node.rawEvents : [],
+      warningCount: asNumber(node.warningCount) ?? 0,
+      errorCount: asNumber(node.errorCount) ?? 0,
+      sourceCount: asNumber(node.sourceCount) ?? 0,
+      artifactCount: asNumber(node.artifactCount) ?? 0,
       instanceId: id,
       instanceLabel: formatNodeInstanceLabel(id, type),
     };
@@ -446,6 +483,7 @@ export const buildRunTraceView = (
       }, options.nodeCatalog));
     const operations = [...summaryOperations, ...manifestOperations];
     const tools = asArray(summary.tools).map(toolViewFromSummary);
+    const models = asArray(debug.models).map(modelViewFromSummary);
     const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
@@ -463,6 +501,7 @@ export const buildRunTraceView = (
       visualizations: debug.visualizations || {},
       operations,
       tools,
+      models,
       usedOperationCount,
       availableOperationCount: asNumber(summary.availableOperationCount),
       usedToolCount,
@@ -498,6 +537,8 @@ export const buildLiveTraceView = (
   const operations: TraceOperationView[] = [];
   const operationIndex = new Map<string, number>();
   const tools: TraceToolView[] = [];
+  const toolIndex = new Map<string, number>();
+  const models: TraceModelView[] = [];
   let finalOutput: AgentRunFinalOutput | undefined;
   let route: string | undefined;
   let routeReason: string | undefined;
@@ -512,7 +553,7 @@ export const buildLiveTraceView = (
     framework_details: asObject((envelope.data as any)?.framework_details),
   }));
 
-  events.forEach((envelope) => {
+  events.forEach((envelope, index) => {
     const data = asObject(envelope.data);
     if (envelope.event.startsWith('operation.') && typeof data.operation_id === 'string') {
       const operationId = String(data.operation_id);
@@ -551,7 +592,23 @@ export const buildLiveTraceView = (
       route = row.route || route;
       routeReason = row.routeReason || routeReason;
     }
-    if (envelope.event === 'tool.completed') tools.push(toolViewFromSummary(data));
+    if (envelope.event.startsWith('tool.')) {
+      const tool = toolViewFromSummary({ ...data, status: data.status || envelope.event.slice(5), ok: envelope.event !== 'tool.failed' && data.ok !== false });
+      const key = String(tool.id || `${tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}`);
+      const existing = toolIndex.get(key);
+      if (existing === undefined) {
+        toolIndex.set(key, tools.length);
+        tools.push(tool);
+      } else {
+        tools[existing] = { ...tools[existing], ...tool, raw: { ...tools[existing].raw, ...tool.raw } };
+      }
+    }
+    if (envelope.event.startsWith('llm.')) {
+      const model = modelViewFromSummary({ ...data, event_id: data.event_id || `live:${index + 1}`, status: envelope.event.slice(4) });
+      const existing = models.findIndex((row) => row.invocation_id === model.invocation_id);
+      if (existing >= 0) models[existing] = { ...models[existing], ...model, raw: { ...models[existing].raw, ...model.raw } };
+      else models.push(model);
+    }
     if (envelope.event === 'run.completed') {
       finalOutput = asObject(data.final_output) as AgentRunFinalOutput;
       if (!finalOutput.answer && typeof data.answer === 'string') finalOutput.answer = data.answer;
@@ -570,6 +627,7 @@ export const buildLiveTraceView = (
     visualizations: { 'generic.timeline': { id: 'generic.timeline' } },
     operations,
     tools,
+    models,
     usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
@@ -603,6 +661,9 @@ export const mergeLiveAndRetainedTraceViews = (
   const toolKeys = new Set(live.tools.map((tool, index) => `${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
   const retainedTools = retained.tools.filter((tool, index) => !toolKeys.has(`${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
   const tools = [...retainedTools, ...live.tools];
+  const modelKeys = new Set(live.models.map((model) => model.invocation_id || model.event_id));
+  const retainedModels = retained.models.filter((model) => !modelKeys.has(model.invocation_id || model.event_id));
+  const models = [...retainedModels, ...live.models];
   const detailManifest = new Map(
     [...retained.detailManifest, ...live.detailManifest]
       .map((row) => [`${row.operation_id}:${row.visit_index}`, row] as const),
@@ -617,6 +678,7 @@ export const mergeLiveAndRetainedTraceViews = (
     routeReason: live.routeReason || retained.routeReason,
     operations,
     tools,
+    models,
     usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0)

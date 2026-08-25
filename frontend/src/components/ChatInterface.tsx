@@ -645,6 +645,7 @@ export interface ChatInterfaceProps {
 
 export type ChatTraceDescriptor = {
     id: string;
+    threadId?: string;
     messageId: string;
     label: string;
     status?: string;
@@ -2353,6 +2354,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         const runId = msg.agent_run_id || liveForMessage?.runId || msg.id;
         onOpenTrace({
             id: runId,
+            threadId: activeThread.id,
             messageId: msg.id,
             label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
             status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,

@@ -84,6 +84,34 @@ def _runtime_mode(state: Mapping[str, Any]) -> bool:
     return bool(state.get("runtime_execution_mode"))
 
 
+async def _emit_subagent_progress(
+    config: RunnableConfig,
+    kind: str,
+    *,
+    subagent_id: str,
+    state: Mapping[str, Any],
+    todo_id: str,
+    profile_id: str,
+    status: str | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
+    if sink is None or not hasattr(sink, "emit"):
+        return
+    payload = {
+        "subagent_id": subagent_id,
+        "parent_id": str(state.get("agent_run_id") or "") or None,
+        "todo_id": todo_id,
+        "profile_id": profile_id,
+        "operation_id": DEEP_NODE_SUBAGENT,
+        "operation_type": DEEP_NODE_SUBAGENT,
+        "visit_index": 1,
+        **({"status": status} if status else {}),
+        **dict(details or {}),
+    }
+    await sink.emit(kind, {key: value for key, value in payload.items() if value is not None})
+
+
 def _runtime_artifact(
     state: Mapping[str, Any],
     *,
@@ -621,7 +649,33 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
             "artifact_ids": list(subagent.output_artifact_ids_json or []), "usage": dict(subagent.usage_json or {}),
             "retryable": False, "error": None,
         }]}
+    config = dict(config or {})
+    configurable = dict(config.get("configurable") or {})
+    configurable.update({
+        "subagent_id": str(subagent.id),
+        "parent_id": str(state.get("agent_run_id") or "") or None,
+        "attempt": int(todo.get("attempt") or 1),
+    })
+    config["configurable"] = configurable
+    await _emit_subagent_progress(
+        config,
+        "subagent.started",
+        subagent_id=str(subagent.id),
+        state=state,
+        todo_id=str(todo.get("id") or ""),
+        profile_id=profile_id,
+        status="running",
+    )
     try:
+        await _emit_subagent_progress(
+            config,
+            "subagent.progress",
+            subagent_id=str(subagent.id),
+            state=state,
+            todo_id=str(todo.get("id") or ""),
+            profile_id=profile_id,
+            status="collecting_tools",
+        )
         tool_task = asyncio.create_task(_invoke_profile_tools(state, config, item))
         cancel_task = asyncio.create_task(_cancel_when_requested(str(item.get("task_id") or ""), state if _runtime_mode(state) else None))
         done, _ = await asyncio.wait(
@@ -639,6 +693,16 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
         cancel_task.cancel()
         await asyncio.gather(cancel_task, return_exceptions=True)
         outputs = await tool_task
+        await _emit_subagent_progress(
+            config,
+            "subagent.progress",
+            subagent_id=str(subagent.id),
+            state=state,
+            todo_id=str(todo.get("id") or ""),
+            profile_id=profile_id,
+            status="model_synthesis",
+            details={"tool_count": len(outputs)},
+        )
         offloaded_tool_artifact_ids: list[str] = []
         for value in outputs:
             raw_content = str(value.get("content") or "")
@@ -709,6 +773,25 @@ Invalid output: {text[:12000]}"""
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "cancelled", "summary": "", "artifact_ids": [], "usage": {}, "retryable": False, "error": {"code": "task_cancelled", "retryable": False}}
     except Exception as exc:
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "failed", "summary": "", "artifact_ids": [], "usage": {}, "retryable": parallel_retryable_error(exc), "error": {"code": "subagent_failed", "type": type(exc).__name__, "message": str(exc)[:700]}}
+    terminal_kind = {
+        "completed": "subagent.completed",
+        "cancelled": "subagent.cancelled",
+        "timed_out": "subagent.failed",
+    }.get(str(packet.get("status") or ""), "subagent.failed")
+    await _emit_subagent_progress(
+        config,
+        terminal_kind,
+        subagent_id=str(subagent.id),
+        state=state,
+        todo_id=str(todo.get("id") or ""),
+        profile_id=profile_id,
+        status=str(packet.get("status") or "failed"),
+        details={
+            "artifact_ids": [str(value) for value in packet.get("artifact_ids") or []],
+            "usage": dict(packet.get("usage") or {}),
+            "error": packet.get("error") if isinstance(packet.get("error"), Mapping) else None,
+        },
+    )
     return {
         "task_result_packets": [packet],
         "runtime_artifacts": _runtime_artifacts(state),

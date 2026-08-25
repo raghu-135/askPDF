@@ -283,6 +283,20 @@ test('trace projection reads backend-provided summary and graph', () => {
   assert.equal(view.graph?.nodes[1].toolSummaries.length, 1);
 });
 
+test('topology-only graph nodes receive an empty runtime overlay', () => {
+  const debug = canonicalDebug(backendDebug);
+  debug.visualizations['langgraph.graph'].nodes = [
+    { id: 'planner', type: 'planner', label: 'Planner' },
+  ];
+
+  const view = buildRunTraceView({ ...traceBackedRun, debug });
+
+  assert.deepEqual(view.graph?.nodes[0].toolSummaries, []);
+  assert.deepEqual(view.graph?.nodes[0].rawEvents, []);
+  assert.equal(view.graph?.nodes[0].warningCount, 0);
+  assert.equal(view.graph?.nodes[0].errorCount, 0);
+});
+
 test('retained trace uses required correlated canonical diagnostics', () => {
   const failures = [
     { event_id: 'failure-1', kind: 'tool.failed', classification: 'primary', code: 'search_failed', message: 'Search unavailable', retryable: true, location: { tool_name: 'search' } },
@@ -504,6 +518,24 @@ test('live trace projection keeps loop visits, full details, tools, and final ou
   assert.equal(view.tools[0].callerVisitIndex, 1);
   assert.equal(view.finalOutput.answer, 'Complete final answer');
   assert.deepEqual(view.detailManifest.map((row) => row.visit_index), [1, 2]);
+});
+
+test('live trace projection correlates model and tool lifecycle activity without sensitive payloads', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'operation.started', data: { operation_id: 'deep_task_planner', operation_type: 'deep_task_planner', visit_index: 1 } },
+    { id: 2, event: 'llm.started', data: { event_id: 'event-2', invocation_id: 'llm-1', model_name: 'test-model', operation_id: 'deep_task_planner', visit_index: 1, prompt: 'private prompt', status: 'started' } },
+    { id: 3, event: 'tool.started', data: { event_id: 'event-3', tool_call_id: 'tool-1', tool_name: 'search_documents', caller_node: 'deep_task_planner', caller_visit_index: 1, status: 'started', arguments: { query: 'private query' } } },
+    { id: 4, event: 'tool.completed', data: { event_id: 'event-4', tool_call_id: 'tool-1', tool_name: 'search_documents', caller_node: 'deep_task_planner', caller_visit_index: 1, status: 'completed', ok: true } },
+    { id: 5, event: 'llm.completed', data: { event_id: 'event-5', invocation_id: 'llm-1', model_name: 'test-model', operation_id: 'deep_task_planner', visit_index: 1, status: 'completed', usage: { total_tokens: 42 }, response: 'private response' } },
+  ]);
+
+  assert.equal(view.models.length, 1);
+  assert.equal(view.models[0].status, 'completed');
+  assert.equal(view.models[0].model_name, 'test-model');
+  assert.equal(view.tools.length, 1);
+  assert.equal(view.tools[0].status, 'completed');
+  assert.equal(view.tools[0].id, 'tool-1');
+  assert.equal(view.events.some((event) => JSON.stringify(event.payload).includes('private')), false);
 });
 
 test('live trace projection preserves string node failures', () => {
