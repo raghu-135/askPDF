@@ -72,6 +72,13 @@ def test_unknown_source_event_is_observational_runtime_event():
     assert event.source_metadata["source_event"] == "hermes.future.event"
 
 
+@pytest.mark.parametrize("kind", ["dispatch.started", "worker.retrying", "worker.timed_out", "aggregation.partial"])
+def test_parallel_lifecycle_events_remain_canonical(kind):
+    event = create_runtime_event(event_id=f"run:{kind}", run_id="run", sequence=1, kind=kind)
+    assert event.kind == kind
+    assert event.source_metadata == {}
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -86,4 +93,3 @@ def test_product_event_sources_normalize_to_neutral_kinds(source: str, expected:
     kind, metadata = normalize_product_event_kind(source)
     assert kind == expected
     assert metadata["source_event"] == source
-

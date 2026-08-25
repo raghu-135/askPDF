@@ -415,6 +415,7 @@ export default function DeepResearchTaskPanel({
           sequence: value.sequence,
           attempt: value.attempt,
           occurred_at: value.occurred_at,
+          parallel_groups: value.parallel_groups,
         };
         const envelope = { id: value.id || sequence, event: kind, data } as BuilderTestStreamEnvelope;
         if (active) {

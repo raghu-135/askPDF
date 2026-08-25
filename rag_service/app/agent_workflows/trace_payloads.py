@@ -17,6 +17,7 @@ def is_current_debug_payload(value: Any) -> bool:
         and isinstance(value.get("diagnostics"), dict)
         and isinstance(value.get("events"), list)
         and isinstance(value.get("operations"), list)
+        and isinstance(value.get("parallel_groups"), list)
     )
 
 
@@ -454,7 +455,11 @@ def merge_debug_payloads(
         return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row.get("event_id") or row.get("operation_id") or "")))
 
     merged_events = merge_rows("events", ("event_id",))
-    from app.agent_workflows.canonical_trace import build_trace_diagnostics
+    from app.agent_workflows.canonical_trace import (
+        TRACE_VISUALIZATION_PARALLEL,
+        build_parallel_groups,
+        build_trace_diagnostics,
+    )
     from app.runtime.contracts import AgentRuntimeEvent
     diagnostic_events = [
         AgentRuntimeEvent(
@@ -468,6 +473,18 @@ def merge_debug_payloads(
         )
         for index, row in enumerate(merged_events)
     ]
+    parallel_groups = build_parallel_groups(diagnostic_events)
+    visualizations = {
+        **_as_dict(base_payload.get("visualizations")),
+        **_as_dict(incoming_payload.get("visualizations")),
+    }
+    if parallel_groups:
+        visualizations[TRACE_VISUALIZATION_PARALLEL] = {
+            "id": TRACE_VISUALIZATION_PARALLEL,
+            "group_ids": [group["group_id"] for group in parallel_groups],
+        }
+    else:
+        visualizations.pop(TRACE_VISUALIZATION_PARALLEL, None)
     payload = {
         **base_payload,
         "trace": base_trace,
@@ -479,11 +496,9 @@ def merge_debug_payloads(
         "approvals": merge_rows("approvals", ("event_id",)),
         "subagents": merge_rows("subagents", ("event_id",)),
         "artifacts": merge_rows("artifacts", ("event_id",)),
+        "parallel_groups": parallel_groups,
         "diagnostics": build_trace_diagnostics(diagnostic_events),
-        "visualizations": {
-            **_as_dict(base_payload.get("visualizations")),
-            **_as_dict(incoming_payload.get("visualizations")),
-        },
+        "visualizations": visualizations,
     }
     summary.pop("nodes", None)
     summary.pop("usedNodeCount", None)
@@ -499,7 +514,7 @@ def merge_debug_payloads(
     summary.pop("errors", None)
     base_trace.update({
         key: payload[key]
-        for key in ("events", "operations", "tools", "models", "approvals", "subagents", "artifacts", "diagnostics", "visualizations")
+        for key in ("events", "operations", "tools", "models", "approvals", "subagents", "artifacts", "parallel_groups", "diagnostics", "visualizations")
     })
     detail_by_visit: Dict[tuple[str, int], Dict[str, Any]] = {}
     for detail in [*_as_list(base_payload.get("details")), *_as_list(incoming_payload.get("details"))]:

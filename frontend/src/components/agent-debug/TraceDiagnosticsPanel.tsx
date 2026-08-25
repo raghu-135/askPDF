@@ -41,7 +41,7 @@ export default function TraceDiagnosticsPanel({
         </Stack>
         {primary && <Stack direction="row" spacing={0.5} sx={{ mt: 0.6 }}>
           <Button size="small" onClick={() => onShowEvent(primary.event_id)}>Show event</Button>
-          {primary.location.operation_id && <Button size="small" onClick={() => onOpenOperation(primary.location.operation_id!, primary.location.attempt)}>Open operation</Button>}
+          {primary.location.operation_id && <Button size="small" onClick={() => { onShowEvent(primary.event_id); onOpenOperation(primary.location.operation_id!, primary.location.attempt); }}>Open operation</Button>}
         </Stack>}
       </Alert>
 
@@ -65,7 +65,7 @@ export default function TraceDiagnosticsPanel({
                 <Button size="small" onClick={() => onShowEvent(failure.event_id)}>
                   {failure.location.tool_name ? 'Show tool event' : failure.location.subagent_id ? 'Show subagent event' : 'Show event'}
                 </Button>
-                {failure.location.operation_id && <Button size="small" onClick={() => onOpenOperation(failure.location.operation_id!, failure.location.attempt)}>Open operation</Button>}
+                {failure.location.operation_id && <Button size="small" onClick={() => { onShowEvent(failure.event_id); onOpenOperation(failure.location.operation_id!, failure.location.attempt); }}>Open operation</Button>}
               </Stack>
             </Box>
           ))}

@@ -51,6 +51,21 @@ class RuntimeEventKind(str, Enum):
     ARTIFACT_CREATED = "artifact.created"
     ARTIFACT_UPDATED = "artifact.updated"
     ARTIFACT_COMPLETED = "artifact.completed"
+    DISPATCH_PLANNED = "dispatch.planned"
+    DISPATCH_STARTED = "dispatch.started"
+    DISPATCH_BARRIER_REACHED = "dispatch.barrier_reached"
+    DISPATCH_CANCELLED = "dispatch.cancelled"
+    WORKER_QUEUED = "worker.queued"
+    WORKER_STARTED = "worker.started"
+    WORKER_PROGRESS = "worker.progress"
+    WORKER_RETRYING = "worker.retrying"
+    WORKER_COMPLETED = "worker.completed"
+    WORKER_SKIPPED = "worker.skipped"
+    WORKER_FAILED = "worker.failed"
+    WORKER_TIMED_OUT = "worker.timed_out"
+    WORKER_CANCELLED = "worker.cancelled"
+    AGGREGATION_COMPLETED = "aggregation.completed"
+    AGGREGATION_PARTIAL = "aggregation.partial"
     RUNTIME_EVENT = "runtime.event"
 
 
@@ -62,7 +77,7 @@ TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
 })
 RUNTIME_EVENT_FAMILY_PREFIXES = (
     "run.", "output.", "llm.", "reasoning.", "interrupt.", "approval.",
-    "tool.", "subagent.", "artifact.", "operation.",
+    "tool.", "subagent.", "artifact.", "operation.", "dispatch.", "worker.", "aggregation.",
 )
 
 

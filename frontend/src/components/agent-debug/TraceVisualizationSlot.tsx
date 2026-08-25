@@ -5,6 +5,7 @@ import type { AgentTraceVisualization } from '../../lib/api';
 import type { TraceRunView } from './agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from '../agent-graph/agent-graph-types';
 import { getAgentGraphSpec } from '../agent-graph/agent-graph-mapper';
+import ParallelTraceLanes from './ParallelTraceLanes';
 
 const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
 
@@ -17,7 +18,14 @@ export interface TraceVisualizationProps {
   focusedTraceRefs?: AgentTraceRefs | null;
   selectedVisitRef?: AgentNodeVisitRef | null;
   onGraphSelection?: (selection: AgentGraphSelection) => void;
+  onEventFocus?: (eventId: string) => void;
+  onOperationFocus?: (operationId: string) => void;
   live?: boolean;
+}
+
+interface TraceVisualizationSlotProps extends Omit<TraceVisualizationProps, 'descriptor'> {
+  visualizationIds?: readonly AgentTraceVisualization['id'][];
+  excludeVisualizationIds?: readonly AgentTraceVisualization['id'][];
 }
 
 export interface TraceVisualizationProvider {
@@ -80,12 +88,25 @@ const hermesProvider: TraceVisualizationProvider = {
   render: ({ descriptor }) => <HermesSessionView descriptor={descriptor} />,
 };
 
+const parallelProvider: TraceVisualizationProvider = {
+  id: 'generic.parallel',
+  render: ({ traceView, onEventFocus, onOperationFocus }) => (
+    <ParallelTraceLanes
+      groups={traceView.parallelGroups}
+      onEventFocus={onEventFocus}
+      onOperationFocus={onOperationFocus}
+      operationLabels={Object.fromEntries(traceView.operations.map((operation) => [operation.id, operation.label]))}
+    />
+  ),
+};
+
 export const TRACE_VISUALIZATION_PROVIDERS: ReadonlyMap<string, TraceVisualizationProvider> = new Map([
+  [parallelProvider.id, parallelProvider],
   [langGraphProvider.id, langGraphProvider],
   [hermesProvider.id, hermesProvider],
 ]);
 
-export default function TraceVisualizationSlot(props: Omit<TraceVisualizationProps, 'descriptor'>) {
+export default function TraceVisualizationSlot(props: TraceVisualizationSlotProps) {
   const [visualizationTrace, setVisualizationTrace] = useState(props.traceView);
   useEffect(() => {
     if (!props.live) {
@@ -110,7 +131,9 @@ export default function TraceVisualizationSlot(props: Omit<TraceVisualizationPro
     visualizations['langgraph.graph'] = { id: 'langgraph.graph' };
   }
   const matches = Object.entries(visualizations)
-    .filter(([id]) => TRACE_VISUALIZATION_PROVIDERS.has(id));
+    .filter(([id]) => TRACE_VISUALIZATION_PROVIDERS.has(id))
+    .filter(([id]) => !props.visualizationIds || props.visualizationIds.includes(id as AgentTraceVisualization['id']))
+    .filter(([id]) => !props.excludeVisualizationIds?.includes(id as AgentTraceVisualization['id']));
   if (matches.length === 0) return null;
   return (
     <>
@@ -118,9 +141,9 @@ export default function TraceVisualizationSlot(props: Omit<TraceVisualizationPro
         const provider = TRACE_VISUALIZATION_PROVIDERS.get(id)!;
         return (
           <Paper key={id} elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-            <Box component="details" open={id === 'langgraph.graph'}>
+            <Box component="details" open={id === 'generic.parallel'}>
               <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
-                {id === 'langgraph.graph' ? 'Execution graph' : 'Hermes session'}
+                {id === 'langgraph.graph' ? 'Execution graph' : id === 'generic.parallel' ? 'Parallel execution' : 'Hermes session'}
               </Box>
                 {provider.render({ ...props, traceView: visualizationTrace, descriptor, live: props.live })}
             </Box>

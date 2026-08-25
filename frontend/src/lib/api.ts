@@ -1033,14 +1033,15 @@ export interface AgentRunDebug {
   unsupported?: boolean;
   trace?: AgentDebugTrace;
   summary?: AgentDebugSummary;
-  events?: AgentTraceTimelineEvent[];
-  operations?: AgentTraceOperation[];
+  events: AgentTraceTimelineEvent[];
+  operations: AgentTraceOperation[];
   tools?: AgentTraceTimelineEvent[];
   models?: AgentTraceTimelineEvent[];
   approvals?: AgentTraceTimelineEvent[];
   subagents?: AgentTraceTimelineEvent[];
   artifacts?: AgentTraceTimelineEvent[];
-  diagnostics?: AgentTraceDiagnostics;
+  diagnostics: AgentTraceDiagnostics;
+  parallel_groups: AgentTraceParallelGroup[];
   visualizations?: Record<string, AgentTraceVisualization>;
   detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
@@ -1060,9 +1061,75 @@ export interface AgentTraceTimelineEvent {
   occurred_at?: string | null;
   operation_id?: string | null;
   parent_operation_id?: string | null;
+  parallel_group_id?: string | null;
+  parallel_member_id?: string | null;
+  parallel_attempt?: number | null;
   status?: string | null;
   payload?: Record<string, any>;
   framework_details?: Record<string, any>;
+}
+
+export interface AgentTraceParallelAttempt {
+  attempt: number;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  first_sequence: number;
+  last_sequence: number;
+  event_ids: string[];
+  failure_event_ids: string[];
+  caused_by_event_ids: string[];
+  related_event_ids: string[];
+}
+
+export interface AgentTraceParallelMember {
+  member_id: string;
+  work_id?: string;
+  operation_id?: string;
+  operation_label?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  subagent_id?: string;
+  ordinal?: number;
+  status: string;
+  first_sequence: number;
+  last_sequence: number;
+  event_ids: string[];
+  attempts: AgentTraceParallelAttempt[];
+}
+
+export interface AgentTraceParallelBarrier {
+  status: string;
+  event_id?: string;
+  sequence?: number;
+  occurred_at?: string | null;
+  result_count?: number;
+}
+
+export interface AgentTraceParallelAggregation {
+  status: string;
+  event_id?: string;
+  sequence?: number;
+  occurred_at?: string | null;
+  counts: Record<string, number>;
+}
+
+export interface AgentTraceParallelGroup {
+  group_id: string;
+  parent_operation_id?: string;
+  topology_ref?: Record<string, any>;
+  status: string;
+  planned: number;
+  first_sequence: number;
+  last_sequence: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  event_ids: string[];
+  members: AgentTraceParallelMember[];
+  barrier: AgentTraceParallelBarrier;
+  aggregation: AgentTraceParallelAggregation;
 }
 
 export interface AgentTraceModelInvocation {
@@ -1163,6 +1230,7 @@ export interface AgentTraceOperation {
 
 export type AgentTraceVisualization =
   | ({ id: 'generic.timeline' } & Record<string, any>)
+  | ({ id: 'generic.parallel'; group_ids: string[] } & Record<string, any>)
   | ({ id: 'langgraph.graph'; nodes?: Record<string, any>[]; edges?: Record<string, any>[]; execution_plan?: string[]; selected_route?: string; visits?: Record<string, any>[] } & Record<string, any>)
   | ({ id: 'hermes.session'; session_id?: string | null; upstream_run_id?: string | null; reasoning?: AgentTraceTimelineEvent[]; approvals?: AgentTraceTimelineEvent[]; tools?: AgentTraceTimelineEvent[]; subagents?: AgentTraceTimelineEvent[]; failures?: AgentTraceFailure[] } & Record<string, any>);
 

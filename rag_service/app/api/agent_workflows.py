@@ -35,6 +35,8 @@ from app.agent_workflows.chat_cancellation import (
     ChatRunCancelResult,
 )
 from app.agent_workflows.trace_details import detail_manifest
+from app.agent_workflows.canonical_trace import build_parallel_groups
+from app.runtime.contracts import AgentRuntimeEvent
 BUILDER_TEST_RUN_KIND = "builder_test"
 
 
@@ -601,13 +603,31 @@ async def stream_agent_run_events(
     async def events():
         sequence = after_sequence
         idle = 0
+        canonical_events: list[AgentRuntimeEvent] = []
+
+        def canonical_event(row: Any) -> AgentRuntimeEvent:
+            return AgentRuntimeEvent(
+                event_id=str(getattr(row, "event_id", "")),
+                run_id=str(getattr(row, "agent_run_id", run.id)),
+                sequence=int(getattr(row, "sequence", 0) or 0),
+                attempt=int(getattr(row, "attempt", 1) or 1),
+                kind=str(getattr(row, "kind", "runtime.event")),
+                payload=dict(getattr(row, "payload_json", None) or {}),
+                occurred_at=maybe_iso_utc_z(getattr(row, "occurred_at", None)),
+                terminal=bool(getattr(row, "terminal", False)),
+                source_metadata=dict(getattr(row, "source_metadata_json", None) or {}),
+            )
+
         while True:
-            rows = await repository.list_run_events(run.id)
-            rows = [row for row in rows if int(getattr(row, "sequence", 0) or 0) > sequence]
+            all_rows = await repository.list_run_events(run.id)
+            if not canonical_events and sequence > 0:
+                canonical_events.extend(canonical_event(row) for row in all_rows if int(getattr(row, "sequence", 0) or 0) <= sequence)
+            rows = [row for row in all_rows if int(getattr(row, "sequence", 0) or 0) > sequence]
             if rows:
                 idle = 0
                 for row in rows:
                     sequence = int(getattr(row, "sequence", sequence) or sequence)
+                    canonical_events.append(canonical_event(row))
                     payload = dict(getattr(row, "payload_json", None) or {})
                     terminal = bool(payload.get("terminal")) or str(getattr(row, "kind", "")) in {
                         "run.completed", "run.failed", "run.cancelled", "run.clarification",
@@ -623,6 +643,7 @@ async def stream_agent_run_events(
                         "occurred_at": maybe_iso_utc_z(getattr(row, "occurred_at", None)),
                         "created_at": maybe_iso_utc_z(getattr(row, "created_at", None)),
                         "terminal": terminal,
+                        "parallel_groups": build_parallel_groups(canonical_events),
                     }
                     yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
                     if terminal:

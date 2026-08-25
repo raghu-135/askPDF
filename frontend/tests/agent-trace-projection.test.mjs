@@ -8,6 +8,7 @@ import {
   buildRunTraceView,
   getRetainedRunErrorMessage,
   mergeLiveAndRetainedTraceViews,
+  parseRunDebug,
   shouldRefreshRetainedTrace,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
 
@@ -244,6 +245,8 @@ const canonicalDebug = (source) => {
   debug.version = 2;
   debug.events = [];
   debug.operations = operations;
+  debug.tools = structuredClone(debug.summary?.tools || []);
+  debug.parallel_groups = [];
   debug.diagnostics = debug.diagnostics || {
     outcome: 'completed',
     summary: { code: 'run_completed', message: 'Run completed without a recorded failure.', retryable: false, primary_failure_event_id: null, primary_basis: null, location: {}, failure_count: 0, cancellation_count: 0 },
@@ -494,6 +497,18 @@ test('trace export returns full backend debug json', () => {
   assert.equal(exported.tool_events, undefined);
 });
 
+test('live trace export includes the complete canonical journal', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'run.started', data: { event_id: 'event-1', sequence: 1 } },
+    { id: 2, event: 'operation.completed', data: { event_id: 'event-2', sequence: 2, operation_id: 'worker', operation_label: 'Worker' } },
+  ]);
+  const exported = JSON.parse(buildTraceExportJson(view));
+
+  assert.deepEqual(exported.events.map((event) => event.event_id), ['event-1', 'event-2']);
+  assert.equal(exported.operations[0].label, 'Worker');
+  assert.deepEqual(exported.parallel_groups, []);
+});
+
 test('live trace projection keeps loop visits, full details, tools, and final output', () => {
   const detail = (visit) => ({
     node_id: 'evidence_evaluator',
@@ -518,6 +533,49 @@ test('live trace projection keeps loop visits, full details, tools, and final ou
   assert.equal(view.tools[0].callerVisitIndex, 1);
   assert.equal(view.finalOutput.answer, 'Complete final answer');
   assert.deepEqual(view.detailManifest.map((row) => row.visit_index), [1, 2]);
+});
+
+test('live trace projection activates generic parallel visualization from backend snapshot', () => {
+  const parallelGroups = [{
+    group_id: 'dispatch-1', status: 'active', planned: 1, first_sequence: 1, last_sequence: 2,
+    event_ids: ['event-1', 'event-2'], barrier: { status: 'pending' }, aggregation: { status: 'pending', counts: {} },
+    members: [{
+      member_id: 'work-1', operation_id: 'retrieval-worker', status: 'active', first_sequence: 2, last_sequence: 2,
+      event_ids: ['event-2'], attempts: [{
+        attempt: 1, status: 'active', first_sequence: 2, last_sequence: 2, event_ids: ['event-2'],
+        failure_event_ids: [], caused_by_event_ids: [], related_event_ids: [],
+      }],
+    }],
+  }];
+  const view = buildLiveTraceView([
+    { id: 1, event: 'dispatch.started', data: { event_id: 'event-1', sequence: 1, dispatch_id: 'dispatch-1', parallel_groups: parallelGroups } },
+    { id: 2, event: 'worker.started', data: { event_id: 'event-2', sequence: 2, dispatch_id: 'dispatch-1', work_id: 'work-1', parallel_groups: parallelGroups } },
+  ]);
+
+  assert.deepEqual(view.visualizations['generic.parallel'], { id: 'generic.parallel', group_ids: ['dispatch-1'] });
+  assert.equal(view.parallelGroups[0].members[0].operation_id, 'retrieval-worker');
+  assert.equal('parallel_groups' in view.events[1].payload, false);
+});
+
+test('malformed live parallel data returns a bounded parse error instead of throwing', () => {
+  const view = buildLiveTraceView([{
+    id: 1,
+    event: 'dispatch.started',
+    data: {
+      event_id: 'event-1',
+      sequence: 1,
+      dispatch_id: 'dispatch-1',
+      parallel_groups: [{
+        group_id: 'dispatch-1', status: 'active', planned: 1, first_sequence: 1, last_sequence: 1,
+        event_ids: ['event-1'], members: [], barrier: { status: 'pending' }, aggregation: { status: 'pending' },
+      }],
+    },
+  }]);
+
+  assert.match(view.parseError, /invalid aggregation data/);
+  assert.deepEqual(view.events, []);
+  assert.deepEqual(view.parallelGroups, []);
+  assert.deepEqual(view.visualizations, {});
 });
 
 test('live trace projection correlates model and tool lifecycle activity without sensitive payloads', () => {
@@ -577,6 +635,17 @@ test('live and retained projections merge repeated visits without duplicating id
   assert.equal(merged.operations[1].status, 'completed');
 });
 
+test('live parallel projection overrides an older retained parallel snapshot', () => {
+  const retained = buildLiveTraceView([]);
+  retained.parallelGroups = [{ group_id: 'dispatch-1', status: 'active' }];
+  const live = buildLiveTraceView([]);
+  live.parallelGroups = [{ group_id: 'dispatch-1', status: 'completed' }];
+
+  const merged = mergeLiveAndRetainedTraceViews(live, retained);
+
+  assert.equal(merged.parallelGroups[0].status, 'completed');
+});
+
 test('runtime-neutral operation events project without graph semantics', () => {
   const view = buildLiveTraceView([
     { id: 1, event: 'operation.started', data: { operation_id: 'hermes_session', operation_type: 'agent_session', operation_label: 'Hermes Agent', visit_index: 1 } },
@@ -590,53 +659,36 @@ test('runtime-neutral operation events project without graph semantics', () => {
   assert.equal(view.graph, undefined);
 });
 
-test('live trace projection correlates parallel worker progress by work id', () => {
-  const view = buildLiveTraceView([
-    { id: 1, event: 'dispatch.started', data: { dispatch_id: 'dispatch-1', planned: 2 } },
-    { id: 2, event: 'worker.queued', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents' } },
-    { id: 3, event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
-    { id: 4, event: 'worker.completed', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1, elapsed_ms: 12 } },
-    { id: 5, event: 'aggregation.partial', data: { dispatch_id: 'dispatch-1', planned: 2, completed: 1, failed: 1, partial_evidence: true } },
-  ]);
-
-  assert.equal(view.parallel.summary.dispatch_id, 'dispatch-1');
-  assert.equal(view.parallel.summary.partial_evidence, true);
-  assert.equal(view.parallel.tasks.length, 1);
-  assert.equal(view.parallel.tasks[0].work_id, 'work-1');
-  assert.equal(view.parallel.tasks[0].status, 'completed');
-  assert.equal(view.parallel.tasks[0].elapsed_ms, 12);
-});
-
-test('retained trace projection restores expandable parallel attempts', () => {
+test('retained trace projection consumes canonical parallel groups without metrics reconstruction', () => {
   const debug = canonicalDebug(backendDebug);
-  debug.summary.metrics = {
-    parallel_summary: { dispatch_id: 'dispatch-1', planned: 1, completed: 1, retried: 1 },
-    parallel_attempts: [
-      { event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
-      { event: 'worker.retrying', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 1 } },
-      { event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 2 } },
-      { event: 'worker.completed', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, worker_node_id: 'documents', attempt: 2, elapsed_ms: 18 } },
-      { event: 'dispatch.barrier_reached', data: { dispatch_id: 'dispatch-1', result_count: 1 } },
-    ],
-  };
+  debug.parallel_groups = [{
+    group_id: 'dispatch-1', status: 'completed', planned: 1, first_sequence: 1, last_sequence: 5,
+    event_ids: ['event-1', 'event-2'], barrier: { status: 'reached' }, aggregation: { status: 'completed', counts: { completed: 1 } },
+    members: [{ member_id: 'work-1', operation_id: 'documents', status: 'completed', first_sequence: 2, last_sequence: 4, event_ids: ['event-1', 'event-2'], attempts: [
+      { attempt: 1, status: 'retrying', first_sequence: 2, last_sequence: 2, event_ids: ['event-1'], failure_event_ids: [], caused_by_event_ids: [], related_event_ids: [] },
+      { attempt: 2, status: 'completed', first_sequence: 3, last_sequence: 4, event_ids: ['event-2'], failure_event_ids: [], caused_by_event_ids: [], related_event_ids: [] },
+    ] }],
+  }];
+  debug.events = [
+    { event_id: 'event-1', sequence: 1, kind: 'worker.retrying', payload: {} },
+    { event_id: 'event-2', sequence: 2, kind: 'worker.completed', payload: {} },
+  ];
+  debug.visualizations['generic.parallel'] = { id: 'generic.parallel', group_ids: ['dispatch-1'] };
   const view = buildRunTraceView({ id: 'run-1', thread_id: 'thread-1', workflow_id: 'workflow-1', status: 'completed', debug });
 
-  assert.equal(view.parallel.summary.event, 'dispatch.barrier_reached');
-  assert.equal(view.parallel.tasks[0].attempts.length, 2);
-  assert.equal(view.parallel.tasks[0].attempts[0].status, 'retrying');
-  assert.equal(view.parallel.tasks[0].attempts[1].status, 'completed');
+  assert.equal(view.parallelGroups[0].group_id, 'dispatch-1');
+  assert.equal(view.parallelGroups[0].members[0].attempts.length, 2);
+  assert.equal(view.parallelGroups[0].members[0].attempts[1].status, 'completed');
 });
 
-test('parallel projection preserves terminal attempts and lifecycle under out-of-order events', () => {
-  const view = buildLiveTraceView([
-    { id: 1, event: 'worker.timed_out', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, attempt: 1 } },
-    { id: 2, event: 'aggregation.partial', data: { dispatch_id: 'dispatch-1', planned: 1, timed_out: 1, partial_evidence: true } },
-    { id: 3, event: 'worker.started', data: { dispatch_id: 'dispatch-1', work_id: 'work-1', ordinal: 0, attempt: 1 } },
-    { id: 4, event: 'dispatch.started', data: { dispatch_id: 'dispatch-1', planned: 1 } },
-  ]);
+test('trace parser rejects missing and malformed canonical parallel groups', () => {
+  const missing = canonicalDebug(backendDebug);
+  delete missing.parallel_groups;
+  assert.equal(buildRunTraceView({ ...traceBackedRun, debug: missing }), undefined);
+  assert.match(parseRunDebug({ ...traceBackedRun, debug: missing }).reason, /parallel_groups/);
 
-  assert.equal(view.parallel.tasks[0].status, 'timed_out');
-  assert.equal(view.parallel.tasks[0].attempts[0].status, 'timed_out');
-  assert.equal(view.parallel.summary.barrier_state, 'reached');
-  assert.equal(view.parallel.summary.aggregation_state, 'partial');
+  const malformed = canonicalDebug(backendDebug);
+  malformed.parallel_groups = [{ group_id: 'dispatch-1', members: [{ member_id: 'work-1', attempts: [{ attempt: 0 }] }] }];
+  assert.equal(buildRunTraceView({ ...traceBackedRun, debug: malformed }), undefined);
+  assert.match(parseRunDebug({ ...traceBackedRun, debug: malformed }).reason, /invalid/);
 });

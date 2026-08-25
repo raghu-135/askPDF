@@ -1,15 +1,9 @@
-import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceDiagnostics, AgentTraceFailure, AgentTraceLocation, AgentTraceModelInvocation, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceDiagnostics, AgentTraceFailure, AgentTraceLocation, AgentTraceModelInvocation, AgentTraceParallelGroup, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
 import {
   formatNodeInstanceLabel,
   formatNodeLabel,
 } from '../agent-graph/agent-node-labels.js';
 import type { AgentGraphEdge, AgentGraphNode, AgentNodeCatalog } from '../agent-graph/agent-graph-types';
-import {
-  PARALLEL_TERMINAL_WORKER_STATUSES,
-  ParallelRuntimeEvent,
-  ParallelWorkerStatus,
-  parallelWorkerStatusForEvent,
-} from '../../lib/parallel-runtime.ts';
 import { normalizeAgentExecutionStatus } from '../agent-graph/agent-execution-status.ts';
 
 export function getRetainedRunErrorMessage(runDetails: { error_json?: Record<string, any> | null }): string | null {
@@ -21,7 +15,7 @@ export function getRetainedRunErrorMessage(runDetails: { error_json?: Record<str
 
 export function shouldRefreshRetainedTrace(runDetails: AgentRunDetails): boolean {
   const terminal = ['completed', 'failed', 'cancelled'].includes(String(runDetails.status));
-  return terminal && !getRunDebug(runDetails);
+  return terminal && !runDetails.debug;
 }
 
 export interface TraceOperationView {
@@ -74,6 +68,7 @@ export interface TraceGraphView {
 }
 
 export interface TraceRunView {
+  parseError?: string;
   debug?: AgentRunDebug;
   trace?: AgentDebugTrace;
   graph?: TraceGraphView;
@@ -92,6 +87,7 @@ export interface TraceRunView {
   warningCount: number;
   errorCount: number;
   diagnostics: AgentTraceDiagnostics;
+  parallelGroups: AgentTraceParallelGroup[];
   memory?: {
     recalledMemoryIds: string[];
     searchedScopes: Record<string, any>[];
@@ -99,10 +95,6 @@ export interface TraceRunView {
   };
   finalOutput?: AgentRunFinalOutput;
   detailManifest: AgentRunOperationDetailManifest[];
-  parallel?: {
-    summary: Record<string, any>;
-    tasks: Record<string, any>[];
-  };
 }
 
 const asObject = (value: any): Record<string, any> => (
@@ -122,64 +114,6 @@ const asOptionalStringArray = (value: any): string[] | undefined => {
   return items.length > 0 ? items : undefined;
 };
 
-const projectParallelEvents = (events: Record<string, any>[]) => {
-  const tasks = new Map<string, Record<string, any>>();
-  let summary: Record<string, any> = {};
-  let barrierReached = false;
-  let aggregationState = 'pending';
-  events.forEach((envelope) => {
-    const event = String(envelope.event || '');
-    const data = asObject(envelope.data);
-    if (event.startsWith('dispatch.') || event.startsWith('aggregation.')) {
-      summary = { ...summary, ...data, event };
-    }
-    if (event === ParallelRuntimeEvent.BarrierReached) barrierReached = true;
-    if (event === ParallelRuntimeEvent.DispatchCancelled) aggregationState = 'cancelled';
-    else if (event === ParallelRuntimeEvent.AggregationPartial && aggregationState !== 'cancelled') {
-      aggregationState = 'partial';
-      barrierReached = true;
-    } else if (event === ParallelRuntimeEvent.AggregationCompleted && aggregationState === 'pending') {
-      aggregationState = 'completed';
-      barrierReached = true;
-    }
-    if (!event.startsWith('worker.') || typeof data.work_id !== 'string') return;
-    const previous = tasks.get(data.work_id) || { attempts: [] };
-    const attempts = Array.isArray(previous.attempts) ? [...previous.attempts] : [];
-    const attempt = Number(data.attempt || 1);
-    const attemptIndex = attempts.findIndex((item) => Number(item.attempt || 1) === attempt);
-    const status = parallelWorkerStatusForEvent(event);
-    const previousAttempt = attemptIndex >= 0 ? attempts[attemptIndex] : {};
-    const previousStatus = String(previousAttempt.status || '');
-    const preserveTerminal = PARALLEL_TERMINAL_WORKER_STATUSES.has(previousStatus) && !PARALLEL_TERMINAL_WORKER_STATUSES.has(status);
-    const attemptRow = {
-      ...(attemptIndex >= 0 ? attempts[attemptIndex] : {}),
-      ...data,
-      attempt,
-      event,
-      status: preserveTerminal ? previousStatus : status,
-    };
-    if (attemptIndex >= 0) attempts[attemptIndex] = attemptRow;
-    else attempts.push(attemptRow);
-    attempts.sort((a, b) => Number(a.attempt || 1) - Number(b.attempt || 1));
-    tasks.set(data.work_id, { ...previous, ...data, event, status: preserveTerminal ? previousStatus : status, attempts });
-  });
-  const taskRows = [...tasks.values()].sort((a, b) => Number(a.ordinal || 0) - Number(b.ordinal || 0));
-  const counts = Object.fromEntries([
-    ParallelWorkerStatus.Queued, ParallelWorkerStatus.Active, ParallelWorkerStatus.Retrying,
-    ParallelWorkerStatus.Completed, ParallelWorkerStatus.Skipped, ParallelWorkerStatus.Failed,
-    ParallelWorkerStatus.TimedOut, ParallelWorkerStatus.Cancelled,
-  ].map((status) => [status, taskRows.filter((task) => task.status === status).length]));
-  return {
-    summary: {
-      ...counts,
-      ...summary,
-      barrier_state: barrierReached ? 'reached' : 'pending',
-      aggregation_state: aggregationState,
-    },
-    tasks: taskRows,
-  };
-};
-
 const asNumber = (value: any): number | undefined => {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : undefined;
@@ -189,15 +123,66 @@ const asNonEmptyString = (value: any): string | undefined => (
   typeof value === 'string' && value.length > 0 ? value : undefined
 );
 
-export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
+export type AgentRunDebugParseResult =
+  | { ok: true; debug: AgentRunDebug }
+  | { ok: false; reason: string };
+
+const validStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const validateParallelGroups = (value: unknown, events: unknown): string | null => {
+  if (!Array.isArray(value)) return 'parallel_groups must be an array.';
+  if (!Array.isArray(events)) return 'Canonical events must be an array.';
+  const eventIds = new Set(events.map((event) => asNonEmptyString(asObject(event).event_id)).filter(Boolean));
+  const validReferences = (references: unknown) => validStringArray(references) && references.every((eventId) => eventIds.has(eventId));
+  const groupIds = new Set<string>();
+  const memberOwners = new Map<string, string>();
+  for (const group of value) {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return 'A parallel group is not an object.';
+    const row = group as Record<string, any>;
+    if (typeof row.group_id !== 'string' || !row.group_id) return 'A parallel group is missing group_id.';
+    if (groupIds.has(row.group_id)) return `Parallel group ${row.group_id} is duplicated.`;
+    groupIds.add(row.group_id);
+    if (typeof row.status !== 'string' || !Number.isInteger(row.planned) || row.planned < 0) return `Parallel group ${row.group_id} has invalid status or planned count.`;
+    if (!Number.isInteger(row.first_sequence) || !Number.isInteger(row.last_sequence) || row.last_sequence < row.first_sequence) return `Parallel group ${row.group_id} has invalid sequence data.`;
+    if (!validReferences(row.event_ids) || !Array.isArray(row.members)) return `Parallel group ${row.group_id} has invalid event or member data.`;
+    if (!row.barrier || typeof row.barrier !== 'object' || typeof row.barrier.status !== 'string') return `Parallel group ${row.group_id} has invalid barrier data.`;
+    if (!row.aggregation || typeof row.aggregation !== 'object' || typeof row.aggregation.status !== 'string' || !row.aggregation.counts || typeof row.aggregation.counts !== 'object') return `Parallel group ${row.group_id} has invalid aggregation data.`;
+    if (Object.values(row.aggregation.counts).some((count) => !Number.isInteger(count) || Number(count) < 0)) return `Parallel group ${row.group_id} has invalid aggregation counts.`;
+    for (const member of row.members) {
+      if (!member || typeof member !== 'object' || Array.isArray(member)) return `Parallel group ${row.group_id} contains an invalid member.`;
+      const memberRow = member as Record<string, any>;
+      if (typeof memberRow.member_id !== 'string' || !memberRow.member_id) return `Parallel group ${row.group_id} contains a member without member_id.`;
+      const owner = memberOwners.get(memberRow.member_id);
+      if (owner && owner !== row.group_id) return `Parallel member ${memberRow.member_id} belongs to conflicting groups.`;
+      memberOwners.set(memberRow.member_id, row.group_id);
+      if (typeof memberRow.status !== 'string' || !Number.isInteger(memberRow.first_sequence) || !Number.isInteger(memberRow.last_sequence)) return `Parallel member ${memberRow.member_id} has invalid status or sequence data.`;
+      if (!validReferences(memberRow.event_ids) || !Array.isArray(memberRow.attempts)) return `Parallel member ${memberRow.member_id} has invalid event or attempt data.`;
+      for (const attempt of memberRow.attempts) {
+        if (!attempt || typeof attempt !== 'object' || !Number.isInteger(attempt.attempt) || attempt.attempt < 1) return `Parallel member ${memberRow.member_id} has an invalid attempt.`;
+        if (typeof attempt.status !== 'string' || !Number.isInteger(attempt.first_sequence) || !Number.isInteger(attempt.last_sequence)) return `Parallel member ${memberRow.member_id} has invalid attempt state.`;
+        if (!validReferences(attempt.event_ids) || !validReferences(attempt.failure_event_ids) || !validStringArray(attempt.caused_by_event_ids) || !validStringArray(attempt.related_event_ids)) return `Parallel member ${memberRow.member_id} has invalid attempt references.`;
+      }
+    }
+  }
+  return null;
+};
+
+export const parseRunDebug = (runDetails: AgentRunDetails): AgentRunDebugParseResult => {
   const debug = runDetails.debug;
-  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
-  if (debug.version !== 2) return undefined;
-  if (Object.keys(asObject(debug.diagnostics)).length === 0) return undefined;
-  if (!Array.isArray(debug.events) || !Array.isArray(debug.operations)) return undefined;
-  if (Object.keys(asObject(debug.trace)).length === 0) return undefined;
-  if (Object.keys(asObject(debug.summary)).length === 0) return undefined;
-  return debug;
+  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return { ok: false, reason: 'The debug payload is missing.' };
+  if (debug.version !== 2) return { ok: false, reason: 'The trace marker is not supported.' };
+  if (Object.keys(asObject(debug.diagnostics)).length === 0) return { ok: false, reason: 'The diagnostics contract is missing.' };
+  if (!Array.isArray(debug.events) || !Array.isArray(debug.operations)) return { ok: false, reason: 'Canonical events or operations are missing.' };
+  const parallelError = validateParallelGroups(debug.parallel_groups, debug.events);
+  if (parallelError) return { ok: false, reason: parallelError.slice(0, 240) };
+  if (Object.keys(asObject(debug.trace)).length === 0) return { ok: false, reason: 'The canonical trace is missing.' };
+  if (Object.keys(asObject(debug.summary)).length === 0) return { ok: false, reason: 'The trace summary is missing.' };
+  return { ok: true, debug: debug as AgentRunDebug };
+};
+
+export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
+  const result = parseRunDebug(runDetails);
+  return result.ok ? result.debug : undefined;
 };
 
 const diagnosticLocation = (event: AgentTraceTimelineEvent): AgentTraceLocation => {
@@ -210,7 +195,7 @@ const diagnosticLocation = (event: AgentTraceTimelineEvent): AgentTraceLocation 
     tool_name: payload.tool_name,
     subagent_id: payload.subagent_id,
     approval_id: payload.approval_id,
-    parallel_group_id: payload.parallel_group_id || payload.dispatch_id || payload.wave_id,
+    parallel_group_id: payload.parallel_group_id ?? payload.dispatch_id ?? (payload.wave_id !== undefined ? String(payload.wave_id) : undefined),
     attempt: event.attempt,
     sequence: event.sequence,
     topology_ref: payload.topology_ref,
@@ -469,7 +454,7 @@ export const buildRunTraceView = (
     if (!debug) return undefined;
     const summary = asObject(debug.summary);
     const metrics = getRunDebugMetrics(runDetails);
-    const summaryOperations = asArray(debug.operations ?? summary.operations).map((operation) => operationViewFromSummary(operation, options.nodeCatalog));
+    const summaryOperations = asArray(debug.operations).map((operation) => operationViewFromSummary(operation, options.nodeCatalog));
     const manifest = Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [];
     const existingVisits = new Set(summaryOperations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
     const manifestOperations = manifest
@@ -482,13 +467,11 @@ export const buildRunTraceView = (
         raw: { detail_manifest: detail },
       }, options.nodeCatalog));
     const operations = [...summaryOperations, ...manifestOperations];
-    const tools = asArray(summary.tools).map(toolViewFromSummary);
+    const tools = asArray(debug.tools).map(toolViewFromSummary);
     const models = asArray(debug.models).map(modelViewFromSummary);
     const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
-    const retainedParallel = projectParallelEvents(asArray(metrics.parallel_attempts));
-    const retainedParallelSummary = asObject(metrics.parallel_summary);
     const diagnostics = debug.diagnostics as AgentTraceDiagnostics;
     return {
       debug,
@@ -509,6 +492,7 @@ export const buildRunTraceView = (
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
       errorCount: diagnostics.summary.failure_count,
       diagnostics,
+      parallelGroups: debug.parallel_groups,
       memory: Object.keys(memory).length > 0 ? {
         recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
         searchedScopes: asArray(memory.searchedScopes),
@@ -516,12 +500,6 @@ export const buildRunTraceView = (
       } : undefined,
       finalOutput: runDetails.final_output || debug.final_output,
       detailManifest: manifest,
-      parallel: Object.keys(retainedParallelSummary).length > 0 || retainedParallel.tasks.length > 0
-        ? {
-          ...retainedParallel,
-          summary: { ...retainedParallel.summary, ...retainedParallelSummary },
-        }
-        : undefined,
     };
   } catch (err) {
     if (typeof console !== 'undefined') {
@@ -542,16 +520,39 @@ export const buildLiveTraceView = (
   let finalOutput: AgentRunFinalOutput | undefined;
   let route: string | undefined;
   let routeReason: string | undefined;
-  const parallelProjection = projectParallelEvents(events as unknown as Record<string, any>[]);
   const timelineEvents: AgentTraceTimelineEvent[] = events.map((envelope, index) => ({
     event_id: String((envelope.data as any)?.event_id || `live:${index + 1}`),
     sequence: Number((envelope.data as any)?.sequence || index + 1),
     kind: envelope.event,
     occurred_at: (envelope.data as any)?.occurred_at,
     operation_id: (envelope.data as any)?.operation_id,
-    payload: Object.fromEntries(Object.entries(asObject(envelope.data)).filter(([key]) => !['response', 'runtime_binding', 'runtime_metadata', 'prompt', 'messages', 'headers', 'arguments', 'args', 'framework_details', 'framework_metadata'].includes(key))),
+    parallel_group_id: (envelope.data as any)?.parallel_group_id ?? (envelope.data as any)?.dispatch_id ?? ((envelope.data as any)?.wave_id !== undefined ? String((envelope.data as any).wave_id) : undefined),
+    parallel_member_id: (envelope.data as any)?.work_id,
+    parallel_attempt: asNumber((envelope.data as any)?.attempt),
+    payload: Object.fromEntries(Object.entries(asObject(envelope.data)).filter(([key]) => !['response', 'runtime_binding', 'runtime_metadata', 'prompt', 'messages', 'headers', 'arguments', 'args', 'framework_details', 'framework_metadata', 'parallel_groups'].includes(key))),
     framework_details: asObject((envelope.data as any)?.framework_details),
   }));
+  const latestParallelSnapshot = [...events].reverse().find((envelope) => Array.isArray((envelope.data as any)?.parallel_groups));
+  const liveParallelGroups = latestParallelSnapshot ? (latestParallelSnapshot.data as any).parallel_groups : [];
+  const parallelError = validateParallelGroups(liveParallelGroups, timelineEvents);
+  if (parallelError) {
+    return {
+      parseError: parallelError.slice(0, 240),
+      metrics: {},
+      events: [],
+      visualizations: {},
+      operations: [],
+      tools: [],
+      models: [],
+      usedOperationCount: 0,
+      usedToolCount: 0,
+      warningCount: 0,
+      errorCount: 0,
+      diagnostics: buildDiagnosticsFromTimeline([]),
+      parallelGroups: [],
+      detailManifest: [],
+    };
+  }
 
   events.forEach((envelope, index) => {
     const data = asObject(envelope.data);
@@ -618,13 +619,22 @@ export const buildLiveTraceView = (
   });
 
   const diagnostics = buildDiagnosticsFromTimeline(timelineEvents);
+  const visualizations: Record<string, AgentTraceVisualization> = {
+    'generic.timeline': { id: 'generic.timeline' },
+  };
+  if (liveParallelGroups.length > 0) {
+    visualizations['generic.parallel'] = {
+      id: 'generic.parallel',
+      group_ids: liveParallelGroups.map((group: AgentTraceParallelGroup) => group.group_id),
+    };
+  }
 
   return {
     route,
     routeReason,
     metrics: {},
     events: timelineEvents,
-    visualizations: { 'generic.timeline': { id: 'generic.timeline' } },
+    visualizations,
     operations,
     tools,
     models,
@@ -633,6 +643,7 @@ export const buildLiveTraceView = (
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
     errorCount: diagnostics.summary.failure_count,
     diagnostics,
+    parallelGroups: liveParallelGroups as AgentTraceParallelGroup[],
     finalOutput,
     detailManifest: operations.filter((operation) => operation.raw.detail).map((operation) => ({
       operation_id: operation.id,
@@ -642,9 +653,6 @@ export const buildLiveTraceView = (
       available: true,
       truncated: Boolean(operation.raw.detail?.safety?.truncated),
     })),
-    parallel: parallelProjection.tasks.length > 0 || Object.keys(parallelProjection.summary).length > 0
-      ? parallelProjection
-      : undefined,
   };
 };
 
@@ -685,12 +693,23 @@ export const mergeLiveAndRetainedTraceViews = (
       + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
     errorCount: live.diagnostics.summary.failure_count || retained.diagnostics.summary.failure_count,
     diagnostics: live.events.length > 0 ? live.diagnostics : retained.diagnostics,
+    parallelGroups: live.parallelGroups.length > 0 ? live.parallelGroups : retained.parallelGroups,
     finalOutput: live.finalOutput || retained.finalOutput,
     detailManifest: [...detailManifest.values()],
-    parallel: live.parallel || retained.parallel,
   };
 };
 
-export const buildTraceExportJson = (view?: TraceRunView): string => (
-  view?.debug ? JSON.stringify(view.debug, null, 2) : ''
-);
+export const buildTraceExportJson = (view?: TraceRunView): string => {
+  if (!view) return '';
+  return JSON.stringify({
+    ...(view.debug || {}),
+    diagnostics: view.diagnostics,
+    events: view.events,
+    operations: view.operations,
+    tools: view.tools,
+    models: view.models,
+    parallel_groups: view.parallelGroups,
+    visualizations: view.visualizations,
+    final_output: view.finalOutput,
+  }, null, 2);
+};

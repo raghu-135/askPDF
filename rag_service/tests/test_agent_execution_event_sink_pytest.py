@@ -40,6 +40,30 @@ async def test_event_writer_persists_fifo_before_live_delivery():
 
 
 @pytest.mark.asyncio
+async def test_live_delivery_includes_backend_projected_parallel_groups():
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append([], event))
+
+    await sink.emit("dispatch.started", {"event_id": "dispatch-event", "dispatch_id": "dispatch-1", "planned": 1})
+    await sink.emit("worker.started", {
+        "event_id": "worker-event",
+        "dispatch_id": "dispatch-1",
+        "work_id": "work-1",
+        "operation_id": "retrieval-worker",
+        "ordinal": 0,
+        "attempt": 1,
+    })
+
+    dispatch_frame = await sink.queue.get()
+    worker_frame = await sink.queue.get()
+    assert dispatch_frame["data"]["parallel_groups"][0]["group_id"] == "dispatch-1"
+    group = worker_frame["data"]["parallel_groups"][0]
+    assert group["members"][0]["member_id"] == "work-1"
+    assert group["members"][0]["operation_id"] == "retrieval-worker"
+    await sink.finish("run.completed", {"status": "completed"})
+
+
+@pytest.mark.asyncio
 async def test_event_writer_continues_persisted_sequence_and_rejects_after_terminal():
     persisted = []
     sink = AgentExecutionEventSink()

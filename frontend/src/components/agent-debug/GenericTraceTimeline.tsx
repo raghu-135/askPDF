@@ -14,7 +14,7 @@ const eventLabel = (event: AgentTraceTimelineEvent) => {
   );
 };
 
-export default function GenericTraceTimeline({ events, focusedEventId }: { events: AgentTraceTimelineEvent[]; focusedEventId?: string | null }) {
+export default function GenericTraceTimeline({ events, focusedEventId, defaultOpen = false }: { events: AgentTraceTimelineEvent[]; focusedEventId?: string | null; defaultOpen?: boolean }) {
   const containerRef = useRef<HTMLDetailsElement | null>(null);
   const eventRefs = useRef(new Map<string, HTMLElement>());
   useEffect(() => {
@@ -26,9 +26,9 @@ export default function GenericTraceTimeline({ events, focusedEventId }: { event
   if (events.length === 0) return null;
   return (
     <Paper elevation={0} square sx={{ px: 1, py: 0.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-      <Box component="details" ref={containerRef}>
+      <Box component="details" ref={containerRef} open={defaultOpen || undefined}>
         <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
-          Canonical event timeline ({events.length})
+          Raw canonical event journal ({events.length})
         </Box>
         <Stack spacing={0.5} sx={{ py: 0.5 }}>
           {[...events].sort((a, b) => a.sequence - b.sequence).map((event) => {

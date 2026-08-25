@@ -351,8 +351,19 @@ async def test_parallel_event_journal_persists_deterministic_parent_child_spans(
     worker = next(item["data"] for item in projection["journal"] if item["event"] == "worker.completed")
     assert worker["span_id"] == "worker:work-1:attempt:1"
     assert worker["parent_span_id"] == "dispatch:dispatch-1"
+    assert [event.kind for event in sink.canonical_events()] == [
+        "dispatch.started", "worker.started", "worker.completed",
+        "dispatch.barrier_reached", "aggregation.completed",
+    ]
+    assert [event.kind for event in recorder._runtime_events] == [
+        "dispatch.started", "worker.started", "worker.completed",
+        "dispatch.barrier_reached", "aggregation.completed",
+    ]
     run.status = "completed"
     debug = recorder.finalize(run=run, chat_turn_id=None, metrics={"parallel_worker_completed": 1})
+    assert debug["parallel_groups"][0]["group_id"] == "dispatch-1"
+    assert debug["parallel_groups"][0]["members"][0]["member_id"] == "work-1"
+    assert debug["visualizations"]["generic.parallel"]["group_ids"] == ["dispatch-1"]
     spans = {span["span_id"]: span for span in debug["trace"]["spans"]}
     assert spans["dispatch:dispatch-1"]["parent_span_id"] == "run:run-trace"
     assert spans["worker:work-1:attempt:1"]["parent_span_id"] == "dispatch:dispatch-1"

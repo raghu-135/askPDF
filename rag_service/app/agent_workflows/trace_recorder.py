@@ -883,6 +883,7 @@ class AgentTraceRecorder:
             "approvals": canonical["approvals"],
             "subagents": canonical["subagents"],
             "artifacts": canonical["artifacts"],
+            "parallel_groups": canonical["parallel_groups"],
             "diagnostics": canonical["diagnostics"],
             "visualizations": canonical["visualizations"],
             "details": details,

@@ -18,7 +18,7 @@ import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './a
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
 import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 import { formatDurationMs } from '../../lib/formatDuration';
-import { TraceLlmUsageTooltip, TraceOperationsTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
+import { TraceOperationsTooltip } from '../agent-debug/AgentRunTraceTooltips';
 import GenericTraceTimeline from '../agent-debug/GenericTraceTimeline';
 import TraceDiagnosticsPanel from '../agent-debug/TraceDiagnosticsPanel';
 import TraceVisualizationSlot from '../agent-debug/TraceVisualizationSlot';
@@ -49,14 +49,6 @@ const nodeSummary = (node: TraceOperationView) => {
   else if (event.answer_chars) summary = `Generated an answer (${event.answer_chars} characters).`;
   else summary = node.status === 'active' ? 'Running…' : 'Completed this step.';
   return compactExecutionText(summary, 260);
-};
-
-const formatTokenCount = (value: unknown) => {
-  const count = Number(value);
-  if (!Number.isFinite(count) || count <= 0) return undefined;
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)}m`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(count >= 10_000 ? 0 : 1)}k`;
-  return count.toLocaleString();
 };
 
 function AgentExecutionView({
@@ -204,6 +196,22 @@ function AgentExecutionView({
     else setSelectedVisit(null);
   }, [revealVisit, traceView.operations]);
 
+  const focusOperation = useCallback((operationId: string) => {
+    const operation = [...traceView.operations].reverse().find((row) => row.id === operationId);
+    if (operation) {
+      const event = [...traceView.events].reverse().find((row) => row.operation_id === operationId);
+      if (event) {
+        setFocusedEventId(event.event_id);
+      }
+      revealVisit(toAgentNodeVisitRef(operation));
+    }
+  }, [revealVisit, traceView.events, traceView.operations]);
+
+  const focusEvent = useCallback((eventId: string) => {
+    setFocusedEventId(eventId);
+    setProgressOpen(true);
+  }, []);
+
   useEffect(() => {
     if (!selectedVisit) return;
     if (selectionContextRef.current !== detailContextKey) return;
@@ -220,7 +228,6 @@ function AgentExecutionView({
   const finalOutput = traceView.finalOutput;
   const memoryDebug = traceView.memory;
   const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
-  const tokenCount = formatTokenCount(traceView.metrics.llm_token_count_total);
   const copyAnswer = useCallback(async () => {
     if (finalOutput?.answer && navigator.clipboard) await navigator.clipboard.writeText(finalOutput.answer);
   }, [finalOutput?.answer]);
@@ -242,7 +249,7 @@ function AgentExecutionView({
         <Box component="details" open={progressOpen} onToggle={(event) => setProgressOpen(event.currentTarget.open)}>
           <Box component="summary" sx={{ cursor: 'pointer', listStylePosition: 'inside', '&::marker': { fontSize: '0.78rem' } }}>
             <Stack direction="row" spacing={0.6} alignItems="center" sx={{ display: 'inline-flex', ml: 0.5, mb: progressOpen ? 0.75 : 0, flexWrap: 'wrap', rowGap: 0.45, verticalAlign: 'middle' }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>{running ? 'Live progress' : 'Execution progress'}</Typography>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>{running ? 'Live execution trace' : 'Execution trace'}</Typography>
               <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
               {traceView.route && (
                 <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
@@ -251,16 +258,6 @@ function AgentExecutionView({
               <Tooltip title={<TraceOperationsTooltip operations={traceView.operations} usedCount={traceView.usedOperationCount} availableCount={traceView.availableOperationCount} />} arrow>
                 <Chip aria-label={`${traceView.usedOperationCount} operations, ${traceView.operations.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedOperationCount}o${traceView.operations.length !== traceView.usedOperationCount ? ` · ${traceView.operations.length}v` : ''}`} sx={{ height: 22 }} />
               </Tooltip>
-              {traceView.tools.length > 0 && (
-                <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
-                  <Chip aria-label={`${traceView.tools.length} tool calls`} size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={traceView.tools.length} sx={{ height: 22 }} />
-                </Tooltip>
-              )}
-              {tokenCount && (
-                <Tooltip title={<TraceLlmUsageTooltip metrics={traceView.metrics} />} arrow>
-                  <Chip size="small" variant="outlined" label={`${tokenCount} tokens`} sx={{ height: 22 }} />
-                </Tooltip>
-              )}
               {traceView.warningCount > 0 && (
                 <Tooltip title={`${traceView.warningCount} warnings`} arrow>
                   <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={traceView.warningCount} sx={{ height: 22 }} />
@@ -295,7 +292,7 @@ function AgentExecutionView({
         )}
         <TraceDiagnosticsPanel
           diagnostics={traceView.diagnostics}
-          onShowEvent={setFocusedEventId}
+          onShowEvent={focusEvent}
           onOpenOperation={(operationId, attempt) => {
             const operation = traceView.operations.find((row) => row.id === operationId && (!attempt || row.visitIndex === attempt))
               || [...traceView.operations].reverse().find((row) => row.id === operationId);
@@ -324,6 +321,10 @@ function AgentExecutionView({
             model.operation_id === node.id && Number(model.visit_index || 1) === visitRef.visitIndex
           ));
           const activeModel = [...visitModels].reverse().find((model) => model.status === 'started' || model.status === 'active');
+          const visitEvents = traceView.events.filter((event) => (
+            event.operation_id === node.id
+            && Number(event.payload?.visit_index || 1) === visitRef.visitIndex
+          ));
           return (
             <Accordion
               key={`${key}:${index}`}
@@ -404,6 +405,9 @@ function AgentExecutionView({
                   <Tooltip title={<Box sx={{ maxWidth: 520, overflowWrap: 'anywhere' }}>{summary}</Box>} placement="top" arrow>
                     <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>{summary}</Typography>
                   </Tooltip>
+                  {formattedDuration && <Chip size="small" variant="outlined" label={formattedDuration} sx={{ height: 21, flexShrink: 0 }} />}
+                  {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21, flexShrink: 0 }} />}
+                  {visitModels.length > 0 && <Chip size="small" variant="outlined" icon={<MemoryIcon />} label={visitModels.length} sx={{ height: 21, flexShrink: 0 }} />}
                   {activeModel && <Chip size="small" color="primary" variant="outlined" label={`Calling ${activeModel.model_name || 'model'}…`} sx={{ height: 21, flexShrink: 0 }} />}
                 </Stack>
               </AccordionSummary>
@@ -453,6 +457,26 @@ function AgentExecutionView({
                     ))}
                   </Stack>
                 )}
+                {visitEvents.length > 0 && (
+                  <Box component="details" sx={{ mt: 0.7 }}>
+                    <Box component="summary" sx={{ cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700 }}>
+                      Canonical events ({visitEvents.length})
+                    </Box>
+                    <Stack spacing={0.25} sx={{ mt: 0.35 }}>
+                      {[...visitEvents].sort((a, b) => a.sequence - b.sequence).map((event) => (
+                        <Typography
+                          key={event.event_id}
+                          component="button"
+                          variant="caption"
+                          onClick={() => focusEvent(event.event_id)}
+                          sx={{ border: 0, p: 0, bgcolor: 'transparent', color: 'text.secondary', textAlign: 'left', cursor: 'pointer' }}
+                        >
+                          #{event.sequence} · {event.kind}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Box>
+                )}
               </AccordionDetails>}
             </Accordion>
           );
@@ -483,6 +507,19 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
+      <TraceVisualizationSlot
+        traceView={traceView}
+        resolvedSpec={resolvedSpec}
+        framework={framework}
+        workflowId={workflowId}
+        focusedTraceRefs={focusedTraceRefs}
+        selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
+        onGraphSelection={handleGraphSelection}
+        onEventFocus={focusEvent}
+        onOperationFocus={focusOperation}
+        live={running}
+        visualizationIds={['generic.parallel']}
+      />
       <GenericTraceTimeline events={traceView.events} focusedEventId={focusedEventId} />
       <TraceVisualizationSlot
         traceView={traceView}
@@ -492,7 +529,10 @@ function AgentExecutionView({
         focusedTraceRefs={focusedTraceRefs}
         selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
         onGraphSelection={handleGraphSelection}
+        onEventFocus={focusEvent}
+        onOperationFocus={focusOperation}
         live={running}
+        excludeVisualizationIds={['generic.parallel']}
       />
     </Stack>
   );

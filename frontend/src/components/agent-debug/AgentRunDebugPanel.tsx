@@ -8,10 +8,9 @@ import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconBu
 import { getAgentRun, getAgentRunCapabilities, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentRuntimeCapabilityResponse, type AgentTraceRefs } from '../../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
+import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
-import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
 import { withRetry } from '../../lib/retry-utils';
 
@@ -66,16 +65,14 @@ function AgentRunDebugPanel({
     ? runtimeOperationAvailability(runCapabilities, responseOperation)
     : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
-  const unsupportedTraceFormat = Boolean(
-    runDetails?.debug
-    && (runDetails.debug.version !== 2 || !runDetails.debug.diagnostics),
-  );
+  const debugParseResult = useMemo(() => runDetails?.debug && runDetails ? parseRunDebug(runDetails) : null, [runDetails]);
+  const debugParseError = debugParseResult && 'reason' in debugParseResult ? debugParseResult.reason : null;
+  const liveParseError = liveTraceView?.parseError;
   const executionTraceView = useMemo(
-    () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
+    () => liveTraceView?.parseError ? liveTraceView : liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
     [liveTraceView, traceView],
   );
-  const trace = traceView?.trace;
-  const traceJson = useMemo(() => buildTraceExportJson(traceView), [traceView]);
+  const traceJson = useMemo(() => buildTraceExportJson(executionTraceView), [executionTraceView]);
   const interruptOptions = Array.isArray(pendingInterrupt?.options)
     ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
     : [];
@@ -87,8 +84,6 @@ function AgentRunDebugPanel({
   const executionResolvedSpec = runDetails?.resolved_spec_json;
   const executionStatus = runDetails?.status || (running ? 'running' : undefined);
   const executionDetailsAvailable = Boolean(runDetails && !running);
-  const parallelSummary = liveTraceView?.parallel?.summary || runDetails?.parallel_summary || runDetails?.metrics_json?.parallel_summary;
-  const parallelTasks = liveTraceView?.parallel?.tasks || [];
   const correctiveInspection = useMemo(
     () => runDetails ? buildCorrectiveInspection(runDetails, traceView?.metrics) : undefined,
     [runDetails, traceView?.metrics],
@@ -286,7 +281,7 @@ function AgentRunDebugPanel({
             Run …{runId.slice(-8)}
           </Typography>
         </Tooltip>
-        {trace && (
+        {traceJson && (
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <Tooltip title={copyStatus === 'copied' ? 'Copied trace JSON' : copyStatus === 'failed' ? 'Copy failed' : 'Copy trace JSON'} arrow>
               <span>
@@ -320,66 +315,6 @@ function AgentRunDebugPanel({
         <Typography variant="caption" color="error">
           {error}
         </Typography>
-      )}
-      {parallelSummary && (
-        <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: parallelSummary.partial_evidence ? 'warning.main' : 'divider' }}>
-          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-            Parallel dispatch{parallelSummary.partial_evidence ? ' · partial evidence' : ''}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
-            {Number(parallelSummary.completed || 0)}/{Number(parallelSummary.planned || 0)} completed
-            {Number(parallelSummary.failed || 0) ? ` · ${parallelSummary.failed} failed` : ''}
-            {Number(parallelSummary.timed_out || 0) ? ` · ${parallelSummary.timed_out} timed out` : ''}
-            {Number(parallelSummary.retried || 0) ? ` · ${parallelSummary.retried} retries` : ''}
-            {parallelSummary.elapsed_ms != null ? ` · ${Math.round(Number(parallelSummary.elapsed_ms))} ms worker time` : ''}
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, my: 0.5 }}>
-            {Object.entries(PARALLEL_WORKER_STATUS_LABELS).map(([status, label]) => (
-              Number(parallelSummary[status] || 0) > 0 ? <Chip key={status} size="small" variant="outlined" label={`${parallelSummary[status]} ${label}`} /> : null
-            ))}
-            <Chip size="small" variant="outlined" label={`barrier ${parallelSummary.barrier_state || 'pending'}`} />
-            <Chip size="small" variant="outlined" label={`aggregation ${parallelSummary.aggregation_state || (parallelSummary.partial_evidence ? 'partial' : 'completed')}`} />
-          </Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Fan-out {Number(parallelSummary.fan_out_width ?? parallelSummary.planned ?? 0)}
-            {' · '}peak {Number(parallelSummary.peak_concurrency || 0)}
-            {parallelSummary.elapsed_ms != null ? ` · dispatch ${Math.round(Number(parallelSummary.elapsed_ms))} ms` : ''}
-          </Typography>
-          {(parallelSummary.evidence_packets_before_dedupe != null || parallelSummary.document_sources_before_dedupe != null || parallelSummary.web_sources_before_dedupe != null) && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Deduplication: evidence {Number(parallelSummary.evidence_packets_before_dedupe || 0)}→{Number(parallelSummary.evidence_packets_after_dedupe || 0)}
-              {' · '}documents {Number(parallelSummary.document_sources_before_dedupe || 0)}→{Number(parallelSummary.document_sources_after_dedupe || 0)}
-              {' · '}web {Number(parallelSummary.web_sources_before_dedupe || 0)}→{Number(parallelSummary.web_sources_after_dedupe || 0)}
-            </Typography>
-          )}
-          {parallelSummary.dispatch_id && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-              Dispatch {parallelSummary.dispatch_id}
-            </Typography>
-          )}
-          {parallelTasks.length > 0 && (
-            <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-              {parallelTasks.map((task) => (
-                <Box component="details" key={String(task.work_id)} sx={{ '& summary': { cursor: 'pointer' } }}>
-                  <Typography component="summary" variant="caption" color="text.secondary">
-                    {Number(task.ordinal || 0) + 1}. {task.worker_node_id || task.worker_type || 'worker'} · {task.status || 'queued'}
-                    {Number(task.attempt || 0) > 1 ? ` · attempt ${task.attempt}` : ''}
-                    {task.elapsed_ms != null ? ` · ${Math.round(Number(task.elapsed_ms))} ms` : ''}
-                  </Typography>
-                  {(Array.isArray(task.attempts) ? task.attempts : []).map((attempt: Record<string, any>) => (
-                    <Typography key={`${task.work_id}:${attempt.attempt}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 2 }}>
-                      Attempt {Number(attempt.attempt || 1)} · {attempt.status || 'unknown'}
-                      {attempt.reason ? ` · ${attempt.reason}` : ''}
-                      {attempt.retryable === true ? ' · retryable' : attempt.retryable === false ? ' · non-retryable' : ''}
-                      {attempt.elapsed_ms != null ? ` · ${Math.round(Number(attempt.elapsed_ms))} ms` : ''}
-                      {attempt.occurred_at ? ` · ${attempt.occurred_at}` : ''}
-                    </Typography>
-                  ))}
-                </Box>
-              ))}
-            </Box>
-          )}
-        </Box>
       )}
       {corrective && (
         <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: corrective.exhausted_budget_type ? 'warning.main' : 'divider' }}>
@@ -553,17 +488,24 @@ function AgentRunDebugPanel({
       )}
       {!loading && !error && runDetails && !debug && (
         <Typography variant="caption" color={retainedErrorMessage ? 'error' : 'text.secondary'} sx={{ px: 1, py: 0.75 }}>
-          {unsupportedTraceFormat
-            ? 'Trace format is no longer supported.'
-            : retainedErrorMessage || (traceRefreshExhausted ? 'Trace not captured for this run.' : 'Retained execution trace is finalizing…')}
+          {retainedErrorMessage || (traceRefreshExhausted ? 'Trace not captured for this run.' : 'Retained execution trace is finalizing…')}
         </Typography>
       )}
       {debug && !traceView && (
-        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
-          {unsupportedTraceFormat ? 'Trace format is no longer supported.' : 'Trace payload is incomplete.'}
-        </Typography>
+        <Box sx={{ px: 1, py: 0.75 }}>
+          <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
+          {debugParseError && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{debugParseError}</Typography>
+          )}
+        </Box>
       )}
-      {executionTraceView && (
+      {liveParseError && (
+        <Box sx={{ px: 1, py: 0.75 }}>
+          <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{liveParseError}</Typography>
+        </Box>
+      )}
+      {executionTraceView && !liveParseError && (
         <>
       <AgentExecutionView
             runId={runId}

@@ -389,6 +389,7 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
         "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
         "events": [],
         "operations": [],
+        "parallel_groups": [],
         "details": [{"operation_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
     }
     incoming = {
@@ -398,6 +399,7 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
         "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
         "events": [],
         "operations": [],
+        "parallel_groups": [],
         "details": [{"operation_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
     }
 
@@ -406,6 +408,31 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
     assert merged["detail_safety"]["size_bytes"] <= 900
     assert merged["detail_safety"]["truncated"] is True
     assert any(detail.get("safety", {}).get("run_limit_reached") for detail in merged["details"])
+
+
+def test_resumed_trace_rebuilds_parallel_groups_from_merged_canonical_events():
+    empty_diagnostics = {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []}
+    common = {"version": 2, "trace": {"schema_version": 1, "spans": [], "metrics": {}}, "summary": {}, "diagnostics": empty_diagnostics, "operations": [], "parallel_groups": []}
+    base = {
+        **common,
+        "events": [
+            {"event_id": "event-1", "sequence": 1, "attempt": 1, "kind": "dispatch.started", "payload": {"dispatch_id": "dispatch-1", "planned": 1}},
+            {"event_id": "event-2", "sequence": 2, "attempt": 1, "kind": "worker.started", "payload": {"dispatch_id": "dispatch-1", "work_id": "work-1", "attempt": 1}},
+        ],
+    }
+    incoming = {
+        **common,
+        "events": [
+            {"event_id": "event-3", "sequence": 3, "attempt": 1, "kind": "worker.completed", "payload": {"dispatch_id": "dispatch-1", "work_id": "work-1", "attempt": 1}},
+            {"event_id": "event-4", "sequence": 4, "attempt": 1, "kind": "aggregation.completed", "payload": {"dispatch_id": "dispatch-1", "planned": 1, "completed": 1}},
+        ],
+    }
+
+    merged = merge_debug_payloads(base, incoming, resolved_spec={})
+
+    assert merged["parallel_groups"][0]["status"] == "completed"
+    assert merged["parallel_groups"][0]["members"][0]["event_ids"] == ["event-2", "event-3"]
+    assert merged["visualizations"]["generic.parallel"]["group_ids"] == ["dispatch-1"]
 
 
 def test_trace_detail_scalar_limit_is_explicit_and_preserves_normal_whitespace():
@@ -8301,7 +8328,7 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) >= {"version", "trace", "summary", "operations", "events", "visualizations", "detail_manifest", "detail_safety"}
+        assert set(payload["debug"]) >= {"version", "trace", "summary", "operations", "events", "parallel_groups", "visualizations", "detail_manifest", "detail_safety"}
         assert len(payload["debug"]["detail_manifest"]) == 1
         assert payload["debug"]["detail_manifest"][0]["operation_id"] == "router"
         assert payload["debug"]["detail_manifest"][0]["visit_index"] == 1

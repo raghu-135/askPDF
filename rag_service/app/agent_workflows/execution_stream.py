@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from app.agent_workflows.canonical_trace import build_parallel_groups
 from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
@@ -295,7 +296,11 @@ class AgentExecutionEventSink:
             if self._trace_recorder is not None and hasattr(self._trace_recorder, "record_runtime_event"):
                 self._trace_recorder.record_runtime_event(event, attributes=envelope.get("data") or {})
         if self._delivery_attached:
-            await self.queue.put({"event": canonical.kind, "data": dict(canonical.payload)})
+            delivery_payload = dict(canonical.payload)
+            parallel_groups = build_parallel_groups(self._canonical_events)
+            if parallel_groups:
+                delivery_payload["parallel_groups"] = parallel_groups
+            await self.queue.put({"event": canonical.kind, "data": delivery_payload})
 
 
 def retain_background_task(task: asyncio.Task[Any]) -> None:

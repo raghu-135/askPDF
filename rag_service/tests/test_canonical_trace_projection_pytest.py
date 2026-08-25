@@ -1,7 +1,9 @@
 import time
 from types import SimpleNamespace
 
-from app.agent_workflows.canonical_trace import build_canonical_trace_projection
+import pytest
+
+from app.agent_workflows.canonical_trace import TraceProjectionError, build_canonical_trace_projection, build_parallel_groups
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from app.runtime.contracts import AgentRuntimeEvent
 from app.runtime.langgraph_adapter import _event_from_graph
@@ -270,4 +272,75 @@ def test_trace_recorder_emits_version_two_from_canonical_events() -> None:
     assert payload["operations"][0]["operation_id"] == "step-1"
     assert payload["trace"]["events"] == payload["events"]
     assert payload["diagnostics"]["outcome"] == "completed"
+    assert payload["parallel_groups"] == []
     assert "graph" not in payload
+
+
+def test_parallel_projection_preserves_groups_members_retries_and_zero_wave_id() -> None:
+    events = [
+        _event(1, "dispatch.started", {"wave_id": 0, "planned": 2, "parent_operation_id": "research"}, "future"),
+        _event(2, "worker.started", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 1, "operation_id": "retrieve-a"}, "future"),
+        _event(3, "worker.retrying", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 1, "operation_id": "retrieve-a"}, "future"),
+        _event(4, "worker.started", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 2, "operation_id": "retrieve-a"}, "future"),
+        _event(5, "worker.completed", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 2, "operation_id": "retrieve-a", "elapsed_ms": 12}, "future"),
+        _event(6, "worker.timed_out", {"wave_id": 0, "work_id": "work-b", "ordinal": 1, "attempt": 1, "operation_id": "retrieve-b"}, "future"),
+        _event(7, "worker.progress", {"wave_id": 0, "work_id": "work-b", "ordinal": 1, "attempt": 1, "operation_id": "retrieve-b"}, "future"),
+        _event(8, "dispatch.barrier_reached", {"wave_id": 0, "result_count": 2}, "future"),
+        _event(9, "aggregation.partial", {"wave_id": 0, "planned": 2, "completed": 1, "timed_out": 1}, "future"),
+    ]
+
+    projection = build_canonical_trace_projection(events=events, resolved_spec={}, framework="future")
+
+    assert projection["visualizations"]["generic.parallel"]["group_ids"] == ["0"]
+    group = projection["parallel_groups"][0]
+    assert group["group_id"] == "0"
+    assert group["parent_operation_id"] == "research"
+    assert group["status"] == "partial"
+    assert group["barrier"]["status"] == "reached"
+    assert group["aggregation"]["counts"] == {"planned": 2, "completed": 1, "timed_out": 1}
+    assert [member["member_id"] for member in group["members"]] == ["work-a", "work-b"]
+    assert [attempt["status"] for attempt in group["members"][0]["attempts"]] == ["retrying", "completed"]
+    assert group["members"][1]["status"] == "timed_out"
+    assert group["members"][1]["attempts"][0]["failure_event_ids"] == ["event-6"]
+    assert projection["events"][1]["parallel_group_id"] == "0"
+    assert projection["events"][1]["parallel_member_id"] == "work-a"
+
+
+def test_parallel_projection_preserves_required_empty_structural_collections() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "dispatch.started", {"dispatch_id": "dispatch-a", "planned": 1}, "future"),
+            _event(2, "worker.completed", {
+                "dispatch_id": "dispatch-a",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+                "attempt": 1,
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    group = projection["parallel_groups"][0]
+    assert group["aggregation"] == {"status": "pending", "counts": {}}
+    attempt = group["members"][0]["attempts"][0]
+    assert attempt["failure_event_ids"] == []
+    assert attempt["caused_by_event_ids"] == []
+    assert attempt["related_event_ids"] == []
+
+
+@pytest.mark.parametrize(
+    "events, message",
+    [
+        ([_event(1, "worker.started", {"work_id": "work-a"})], "missing a group identity"),
+        ([_event(1, "worker.started", {"dispatch_id": "dispatch-a"})], "missing a member identity"),
+        ([_event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a", "attempt": 0})], "invalid attempt"),
+        ([
+            _event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a"}),
+            _event(2, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-a"}),
+        ], "conflicting groups"),
+    ],
+)
+def test_parallel_projection_rejects_malformed_correlation(events, message) -> None:
+    with pytest.raises(TraceProjectionError, match=message):
+        build_parallel_groups(events)
