@@ -7,6 +7,7 @@ PostgreSQL when AGENT_RUNTIME_EXECUTION_DATABASE_URL is configured.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import os
@@ -144,6 +145,7 @@ class ExecutionStore:
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._operations: dict[tuple[str, str], dict[str, Any]] = {}
         self._condition = None
+        self._lock = asyncio.Lock()
         self._pool = None
         self.owner_id = os.getenv("AGENT_RUNTIME_WORKER_ID") or f"runtime-{uuid.uuid4().hex}"
         self.lease_seconds = max(5, int(os.getenv("AGENT_RUNTIME_LEASE_SECONDS", "60")))
@@ -296,6 +298,8 @@ class ExecutionStore:
                     if existing.request_fingerprint in {None, fingerprint}:
                         return existing
                     raise ExecutionConflictError("terminal execution is immutable; use retry")
+                if any(item.get("terminal") for item in self._events.get(run_id, [])):
+                    return replace(existing, replay_only=True)
                 return existing
             self._records[run_id] = record
             self._events.setdefault(run_id, [])
@@ -372,6 +376,11 @@ class ExecutionStore:
             return current  # type: ignore[return-value]
         if replay_attempt is not None:
             return replace(current, attempt=replay_attempt, replay_only=True)
+        if await self._pool.fetchval(
+            "select exists(select 1 from runtime_events where run_id=$1 and terminal=true)",
+            run_id,
+        ):
+            return replace(current, replay_only=True)
         return current
 
     async def get(self, run_id: str) -> ExecutionRecord | None:
@@ -622,6 +631,125 @@ class ExecutionStore:
             if not updated.endswith("1"):
                 raise ExecutionConflictError("terminal event was not found")
 
+    async def finalize_execution(
+        self,
+        run_id: str,
+        terminal_event: Mapping[str, Any],
+        result: Mapping[str, Any],
+        *,
+        status: str,
+        error: Mapping[str, Any] | None = None,
+        attempt: int | None = None,
+        owner_id: str,
+        fencing_token: int,
+    ) -> dict[str, Any]:
+        """Atomically commit the terminal journal entry and execution state."""
+        if status not in TERMINAL_STATUSES:
+            raise ValueError("runtime finalization requires a terminal status")
+        item = dict(terminal_event)
+        if not bool(item.get("terminal")):
+            raise ValueError("runtime finalization requires a terminal event")
+        safe_result = _json_safe(dict(result))
+        safe_error = _json_safe(dict(error)) if error else None
+        if self._pool is None:
+            async with self._lock:
+                record = self._records[run_id]
+                if record.owner_id != owner_id or record.fencing_token != fencing_token:
+                    raise LeaseLostError(f"lost runtime lease for {run_id}")
+                effective_attempt = attempt or record.attempt
+                terminals = [value for value in self._events.get(run_id, []) if value.get("terminal") and int(value.get("attempt", 1)) == effective_attempt]
+                if len(terminals) > 1:
+                    raise ExecutionConflictError("multiple terminal events were persisted")
+                if terminals:
+                    stored = terminals[0]
+                    if stored.get("result") not in (None, safe_result):
+                        raise ExecutionConflictError("terminal event already has a conflicting result")
+                    stored["result"] = safe_result
+                else:
+                    item["attempt"] = effective_attempt
+                    item["event_id"] = _event_id(run_id, effective_attempt, str(item["event_id"]))
+                    item["sequence"] = record.next_sequence
+                    item["result"] = safe_result
+                    self._events.setdefault(run_id, []).append(item)
+                    record.next_sequence += 1
+                    stored = item
+                record.status = status
+                record.result = dict(safe_result)
+                record.error = dict(safe_error) if safe_error else None
+                if item.get("continuation") is not None:
+                    record.continuation = dict(item["continuation"])
+                record.cancel_requested = False
+                record.owner_id = None
+                record.lease_expires_at = None
+                record.heartbeat_at = None
+                record.updated_at = _now()
+                if record.last_operation_id:
+                    operation = self._operations.get((run_id, record.last_operation_id))
+                    if operation is not None:
+                        operation["status"] = status
+                        operation["result"] = dict(safe_result)
+                return dict(stored)
+
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                record = await connection.fetchrow(
+                    """select attempt, next_sequence, last_operation_id from runtime_executions
+                       where run_id=$1 and owner_id=$2 and fencing_token=$3
+                         and (lease_expires_at is null or lease_expires_at > now()) for update""",
+                    run_id, owner_id, fencing_token,
+                )
+                if record is None:
+                    raise LeaseLostError(f"lost runtime lease for {run_id}")
+                effective_attempt = attempt or int(record["attempt"])
+                terminals = await connection.fetch(
+                    "select * from runtime_events where run_id=$1 and attempt=$2 and terminal=true for update",
+                    run_id, effective_attempt,
+                )
+                if len(terminals) > 1:
+                    raise ExecutionConflictError("multiple terminal events were persisted")
+                if terminals:
+                    existing_result = _json_object(terminals[0]["result"])
+                    if existing_result not in (None, safe_result):
+                        raise ExecutionConflictError("terminal event already has a conflicting result")
+                    stored = await connection.fetchrow(
+                        "update runtime_events set result=$3::jsonb where run_id=$1 and event_id=$2 returning *",
+                        run_id, terminals[0]["event_id"], json.dumps(safe_result),
+                    )
+                else:
+                    sequence = int(record["next_sequence"])
+                    event_id = _event_id(run_id, effective_attempt, str(item["event_id"]))
+                    stored = await connection.fetchrow(
+                        """insert into runtime_events(
+                               run_id, sequence, attempt, event_id, kind, payload, occurred_at,
+                               trace_id, continuation, terminal, result
+                           ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb,true,$10::jsonb)
+                           returning *""",
+                        run_id, sequence, effective_attempt, event_id,
+                        item.get("kind", "run.completed"), json.dumps(_json_safe(item.get("payload") or {})),
+                        item.get("occurred_at"), item.get("trace_id"),
+                        json.dumps(_json_safe(item.get("continuation"))) if item.get("continuation") is not None else None,
+                        json.dumps(safe_result),
+                    )
+                    await connection.execute(
+                        "update runtime_executions set next_sequence=next_sequence+1 where run_id=$1",
+                        run_id,
+                    )
+                await connection.execute(
+                    """update runtime_executions
+                       set status=$2, result=$3::jsonb, error=$4::jsonb,
+                           continuation=coalesce($5::jsonb, continuation), cancel_requested=false,
+                           owner_id=null, lease_expires_at=null, heartbeat_at=null, updated_at=now()
+                       where run_id=$1""",
+                    run_id, status, json.dumps(safe_result), json.dumps(safe_error) if safe_error else None,
+                    json.dumps(_json_safe(item.get("continuation"))) if item.get("continuation") is not None else None,
+                )
+                if record["last_operation_id"]:
+                    await connection.execute(
+                        "update runtime_operations set status=$3, result=$4::jsonb where run_id=$1 and operation_id=$2",
+                        run_id, record["last_operation_id"], status, json.dumps(safe_result),
+                    )
+                return _event_row_to_dict(stored)
+
     async def events_after(self, run_id: str, sequence: int = 0, *, attempt: int | None = None) -> list[dict[str, Any]]:
         if attempt is None:
             record = await self.get(run_id)
@@ -641,7 +769,8 @@ class ExecutionStore:
         """Return bounded nonterminal records for repeated lease recovery."""
         limit = max(1, min(int(limit), 1000))
         if self._pool is None:
-            records = [record for record in self._records.values() if record.status not in {"completed", "failed", "cancelled", "no_continuation"}]
+            terminal_run_ids = {run_id for run_id, events in self._events.items() if any(item.get("terminal") for item in events)}
+            records = [record for record in self._records.values() if record.status not in TERMINAL_STATUSES and record.run_id not in terminal_run_ids]
             now = datetime.now(timezone.utc)
             def recovery_key(record: ExecutionRecord) -> tuple[int, str, str]:
                 expired = 0
@@ -650,11 +779,82 @@ class ExecutionStore:
                 return expired, record.updated_at, record.run_id
             return sorted(records, key=recovery_key)[:limit]
         rows = await self._pool.fetch(
-            """select run_id from runtime_executions
-               where status not in ('completed','failed','cancelled','no_continuation')
+            """select executions.run_id from runtime_executions executions
+               where executions.status not in ('completed','failed','cancelled','no_continuation')
+                 and not exists (select 1 from runtime_events events where events.run_id=executions.run_id and events.terminal=true)
                order by case when lease_expires_at is not null and lease_expires_at < now() then 0 else 1 end,
-                        updated_at, run_id
+                        executions.updated_at, executions.run_id
                limit $1""",
             limit,
         )
         return [record for row in rows if (record := await self.get(row["run_id"])) is not None]
+
+    async def list_terminal_reconciliation_candidates(self, limit: int = 100) -> list[ExecutionRecord]:
+        limit = max(1, min(int(limit), 1000))
+        if self._pool is None:
+            run_ids = [run_id for run_id, events in self._events.items() if any(item.get("terminal") for item in events)]
+            return [self._records[run_id] for run_id in run_ids if self._records[run_id].status not in TERMINAL_STATUSES][:limit]
+        rows = await self._pool.fetch(
+            """select distinct executions.run_id from runtime_executions executions
+               join runtime_events events on events.run_id=executions.run_id and events.terminal=true
+               where executions.status not in ('completed','failed','cancelled','no_continuation')
+               order by executions.run_id limit $1""",
+            limit,
+        )
+        return [record for row in rows if (record := await self.get(row["run_id"])) is not None]
+
+    async def reconcile_terminal_execution(self, run_id: str) -> str:
+        """Finalize a committed terminal result without executing runtime work again."""
+        if self._pool is None:
+            async with self._lock:
+                terminals = [item for item in self._events.get(run_id, []) if item.get("terminal")]
+                if len(terminals) != 1 or not terminals[0].get("result"):
+                    record = self._records[run_id]
+                    record.status = "failed"
+                    record.error = {"code": "runtime_terminal_result_missing", "retryable": False}
+                    record.owner_id = record.lease_expires_at = record.heartbeat_at = None
+                    record.cancel_requested = False
+                    return "quarantined"
+                result = dict(terminals[0]["result"])
+                status = str(result.get("status") or "")
+                if status not in TERMINAL_STATUSES:
+                    return "quarantined"
+                record = self._records[run_id]
+                record.status, record.result = status, result
+                record.owner_id = record.lease_expires_at = record.heartbeat_at = None
+                record.cancel_requested = False
+                return "reconciled"
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                execution = await connection.fetchrow("select last_operation_id from runtime_executions where run_id=$1 for update", run_id)
+                terminals = await connection.fetch("select result from runtime_events where run_id=$1 and terminal=true for update", run_id)
+                if execution is None:
+                    return "quarantined"
+                if len(terminals) != 1 or _json_object(terminals[0]["result"]) is None:
+                    invariant_error = {"code": "runtime_terminal_result_missing", "retryable": False}
+                    await connection.execute(
+                        """update runtime_executions set status='failed', error=$2::jsonb, cancel_requested=false,
+                           owner_id=null, lease_expires_at=null, heartbeat_at=null, updated_at=now() where run_id=$1""",
+                        run_id, json.dumps(invariant_error),
+                    )
+                    if execution["last_operation_id"]:
+                        await connection.execute(
+                            "update runtime_operations set status='failed' where run_id=$1 and operation_id=$2",
+                            run_id, execution["last_operation_id"],
+                        )
+                    return "quarantined"
+                result = _json_object(terminals[0]["result"])
+                status = str((result or {}).get("status") or "")
+                if result is None or status not in TERMINAL_STATUSES:
+                    return "quarantined"
+                await connection.execute(
+                    """update runtime_executions set status=$2, result=$3::jsonb, cancel_requested=false,
+                       owner_id=null, lease_expires_at=null, heartbeat_at=null, updated_at=now() where run_id=$1""",
+                    run_id, status, json.dumps(_json_safe(result)),
+                )
+                if execution["last_operation_id"]:
+                    await connection.execute(
+                        "update runtime_operations set status=$3, result=$4::jsonb where run_id=$1 and operation_id=$2",
+                        run_id, execution["last_operation_id"], status, json.dumps(_json_safe(result)),
+                    )
+                return "reconciled"

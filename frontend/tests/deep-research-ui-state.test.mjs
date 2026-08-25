@@ -3,9 +3,11 @@ import test from 'node:test';
 
 import {
   isTaskOwnedAgentRun,
+  isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
   resolveDeepResearchContextWindow,
   shouldPollAgentTask,
+  shouldSubscribeToAgentTaskEvents,
 } from '../src/lib/deep-research-ui-state.ts';
 
 test('authoritative active-run state and binding replace a stale task run projection', () => {
@@ -28,6 +30,22 @@ test('active tasks continue polling while terminal tasks stop', () => {
   for (const status of ['completed', 'failed', 'expired', 'cancelled']) {
     assert.equal(shouldPollAgentTask({ status }), false, status);
   }
+});
+
+test('LangGraph and Hermes stop event subscriptions at the shared terminal boundary', () => {
+  for (const engine of ['langgraph', 'hermes']) {
+    const activeTask = { status: 'running', configuration: { engine } };
+    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'running' }), true, engine);
+    assert.equal(shouldSubscribeToAgentTaskEvents({ ...activeTask, status: 'completed' }, { status: 'running' }), false, engine);
+    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'completed' }), false, engine);
+  }
+});
+
+test('committed task terminal events are recognized without framework-specific payloads', () => {
+  assert.equal(isTerminalAgentTaskEvent({ type: 'run.completed', terminal: true }), true);
+  assert.equal(isTerminalAgentTaskEvent({ type: 'run.failed' }), true);
+  assert.equal(isTerminalAgentTaskEvent({ type: 'run.cancelled' }), true);
+  assert.equal(isTerminalAgentTaskEvent({ type: 'output.delta', terminal: false }), false);
 });
 
 test('task-owned runs cannot use Debug Trace as an approval surface', () => {

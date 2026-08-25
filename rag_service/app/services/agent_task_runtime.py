@@ -18,6 +18,7 @@ from app.db import AgentRunStatus, get_recent_messages, get_thread, get_thread_s
 from app.mcp.execution_context_token import issue_execution_context_token
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
+from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
@@ -60,6 +61,17 @@ async def _invoke_task_runtime(
     registry: RuntimeRegistry,
 ) -> AgentRuntimeResult | None:
     """Dispatch one task attempt using its explicit lifecycle contract."""
+
+    projection = dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {})
+    persisted_result = projection.get("runtime_result")
+    if isinstance(persisted_result, dict):
+        return AgentRuntimeResult(
+            status=str(persisted_result.get("status") or AgentRunStatus.FAILED.value),
+            output=persisted_result.get("answer"),
+            interruption=persisted_result.get("pending_interrupt"),
+            runtime_metadata=dict(persisted_result.get("runtime_metadata") or {}),
+            error=dict(persisted_result.get("agent_error") or {}),
+        )
 
     pending = dict(run.pending_interrupt_json or {})
     if getattr(run, "_fresh_runtime_run", False):
@@ -211,6 +223,60 @@ async def _complete_run_with_trace(
         error_json=error,
         debug_trace_json=debug_payload,
         completed_at=completed_at,
+    )
+
+
+async def _finalize_task_run(
+    *,
+    task: Any,
+    run: Any,
+    recorder: AgentTraceRecorder,
+    sink: AgentExecutionEventSink,
+    run_status: str,
+    task_status: str,
+    metrics: dict[str, Any],
+    result: dict[str, Any],
+    error: Optional[dict[str, Any]] = None,
+    reason: Optional[str] = None,
+    final_artifact_id: Optional[str] = None,
+) -> None:
+    completed_at = datetime.now(timezone.utc)
+    debug_payload = finalize_and_merge_debug_payload(
+        recorder=recorder,
+        run=run,
+        metrics=metrics,
+        result=result,
+        route=result.get("route"),
+        route_reason=result.get("route_reason"),
+        error=error,
+        run_status=run_status,
+        completed_at=completed_at,
+    )
+    terminal_kind = (
+        "run.cancelled" if run_status == AgentRunStatus.CANCELLED.value
+        else "run.failed" if run_status == AgentRunStatus.FAILED.value
+        else "run.completed"
+    )
+
+    async def commit(terminal_event: Any) -> None:
+        await tasks.finalize_task_run(
+            task.id,
+            run.id,
+            run_status=run_status,
+            task_status=task_status,
+            metrics=metrics,
+            error=error,
+            debug_trace=debug_payload,
+            terminal_reason=reason,
+            terminal_event=terminal_event,
+            final_artifact_id=final_artifact_id,
+            completed_at=completed_at,
+        )
+
+    await sink.finish(
+        terminal_kind,
+        {"run_id": run.id, "task_id": task.id, "status": run_status, "response": result},
+        terminal_committer=commit,
     )
 
 
@@ -476,8 +542,21 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         "agent_workflow_version": run.workflow_version,
         "checkpoint_thread_id": run.checkpoint_thread_id,
     }
-    heartbeat = asyncio.create_task(_heartbeat(task.id, worker_id))
     started = time.perf_counter()
+    runtime_event_sink = AgentExecutionEventSink(include_details=False)
+    runtime_event_sink.detach_delivery()
+    runtime_event_sink.bind_trace_recorder(trace)
+    runtime_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
+    existing_run_events = await repository.list_run_events(run.id)
+    runtime_event_sink.bind_runtime_event_persister(
+        run.id,
+        repository.append_run_event,
+        initial_sequence=max(
+            (int(getattr(event, "sequence", 0) or 0) for event in existing_run_events),
+            default=0,
+        ),
+    )
+    heartbeat = asyncio.create_task(_heartbeat(task.id, worker_id))
     async def cancellation_requested() -> bool:
         return await tasks.task_cancel_requested(task.id) or await tasks.active_runtime_budget_exhausted(task.id)
 
@@ -548,12 +627,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_id=task.id,
             task_worker_id=worker_id,
         )
-        runtime_event_sink = None
-        if definition.framework == "hermes":
-            runtime_event_sink = AgentExecutionEventSink(include_details=False)
-            runtime_event_sink.bind_trace_recorder(trace)
-            runtime_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
-            runtime_event_sink.bind_runtime_event_persister(run.id, repository.append_run_event)
         runtime_result = await _invoke_task_runtime(
             adapter=adapter,
             definition=definition,
@@ -578,6 +651,13 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         if runtime_result.continuation is not None:
             await repository.update_runtime_binding(run.id, runtime_result.continuation)
         result = result_to_product_payload(runtime_result)
+        if str(result.get("status") or "") in {
+            AgentRunStatus.COMPLETED.value,
+            AgentRunStatus.FAILED.value,
+            AgentRunStatus.CANCELLED.value,
+        } and not dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {}).get("runtime_result"):
+            await record_terminal_result(run, result)
+        await runtime_event_sink.flush()
         # Runtime artifacts are data, not product records. Project them in
         # rag-service after the stream completes and translate deterministic
         # runtime IDs to the persisted artifact IDs used by task APIs.
@@ -658,21 +738,16 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                         "approval_scope_kind": pending.get("approval_scope_kind"),
                     },
                 )
+            await runtime_event_sink.finish_boundary()
             return
         if status == AgentRunStatus.CANCELLED.value:
             latest_task = await tasks.get_task(task.id)
             budget_exhausted = bool(latest_task and latest_task.terminal_reason == "active_runtime_budget_exhausted")
-            await _complete_run_with_trace(
-                repository,
-                run=run,
-                recorder=trace,
-                status=status,
-                metrics=metrics,
-                result=result,
-            )
-            await tasks.complete_task(
-                task.id,
-                status=AgentTaskStatus.FAILED.value if budget_exhausted else AgentTaskStatus.CANCELLED.value,
+            await _finalize_task_run(
+                task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                run_status=status,
+                task_status=AgentTaskStatus.FAILED.value if budget_exhausted else AgentTaskStatus.CANCELLED.value,
+                metrics=metrics, result=result,
                 reason="active_runtime_budget_exhausted" if budget_exhausted else "cancelled_by_user",
             )
             return
@@ -683,16 +758,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             final_answer = str(result.get("final_answer") or result.get("answer") or "").strip()
             if not final_answer:
                 terminal_error = {"code": "final_report_missing", "retryable": True}
-                await _complete_run_with_trace(
-                    repository,
-                    run=run,
-                    recorder=trace,
-                    status=AgentRunStatus.FAILED.value,
-                    metrics=metrics,
-                    result=result,
-                    error=terminal_error,
+                await _finalize_task_run(
+                    task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                    run_status=AgentRunStatus.FAILED.value, task_status=AgentTaskStatus.FAILED.value,
+                    metrics=metrics, result=result, error=terminal_error, reason="final_report_missing",
                 )
-                await tasks.complete_task(task.id, status=AgentTaskStatus.FAILED.value, reason="final_report_missing")
                 return
             evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
             if definition.framework == "hermes" and evidence_policy == "document_when_available":
@@ -709,13 +779,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                         "retryable": True,
                         "details": grounding,
                     }
-                    await _complete_run_with_trace(
-                        repository, run=run, recorder=trace,
-                        status=AgentRunStatus.FAILED.value, metrics=metrics,
-                        result=result, error=terminal_error,
-                    )
-                    await tasks.complete_task(
-                        task.id, status=AgentTaskStatus.FAILED.value,
+                    await _finalize_task_run(
+                        task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                        run_status=AgentRunStatus.FAILED.value, task_status=AgentTaskStatus.FAILED.value,
+                        metrics=metrics, result=result, error=terminal_error,
                         reason="required_evidence_unavailable",
                     )
                     return
@@ -739,32 +806,20 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 },
                 source_refs={"artifact_ids": [str(item["id"]) for item in evidence_manifest]},
             )
-            await _complete_run_with_trace(
-                repository,
-                run=run,
-                recorder=trace,
-                status=status,
-                metrics=metrics,
-                result=result,
-                error=error,
-            )
-            await tasks.complete_task(
-                task.id,
-                status=AgentTaskStatus.COMPLETED.value,
+            await _finalize_task_run(
+                task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                run_status=status, task_status=AgentTaskStatus.COMPLETED.value,
+                metrics=metrics, result=result, error=error,
                 reason="incomplete" if incomplete else "completed",
                 final_artifact_id=final_artifact.id,
             )
         else:
-            await _complete_run_with_trace(
-                repository,
-                run=run,
-                recorder=trace,
-                status=status,
-                metrics=metrics,
-                result=result,
-                error=error,
+            await _finalize_task_run(
+                task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                run_status=status, task_status=AgentTaskStatus.FAILED.value,
+                metrics=metrics, result=result, error=error,
+                reason=str((error or {}).get("code") or status),
             )
-            await tasks.complete_task(task.id, status=AgentTaskStatus.FAILED.value, reason=str((error or {}).get("code") or status))
     except Exception as exc:
         logger.exception("Deep research task execution failed | task_id=%s run_id=%s", task.id, run.id)
         terminal_error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
@@ -773,18 +828,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             "raw_message": str(exc)[:1000],
             "retryable": True,
         }
-        await _complete_run_with_trace(
-            repository,
-            run=run,
-            recorder=trace,
-            status=AgentRunStatus.FAILED.value,
-            metrics={"duration_ms": round((time.perf_counter() - started) * 1000, 2), "error_count": 1},
-            result={"agent_error": terminal_error},
-            error=terminal_error,
-        )
-        await tasks.complete_task(
-            task.id,
-            status=AgentTaskStatus.FAILED.value,
+        failure_metrics = {"duration_ms": round((time.perf_counter() - started) * 1000, 2), "error_count": 1}
+        await _finalize_task_run(
+            task=task, run=run, recorder=trace, sink=runtime_event_sink,
+            run_status=AgentRunStatus.FAILED.value, task_status=AgentTaskStatus.FAILED.value,
+            metrics=failure_metrics, result={"agent_error": terminal_error}, error=terminal_error,
             reason=str(terminal_error.get("code") or "deep_research_execution_failed"),
         )
     finally:

@@ -111,7 +111,22 @@ async def test_transport_terminal_is_not_recorded_as_product_terminal():
     await sink.emit_runtime_event(runtime_terminal)
     await sink.finish("run.completed", {"status": "completed"})
 
-    assert [event.event_id for event in persisted] == ["run-1:1"]
+    assert [event.event_id for event in persisted] == ["askpdf-terminal:run-1:run.completed"]
+
+
+@pytest.mark.asyncio
+async def test_product_terminal_id_cannot_collide_with_runtime_sequence_id():
+    persisted = []
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append(persisted, event))
+
+    await sink.emit("output.completed", {"event_id": "run-1:2"})
+    await sink.finish("run.completed", {"status": "completed"})
+
+    assert [event.event_id for event in persisted] == [
+        "run-1:2",
+        "askpdf-terminal:run-1:run.completed",
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,6 +148,40 @@ async def test_writer_failure_is_observed_and_failure_terminal_can_still_be_pers
 
     assert [(event.sequence, event.kind) for event in persisted] == [(2, "run.failed")]
     assert [await sink.queue.get()] == [{"event": "run.failed", "data": {"status": "failed"}}]
+
+
+@pytest.mark.asyncio
+async def test_transactional_terminal_is_delivered_only_after_commit_acknowledgement():
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append([], event))
+    commit_started = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def commit(_event):
+        commit_started.set()
+        await release_commit.wait()
+
+    finish = asyncio.create_task(
+        sink.finish("run.completed", {"status": "completed"}, terminal_committer=commit)
+    )
+    await commit_started.wait()
+    assert sink.queue.empty()
+    release_commit.set()
+    await finish
+    assert await sink.queue.get() == {"event": "run.completed", "data": {"status": "completed"}}
+
+
+@pytest.mark.asyncio
+async def test_transactional_terminal_commit_failure_emits_no_terminal_frame():
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append([], event))
+
+    async def fail(_event):
+        raise RuntimeError("terminal commit failed")
+
+    with pytest.raises(RuntimeError, match="terminal commit failed"):
+        await sink.finish("run.completed", {"status": "completed"}, terminal_committer=fail)
+    assert sink.queue.empty()
 
 
 @pytest.mark.asyncio

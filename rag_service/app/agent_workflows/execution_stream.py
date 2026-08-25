@@ -25,6 +25,7 @@ class _EventCommand:
     data: Dict[str, Any]
     acknowledgement: asyncio.Future[None] | None = None
     terminal: bool = False
+    terminal_committer: Any = None
 
 
 _retained_executions: set[asyncio.Task[Any]] = set()
@@ -156,12 +157,21 @@ class AgentExecutionEventSink:
         if self._writer_error is not None:
             raise self._writer_error
 
-    async def finish(self, event: str, data: Dict[str, Any] | None = None) -> None:
+    async def finish(
+        self,
+        event: str,
+        data: Dict[str, Any] | None = None,
+        *,
+        terminal_committer: Any = None,
+    ) -> None:
         if self._finished:
             return
         self._accepting = False
         acknowledgement = asyncio.get_running_loop().create_future()
-        self._enqueue(event, data, acknowledgement=acknowledgement, terminal=True)
+        self._ensure_writer()
+        self._commands.put_nowait(
+            _EventCommand(event, dict(data or {}), acknowledgement, True, terminal_committer)
+        )
         try:
             await acknowledgement
         finally:
@@ -199,7 +209,12 @@ class AgentExecutionEventSink:
                     command.acknowledgement.set_exception(self._writer_error)
                 continue
             try:
-                await self._record_event(command.event, command.data)
+                await self._record_event(
+                    command.event,
+                    command.data,
+                    product_terminal=command.terminal,
+                    terminal_committer=command.terminal_committer,
+                )
             except Exception as exc:
                 self._writer_error = exc
                 logger.exception("Runtime event writer failed | run_id=%s event=%s", self._run_id, command.event)
@@ -209,7 +224,14 @@ class AgentExecutionEventSink:
             if command.acknowledgement is not None and not command.acknowledgement.done():
                 command.acknowledgement.set_result(None)
 
-    async def _record_event(self, event: str, data: Dict[str, Any]) -> None:
+    async def _record_event(
+        self,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        product_terminal: bool = False,
+        terminal_committer: Any = None,
+    ) -> None:
         envelope = self._event(event, data)
         event_id = str((envelope.get("data") or {}).get("event_id") or "")
         normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
@@ -232,8 +254,13 @@ class AgentExecutionEventSink:
             return
 
         self._sequence += 1
+        generated_event_id = (
+            f"askpdf-terminal:{self._run_id or 'run'}:{normalized_kind}"
+            if product_terminal
+            else f"{self._run_id or 'run'}:{self._sequence}"
+        )
         canonical = create_runtime_event(
-            event_id=event_id or f"{self._run_id or 'run'}:{self._sequence}",
+            event_id=event_id or generated_event_id,
             run_id=self._run_id or str(normalized_payload.get("run_id") or normalized_payload.get("agent_run_id") or "unbound"),
             sequence=self._sequence,
             attempt=int(normalized_payload.get("attempt") or 1),
@@ -244,7 +271,9 @@ class AgentExecutionEventSink:
             source_metadata=source_metadata,
         )
         validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
-        if self._runtime_event_persister is not None and canonical.run_id:
+        if terminal_committer is not None:
+            await terminal_committer(canonical)
+        elif self._runtime_event_persister is not None and canonical.run_id:
             await self._runtime_event_persister(canonical.run_id, canonical)
         self._canonical_events.append(canonical)
         if event_id:

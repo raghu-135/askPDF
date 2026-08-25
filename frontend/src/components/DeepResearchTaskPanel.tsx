@@ -37,7 +37,13 @@ import {
   type AgentRuntimeCapabilityResponse,
   type DeepResearchEngine,
 } from '../lib/api';
-import { mergeActiveAgentTaskRun, resolveDeepResearchContextWindow, shouldPollAgentTask } from '../lib/deep-research-ui-state';
+import {
+  isTerminalAgentTaskEvent,
+  mergeActiveAgentTaskRun,
+  resolveDeepResearchContextWindow,
+  shouldPollAgentTask,
+  shouldSubscribeToAgentTaskEvents,
+} from '../lib/deep-research-ui-state';
 import { isCurrentRuntimeCapabilityRequest, isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
 import { withRetry } from '../lib/retry-utils';
 import {
@@ -254,6 +260,7 @@ export default function DeepResearchTaskPanel({
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
+  const sequenceRunId = useRef<string | null>(null);
   const capabilityRequestId = useRef(0);
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
@@ -376,22 +383,59 @@ export default function DeepResearchTaskPanel({
   ]);
 
   useEffect(() => {
-    if (!selectedTaskId || !selectedRun) return;
-    lastSequence.current = 0;
-    const query = new URLSearchParams({ thread_id: threadId, run_id: selectedRun.id, scope: 'run', after_sequence: String(lastSequence.current) });
-    const source = new EventSource(`${API_BASE}/api/agent-tasks/${encodeURIComponent(selectedTaskId)}/events?${query}`);
-    source.addEventListener('task_event', (event) => {
-      lastSequence.current = Math.max(lastSequence.current, Number(event.lastEventId || 0));
-      let payload: any = {};
-      try { payload = JSON.parse((event as MessageEvent).data || '{}'); } catch { payload = {}; }
-      const type = String(payload.type || '');
-      if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
-      if (/^(runtime\.event|subagent\.|artifact\.|output\.)/.test(type)) {
-        void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => setItems(value.items));
-      }
-    });
-    return () => source.close();
-  }, [selectedRun?.id, selectedTaskId, threadId, refresh]);
+    if (!selectedTaskId || !selectedRun || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;
+    let active = true;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+    const taskId = selectedTaskId;
+    const runId = selectedRun.id;
+    if (sequenceRunId.current !== runId) {
+      sequenceRunId.current = runId;
+      lastSequence.current = 0;
+    }
+
+    const close = () => {
+      active = false;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      source?.close();
+      source = null;
+    };
+    const connect = () => {
+      if (!active) return;
+      const query = new URLSearchParams({
+        thread_id: threadId,
+        run_id: runId,
+        scope: 'run',
+        after_sequence: String(lastSequence.current),
+      });
+      source = new EventSource(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/events?${query}`);
+      source.addEventListener('task_event', (event) => {
+        const sequence = Number(event.lastEventId || 0);
+        if (sequence > 0 && sequence <= lastSequence.current) return;
+        lastSequence.current = Math.max(lastSequence.current, sequence);
+        let payload: Record<string, unknown> = {};
+        try { payload = JSON.parse((event as MessageEvent).data || '{}'); } catch { payload = {}; }
+        const type = String(payload.type || '');
+        const terminal = isTerminalAgentTaskEvent(payload);
+        if (terminal) {
+          close();
+          void refresh().catch((value) => setError(String(value)));
+          return;
+        }
+        if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
+        if (/^(runtime\.event|subagent\.|artifact\.|output\.)/.test(type)) {
+          void getAgentTaskTimeline(taskId, runId, threadId).then((value) => setItems(value.items));
+        }
+      });
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (active) reconnectTimer = window.setTimeout(connect, 2000);
+      };
+    };
+    connect();
+    return close;
+  }, [selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status, threadId, refresh]);
 
   const launch = async (objective: string) => {
     if (webSearchMode !== 'off' && webCapability !== true) {

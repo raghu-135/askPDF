@@ -289,3 +289,56 @@ async def test_runtime_lease_fences_competing_workers_and_mutations() -> None:
     with pytest.raises(LeaseLostError):
         await store.append("leased", {"event_id": "stale", "kind": "runtime.event"}, owner_id="worker-b", fencing_token=1)
     assert await store.heartbeat("leased", owner_id="worker-a", fencing_token=first)
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_commits_terminal_result_status_and_lease_release() -> None:
+    store = ExecutionStore()
+    await store.create("atomic", "start", {"run_id": "atomic"}, {"request": {"run_id": "atomic"}})
+    fencing_token = await store.claim("atomic")
+    assert fencing_token is not None
+
+    stored = await store.finalize_execution(
+        "atomic",
+        {"event_id": "atomic:terminal", "kind": "run.completed", "payload": {"status": "completed"}, "terminal": True},
+        {"status": "completed", "output": {"answer": "done"}},
+        status="completed",
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
+    )
+
+    record = await store.get("atomic")
+    assert stored["result"]["status"] == "completed"
+    assert record.status == "completed"
+    assert record.owner_id is None
+    assert record.lease_expires_at is None
+    assert record.heartbeat_at is None
+    assert len(await store.events_after("atomic")) == 1
+    assert await store.list_recovery_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_is_reconciled_or_quarantined_without_recovery() -> None:
+    store = ExecutionStore()
+    await store.create("reconcile", "start", {"run_id": "reconcile"}, {"request": {"run_id": "reconcile"}})
+    await store.append(
+        "reconcile",
+        {"event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
+        result={"status": "completed", "output": {"answer": "done"}},
+    )
+    await store.create("quarantine", "start", {"run_id": "quarantine"}, {"request": {"run_id": "quarantine"}})
+    await store.append(
+        "quarantine",
+        {"event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
+    )
+
+    assert await store.list_recovery_candidates() == []
+    assert {record.run_id for record in await store.list_terminal_reconciliation_candidates()} == {"reconcile", "quarantine"}
+    assert await store.reconcile_terminal_execution("reconcile") == "reconciled"
+    assert await store.reconcile_terminal_execution("quarantine") == "quarantined"
+    assert (await store.get("reconcile")).status == "completed"
+    assert (await store.get("quarantine")).status == "failed"
+    replay = await store.create(
+        "quarantine", "start", {"run_id": "quarantine"}, {"request": {"run_id": "quarantine"}},
+    )
+    assert replay.status == "failed"

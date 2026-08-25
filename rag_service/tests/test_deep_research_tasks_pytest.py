@@ -32,6 +32,7 @@ from app.services.content_store import SharedVolumeContentStore, set_content_sto
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
 from app.runtime.errors import RuntimeError as AgentRuntimeError
+from app.runtime.events import create_runtime_event
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
@@ -151,6 +152,48 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
     assert caught.value is rejection
     adapter.start.assert_not_awaited()
     repository.mark_runtime_started.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_replays_persisted_terminal_result_without_hermes_continuation():
+    adapter = SimpleNamespace(start=AsyncMock(), continue_run=AsyncMock(), resume=AsyncMock())
+    repository = SimpleNamespace(mark_runtime_started=AsyncMock())
+    run = SimpleNamespace(
+        id="run-1",
+        status="running",
+        pending_interrupt_json={},
+        run_metadata_json={
+            "runtime_started": True,
+            "projection": {
+                "runtime_result": {
+                    "status": "completed",
+                    "answer": "durable answer",
+                    "runtime_metadata": {"provider": "hermes"},
+                },
+            },
+        },
+        _fresh_runtime_run=False,
+    )
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+
+    result = await agent_task_runtime._invoke_task_runtime(
+        adapter=adapter,
+        definition=definition,
+        run=run,
+        runtime_request=AgentRuntimeRequest(
+            "run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id,
+        ),
+        runtime_context=RuntimeExecutionContext(),
+        runtime_event_sink=None,
+        repository=repository,
+        registry=RuntimeRegistry(adapters=[]),
+    )
+
+    assert result.status == "completed"
+    assert result.output == "durable answer"
+    adapter.start.assert_not_awaited()
+    adapter.continue_run.assert_not_awaited()
+    adapter.resume.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -447,7 +490,6 @@ async def test_attach_run_converges_on_existing_active_run(test_session_maker, s
     async with test_session_maker() as session:
         async with session.begin():
             session.add(contender)
-
     selected = await repository.attach_run(task.id, contender)
 
     assert selected.id == active.id
@@ -460,6 +502,51 @@ async def test_attach_run_converges_on_existing_active_run(test_session_maker, s
     assert refreshed_task.active_run_id == active.id
     assert refreshed_task.latest_run_attempt == 1
 
+
+@pytest.mark.asyncio
+async def test_task_run_terminal_state_and_journals_commit_together(test_session_maker, sample_thread):
+    await _seed_deep_workflow(test_session_maker)
+    task, _ = await repository.create_task(
+        thread_id=sample_thread.id, project_id=sample_thread.project_id, user_id=None,
+        workflow_id="deep_research_agent", objective="Atomic terminal commit",
+        idempotency_key=str(uuid.uuid4()), config={},
+    )
+    task, _, _ = await repository.apply_command(
+        task.id, action="start", idempotency_key="start-atomic", expected_version=task.version,
+    )
+    run = await _attach_test_run(test_session_maker, task)
+    claimed = await repository.claim_next_task("atomic-worker", lease_seconds=60)
+    assert claimed is not None and claimed.id == task.id
+    terminal = create_runtime_event(
+        event_id=f"askpdf-terminal:{run.id}:run.completed", run_id=run.id, sequence=1,
+        kind="run.completed", payload={"status": "completed"},
+    )
+    await AgentWorkflowRepository().append_run_event_payload(
+        run_id=run.id,
+        event_id=f"{run.id}:1",
+        sequence=1,
+        attempt=1,
+        kind="output.completed",
+        payload_json={"answer": "done"},
+    )
+
+    finalized = await repository.finalize_task_run(
+        task.id, run.id,
+        run_status="completed", task_status="completed", metrics={"duration_ms": 1},
+        error=None, debug_trace={"trace": {"run_id": run.id}}, terminal_reason="completed",
+        terminal_event=terminal, final_artifact_id=None,
+    )
+
+    stored_run = await AgentWorkflowRepository().get_run(run.id)
+    task_events = await repository.list_events(task.id, agent_run_id=run.id)
+    run_events = await AgentWorkflowRepository().list_run_events(run.id)
+    assert finalized.status == stored_run.status == "completed"
+    assert finalized.lease_owner is None and finalized.lease_expires_at is None
+    assert [event.event_type for event in task_events if event.terminal] == ["run.completed"]
+    assert [(event.sequence, event.kind, event.terminal) for event in run_events] == [
+        (1, "output.completed", False),
+        (2, "run.completed", True),
+    ]
 
 async def _seed_deep_workflow(test_session_maker) -> None:
     async with test_session_maker() as session:
@@ -991,8 +1078,9 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     )
     completed_run = SimpleNamespace(**{**run.__dict__, "status": "completed", "completed_at": utc_now()})
     workflow_repository = SimpleNamespace(
-        complete_run=AsyncMock(return_value=completed_run),
-        set_run_debug_trace=AsyncMock(return_value=completed_run),
+        list_run_events=AsyncMock(return_value=[]),
+        append_run_event=AsyncMock(return_value=True),
+        update_runtime_binding=AsyncMock(),
     )
 
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
@@ -1002,7 +1090,10 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_web_access", AsyncMock(return_value="undecided"))
     monkeypatch.setattr(agent_task_runtime.tasks, "list_artifacts", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", AsyncMock())
+    finalize_task_run = AsyncMock(return_value=SimpleNamespace(**{**task.__dict__, "status": "completed"}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "finalize_task_run", finalize_task_run)
     monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime, "record_terminal_result", AsyncMock())
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", lambda: workflow_repository)
     monkeypatch.setattr(
         "app.runtime.langgraph.router_runtime.continue_compiled_rag_chat",
@@ -1022,9 +1113,9 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
 
     await agent_task_runtime.execute_claimed_task(task.id, "worker-trace")
 
-    workflow_repository.complete_run.assert_awaited_once()
-    assert not workflow_repository.complete_run.await_args.kwargs["error_json"]
-    debug_payload = workflow_repository.complete_run.await_args.kwargs["debug_trace_json"]
+    finalize_task_run.assert_awaited_once()
+    assert not finalize_task_run.await_args.kwargs["error"]
+    debug_payload = finalize_task_run.await_args.kwargs["debug_trace"]
     assert debug_payload["trace"]["run_id"] == run.id
     assert debug_payload["trace"]["status"] == "completed"
     assert debug_payload["summary"]["usedNodeCount"] == 0

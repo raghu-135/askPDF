@@ -15,6 +15,7 @@ from app.db.enums import AgentRunStatus
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
     AgentRun,
+    AgentRunEvent,
     AgentTask,
     AgentTaskArtifact,
     AgentTaskCommand,
@@ -24,7 +25,7 @@ from app.db.models_sqlmodel import (
     AgentTaskTodo,
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
-from app.time_utils import utc_now
+from app.time_utils import parse_datetime_utc, utc_now
 from app.agent_workflows.trace_details import sanitize_trace_detail
 from app.runtime.contracts import TERMINAL_RUNTIME_EVENT_KINDS
 from app.runtime.events import normalize_product_event_kind
@@ -1277,6 +1278,122 @@ async def complete_task(task_id: str, *, status: str, reason: Optional[str] = No
             task.lease_expires_at = None
             task.version += 1
             await _append_event(session, task, f"task.{status}", agent_run_id=task.active_run_id, artifact_id=final_artifact_id, payload={"reason": reason, "version": task.version})
+        await session.refresh(task)
+        return task
+
+
+async def finalize_task_run(
+    task_id: str,
+    run_id: str,
+    *,
+    run_status: str,
+    task_status: str,
+    metrics: Dict[str, Any],
+    error: Optional[Dict[str, Any]],
+    debug_trace: Dict[str, Any],
+    terminal_reason: Optional[str],
+    terminal_event: Any,
+    final_artifact_id: Optional[str] = None,
+    completed_at: Any = None,
+) -> AgentTask:
+    """Atomically commit terminal run, task, and both product journals."""
+    if task_status not in TERMINAL_TASK_STATUSES:
+        raise ValueError("task finalization requires a terminal task status")
+    if run_status not in {
+        AgentRunStatus.COMPLETED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+    }:
+        raise ValueError("task finalization requires a terminal run status")
+    if not bool(getattr(terminal_event, "terminal", False)):
+        raise ValueError("task finalization requires a terminal run event")
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
+            )).scalar_one()
+            run = (await session.execute(
+                select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update()
+            )).scalar_one()
+            existing_terminal = (await session.execute(
+                select(AgentRunEvent).where(
+                    AgentRunEvent.agent_run_id == run_id,
+                    AgentRunEvent.terminal.is_(True),
+                )
+            )).scalar_one_or_none()
+            if existing_terminal is not None and existing_terminal.event_id != terminal_event.event_id:
+                raise AgentTaskConflict("task_terminal_conflict", "A different terminal run event already exists")
+            if task.status in TERMINAL_TASK_STATUSES and task.status != task_status:
+                raise AgentTaskConflict("task_terminal_conflict", "The task already has a different terminal status")
+            if run.status in {
+                AgentRunStatus.COMPLETED.value,
+                AgentRunStatus.FAILED.value,
+                AgentRunStatus.CANCELLED.value,
+            } and run.status != run_status:
+                raise AgentTaskConflict("task_terminal_conflict", "The run already has a different terminal status")
+            if (
+                existing_terminal is not None
+                and task.status == task_status
+                and run.status == run_status
+            ):
+                return task
+
+            completed_at = completed_at or utc_now()
+            run.status = run_status
+            run.completed_at = completed_at
+            replace_jsonb_field(run, "metrics_json", metrics)
+            replace_jsonb_field(run, "error_json", error or {})
+            replace_jsonb_field(run, "debug_trace_json", debug_trace)
+            run_metadata = dict(run.run_metadata_json or {})
+            projection = dict(run_metadata.get("projection") or {})
+            if projection.get("runtime_result"):
+                projection.update({
+                    "status": "applied",
+                    "reconciliation_status": "projected",
+                    "final_artifact_id": final_artifact_id,
+                })
+                run_metadata["projection"] = projection
+                replace_jsonb_field(run, "run_metadata_json", run_metadata)
+
+            task.status = task_status
+            task.current_phase = task_status
+            task.terminal_reason = terminal_reason
+            task.completed_at = completed_at
+            task.expires_at = None
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.heartbeat_at = None
+            task.version += 1
+
+            if existing_terminal is None:
+                latest_sequence = (await session.execute(
+                    select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(
+                        AgentRunEvent.agent_run_id == run_id
+                    )
+                )).scalar_one()
+                source_metadata = dict(terminal_event.source_metadata or {})
+                source_metadata.setdefault("source_sequence", int(terminal_event.sequence))
+                session.add(AgentRunEvent(
+                    agent_run_id=run_id,
+                    event_id=str(terminal_event.event_id),
+                    sequence=int(latest_sequence) + 1,
+                    attempt=int(terminal_event.attempt),
+                    kind=str(terminal_event.kind),
+                    occurred_at=parse_datetime_utc(terminal_event.occurred_at),
+                    payload_json=dict(terminal_event.payload or {}),
+                    trace_id=terminal_event.trace_id,
+                    terminal=True,
+                    source_metadata_json=source_metadata,
+                ))
+            await _append_event(
+                session,
+                task,
+                f"task.{task_status}",
+                agent_run_id=run_id,
+                artifact_id=final_artifact_id,
+                payload={"reason": terminal_reason, "version": task.version},
+            )
         await session.refresh(task)
         return task
 

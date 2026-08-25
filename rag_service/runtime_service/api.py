@@ -157,6 +157,13 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         recovery_batch_size = max(1, min(1000, int(os.getenv("AGENT_RUNTIME_RECOVERY_BATCH_SIZE", "100"))))
 
         async def recover_once() -> None:
+            for record in await execution_store.list_terminal_reconciliation_candidates(recovery_batch_size):
+                outcome = await execution_store.reconcile_terminal_execution(record.run_id)
+                if outcome == "quarantined":
+                    logger.error(
+                        "Runtime terminal invariant violation; execution quarantined | run_id=%s",
+                        record.run_id,
+                    )
             for record in await execution_store.list_recovery_candidates(recovery_batch_size):
                 if runtime_state["active"].get(record.run_id) is not None:
                     continue
@@ -352,6 +359,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         class DurableSink:
             def __init__(self) -> None:
                 self.terminal_event_id: str | None = None
+                self.terminal_event: AgentRuntimeEvent | None = None
 
             async def emit(self, *args: Any) -> None:
                 if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
@@ -381,6 +389,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                     if self.terminal_event_id is not None and self.terminal_event_id != event.event_id:
                         raise RuntimeError("runtime_protocol_error", "Runtime emitted more than one terminal event")
                     self.terminal_event_id = event.event_id
+                    self.terminal_event = event
+                    return
                 await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
 
         durable_sink = DurableSink()
@@ -396,31 +406,21 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                     payload={"status": result.status, **({"error": dict(error)} if error else {})},
                     continuation=result.continuation,
                 )
-                stored_terminal = await execution_store.append(
+            else:
+                terminal = durable_sink.terminal_event
+                if terminal is None:
+                    raise RuntimeError("runtime_protocol_error", "Runtime terminal event was not found")
+            stored_terminal = await execution_store.finalize_execution(
                     run_id,
                     terminal.to_dict(),
-                    result=result.to_dict(),
+                    result.to_dict(),
+                    status=result.status,
+                    error=dict(error) if error else None,
                     attempt=attempt,
                     owner_id=owner_id,
                     fencing_token=fencing_token,
                 )
-                durable_sink.terminal_event_id = str(stored_terminal["event_id"])
-            else:
-                await execution_store.set_event_result(
-                    run_id,
-                    durable_sink.terminal_event_id,
-                    result.to_dict(),
-                    owner_id=owner_id,
-                    fencing_token=fencing_token,
-                )
-            await execution_store.set_status(
-                run_id,
-                result.status,
-                result=result.to_dict(),
-                error=dict(error) if error else None,
-                owner_id=owner_id,
-                fencing_token=fencing_token,
-            )
+            durable_sink.terminal_event_id = str(stored_terminal["event_id"])
 
         await execution_store.set_status(run_id, "running", owner_id=owner_id, fencing_token=fencing_token)
         heartbeat_stop = asyncio.Event()
@@ -530,7 +530,6 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                     raise HTTPException(status_code=404, detail="runtime run not found")
 
             task = runtime_state["active"].get(request.run_id)
-            terminal_statuses = {"completed", "failed", "cancelled", "no_continuation"}
             should_start = allow_start and not record.replay_only and (
                 record.status == "queued"
             )
