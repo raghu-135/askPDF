@@ -167,11 +167,15 @@ def _artifact_payload(artifact: Any) -> dict[str, Any]:
 
 
 def _run_payload(run: Any) -> dict[str, Any]:
-    debug = (
-        {key: value for key, value in run.debug_trace_json.items() if key != "details"}
-        if isinstance(run.debug_trace_json, dict)
-        else None
-    )
+    retained_debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
+    if retained_debug and retained_debug.get("version") != 2:
+        debug = {"version": retained_debug.get("version"), "unsupported": True}
+    else:
+        debug = (
+            {key: value for key, value in retained_debug.items() if key != "details"}
+            if retained_debug
+            else None
+        )
     return {
         "id": run.id,
         "task_id": run.task_id,

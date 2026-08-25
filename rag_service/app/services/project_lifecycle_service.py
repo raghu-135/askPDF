@@ -90,7 +90,7 @@ def _valid_debug_trace(run: AgentRun) -> bool:
     return (
         run.status in TERMINAL_RUN_STATUSES
         and isinstance(debug, dict)
-        and debug.get("version") == 1
+        and debug.get("version") == 2
         and isinstance(debug.get("trace"), dict)
         and isinstance(debug.get("summary"), dict)
     )

@@ -12,6 +12,8 @@ from app.agent_workflows.trace_payloads import (
     merge_debug_payloads,
 )
 from app.agent_workflows.trace_recorder import AgentTraceRecorder, TRACE_SCHEMA_VERSION
+from app.runtime.events import create_runtime_event
+from app.runtime.observability import normalize_runtime_event
 
 
 def build_debug_payload(
@@ -26,12 +28,38 @@ def build_debug_payload(
     error: Any = None,
 ) -> Dict[str, Any]:
     recorder = AgentTraceRecorder(run)
+    sequence = 1
     for event in node_events:
         if isinstance(event, dict):
             recorder.record_node_event(event)
+            status = str(event.get("status") or ("failed" if event.get("error") else "completed"))
+            source_kind = f"node.{status}" if status in {"started", "completed", "failed", "skipped"} else "node.completed"
+            kind, payload = normalize_runtime_event(source_kind, event)
+            recorder.record_agent_runtime_event(create_runtime_event(
+                event_id=f"debug:{getattr(run, 'id', 'run')}:{sequence}",
+                run_id=str(getattr(run, "id", "run")),
+                sequence=sequence,
+                kind=kind,
+                payload=payload,
+                occurred_at=event.get("end_time") or event.get("start_time"),
+                source_metadata={"source_event": source_kind},
+            ))
+            sequence += 1
     for event in tool_events:
         if isinstance(event, dict):
             recorder.record_tool_event(event)
+            source_kind = "tool.completed" if event.get("ok", True) else "tool.failed"
+            kind, payload = normalize_runtime_event(source_kind, event)
+            recorder.record_agent_runtime_event(create_runtime_event(
+                event_id=f"debug:{getattr(run, 'id', 'run')}:{sequence}",
+                run_id=str(getattr(run, "id", "run")),
+                sequence=sequence,
+                kind=kind,
+                payload=payload,
+                occurred_at=event.get("end_time") or event.get("start_time"),
+                source_metadata={"source_event": source_kind},
+            ))
+            sequence += 1
     return recorder.finalize(
         run=run,
         chat_turn_id=chat_turn_id,
@@ -53,7 +81,7 @@ def build_debug_trace(
     route_reason: Any = None,
     error: Any = None,
 ) -> Dict[str, Any]:
-    """Build only the v1 trace document for tests and schema checks."""
+    """Build only the canonical trace document for tests and schema checks."""
 
     payload = build_debug_payload(
         run=run,

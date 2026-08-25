@@ -272,14 +272,22 @@ class AgentExecutionEventSink:
         )
         validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
         if terminal_committer is not None:
+            # The terminal debug payload is built by the committer, so the
+            # canonical terminal event must already be part of the recorder.
+            self._canonical_events.append(canonical)
+            if event_id:
+                self._runtime_event_ids[event_id] = candidate_hash
+            if self._trace_recorder is not None:
+                self._trace_recorder.record_agent_runtime_event(canonical)
             await terminal_committer(canonical)
-        elif self._runtime_event_persister is not None and canonical.run_id:
-            await self._runtime_event_persister(canonical.run_id, canonical)
-        self._canonical_events.append(canonical)
-        if event_id:
-            self._runtime_event_ids[event_id] = candidate_hash
-        if self._trace_recorder is not None:
-            self._trace_recorder.record_agent_runtime_event(canonical)
+        else:
+            if self._runtime_event_persister is not None and canonical.run_id:
+                await self._runtime_event_persister(canonical.run_id, canonical)
+            self._canonical_events.append(canonical)
+            if event_id:
+                self._runtime_event_ids[event_id] = candidate_hash
+            if self._trace_recorder is not None:
+                self._trace_recorder.record_agent_runtime_event(canonical)
         if event.startswith(PARALLEL_EVENT_PREFIXES):
             self._parallel_events.append(envelope)
             if len(self._parallel_events) > PARALLEL_EVENT_JOURNAL_LIMIT:

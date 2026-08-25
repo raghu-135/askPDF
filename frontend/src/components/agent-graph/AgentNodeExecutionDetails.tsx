@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
-import type { AgentRunNodeDetail } from '../../lib/api';
+import type { AgentRunOperationDetail } from '../../lib/api';
 import { JsonPreview } from './AgentGraphInspectorPrimitives';
 
 const Section = ({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) => {
@@ -19,7 +19,7 @@ const hasData = (value: unknown) => value !== undefined && value !== null
   && (!(Array.isArray(value)) || value.length > 0)
   && (!(typeof value === 'object') || Object.keys(value as Record<string, unknown>).length > 0);
 
-function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
+function AgentNodeExecutionDetails({ detail }: { detail: AgentRunOperationDetail }) {
   const llm = detail.llm || {};
   const safety = detail.safety || {};
   const eventLlm = detail.event?.llm_result_summary?.llm || {};

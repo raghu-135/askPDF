@@ -31,6 +31,10 @@ export function shouldSubscribeToAgentTaskEvents(
   );
 }
 
+export function isRunOwnedBySelectedTask(taskId: string | null, run: AgentTaskRun | null): boolean {
+  return Boolean(taskId && run && run.task_id === taskId);
+}
+
 export function isTerminalAgentTaskEvent(payload: Record<string, unknown>): boolean {
   return payload.terminal === true || TERMINAL_EVENT_TYPES.has(String(payload.type || ''));
 }

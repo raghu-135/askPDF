@@ -7,7 +7,7 @@ from app.agent_workflows.trace_sanitization import _as_dict, _as_list, _bounded_
 from app.time_utils import iso_utc_z
 
 
-DEBUG_PAYLOAD_VERSION = 1
+DEBUG_PAYLOAD_VERSION = 2
 INTERRUPT_EVENT_NAMES = {
     "pending": "interrupt.requested",
     "requested": "interrupt.requested",
@@ -196,7 +196,7 @@ def append_interrupt_event_to_debug_payload(
     run_status: Optional[str] = None,
     completed_at: Any = None,
 ) -> Any:
-    """Append a HITL event to an already-stored debug payload, preserving v1 shape."""
+    """Append a HITL event to an already-stored canonical debug payload."""
 
     if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
         return debug_payload
@@ -245,7 +245,7 @@ def append_runtime_event_to_debug_payload(
     run_status: Optional[str] = None,
     completed_at: Any = None,
 ) -> Any:
-    """Append a generic root lifecycle event to a stored v1 debug payload."""
+    """Append a generic root lifecycle event to a stored trace payload."""
 
     if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
         return debug_payload
@@ -425,9 +425,51 @@ def merge_debug_payloads(
             base_root["end_time"] = iso_utc_z(completed_at) if completed_at is not None else None
 
     _rebuild_trace_refs(base_trace)
-    from app.agent_workflows.trace_summary import _build_summary_from_trace, build_debug_graph
-    summary = _build_summary_from_trace(base_trace, resolved_spec)
-    payload = {**base_payload, "trace": base_trace, "summary": summary}
+    from app.agent_workflows.trace_summary import _build_summary_from_trace
+    summary = {
+        **_build_summary_from_trace(base_trace, resolved_spec),
+        **_as_dict(base_payload.get("summary")),
+        **_as_dict(incoming_payload.get("summary")),
+    }
+
+    def merge_rows(name: str, key_fields: tuple[str, ...]) -> List[Dict[str, Any]]:
+        rows: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+        for row in [*_as_list(base_payload.get(name)), *_as_list(incoming_payload.get(name))]:
+            if not isinstance(row, dict):
+                continue
+            key = tuple(row.get(field) for field in key_fields)
+            rows[key] = {**rows.get(key, {}), **row}
+        return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row.get("event_id") or row.get("operation_id") or "")))
+
+    payload = {
+        **base_payload,
+        "trace": base_trace,
+        "summary": summary,
+        "events": merge_rows("events", ("event_id",)),
+        "operations": merge_rows("operations", ("operation_id", "visit_index")),
+        "tools": merge_rows("tools", ("event_id",)),
+        "approvals": merge_rows("approvals", ("event_id",)),
+        "subagents": merge_rows("subagents", ("event_id",)),
+        "artifacts": merge_rows("artifacts", ("event_id",)),
+        "visualizations": {
+            **_as_dict(base_payload.get("visualizations")),
+            **_as_dict(incoming_payload.get("visualizations")),
+        },
+    }
+    summary.pop("nodes", None)
+    summary.pop("usedNodeCount", None)
+    summary.pop("availableNodeCount", None)
+    summary["operations"] = payload["operations"]
+    summary["tools"] = payload["tools"]
+    summary["usedOperationCount"] = len({
+        str(row.get("operation_id"))
+        for row in payload["operations"]
+        if row.get("operation_id") and row.get("status") != "skipped"
+    })
+    base_trace.update({
+        key: payload[key]
+        for key in ("events", "operations", "tools", "approvals", "subagents", "artifacts", "visualizations")
+    })
     detail_by_visit: Dict[tuple[str, int], Dict[str, Any]] = {}
     for detail in [*_as_list(base_payload.get("details")), *_as_list(incoming_payload.get("details"))]:
         if not isinstance(detail, dict):
@@ -436,7 +478,7 @@ def merge_debug_payloads(
             visit_index = max(1, int(detail.get("visit_index") or 1))
         except (TypeError, ValueError):
             visit_index = 1
-        detail_by_visit[(str(detail.get("node_id") or ""), visit_index)] = dict(detail)
+        detail_by_visit[(str(detail.get("operation_id") or ""), visit_index)] = dict(detail)
     if detail_by_visit:
         from app.agent_workflows.trace_details import TRACE_DETAIL_RUN_LIMIT, trace_detail_size
 
@@ -450,8 +492,8 @@ def merge_debug_payloads(
             if retained_size + detail_size > TRACE_DETAIL_RUN_LIMIT:
                 merge_limit_reached = True
                 retained = {
-                    "node_id": detail.get("node_id"),
-                    "node_type": detail.get("node_type"),
+                    "operation_id": detail.get("operation_id"),
+                    "operation_type": detail.get("operation_type"),
                     "visit_index": detail.get("visit_index"),
                     "status": detail.get("status"),
                     "safety": {
@@ -487,7 +529,4 @@ def merge_debug_payloads(
         })
     if detail_safety:
         payload["detail_safety"] = detail_safety
-    graph_spec = _as_dict(_as_dict(resolved_spec.get("config")).get("graph"))
-    if _as_list(graph_spec.get("nodes")):
-        payload["graph"] = build_debug_graph(resolved_spec=resolved_spec, summary=summary)
     return payload

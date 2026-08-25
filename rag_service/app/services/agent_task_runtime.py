@@ -241,17 +241,6 @@ async def _finalize_task_run(
     final_artifact_id: Optional[str] = None,
 ) -> None:
     completed_at = datetime.now(timezone.utc)
-    debug_payload = finalize_and_merge_debug_payload(
-        recorder=recorder,
-        run=run,
-        metrics=metrics,
-        result=result,
-        route=result.get("route"),
-        route_reason=result.get("route_reason"),
-        error=error,
-        run_status=run_status,
-        completed_at=completed_at,
-    )
     terminal_kind = (
         "run.cancelled" if run_status == AgentRunStatus.CANCELLED.value
         else "run.failed" if run_status == AgentRunStatus.FAILED.value
@@ -259,6 +248,17 @@ async def _finalize_task_run(
     )
 
     async def commit(terminal_event: Any) -> None:
+        debug_payload = finalize_and_merge_debug_payload(
+            recorder=recorder,
+            run=run,
+            metrics=metrics,
+            result=result,
+            route=result.get("route"),
+            route_reason=result.get("route_reason"),
+            error=error,
+            run_status=run_status,
+            completed_at=completed_at,
+        )
         await tasks.finalize_task_run(
             task.id,
             run.id,
@@ -275,7 +275,14 @@ async def _finalize_task_run(
 
     await sink.finish(
         terminal_kind,
-        {"run_id": run.id, "task_id": task.id, "status": run_status, "response": result},
+        {
+            "run_id": run.id,
+            "task_id": task.id,
+            "status": run_status,
+            "response": result,
+            "error": error,
+            "terminal_reason": reason,
+        },
         terminal_committer=commit,
     )
 

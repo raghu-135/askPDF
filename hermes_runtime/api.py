@@ -156,12 +156,23 @@ class _HermesEventBudget:
 
 
 def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, Any] | None = None, *, event_id: str | None = None, source_event_id: str | None = None, terminal: bool = False, continuation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    normalized_payload = dict(payload or {})
+    hermes_details = {
+        key: normalized_payload.get(key)
+        for key in ("session_id", "upstream_run_id", "tool_call_id", "approval_id", "subagent_id", "parent_subagent_id")
+        if normalized_payload.get(key) is not None
+    }
+    existing_details = normalized_payload.get("framework_details")
+    normalized_payload["framework_details"] = {
+        **(dict(existing_details) if isinstance(existing_details, Mapping) else {}),
+        "hermes": hermes_details,
+    }
     event = {
         "event_id": event_id or f"{run_id}:{sequence}",
         "run_id": run_id,
         "sequence": sequence,
         "kind": kind,
-        "payload": dict(payload or {}),
+        "payload": normalized_payload,
         "terminal": terminal,
         "source_metadata": {"framework": "hermes", "source_event": source_event_id} if source_event_id else {"framework": "hermes"},
     }

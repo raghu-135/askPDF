@@ -10,16 +10,17 @@ import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Chip, CircularProgress, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { getAgentRunOperationDetails, type AgentRunNodeDetail } from '../../lib/api';
-import type { TraceNodeView, TraceRunView } from '../agent-debug/agent-trace-projection';
+import { getAgentRunOperationDetails, type AgentRunOperationDetail } from '../../lib/api';
+import type { TraceOperationView, TraceRunView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
 import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 import { formatDurationMs } from '../../lib/formatDuration';
-import { TraceLlmUsageTooltip, TraceNodesTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
+import { TraceLlmUsageTooltip, TraceOperationsTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
+import GenericTraceTimeline from '../agent-debug/GenericTraceTimeline';
+import TraceVisualizationSlot from '../agent-debug/TraceVisualizationSlot';
 import { compactExecutionText } from './agent-execution-display';
 import {
   agentNodeVisitKey,
@@ -30,11 +31,19 @@ import {
   toAgentNodeVisitRef,
 } from './agent-node-visits';
 
-const AgentDebugCanvas = dynamic(() => import('./AgentDebugCanvas'), { ssr: false });
+const visitKey = (operation: Pick<TraceOperationView, 'id' | 'visitIndex'>) => agentNodeVisitKey(operation);
 
-const visitKey = (node: Pick<TraceNodeView, 'id' | 'visitIndex'>) => agentNodeVisitKey(node);
+const failureTitle = (failure: Record<string, any>) => {
+  const error = failure.error || failure.payload?.error || failure;
+  return String(error.code || failure.kind || 'runtime_failure').replaceAll('_', ' ');
+};
 
-const nodeSummary = (node: TraceNodeView) => {
+const failureMessage = (failure: Record<string, any>) => {
+  const error = failure.error || failure.payload?.error || failure;
+  return String(error.safe_message || error.message || error.raw_message || failure.payload?.message || 'No failure message was provided.');
+};
+
+const nodeSummary = (node: TraceOperationView) => {
   const raw = node.raw || {};
   const detail = raw.detail || {};
   const event = detail.event || raw;
@@ -69,7 +78,6 @@ function AgentExecutionView({
   status,
   running = false,
   focusedTraceRefs,
-  defaultGraphOpen = false,
   defaultFinalAnswerOpen = false,
   suspended = false,
   chatMode = false,
@@ -84,21 +92,19 @@ function AgentExecutionView({
   status?: string;
   running?: boolean;
   focusedTraceRefs?: AgentTraceRefs | null;
-  defaultGraphOpen?: boolean;
   defaultFinalAnswerOpen?: boolean;
   suspended?: boolean;
   chatMode?: boolean;
   detailsAvailable?: boolean;
 }) {
-  const graphSupported = Boolean(traceView.graph && (traceView.graph.nodes.length > 0 || traceView.graph.edges.length > 0));
   const initialDetails = useMemo(() => {
-    const result: Record<string, AgentRunNodeDetail> = {};
-    traceView.nodes.forEach((node) => {
-      if (node.raw?.detail) result[visitKey(node)] = node.raw.detail as AgentRunNodeDetail;
+    const result: Record<string, AgentRunOperationDetail> = {};
+    traceView.operations.forEach((node) => {
+      if (node.raw?.detail) result[visitKey(node)] = node.raw.detail as AgentRunOperationDetail;
     });
     return result;
-  }, [traceView.nodes]);
-  const [details, setDetails] = useState<Record<string, AgentRunNodeDetail>>(initialDetails);
+  }, [traceView.operations]);
+  const [details, setDetails] = useState<Record<string, AgentRunOperationDetail>>(initialDetails);
   const [expanded, setExpanded] = useState<string | false>(false);
   const [selectedVisit, setSelectedVisit] = useState<AgentNodeVisitRef | null>(null);
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = useState<string | null>(null);
@@ -106,7 +112,6 @@ function AgentExecutionView({
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
   const [progressOpen, setProgressOpen] = useState(true);
-  const [graphOpen, setGraphOpen] = useState(defaultGraphOpen);
   const [finalAnswerOpen, setFinalAnswerOpen] = useState(defaultFinalAnswerOpen);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
@@ -128,7 +133,6 @@ function AgentExecutionView({
       setLoadingKey(null);
       setDetailErrors({});
       setProgressOpen(true);
-      setGraphOpen(defaultGraphOpen);
       setFinalAnswerOpen(defaultFinalAnswerOpen);
       return;
     }
@@ -136,9 +140,9 @@ function AgentExecutionView({
       const changed = Object.entries(initialDetails).some(([key, detail]) => current[key] !== detail);
       return changed ? { ...current, ...initialDetails } : current;
     });
-  }, [defaultFinalAnswerOpen, defaultGraphOpen, detailContextKey, initialDetails]);
+  }, [defaultFinalAnswerOpen, detailContextKey, initialDetails]);
 
-  const loadDetail = useCallback(async (node: TraceNodeView) => {
+  const loadDetail = useCallback(async (node: TraceOperationView) => {
     const key = visitKey(node);
     const requestKey = `${detailContextKey}:${key}`;
     if (!detailsAvailable || details[key] || inFlightDetailKeys.current.has(requestKey) || !runId || !threadId || node.status === 'active') return;
@@ -162,7 +166,7 @@ function AgentExecutionView({
     }
   }, [detailContextKey, details, detailsAvailable, runId, threadId]);
 
-  const selectVisit = useCallback((node: TraceNodeView, open: boolean) => {
+  const selectVisit = useCallback((node: TraceOperationView, open: boolean) => {
     const key = visitKey(node);
     selectionContextRef.current = detailContextKey;
     setExpanded(open ? key : false);
@@ -174,12 +178,12 @@ function AgentExecutionView({
   }, [detailContextKey, loadDetail]);
 
   const revealVisit = useCallback((visit: AgentNodeVisitRef) => {
-    const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
+    const node = traceView.operations.find((row) => visitKey(row) === agentNodeVisitKey(visit));
     if (!node) return;
     selectVisit(node, true);
     setProgressOpen(true);
     setRevealRequest((current) => ({ key: agentNodeVisitKey(visit), token: (current?.token || 0) + 1 }));
-  }, [selectVisit, traceView.nodes]);
+  }, [selectVisit, traceView.operations]);
 
   useEffect(() => {
     if (!revealRequest || expanded !== revealRequest.key) return;
@@ -200,25 +204,25 @@ function AgentExecutionView({
       return;
     }
     setSelectedTopologyNodeId(selection.node.id);
-    const node = [...traceView.nodes].reverse().find((row) => (
+    const node = [...traceView.operations].reverse().find((row) => (
       String(row.topologyRef?.id || row.id) === selection.node.id
     ));
     if (node) revealVisit(toAgentNodeVisitRef(node));
     else setSelectedVisit(null);
-  }, [revealVisit, traceView.nodes]);
+  }, [revealVisit, traceView.operations]);
 
   useEffect(() => {
     if (!selectedVisit) return;
     if (selectionContextRef.current !== detailContextKey) return;
     const selectedKey = agentNodeVisitKey(selectedVisit);
-    if (traceView.nodes.some((node) => visitKey(node) === selectedKey)) return;
-    const fallback = [...traceView.nodes].reverse().find((node) => node.id === selectedVisit.nodeId);
+    if (traceView.operations.some((node) => visitKey(node) === selectedKey)) return;
+    const fallback = [...traceView.operations].reverse().find((node) => node.id === selectedVisit.nodeId);
     if (fallback) {
       setSelectedVisit(toAgentNodeVisitRef(fallback));
     } else {
       setSelectedVisit(null);
     }
-  }, [detailContextKey, selectedVisit, traceView.nodes]);
+  }, [detailContextKey, selectedVisit, traceView.operations]);
 
   const finalOutput = traceView.finalOutput;
   const memoryDebug = traceView.memory;
@@ -251,8 +255,8 @@ function AgentExecutionView({
                 <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
               )}
               {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
-              <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
-                <Chip aria-label={`${traceView.usedNodeCount} operations, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}o${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
+              <Tooltip title={<TraceOperationsTooltip operations={traceView.operations} usedCount={traceView.usedOperationCount} availableCount={traceView.availableOperationCount} />} arrow>
+                <Chip aria-label={`${traceView.usedOperationCount} operations, ${traceView.operations.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedOperationCount}o${traceView.operations.length !== traceView.usedOperationCount ? ` · ${traceView.operations.length}v` : ''}`} sx={{ height: 22 }} />
               </Tooltip>
               {traceView.tools.length > 0 && (
                 <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
@@ -296,16 +300,35 @@ function AgentExecutionView({
             </Stack>
           </Paper>
         )}
-        {traceView.nodes.length === 0 ? (
+        {traceView.errors.length > 0 && (
+          <Alert severity="error" icon={<ErrorOutlineIcon />} sx={{ mb: 0.75, '& .MuiAlert-message': { width: '100%' } }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {traceView.errors.length === 1 ? 'Run failure' : `Failures (${traceView.errors.length})`}
+            </Typography>
+            <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+              {traceView.errors.map((failure, index) => (
+                <Box component="details" key={String(failure.event_id || `${failureTitle(failure)}:${index}`)} open={index === traceView.errors.length - 1}>
+                  <Box component="summary" sx={{ cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+                    {failureTitle(failure)} · {failureMessage(failure)}
+                  </Box>
+                  <Box component="pre" sx={{ mt: 0.4, mb: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.7rem' }}>
+                    {JSON.stringify(failure, null, 2)}
+                  </Box>
+                </Box>
+              ))}
+            </Stack>
+          </Alert>
+        )}
+        {traceView.operations.length === 0 ? (
           <Typography variant="body2" color="text.secondary">Start a run to see each operation.</Typography>
-        ) : traceView.nodes.map((node, index) => {
+        ) : traceView.operations.map((node, index) => {
           const key = visitKey(node);
           const detail = details[key];
-          const nodeVisits = getChronologicalNodeVisits(traceView.nodes, node.id);
+          const nodeVisits = getChronologicalNodeVisits(traceView.operations, node.id);
           const visitPosition = nodeVisits.findIndex((visit) => visitKey(visit) === key);
           const visitRef = toAgentNodeVisitRef(node);
-          const previousVisit = getPreviousNodeVisit(traceView.nodes, visitRef);
-          const nextVisit = getNextNodeVisit(traceView.nodes, visitRef);
+          const previousVisit = getPreviousNodeVisit(traceView.operations, visitRef);
+          const nextVisit = getNextNodeVisit(traceView.operations, visitRef);
           const route = getNodeVisitRoute(node);
           const summary = nodeSummary(node);
           const formattedDuration = formatDurationMs(node.durationMs);
@@ -326,6 +349,7 @@ function AgentExecutionView({
               disableGutters
               sx={{
                 width: '100%',
+                ml: node.parentOperationId ? 1.5 : 0,
                 minWidth: 0,
                 maxWidth: '100%',
                 overflow: 'hidden',
@@ -446,31 +470,15 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
-      {graphSupported ? (
-        <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-          <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
-            <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
-              Execution graph
-            </Box>
-            {graphOpen && (
-              <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
-                <AgentDebugCanvas
-                  resolvedSpec={resolvedSpec}
-                  workflowId={workflowId}
-                  traceView={traceView}
-                  focusedTraceRefs={focusedTraceRefs}
-                  selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
-                  onSelectionChange={handleGraphSelection}
-                />
-              </Box>
-            )}
-          </Box>
-        </Paper>
-      ) : (
-        <Paper elevation={0} square sx={{ px: 1, py: 0.8, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-          <Typography variant="caption" color="text.secondary">This runtime exposes execution operations without topology.</Typography>
-        </Paper>
-      )}
+      <GenericTraceTimeline events={traceView.events} />
+      <TraceVisualizationSlot
+        traceView={traceView}
+        resolvedSpec={resolvedSpec}
+        workflowId={workflowId}
+        focusedTraceRefs={focusedTraceRefs}
+        selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
+        onGraphSelection={handleGraphSelection}
+      />
     </Stack>
   );
 }

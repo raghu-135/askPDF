@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isRunOwnedBySelectedTask,
   isTaskOwnedAgentRun,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
@@ -51,6 +52,12 @@ test('committed task terminal events are recognized without framework-specific p
 test('task-owned runs cannot use Debug Trace as an approval surface', () => {
   assert.equal(isTaskOwnedAgentRun({ id: 'run-1', task_id: 'task-1' }), true);
   assert.equal(isTaskOwnedAgentRun({ id: 'run-2', task_id: null }), false);
+});
+
+test('task navigation never combines the newly selected task with a stale run', () => {
+  assert.equal(isRunOwnedBySelectedTask('task-b', { id: 'run-a', task_id: 'task-a' }), false);
+  assert.equal(isRunOwnedBySelectedTask('task-b', { id: 'run-b', task_id: 'task-b' }), true);
+  assert.equal(isRunOwnedBySelectedTask(null, { id: 'run-b', task_id: 'task-b' }), false);
 });
 
 test('Hermes uses its deployment context without changing LangGraph selection', () => {

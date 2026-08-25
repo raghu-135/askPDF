@@ -101,7 +101,7 @@ const backendDebug = {
       llm_token_count_total: 125,
       llm_retry_count: 1,
     },
-    nodes: [
+    operations: [
       {
         id: 'planner',
         status: 'completed',
@@ -168,8 +168,8 @@ const backendDebug = {
         },
       },
     ],
-    usedNodeCount: 2,
-    availableNodeCount: 4,
+    usedOperationCount: 2,
+    availableOperationCount: 4,
     usedToolCount: 1,
     availableToolCount: 2,
     warningCount: 0,
@@ -228,11 +228,39 @@ const backendDebug = {
   },
 };
 
+const canonicalDebug = (source) => {
+  const debug = structuredClone(source);
+  const operations = (debug.summary?.operations || []).map((row) => ({
+    operation_id: row.operation_id || row.id,
+    operation_type: row.operation_type || row.type,
+    operation_label: row.operation_label || row.label || row.id,
+    visit_index: row.visit_index || row.visitIndex,
+    status: row.status,
+    duration_ms: row.duration_ms || row.durationMs,
+    topology_ref: { kind: 'graph_node', id: row.operation_id || row.id },
+    ...row,
+  }));
+  const graph = debug.graph;
+  debug.version = 2;
+  debug.events = [];
+  debug.operations = operations;
+  debug.summary = { ...debug.summary, operations };
+  debug.visualizations = {
+    'generic.timeline': { id: 'generic.timeline' },
+    ...(graph ? { 'langgraph.graph': {
+      id: 'langgraph.graph', nodes: graph.nodes, edges: graph.edges,
+      execution_plan: graph.executionPlan, selected_route: graph.selectedRoute,
+    } } : {}),
+  };
+  delete debug.graph;
+  return debug;
+};
+
 const traceBackedRun = {
   id: 'run-1',
   workflow_id: 'plan_execute_rag_agent',
   metrics_json: { duration_ms: 99 },
-  debug: backendDebug,
+  debug: canonicalDebug(backendDebug),
 };
 
 test('trace projection reads backend-provided summary and graph', () => {
@@ -240,14 +268,28 @@ test('trace projection reads backend-provided summary and graph', () => {
 
   assert.equal(view.route, 'execute');
   assert.equal(view.routeReason, 'Document evidence requested.');
-  assert.deepEqual(view.nodes.map((node) => node.id), ['planner', 'retrieval_worker', 'thread_conversation_history_worker']);
+  assert.deepEqual(view.operations.map((operation) => operation.id), ['planner', 'retrieval_worker', 'thread_conversation_history_worker']);
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
-  assert.equal(view.nodes[0].visitIndex, 1);
+  assert.equal(view.operations[0].visitIndex, 1);
   assert.equal(view.tools[0].callerVisitIndex, 1);
-  assert.equal(view.nodes[0].span?.span_id, 'node:planner:0');
+  assert.equal(view.operations[0].span?.span_id, 'node:planner:0');
   assert.equal(view.tools[0].span?.span_id, 'tool:search_documents:0');
   assert.equal(view.graph?.selectedRoute, 'execute');
   assert.equal(view.graph?.nodes[1].toolSummaries.length, 1);
+});
+
+test('retained trace prefers correlated canonical failures over aggregate counters', () => {
+  const failures = [
+    { event_id: 'failure-1', sequence: 10, kind: 'tool.failed', classification: 'primary', error: { code: 'search_failed', message: 'Search unavailable' } },
+    { event_id: 'failure-2', sequence: 11, kind: 'run.failed', classification: 'terminal', failure_count: 2, primary_failure_event_id: 'failure-1', contributing_failure_event_ids: ['failure-1'], error: { code: 'evidence_unavailable', message: 'Evidence unavailable' } },
+  ];
+  const debug = canonicalDebug({ ...backendDebug, failures, summary: { ...backendDebug.summary, errorCount: 99, errors: [] } });
+
+  const view = buildRunTraceView({ ...traceBackedRun, debug });
+
+  assert.equal(view.errorCount, 2);
+  assert.deepEqual(view.errors.map((failure) => failure.event_id), ['failure-1', 'failure-2']);
+  assert.deepEqual(view.errors[1].contributing_failure_event_ids, ['failure-1']);
 });
 
 test('trace projection preserves custom node type metadata and normalizes graph labels', () => {
@@ -255,7 +297,7 @@ test('trace projection preserves custom node type metadata and normalizes graph 
     ...backendDebug,
     summary: {
       ...backendDebug.summary,
-      nodes: [
+      operations: [
         {
           id: 'retrieval_1',
           type: 'retrieval_worker',
@@ -315,7 +357,7 @@ test('trace projection preserves custom node type metadata and normalizes graph 
   };
 
   const view = buildRunTraceView(
-    { ...traceBackedRun, id: 'run-custom', debug: customDebug },
+    { ...traceBackedRun, id: 'run-custom', debug: canonicalDebug(customDebug) },
     {
       nodeCatalog: {
         retrieval_worker: {
@@ -328,10 +370,10 @@ test('trace projection preserves custom node type metadata and normalizes graph 
     },
   );
 
-  assert.equal(view.nodes[0].id, 'retrieval_1');
-  assert.equal(view.nodes[0].type, 'retrieval_worker');
-  assert.equal(view.nodes[0].label, 'Catalog Document Retrieval');
-  assert.equal(view.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
+  assert.equal(view.operations[0].id, 'retrieval_1');
+  assert.equal(view.operations[0].type, 'retrieval_worker');
+  assert.equal(view.operations[0].label, 'retrieval_1');
+  assert.equal(view.operations[0].instanceLabel, 'retrieval_1 · retrieval_worker');
   assert.equal(view.tools[0].callerNode, 'retrieval_1');
   assert.equal(view.tools[0].callerNodeType, 'retrieval_worker');
   assert.equal(view.graph?.nodes[0].label, 'Catalog Document Retrieval');
@@ -344,8 +386,8 @@ test('trace projection preserves custom node type metadata and normalizes graph 
 test('trace projection uses backend counts without inferring from spans', () => {
   const view = buildRunTraceView(traceBackedRun);
 
-  assert.equal(view.usedNodeCount, 2);
-  assert.equal(view.availableNodeCount, 4);
+  assert.equal(view.usedOperationCount, 2);
+  assert.equal(view.availableOperationCount, 4);
   assert.equal(view.usedToolCount, 1);
   assert.equal(view.availableToolCount, 2);
   assert.equal(view.warningCount, 0);
@@ -360,80 +402,16 @@ test('trace projection creates expandable rows for retained detail visits missin
     debug: {
       ...traceBackedRun.debug,
       detail_manifest: [
-        { node_id: 'planner', node_type: 'deep_task_planner', visit_index: 1, status: 'completed', available: true },
-        { node_id: 'planner', node_type: 'deep_task_planner', visit_index: 2, status: 'completed', available: true },
+        { operation_id: 'planner', operation_type: 'deep_task_planner', visit_index: 1, status: 'completed', available: true },
+        { operation_id: 'planner', operation_type: 'deep_task_planner', visit_index: 2, status: 'completed', available: true },
       ],
-      summary: { ...traceBackedRun.debug.summary, nodes: [] },
+      operations: [],
+      summary: { ...traceBackedRun.debug.summary, operations: [] },
     },
   });
 
-  assert.deepEqual(view.nodes.map((node) => [node.id, node.visitIndex]), [['planner', 1], ['planner', 2]]);
-  assert.equal(view.usedNodeCount, 2);
-});
-
-test('trace projection reads visit metadata from raw fallback fields', () => {
-  const rawVisitDebug = {
-    ...backendDebug,
-    summary: {
-      ...backendDebug.summary,
-      nodes: [
-        {
-          id: 'evidence_evaluator',
-          status: 'completed',
-          skipped: false,
-          durationMs: 5,
-          warningCodes: [],
-          raw: { node: 'evidence_evaluator', visit_index: 2 },
-        },
-      ],
-      tools: [
-        {
-          name: 'search_documents',
-          callerNode: 'evidence_evaluator',
-          ok: true,
-          warningCodes: [],
-          raw: { tool_name: 'search_documents', caller_node: 'evidence_evaluator', caller_visit_index: 2 },
-        },
-      ],
-    },
-  };
-
-  const view = buildRunTraceView({ ...traceBackedRun, debug: rawVisitDebug });
-
-  assert.equal(view.nodes[0].visitIndex, 2);
-  assert.equal(view.tools[0].callerVisitIndex, 2);
-});
-
-test('trace projection keeps visit metadata optional for older traces', () => {
-  const olderDebug = {
-    ...backendDebug,
-    summary: {
-      ...backendDebug.summary,
-      nodes: [
-        {
-          id: 'retrieval_worker',
-          status: 'completed',
-          skipped: false,
-          durationMs: 8,
-          warningCodes: [],
-          raw: { node: 'retrieval_worker' },
-        },
-      ],
-      tools: [
-        {
-          name: 'search_documents',
-          callerNode: 'retrieval_worker',
-          ok: true,
-          warningCodes: [],
-          raw: { tool_name: 'search_documents', caller_node: 'retrieval_worker' },
-        },
-      ],
-    },
-  };
-  const view = buildRunTraceView({ ...traceBackedRun, debug: olderDebug });
-
-  assert.equal(view.nodes[0].visitIndex, undefined);
-  assert.equal(view.tools[0].callerVisitIndex, undefined);
+  assert.deepEqual(view.operations.map((operation) => [operation.id, operation.visitIndex]), [['planner', 1], ['planner', 2]]);
+  assert.equal(view.usedOperationCount, 2);
 });
 
 test('retained terminal node spans cannot remain visually active', () => {
@@ -441,7 +419,7 @@ test('retained terminal node spans cannot remain visually active', () => {
     ...backendDebug,
     summary: {
       ...backendDebug.summary,
-      nodes: [
+      operations: [
         {
           id: 'serial_dispatch',
           type: 'serial_dispatch',
@@ -464,9 +442,9 @@ test('retained terminal node spans cannot remain visually active', () => {
     },
   };
 
-  const view = buildRunTraceView({ ...traceBackedRun, debug: completedRun });
+  const view = buildRunTraceView({ ...traceBackedRun, debug: canonicalDebug(completedRun) });
 
-  assert.deepEqual(view.nodes.map((node) => node.status), ['completed', 'completed']);
+  assert.deepEqual(view.operations.map((operation) => operation.status), ['completed', 'completed']);
 });
 
 test('trace projection handles null debug payload', () => {
@@ -483,10 +461,10 @@ test('trace export returns full backend debug json', () => {
   const view = buildRunTraceView(traceBackedRun);
   const exported = JSON.parse(buildTraceExportJson(view));
 
-  assert.equal(exported.version, 1);
+  assert.equal(exported.version, 2);
   assert.equal(exported.trace.trace_id, 'run-1');
   assert.equal(exported.summary.route, 'execute');
-  assert.equal(exported.graph.selectedRoute, 'execute');
+  assert.equal(exported.visualizations['langgraph.graph'].selected_route, 'execute');
   assert.equal(exported.node_events, undefined);
   assert.equal(exported.tool_events, undefined);
 });
@@ -501,17 +479,17 @@ test('live trace projection keeps loop visits, full details, tools, and final ou
     checkpoint_after: { replan_count: visit },
   });
   const view = buildLiveTraceView([
-    { id: 1, event: 'node.started', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 1 } },
-    { id: 2, event: 'node.completed', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 1, evaluator_route: 'replan', detail: detail(1) } },
+    { id: 1, event: 'operation.started', data: { operation_id: 'evidence_evaluator', operation_type: 'evidence_evaluator', visit_index: 1 } },
+    { id: 2, event: 'operation.completed', data: { operation_id: 'evidence_evaluator', operation_type: 'evidence_evaluator', visit_index: 1, evaluator_route: 'replan', detail: detail(1) } },
     { id: 3, event: 'tool.completed', data: { tool_name: 'search_documents', caller_node: 'evidence_evaluator', caller_visit_index: 1, ok: true } },
-    { id: 4, event: 'node.started', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 2 } },
-    { id: 5, event: 'node.completed', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 2, evaluator_route: 'answer', detail: detail(2) } },
+    { id: 4, event: 'operation.started', data: { operation_id: 'evidence_evaluator', operation_type: 'evidence_evaluator', visit_index: 2 } },
+    { id: 5, event: 'operation.completed', data: { operation_id: 'evidence_evaluator', operation_type: 'evidence_evaluator', visit_index: 2, evaluator_route: 'answer', detail: detail(2) } },
     { id: 6, event: 'run.completed', data: { final_output: { answer: 'Complete final answer', route: 'document' } } },
   ]);
 
-  assert.deepEqual(view.nodes.map((node) => node.visitIndex), [1, 2]);
-  assert.equal(view.nodes[0].raw.detail.checkpoint_after.replan_count, 1);
-  assert.equal(view.nodes[1].raw.detail.checkpoint_after.replan_count, 2);
+  assert.deepEqual(view.operations.map((operation) => operation.visitIndex), [1, 2]);
+  assert.equal(view.operations[0].raw.detail.checkpoint_after.replan_count, 1);
+  assert.equal(view.operations[1].raw.detail.checkpoint_after.replan_count, 2);
   assert.equal(view.tools[0].callerVisitIndex, 1);
   assert.equal(view.finalOutput.answer, 'Complete final answer');
   assert.deepEqual(view.detailManifest.map((row) => row.visit_index), [1, 2]);
@@ -519,21 +497,21 @@ test('live trace projection keeps loop visits, full details, tools, and final ou
 
 test('live trace projection preserves string node failures', () => {
   const view = buildLiveTraceView([
-    { id: 1, event: 'node.failed', data: { node_id: 'router', node_type: 'router', visit_index: 1, error: 'Model connection failed' } },
+    { id: 1, event: 'operation.failed', data: { operation_id: 'router', operation_type: 'router', visit_index: 1, error: 'Model connection failed' } },
   ]);
 
-  assert.equal(view.nodes[0].status, 'error');
-  assert.equal(view.nodes[0].error.raw_message, 'Model connection failed');
+  assert.equal(view.operations[0].status, 'error');
+  assert.equal(view.operations[0].error.raw_message, 'Model connection failed');
   assert.equal(view.errors[0].raw_message, 'Model connection failed');
 });
 
 test('live trace projection surfaces terminal run failures without a node failure', () => {
   const view = buildLiveTraceView([
-    { id: 1, event: 'node.completed', data: { node_id: 'router', node_type: 'router', visit_index: 1, route: 'memory' } },
+    { id: 1, event: 'operation.completed', data: { operation_id: 'router', operation_type: 'router', visit_index: 1, route: 'memory' } },
     { id: 2, event: 'run.failed', data: { error: { code: 'workflow_failed', raw_message: 'No destination for route memory' } } },
   ]);
 
-  assert.equal(view.nodes[0].status, 'completed');
+  assert.equal(view.operations[0].status, 'completed');
   assert.equal(view.errorCount, 1);
   assert.equal(view.errors[0].code, 'workflow_failed');
   assert.equal(view.errors[0].raw_message, 'No destination for route memory');
@@ -541,19 +519,19 @@ test('live trace projection surfaces terminal run failures without a node failur
 
 test('live and retained projections merge repeated visits without duplicating identities', () => {
   const retained = buildLiveTraceView([
-    { id: 1, event: 'node.completed', data: { node_id: 'router', node_type: 'router', visit_index: 1, route: 'execute' } },
-    { id: 2, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
+    { id: 1, event: 'operation.completed', data: { operation_id: 'router', operation_type: 'router', visit_index: 1, route: 'execute' } },
+    { id: 2, event: 'operation.completed', data: { operation_id: 'worker', operation_type: 'document_retrieval', visit_index: 1 } },
   ]);
   const live = buildLiveTraceView([
-    { id: 3, event: 'node.started', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
-    { id: 4, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
-    { id: 5, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 2 } },
+    { id: 3, event: 'operation.started', data: { operation_id: 'worker', operation_type: 'document_retrieval', visit_index: 1 } },
+    { id: 4, event: 'operation.completed', data: { operation_id: 'worker', operation_type: 'document_retrieval', visit_index: 1 } },
+    { id: 5, event: 'operation.completed', data: { operation_id: 'worker', operation_type: 'document_retrieval', visit_index: 2 } },
   ]);
 
   const merged = mergeLiveAndRetainedTraceViews(live, retained);
 
-  assert.deepEqual(merged.nodes.map((node) => `${node.id}:${node.visitIndex}`), ['router:1', 'worker:1', 'worker:2']);
-  assert.equal(merged.nodes[1].status, 'completed');
+  assert.deepEqual(merged.operations.map((operation) => `${operation.id}:${operation.visitIndex}`), ['router:1', 'worker:1', 'worker:2']);
+  assert.equal(merged.operations[1].status, 'completed');
 });
 
 test('runtime-neutral operation events project without graph semantics', () => {
@@ -587,7 +565,7 @@ test('live trace projection correlates parallel worker progress by work id', () 
 });
 
 test('retained trace projection restores expandable parallel attempts', () => {
-  const debug = structuredClone(backendDebug);
+  const debug = canonicalDebug(backendDebug);
   debug.summary.metrics = {
     parallel_summary: { dispatch_id: 'dispatch-1', planned: 1, completed: 1, retried: 1 },
     parallel_attempts: [

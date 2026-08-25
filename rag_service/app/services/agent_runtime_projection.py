@@ -66,6 +66,8 @@ class AgentRuntimeProjection:
                 kind=str(event.kind),
                 payload=event.payload_json if isinstance(event.payload_json, dict) else {},
                 occurred_at=str(event.occurred_at) if event.occurred_at else None,
+                terminal=bool(event.terminal),
+                source_metadata=event.source_metadata_json if isinstance(event.source_metadata_json, dict) else {},
             ))
         result_payload = dict(result or {})
         debug = finalize_and_merge_debug_payload(

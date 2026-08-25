@@ -172,6 +172,39 @@ async def test_transactional_terminal_is_delivered_only_after_commit_acknowledge
 
 
 @pytest.mark.asyncio
+async def test_transactional_terminal_is_in_recorder_before_debug_commit():
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append([], event))
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def record_agent_runtime_event(self, event):
+            self.events.append(event)
+
+    recorder = Recorder()
+    sink.bind_trace_recorder(recorder)
+    observed = []
+
+    async def commit(terminal_event):
+        observed.append(([event.kind for event in recorder.events], terminal_event.payload))
+
+    await sink.emit("tool.failed", {"error": {"code": "first_failure"}})
+    await sink.emit("subagent.failed", {"error": {"code": "second_failure"}})
+    await sink.finish(
+        "run.failed",
+        {"status": "failed", "error": {"code": "terminal_failure"}},
+        terminal_committer=commit,
+    )
+
+    assert observed == [(
+        ["tool.failed", "subagent.failed", "run.failed"],
+        {"status": "failed", "error": {"code": "terminal_failure"}},
+    )]
+
+
+@pytest.mark.asyncio
 async def test_transactional_terminal_commit_failure_emits_no_terminal_frame():
     sink = AgentExecutionEventSink()
     sink.bind_runtime_event_persister("run-1", lambda _run_id, event: _append([], event))

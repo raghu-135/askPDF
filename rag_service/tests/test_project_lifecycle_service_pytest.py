@@ -146,7 +146,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
 ):
     now = utc_now()
     debug = {
-        "version": 1,
+        "version": 2,
         "trace": {"run_id": "source-run", "thread_id": "source-thread", "spans": []},
         "summary": {"status": "completed"},
     }

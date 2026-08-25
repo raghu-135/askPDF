@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional
 
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -35,6 +34,7 @@ from app.agent_workflows.trace_otel import (
     enrich_tool_event,
 )
 from app.runtime.contracts import AgentRuntimeEvent
+from app.agent_workflows.canonical_trace import build_canonical_trace_projection
 from app.agent_workflows.trace_payloads import (
     DEBUG_PAYLOAD_VERSION,
     build_interrupt_trace_event,
@@ -49,7 +49,7 @@ from app.agent_workflows.trace_sanitization import (
     _otel_attr_value,
     _set_attributes,
 )
-from app.agent_workflows.trace_summary import _build_summary_from_trace, build_debug_graph
+from app.agent_workflows.trace_summary import _build_summary_from_trace
 from app.agent_workflows.trace_details import (
     TRACE_DETAIL_RUN_LIMIT,
     final_output_from_result,
@@ -61,7 +61,7 @@ from app.agent.reasoning import normalize_ai_response
 from app.time_utils import iso_utc_z
 
 
-TRACE_SCHEMA_VERSION = 1
+TRACE_SCHEMA_VERSION = 2
 
 
 class AgentTraceRecorder:
@@ -92,6 +92,7 @@ class AgentTraceRecorder:
         self._detail_limit_reached = False
         self._finalized = False
         self._closed_parallel_span_ids: set[str] = set()
+        self._runtime_events: List[AgentRuntimeEvent] = []
         self._root_span = self._start_span(
             span_id=self.run_span_id,
             parent_span_id=None,
@@ -715,29 +716,9 @@ class AgentTraceRecorder:
     def record_agent_runtime_event(self, event: AgentRuntimeEvent) -> None:
         """Record one canonical runtime event in the product trace."""
 
-        payload = dict(event.payload)
-        if event.kind in {"operation.completed", "operation.failed", "operation.skipped"}:
-            operation_id = str(payload.get("operation_id") or "operation")
-            status = {
-                "operation.completed": "completed",
-                "operation.failed": "failed",
-                "operation.skipped": "skipped",
-            }[event.kind]
-            self.record_node_event({
-                **payload,
-                "node": operation_id,
-                "node_type": str(payload.get("operation_type") or operation_id),
-                "visit_index": max(1, int(payload.get("visit_index") or 1)),
-                "status": status,
-                "start_time": payload.get("started_at") or payload.get("start_time"),
-                "end_time": payload.get("completed_at") or payload.get("end_time") or datetime.utcnow().isoformat() + "Z",
-                "elapsed_ms": payload.get("duration_ms") or payload.get("elapsed_ms"),
-                "error": payload.get("error"),
-            })
-        elif event.kind in {"tool.completed", "tool.failed"}:
-            self.record_tool_event(payload)
-        elif event.kind != "run.started":
-            self.record_runtime_event(event.kind, attributes=payload)
+        self._runtime_events.append(event)
+        if event.kind != "run.started":
+            self.record_runtime_event(event.kind, attributes=dict(event.payload))
 
     def _record_parallel_runtime_span(self, event_name: str, attributes: Mapping[str, Any]) -> None:
         if event_name not in PARALLEL_EVENT_NAMES:
@@ -856,12 +837,53 @@ class AgentTraceRecorder:
             self._finalized = True
         trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
         summary = self._build_summary(trace)
+        framework = str(getattr(run, "framework", None) or "")
+        canonical = build_canonical_trace_projection(
+            events=self._runtime_events,
+            resolved_spec=self.resolved_spec,
+            framework=framework,
+        )
+        summary = {
+            **summary,
+            "operations": canonical["operations"],
+            "tools": canonical["tools"],
+            "approvalCount": len(canonical["approvals"]),
+            "subagentCount": len(canonical["subagents"]),
+            "artifactCount": len(canonical["artifacts"]),
+            "errorCount": len(canonical["failures"]),
+            "errors": canonical["failures"],
+            "usedOperationCount": len({row["operation_id"] for row in canonical["operations"] if row.get("status") != "skipped"}),
+        }
+        summary.pop("nodes", None)
+        summary.pop("usedNodeCount", None)
+        summary.pop("availableNodeCount", None)
         final_output = final_output_from_result(result)
+        details = []
+        for row in canonical["operations"]:
+            stored = self._node_details.get(self._detail_key(str(row["operation_id"]), row.get("visit_index")))
+            detail = dict(stored or {})
+            detail.pop("node_id", None)
+            detail.pop("node_type", None)
+            details.append({
+                **detail,
+                "operation_id": row["operation_id"],
+                "operation_type": row.get("operation_type"),
+                "visit_index": row.get("visit_index"),
+                "status": row.get("status"),
+            })
         payload = {
             "version": DEBUG_PAYLOAD_VERSION,
-            "trace": trace,
+            "trace": {**trace, **canonical, "framework": framework},
             "summary": summary,
-            "details": list(self._node_details.values()),
+            "events": canonical["events"],
+            "operations": canonical["operations"],
+            "tools": canonical["tools"],
+            "approvals": canonical["approvals"],
+            "subagents": canonical["subagents"],
+            "artifacts": canonical["artifacts"],
+            "failures": canonical["failures"],
+            "visualizations": canonical["visualizations"],
+            "details": details,
             "detail_safety": {
                 "size_bytes": self._detail_bytes,
                 "run_limit_bytes": TRACE_DETAIL_RUN_LIMIT,
@@ -870,9 +892,6 @@ class AgentTraceRecorder:
         }
         if final_output:
             payload["final_output"] = final_output
-        graph_spec = _as_dict(_as_dict(self.resolved_spec.get("config")).get("graph"))
-        if _as_list(graph_spec.get("nodes")):
-            payload["graph"] = build_debug_graph(resolved_spec=self.resolved_spec, summary=summary)
         return payload
 
     def _span_to_dict(self, span: ReadableSpan) -> Dict[str, Any]:

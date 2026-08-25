@@ -1,4 +1,4 @@
-"""Framework-neutral execution-operation normalization and retained projection."""
+"""Framework-neutral execution-operation normalization."""
 
 from __future__ import annotations
 
@@ -38,10 +38,17 @@ def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tup
             "operation_label": data.get("operation_label") or data.get("label"),
             "visit_index": max(1, int(data.get("visit_index") or 1)),
             "topology_ref": dict(topology_ref),
-            "framework_metadata": {
-                **(dict(data.get("framework_metadata") or {}) if isinstance(data.get("framework_metadata"), Mapping) else {}),
-                "node_id": operation_id,
-                "node_type": operation_type,
+            "framework_details": {
+                **(dict(data.get("framework_details") or {}) if isinstance(data.get("framework_details"), Mapping) else {}),
+                "langgraph": {
+                    **(dict(data.get("framework_metadata") or {}) if isinstance(data.get("framework_metadata"), Mapping) else {}),
+                    "node_id": operation_id,
+                    "node_type": operation_type,
+                    "route": data.get("route"),
+                    "route_reason": data.get("route_reason"),
+                    "checkpoint": data.get("checkpoint"),
+                    "superstep": data.get("superstep"),
+                },
             },
         }
         kind = normalized_kind

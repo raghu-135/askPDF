@@ -43,6 +43,8 @@ from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInte
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.services.agent_runtime_projection import AgentRuntimeProjection
+from app.runtime.events import create_runtime_event
+from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
@@ -232,6 +234,24 @@ def make_trace_recorder(run_id: str, thread_id: str, spec: dict, workflow_id: st
     )
 
 
+def record_canonical_node_event(recorder, *, sequence, node_id, node_type, visit_index, status="completed"):
+    source_kind = f"node.{status}"
+    kind, payload = normalize_runtime_event(source_kind, {
+        "node": node_id,
+        "node_type": node_type,
+        "visit_index": visit_index,
+        "status": status,
+    })
+    recorder.record_agent_runtime_event(create_runtime_event(
+        event_id=f"test:{recorder.run.id}:{sequence}",
+        run_id=recorder.run.id,
+        sequence=sequence,
+        kind=kind,
+        payload=payload,
+        source_metadata={"source_event": source_kind},
+    ))
+
+
 def test_trace_recorder_synthesizes_missing_node_spans_and_deduplicates_replay():
     recorder = make_trace_recorder(
         "run-deep-lifecycle",
@@ -255,13 +275,20 @@ def test_trace_recorder_synthesizes_missing_node_spans_and_deduplicates_replay()
             update={"task_plan_revision": visit_index},
             status="completed",
         )
+        record_canonical_node_event(
+            recorder,
+            sequence=visit_index,
+            node_id="deep_task_planner",
+            node_type="deep_task_planner",
+            visit_index=visit_index,
+        )
     payload = recorder.finalize(run=recorder.run, chat_turn_id=None, metrics={})
     visits = [
-        node["visitIndex"] for node in payload["summary"]["nodes"]
-        if node["id"] == "deep_task_planner"
+        operation["visit_index"] for operation in payload["summary"]["operations"]
+        if operation["operation_id"] == "deep_task_planner"
     ]
     assert visits == [1, 2]
-    assert payload["summary"]["usedNodeCount"] == 2
+    assert payload["summary"]["usedOperationCount"] == 1
 
 
 def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_answer():
@@ -314,6 +341,13 @@ def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_ans
             status="completed",
             event={"evaluator_route": "answer"},
         )
+        record_canonical_node_event(
+            recorder,
+            sequence=visit_index,
+            node_id="evidence_evaluator",
+            node_type="evidence_evaluator",
+            visit_index=visit_index,
+        )
 
     payload = recorder.finalize(
         run=run,
@@ -328,7 +362,7 @@ def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_ans
         },
     )
 
-    assert [(detail["node_id"], detail["visit_index"]) for detail in payload["details"]] == [
+    assert [(detail["operation_id"], detail["visit_index"]) for detail in payload["details"]] == [
         ("evidence_evaluator", 1),
         ("evidence_evaluator", 2),
     ]
@@ -349,16 +383,16 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
     monkeypatch.setattr(trace_details, "TRACE_DETAIL_RUN_LIMIT", 900)
     trace = {"schema_version": 1, "spans": [], "metrics": {}}
     base = {
-        "version": 1,
+        "version": 2,
         "trace": dict(trace),
         "summary": {},
-        "details": [{"node_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
+        "details": [{"operation_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
     }
     incoming = {
-        "version": 1,
+        "version": 2,
         "trace": dict(trace),
         "summary": {},
-        "details": [{"node_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
+        "details": [{"operation_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
     }
 
     merged = merge_debug_payloads(base, incoming, resolved_spec={})
@@ -724,7 +758,7 @@ class TestAgentRunMetrics:
         assert event["attributes"]["access_token"] == "[redacted]"
         assert event["attributes"]["token_usage"] == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
-    def test_build_debug_trace_v1_shape_for_direct_tool_plan_and_failed_runs(self):
+    def test_build_otel_trace_shape_for_direct_tool_plan_and_failed_runs(self):
         run = SimpleNamespace(
             id="run-shape",
             thread_id="thread-1",
@@ -763,8 +797,8 @@ class TestAgentRunMetrics:
         assert trace["schema_version"] == 1
         span_ids = {span["span_id"]: span for span in trace["spans"]}
         assert span_ids["node:planner:0"]["raw"]["node"] == "planner"
-        assert span_ids["run:run-shape"]["events"][0]["name"] == "exception"
-        assert span_ids["run:run-shape"]["events"][0]["attributes"]["askpdf.error.retryable"] is True
+        exception = next(event for event in span_ids["run:run-shape"]["events"] if event["name"] == "exception")
+        assert exception["attributes"]["askpdf.error.retryable"] is True
         assert span_ids["node:planner:0"]["events"][0]["name"] == "decision.made"
         assert span_ids["node:retrieval_worker:1"]["status"] == "error"
         assert any(event["name"] == "exception" for event in span_ids["node:retrieval_worker:1"]["events"])
@@ -4482,7 +4516,22 @@ class TestAgentRunService:
                 }
                 trace_recorder.record_node_event(node_event)
                 trace_recorder.record_tool_event(tool_event)
+                record_canonical_node_event(
+                    trace_recorder,
+                    sequence=1,
+                    node_id="router",
+                    node_type="router",
+                    visit_index=1,
+                )
+                trace_recorder.record_agent_runtime_event(create_runtime_event(
+                    event_id=f"test:{trace_recorder.run.id}:2",
+                    run_id=trace_recorder.run.id,
+                    sequence=2,
+                    kind="tool.completed",
+                    payload=tool_event,
+                ))
                 return {
+                    **agent_run_context,
                     "answer": "router ok",
                     "document_sources": [],
                     "web_sources": [],
@@ -4491,7 +4540,6 @@ class TestAgentRunService:
                     "route": "direct",
                     "node_events": [node_event],
                     "tool_events": [tool_event],
-                    **agent_run_context,
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
@@ -4523,9 +4571,10 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
         assert run.metrics_json["tool_event_count"] == 1
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
-        assert run.debug_trace_json["version"] == 1
+        assert run.debug_trace_json["version"] == 2
         assert run.debug_trace_json["trace"]["run_id"] == run.id
-        assert any(node["id"] == "router" for node in run.debug_trace_json["graph"]["nodes"])
+        assert any(operation["operation_id"] == "router" for operation in run.debug_trace_json["operations"])
+        assert "langgraph.graph" in run.debug_trace_json["visualizations"]
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_current_v2_builtin(self, engine, sample_thread, monkeypatch):
@@ -7387,13 +7436,13 @@ async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
     import app.api.agent_workflows as agent_workflows_api
 
     details = [
-        {"node_id": "evidence_evaluator", "node_type": "evidence_evaluator", "visit_index": 1, "status": "completed", "checkpoint_after": {"replan_count": 0}},
-        {"node_id": "evidence_evaluator", "node_type": "evidence_evaluator", "visit_index": 2, "status": "completed", "checkpoint_after": {"replan_count": 1}},
+        {"operation_id": "evidence_evaluator", "operation_type": "evidence_evaluator", "visit_index": 1, "status": "completed", "checkpoint_after": {"replan_count": 0}},
+        {"operation_id": "evidence_evaluator", "operation_type": "evidence_evaluator", "visit_index": 2, "status": "completed", "checkpoint_after": {"replan_count": 1}},
     ]
 
     async def fake_get_run(_self, run_id):
         assert run_id == "run-loop-details"
-        return SimpleNamespace(id=run_id, thread_id="thread-loop-details", debug_trace_json={"version": 1, "details": details})
+        return SimpleNamespace(id=run_id, thread_id="thread-loop-details", debug_trace_json={"version": 2, "details": details})
 
     async def fake_get_thread(thread_id):
         return SimpleNamespace(id=thread_id) if thread_id == "thread-loop-details" else None
@@ -7401,9 +7450,9 @@ async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
     monkeypatch.setattr(AgentWorkflowRepository, "get_run", fake_get_run)
     monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
 
-    response = await agent_workflows_api.get_agent_run_node_details(
+    response = await agent_workflows_api.get_agent_run_operation_details(
         "run-loop-details",
-        node_id="evidence_evaluator",
+        operation_id="evidence_evaluator",
         visit_index=2,
         thread_id="thread-loop-details",
     )
@@ -8151,6 +8200,8 @@ class TestAgentWorkflowApi:
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
                 workflow_version_id=version.id,
+                framework=workflow.framework,
+                builder_id=workflow.builder_id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
 
@@ -8244,13 +8295,16 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) >= {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
-        assert payload["debug"]["detail_manifest"] == []
+        assert set(payload["debug"]) >= {"version", "trace", "summary", "operations", "events", "visualizations", "detail_manifest", "detail_safety"}
+        assert len(payload["debug"]["detail_manifest"]) == 1
+        assert payload["debug"]["detail_manifest"][0]["operation_id"] == "router"
+        assert payload["debug"]["detail_manifest"][0]["visit_index"] == 1
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]
-        assert payload["debug"]["version"] == 1
+        assert payload["debug"]["version"] == 2
         assert payload["debug"]["summary"]["route"] == "web"
-        assert payload["debug"]["graph"] == stored_graph
+        assert "graph" not in payload["debug"]
+        assert payload["debug"]["visualizations"]["langgraph.graph"]["nodes"]
         trace = payload["debug"]["trace"]
         assert trace["metrics"]["duration_ms"] == 42.0
         assert trace["metrics"]["route"] == "web"
@@ -8300,6 +8354,8 @@ class TestAgentWorkflowApi:
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
                 workflow_version_id=version.id,
+                framework=workflow.framework,
+                builder_id=workflow.builder_id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(
@@ -8322,10 +8378,10 @@ class TestAgentWorkflowApi:
         assert response.status_code == 200
         payload = response.json()["agent_run"]
         assert payload["status"] == "failed"
-        assert payload["debug"] is None
+        assert payload["debug"] == {"version": 1, "unsupported": True}
 
     @pytest.mark.asyncio
-    async def test_get_agent_run_returns_null_debug_for_malformed_trace_payload(self, api_client, engine, sample_thread):
+    async def test_get_agent_run_marks_version_one_trace_unsupported(self, api_client, engine, sample_thread):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -8340,6 +8396,8 @@ class TestAgentWorkflowApi:
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
                 workflow_version_id=version.id,
+                framework=workflow.framework,
+                builder_id=workflow.builder_id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(

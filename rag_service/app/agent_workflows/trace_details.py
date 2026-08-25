@@ -121,8 +121,8 @@ def detail_manifest(details: Any) -> list[Dict[str, Any]]:
             continue
         manifest.append(
             {
-                "node_id": row.get("node_id"),
-                "node_type": row.get("node_type"),
+                "operation_id": row.get("operation_id"),
+                "operation_type": row.get("operation_type"),
                 "visit_index": row.get("visit_index"),
                 "status": row.get("status"),
                 "available": True,

@@ -17,6 +17,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.events import create_runtime_event
+from app.runtime.observability import normalize_runtime_event
 
 
 def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
@@ -34,7 +35,8 @@ def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
 
 def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -> AgentRuntimeEvent:
     data = dict(event.get("data") or {})
-    kind = str(event.get("event") or event.get("kind") or "runtime.event")
+    source_kind = str(event.get("event") or event.get("kind") or "runtime.event")
+    kind, data = normalize_runtime_event(source_kind, data)
     return create_runtime_event(
         event_id=str(data.get("event_id") or f"{run_id}:{sequence}"),
         run_id=run_id,
@@ -43,7 +45,7 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
         payload=data,
         occurred_at=data.get("occurred_at") or data.get("timestamp"),
         trace_id=data.get("trace_id"),
-        source_metadata={"framework": "langgraph", "source_event": kind},
+        source_metadata={"framework": "langgraph", "source_event": source_kind},
     )
 
 

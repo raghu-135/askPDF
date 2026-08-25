@@ -38,6 +38,7 @@ import {
   type DeepResearchEngine,
 } from '../lib/api';
 import {
+  isRunOwnedBySelectedTask,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
   resolveDeepResearchContextWindow,
@@ -262,6 +263,8 @@ export default function DeepResearchTaskPanel({
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
   const capabilityRequestId = useRef(0);
+  const taskContextRef = useRef(selectedTaskId);
+  taskContextRef.current = selectedTaskId;
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRun = runs[runIndex] || null;
@@ -314,11 +317,13 @@ export default function DeepResearchTaskPanel({
 
   const refresh = useCallback(async () => {
     if (!selectedTaskId) { setTask(null); setRuns([]); setTodos([]); setItems([]); setRunIndex(-1); return; }
+    const requestedTaskId = selectedTaskId;
     const [nextTask, fetchedRuns, nextTodos] = await Promise.all([
-      getAgentTask(selectedTaskId, threadId),
-      getAgentTaskRuns(selectedTaskId, threadId),
-      getAgentTaskTodos(selectedTaskId, threadId),
+      getAgentTask(requestedTaskId, threadId),
+      getAgentTaskRuns(requestedTaskId, threadId),
+      getAgentTaskTodos(requestedTaskId, threadId),
     ]);
+    if (taskContextRef.current !== requestedTaskId) return;
     const nextRuns = mergeActiveAgentTaskRun(nextTask, fetchedRuns);
     setTask(nextTask);
     setRuns(nextRuns);
@@ -326,7 +331,19 @@ export default function DeepResearchTaskPanel({
     setRunIndex((current) => current >= 0 && current < nextRuns.length ? current : nextRuns.length - 1);
   }, [selectedTaskId, threadId]);
 
-  useEffect(() => { setError(''); void refresh().catch((value) => setError(String(value))); }, [refresh]);
+  useEffect(() => {
+    setTask(null);
+    setRuns([]);
+    setTodos([]);
+    setItems([]);
+    setRunIndex(-1);
+    setError('');
+    sequenceRunId.current = null;
+    lastSequence.current = 0;
+    void refresh().catch((value) => {
+      if (taskContextRef.current === selectedTaskId) setError(String(value));
+    });
+  }, [refresh, selectedTaskId]);
   useEffect(() => {
     if (!shouldPollAgentTask(task)) return;
     let cancelled = false;
@@ -340,8 +357,18 @@ export default function DeepResearchTaskPanel({
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
   }, [refresh, task?.status]);
   useEffect(() => {
-    if (!selectedTaskId || !selectedRun) { setItems([]); return; }
-    void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => { setTask(value.task); setItems(value.items); }).catch((value) => setError(String(value)));
+    if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) { setItems([]); return; }
+    let active = true;
+    const taskId = selectedTaskId;
+    const runId = selectedRun.id;
+    void getAgentTaskTimeline(taskId, runId, threadId).then((value) => {
+      if (!active || taskContextRef.current !== taskId) return;
+      setTask(value.task);
+      setItems(value.items);
+    }).catch((value) => {
+      if (active && taskContextRef.current === taskId) setError(String(value));
+    });
+    return () => { active = false; };
   }, [selectedRun?.id, selectedTaskId, threadId]);
 
   useEffect(() => {
@@ -383,7 +410,7 @@ export default function DeepResearchTaskPanel({
   ]);
 
   useEffect(() => {
-    if (!selectedTaskId || !selectedRun || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;
+    if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;
     let active = true;
     let source: EventSource | null = null;
     let reconnectTimer: number | undefined;

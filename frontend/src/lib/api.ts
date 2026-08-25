@@ -1016,11 +1016,10 @@ export interface AgentDebugSummary {
   routeReason?: string;
   durationMs?: number | null;
   metrics?: Record<string, any>;
-  nodes?: Record<string, any>[];
   operations?: Record<string, any>[];
   tools?: Record<string, any>[];
-  usedNodeCount?: number;
-  availableNodeCount?: number | null;
+  usedOperationCount?: number;
+  availableOperationCount?: number | null;
   usedToolCount?: number;
   availableToolCount?: number | null;
   warningCount?: number;
@@ -1031,16 +1030,18 @@ export interface AgentDebugSummary {
 
 export interface AgentRunDebug {
   version?: number;
+  unsupported?: boolean;
   trace?: AgentDebugTrace;
   summary?: AgentDebugSummary;
-  graph?: {
-    nodes?: Record<string, any>[];
-    edges?: Record<string, any>[];
-    executionPlan?: string[];
-    selectedRoute?: string;
-    [key: string]: any;
-  };
-  detail_manifest?: AgentRunNodeDetailManifest[];
+  events?: AgentTraceTimelineEvent[];
+  operations?: AgentTraceOperation[];
+  tools?: AgentTraceTimelineEvent[];
+  approvals?: AgentTraceTimelineEvent[];
+  subagents?: AgentTraceTimelineEvent[];
+  artifacts?: AgentTraceTimelineEvent[];
+  failures?: AgentTraceFailure[];
+  visualizations?: Record<string, AgentTraceVisualization>;
+  detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
   topology?: {
@@ -1050,15 +1051,60 @@ export interface AgentRunDebug {
   };
 }
 
-export interface AgentRunNodeDetailManifest {
-  node_id: string;
-  node_type?: string;
+export interface AgentTraceTimelineEvent {
+  event_id: string;
+  sequence: number;
+  attempt?: number;
+  kind: string;
+  occurred_at?: string | null;
+  operation_id?: string | null;
+  parent_operation_id?: string | null;
+  status?: string | null;
+  payload?: Record<string, any>;
+  framework_details?: Record<string, any>;
+}
+
+export interface AgentTraceFailure extends AgentTraceTimelineEvent {
+  error?: Record<string, any>;
+  classification?: 'terminal' | 'primary' | 'contributing';
+  contributing_failure_event_ids?: string[];
+  primary_failure_event_id?: string | null;
+  failure_count?: number;
+}
+
+export interface AgentTraceOperation {
+  operation_id: string;
+  operation_type?: string;
+  operation_label: string;
+  parent_operation_id?: string | null;
+  visit_index: number;
+  attempt?: number;
+  status?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  topology_ref?: Record<string, any> | null;
+  framework_details?: Record<string, any>;
+}
+
+export type AgentTraceVisualization =
+  | ({ id: 'generic.timeline' } & Record<string, any>)
+  | ({ id: 'langgraph.graph'; nodes?: Record<string, any>[]; edges?: Record<string, any>[]; execution_plan?: string[]; selected_route?: string; visits?: Record<string, any>[] } & Record<string, any>)
+  | ({ id: 'hermes.session'; session_id?: string | null; upstream_run_id?: string | null; reasoning?: AgentTraceTimelineEvent[]; approvals?: AgentTraceTimelineEvent[]; tools?: AgentTraceTimelineEvent[]; subagents?: AgentTraceTimelineEvent[]; failures?: AgentTraceFailure[] } & Record<string, any>);
+
+export interface AgentRunOperationDetailManifest {
+  operation_id: string;
+  operation_type?: string;
   visit_index: number;
   status?: string;
   available: boolean;
   size_bytes?: number;
   truncated?: boolean;
 }
+
 
 export interface AgentRunFinalOutput {
   answer?: string;
@@ -1071,9 +1117,9 @@ export interface AgentRunFinalOutput {
   safety?: Record<string, any>;
 }
 
-export interface AgentRunNodeDetail {
-  node_id: string;
-  node_type?: string;
+export interface AgentRunOperationDetail {
+  operation_id: string;
+  operation_type?: string;
   visit_index: number;
   status?: string;
   checkpoint_before?: Record<string, any>;
@@ -1171,24 +1217,12 @@ export interface AgentRunDetails {
   [key: string]: any;
 }
 
-export async function getAgentRunNodeDetails(
-  runId: string,
-  threadId: string,
-  nodeId: string,
-  visitIndex: number,
-): Promise<AgentRunNodeDetail> {
-  const params = new URLSearchParams({ thread_id: threadId, node_id: nodeId, visit_index: String(visitIndex) });
-  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/details?${params.toString()}`);
-  if (!res.ok) throw new Error(await res.text());
-  return (await res.json()).detail;
-}
-
 export async function getAgentRunOperationDetails(
   runId: string,
   threadId: string,
   operationId: string,
   visitIndex: number,
-): Promise<AgentRunNodeDetail> {
+): Promise<AgentRunOperationDetail> {
   const params = new URLSearchParams({ thread_id: threadId, visit_index: String(visitIndex) });
   const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/operations/${encodeURIComponent(operationId)}/details?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());

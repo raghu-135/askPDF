@@ -1,4 +1,4 @@
-import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunNodeDetailManifest, BuilderTestStreamEnvelope } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
 import {
   formatNodeInstanceLabel,
   formatNodeLabel,
@@ -24,11 +24,12 @@ export function shouldRefreshRetainedTrace(runDetails: AgentRunDetails): boolean
   return terminal && !getRunDebug(runDetails);
 }
 
-export interface TraceNodeView {
+export interface TraceOperationView {
   id: string;
   type?: string;
   label: string;
   instanceLabel: string;
+  parentOperationId?: string;
   visitIndex?: number;
   status?: string;
   skipped: boolean;
@@ -43,8 +44,6 @@ export interface TraceNodeView {
   raw: Record<string, any>;
   topologyRef?: { kind?: string; id?: string; [key: string]: any };
 }
-
-export type TraceOperationView = TraceNodeView;
 
 export interface TraceToolView {
   name: string;
@@ -76,11 +75,12 @@ export interface TraceRunView {
   route?: string;
   routeReason?: string;
   metrics: Record<string, any>;
-  nodes: TraceNodeView[];
+  events: AgentTraceTimelineEvent[];
+  visualizations: Record<string, AgentTraceVisualization>;
   operations: TraceOperationView[];
   tools: TraceToolView[];
-  usedNodeCount: number;
-  availableNodeCount?: number;
+  usedOperationCount: number;
+  availableOperationCount?: number;
   usedToolCount: number;
   availableToolCount?: number;
   warningCount: number;
@@ -92,7 +92,7 @@ export interface TraceRunView {
     recalledCount: number;
   };
   finalOutput?: AgentRunFinalOutput;
-  detailManifest: AgentRunNodeDetailManifest[];
+  detailManifest: AgentRunOperationDetailManifest[];
   parallel?: {
     summary: Record<string, any>;
     tasks: Record<string, any>[];
@@ -186,7 +186,7 @@ const asNonEmptyString = (value: any): string | undefined => (
 export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
   const debug = runDetails.debug;
   if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
-  if (debug.version !== 1) return undefined;
+  if (debug.version !== 2) return undefined;
   if (Object.keys(asObject(debug.trace)).length === 0) return undefined;
   if (Object.keys(asObject(debug.summary)).length === 0) return undefined;
   return debug;
@@ -229,25 +229,25 @@ const retainedNodeStatus = (row: Record<string, any>): string | undefined => {
     : status;
 };
 
-const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCatalog): TraceNodeView => {
+const operationViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCatalog): TraceOperationView => {
   const raw = asObject(row.raw);
-  const id = String(row.id || row.node || row.name || raw.node || 'unknown_node');
+  const id = String(row.operation_id || row.id || raw.operation_id || 'unknown_operation');
   const type = typeof row.type === 'string'
     ? row.type
-    : typeof row.node_type === 'string'
-      ? row.node_type
-      : typeof raw.node_type === 'string'
-        ? raw.node_type
-        : undefined;
+    : typeof row.operation_type === 'string'
+      ? row.operation_type
+      : undefined;
   return {
     id,
     type,
-    label: formatNodeLabel(id, type, nodeCatalog)
+    label: asNonEmptyString(row.operation_label)
       || asNonEmptyString(row.label)
+      || formatNodeLabel(id, type, nodeCatalog)
       || asNonEmptyString(row.node_name)
       || asNonEmptyString(raw.label)
       || asNonEmptyString(raw.node_name),
     instanceLabel: formatNodeInstanceLabel(id, type),
+    parentOperationId: asNonEmptyString(row.parent_operation_id ?? raw.parent_operation_id),
     visitIndex: asNumber(row.visitIndex ?? row.visit_index ?? raw.visit_index ?? raw.visitIndex),
     status: retainedNodeStatus(row),
     skipped: row.skipped === true || row.status === 'skipped',
@@ -259,13 +259,13 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
     warningCodes: asStringArray(row.warningCodes ?? row.warnings),
     error: row.error && typeof row.error === 'object' ? row.error : undefined,
     span: row.span && typeof row.span === 'object' ? row.span : undefined,
-    raw,
+    raw: { ...row, ...raw },
     topologyRef: asObject(row.topologyRef ?? row.topology_ref ?? raw.topology_ref),
   };
 };
 
 const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
-  const raw = asObject(row.raw);
+  const raw = { ...asObject(row.payload), ...asObject(row.raw) };
   return {
     name: String(row.name || row.tool_name || raw.tool_name || 'tool'),
     id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : undefined,
@@ -290,7 +290,7 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
 };
 
 const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): TraceGraphView | undefined => {
-  const graph = asObject(debug?.graph);
+  const graph = asObject(debug?.visualizations?.['langgraph.graph']);
   const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
     const id = String(node.id || 'unknown_node');
     const type = typeof node.type === 'string' ? node.type : id;
@@ -317,8 +317,8 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
   return {
     nodes,
     edges,
-    executionPlan: asStringArray(graph.executionPlan),
-    selectedRoute: typeof graph.selectedRoute === 'string' ? graph.selectedRoute : undefined,
+    executionPlan: asStringArray(graph.executionPlan ?? graph.execution_plan),
+    selectedRoute: typeof (graph.selectedRoute ?? graph.selected_route) === 'string' ? String(graph.selectedRoute ?? graph.selected_route) : undefined,
   };
 };
 
@@ -331,25 +331,27 @@ export const buildRunTraceView = (
     if (!debug) return undefined;
     const summary = asObject(debug.summary);
     const metrics = getRunDebugMetrics(runDetails);
-    const summaryNodes = asArray(summary.operations ?? summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
+    const summaryOperations = asArray(debug.operations ?? summary.operations).map((operation) => operationViewFromSummary(operation, options.nodeCatalog));
     const manifest = Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [];
-    const existingVisits = new Set(summaryNodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
-    const manifestNodes = manifest
-      .filter((detail) => !existingVisits.has(`${detail.node_id}:${detail.visit_index || 1}`))
-      .map((detail) => nodeViewFromSummary({
-        id: detail.node_id,
-        type: detail.node_type,
+    const existingVisits = new Set(summaryOperations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
+    const manifestOperations = manifest
+      .filter((detail) => !existingVisits.has(`${detail.operation_id}:${detail.visit_index || 1}`))
+      .map((detail) => operationViewFromSummary({
+        operation_id: detail.operation_id,
+        operation_type: detail.operation_type,
         visitIndex: detail.visit_index,
         status: detail.status,
         raw: { detail_manifest: detail },
       }, options.nodeCatalog));
-    const nodes = [...summaryNodes, ...manifestNodes];
+    const operations = [...summaryOperations, ...manifestOperations];
     const tools = asArray(summary.tools).map(toolViewFromSummary);
-    const usedNodeCount = Math.max(asNumber(summary.usedNodeCount) ?? 0, nodes.filter((node) => !node.skipped).length);
+    const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
     const retainedParallel = projectParallelEvents(asArray(metrics.parallel_attempts));
     const retainedParallelSummary = asObject(metrics.parallel_summary);
+    const canonicalFailures = asArray(debug.failures);
+    const projectedErrors = canonicalFailures.length > 0 ? canonicalFailures : asArray(summary.errors);
     return {
       debug,
       trace: getRunTrace(runDetails),
@@ -357,16 +359,17 @@ export const buildRunTraceView = (
       route: typeof summary.route === 'string' ? summary.route : typeof metrics.route === 'string' ? metrics.route : undefined,
       routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
       metrics,
-      nodes,
-      operations: nodes,
+      events: Array.isArray(debug.events) ? debug.events : [],
+      visualizations: debug.visualizations || {},
+      operations,
       tools,
-      usedNodeCount,
-      availableNodeCount: asNumber(summary.availableNodeCount),
+      usedOperationCount,
+      availableOperationCount: asNumber(summary.availableOperationCount),
       usedToolCount,
       availableToolCount: asNumber(summary.availableToolCount),
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
-      errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
-      errors: asArray(summary.errors),
+      errorCount: canonicalFailures.length || asNumber(summary.errorCount) || Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
+      errors: projectedErrors,
       memory: Object.keys(memory).length > 0 ? {
         recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
         searchedScopes: asArray(memory.searchedScopes),
@@ -392,19 +395,28 @@ export const buildRunTraceView = (
 export const buildLiveTraceView = (
   events: BuilderTestStreamEnvelope[],
 ): TraceRunView => {
-  const nodes: TraceNodeView[] = [];
-  const nodeIndex = new Map<string, number>();
+  const operations: TraceOperationView[] = [];
+  const operationIndex = new Map<string, number>();
   const tools: TraceToolView[] = [];
   let finalOutput: AgentRunFinalOutput | undefined;
   let route: string | undefined;
   let routeReason: string | undefined;
   const runErrors: Record<string, any>[] = [];
   const parallelProjection = projectParallelEvents(events as unknown as Record<string, any>[]);
+  const timelineEvents: AgentTraceTimelineEvent[] = events.map((envelope, index) => ({
+    event_id: String((envelope.data as any)?.event_id || `live:${index + 1}`),
+    sequence: Number((envelope.data as any)?.sequence || index + 1),
+    kind: envelope.event,
+    occurred_at: (envelope.data as any)?.occurred_at,
+    operation_id: (envelope.data as any)?.operation_id,
+    payload: asObject(envelope.data),
+    framework_details: asObject((envelope.data as any)?.framework_details),
+  }));
 
   events.forEach((envelope) => {
     const data = asObject(envelope.data);
-    if ((envelope.event.startsWith('node.') || envelope.event.startsWith('operation.')) && typeof (data.operation_id || data.node_id) === 'string') {
-      const operationId = String(data.operation_id || data.node_id);
+    if (envelope.event.startsWith('operation.') && typeof data.operation_id === 'string') {
+      const operationId = String(data.operation_id);
       const visitIndex = asNumber(data.visit_index) || 1;
       const key = `${operationId}:${visitIndex}`;
       const status = envelope.event.endsWith('.started') ? 'active'
@@ -412,11 +424,12 @@ export const buildLiveTraceView = (
           : envelope.event.endsWith('.skipped') ? 'skipped'
             : 'completed';
       const rawError = data.detail?.error ?? data.error;
-      const row: TraceNodeView = {
+      const row: TraceOperationView = {
         id: operationId,
-        type: asNonEmptyString(data.operation_type || data.node_type),
-        label: asNonEmptyString(data.operation_label) || formatNodeLabel(operationId, asNonEmptyString(data.operation_type || data.node_type)),
-        instanceLabel: formatNodeInstanceLabel(operationId, asNonEmptyString(data.operation_type || data.node_type)),
+        type: asNonEmptyString(data.operation_type),
+        label: asNonEmptyString(data.operation_label) || operationId,
+        instanceLabel: formatNodeInstanceLabel(operationId, asNonEmptyString(data.operation_type)),
+        parentOperationId: asNonEmptyString(data.parent_operation_id),
         visitIndex,
         status,
         skipped: status === 'skipped',
@@ -429,12 +442,12 @@ export const buildLiveTraceView = (
         raw: data,
         topologyRef: asObject(data.topology_ref),
       };
-      const existing = nodeIndex.get(key);
+      const existing = operationIndex.get(key);
       if (existing === undefined) {
-        nodeIndex.set(key, nodes.length);
-        nodes.push(row);
+        operationIndex.set(key, operations.length);
+        operations.push(row);
       } else {
-        nodes[existing] = { ...nodes[existing], ...row, raw: { ...nodes[existing].raw, ...data } };
+        operations[existing] = { ...operations[existing], ...row, raw: { ...operations[existing].raw, ...data } };
       }
       route = row.route || route;
       routeReason = row.routeReason || routeReason;
@@ -460,25 +473,26 @@ export const buildLiveTraceView = (
     route,
     routeReason,
     metrics: {},
-    nodes,
-    operations: nodes,
+    events: timelineEvents,
+    visualizations: { 'generic.timeline': { id: 'generic.timeline' } },
+    operations,
     tools,
-    usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
+    usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
-    warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: nodes.filter((node) => node.status === 'error').length + tools.filter((tool) => !tool.ok).length + runErrors.length,
+    warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
+    errorCount: operations.filter((operation) => operation.status === 'error').length + tools.filter((tool) => !tool.ok).length + runErrors.length,
     errors: [
-      ...nodes.map((node) => node.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
+      ...operations.map((operation) => operation.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
       ...runErrors,
     ],
     finalOutput,
-    detailManifest: nodes.filter((node) => node.raw.detail).map((node) => ({
-      node_id: node.id,
-      node_type: node.type,
-      visit_index: node.visitIndex || 1,
-      status: node.status,
+    detailManifest: operations.filter((operation) => operation.raw.detail).map((operation) => ({
+      operation_id: operation.id,
+      operation_type: operation.type,
+      visit_index: operation.visitIndex || 1,
+      status: operation.status,
       available: true,
-      truncated: Boolean(node.raw.detail?.safety?.truncated),
+      truncated: Boolean(operation.raw.detail?.safety?.truncated),
     })),
     parallel: parallelProjection.tasks.length > 0 || Object.keys(parallelProjection.summary).length > 0
       ? parallelProjection
@@ -491,34 +505,35 @@ export const mergeLiveAndRetainedTraceViews = (
   retained?: TraceRunView,
 ): TraceRunView => {
   if (!retained) return live;
-  const liveVisits = new Set(live.nodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
-  const nodes = [
-    ...retained.nodes.filter((node) => !liveVisits.has(`${node.id}:${node.visitIndex || 1}`)),
-    ...live.nodes,
+  const liveVisits = new Set(live.operations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
+  const operations = [
+    ...retained.operations.filter((operation) => !liveVisits.has(`${operation.id}:${operation.visitIndex || 1}`)),
+    ...live.operations,
   ];
   const toolKeys = new Set(live.tools.map((tool, index) => `${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
   const retainedTools = retained.tools.filter((tool, index) => !toolKeys.has(`${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
   const tools = [...retainedTools, ...live.tools];
   const detailManifest = new Map(
     [...retained.detailManifest, ...live.detailManifest]
-      .map((row) => [`${row.node_id}:${row.visit_index}`, row] as const),
+      .map((row) => [`${row.operation_id}:${row.visit_index}`, row] as const),
   );
   return {
     ...retained,
     ...live,
     graph: retained.graph || live.graph,
+    events: live.events.length > 0 ? live.events : retained.events,
+    visualizations: { ...retained.visualizations, ...live.visualizations },
     route: live.route || retained.route,
     routeReason: live.routeReason || retained.routeReason,
-    nodes,
-    operations: nodes,
+    operations,
     tools,
-    usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
+    usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
-    warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0)
+    warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0)
       + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: nodes.filter((node) => node.status === 'error').length
+    errorCount: operations.filter((operation) => operation.status === 'error').length
       + tools.filter((tool) => !tool.ok).length,
-    errors: nodes.map((node) => node.error).filter((nodeError): nodeError is Record<string, any> => Boolean(nodeError && Object.keys(nodeError).length)),
+    errors: operations.map((operation) => operation.error).filter((operationError): operationError is Record<string, any> => Boolean(operationError && Object.keys(operationError).length)),
     finalOutput: live.finalOutput || retained.finalOutput,
     detailManifest: [...detailManifest.values()],
     parallel: live.parallel || retained.parallel,
