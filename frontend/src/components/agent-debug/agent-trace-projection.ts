@@ -1,4 +1,4 @@
-import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunOperationDetailManifest, AgentTraceDiagnostics, AgentTraceFailure, AgentTraceLocation, AgentTraceTimelineEvent, AgentTraceVisualization, BuilderTestStreamEnvelope } from '../../lib/api';
 import {
   formatNodeInstanceLabel,
   formatNodeLabel,
@@ -85,7 +85,7 @@ export interface TraceRunView {
   availableToolCount?: number;
   warningCount: number;
   errorCount: number;
-  errors: Record<string, any>[];
+  diagnostics: AgentTraceDiagnostics;
   memory?: {
     recalledMemoryIds: string[];
     searchedScopes: Record<string, any>[];
@@ -187,9 +187,110 @@ export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefi
   const debug = runDetails.debug;
   if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
   if (debug.version !== 2) return undefined;
+  if (Object.keys(asObject(debug.diagnostics)).length === 0) return undefined;
+  if (!Array.isArray(debug.events) || !Array.isArray(debug.operations)) return undefined;
   if (Object.keys(asObject(debug.trace)).length === 0) return undefined;
   if (Object.keys(asObject(debug.summary)).length === 0) return undefined;
   return debug;
+};
+
+const diagnosticLocation = (event: AgentTraceTimelineEvent): AgentTraceLocation => {
+  const payload = event.payload || {};
+  return Object.fromEntries(Object.entries({
+    operation_id: event.operation_id || payload.operation_id,
+    operation_label: payload.operation_label || payload.label,
+    parent_operation_id: event.parent_operation_id || payload.parent_operation_id || payload.parent_id,
+    tool_call_id: payload.tool_call_id,
+    tool_name: payload.tool_name,
+    subagent_id: payload.subagent_id,
+    approval_id: payload.approval_id,
+    parallel_group_id: payload.parallel_group_id || payload.dispatch_id || payload.wave_id,
+    attempt: event.attempt,
+    sequence: event.sequence,
+    topology_ref: payload.topology_ref,
+  }).filter(([, value]) => value !== undefined && value !== null && value !== '')) as AgentTraceLocation;
+};
+
+export const buildDiagnosticsFromTimeline = (events: AgentTraceTimelineEvent[]): AgentTraceDiagnostics => {
+  const failures: AgentTraceFailure[] = [];
+  let terminal: AgentTraceFailure | undefined;
+  events.forEach((event) => {
+    const payload = event.payload || {};
+    const status = String(event.status || payload.status || '').toLowerCase();
+    const rawErrorValue = payload.error;
+    const rawError = asObject(rawErrorValue);
+    const failed = event.kind === 'run.failed' || event.kind.endsWith('.failed') || ['failed', 'failure', 'error', 'rejected'].includes(status) || Boolean(rawErrorValue) || (event.kind === 'tool.completed' && payload.ok === false);
+    const cancelled = event.kind.endsWith('.cancelled') || ['cancelled', 'canceled'].includes(status);
+    if (!failed && !cancelled) return;
+    const causedBy = asNonEmptyString(payload.caused_by_event_id) || asNonEmptyString(rawError.caused_by_event_id);
+    const row: AgentTraceFailure = {
+      event_id: event.event_id,
+      kind: event.kind,
+      classification: ['run.failed', 'run.cancelled'].includes(event.kind) ? 'terminal_summary' : cancelled ? 'cancellation' : 'contributing',
+      code: String(rawError.code || payload.code || event.kind.replaceAll('.', '_')),
+      message: String(rawError.safe_message || rawError.message || rawError.raw_message || (typeof rawErrorValue === 'string' ? rawErrorValue : '') || payload.message || payload.reason || event.kind),
+      retryable: Boolean(rawError.retryable || payload.retryable),
+      occurred_at: event.occurred_at,
+      location: diagnosticLocation(event),
+      ...(causedBy ? { caused_by_event_id: causedBy } : {}),
+      ...(Array.isArray(payload.related_event_ids) ? { related_event_ids: payload.related_event_ids.map(String) } : {}),
+      ...(Object.keys(asObject(rawError.details)).length > 0 ? { details: asObject(rawError.details) } : {}),
+    };
+    failures.push(row);
+    if (row.classification === 'terminal_summary') terminal = row;
+  });
+  const byId = new Map(failures.map((failure) => [failure.event_id, failure]));
+  const nonTerminal = failures.filter((failure) => !['terminal_summary', 'cancellation'].includes(failure.classification));
+  const explicitId = terminal?.caused_by_event_id;
+  let primary = explicitId ? byId.get(explicitId) : undefined;
+  const visited = new Set<string>();
+  while (primary?.caused_by_event_id && !visited.has(primary.event_id)) {
+    visited.add(primary.event_id);
+    const next = byId.get(primary.caused_by_event_id);
+    if (!next) break;
+    primary = next;
+  }
+  primary ||= nonTerminal[0] || terminal;
+  const primaryBasis = explicitId && primary ? 'explicit_cause' : primary ? 'earliest_observed' : null;
+  const parallelCounts = new Map<string, number>();
+  nonTerminal.forEach((failure) => {
+    const groupId = failure.location.parallel_group_id;
+    if (groupId) parallelCounts.set(groupId, (parallelCounts.get(groupId) || 0) + 1);
+  });
+  failures.forEach((failure) => {
+    if (failure === primary && failure.classification !== 'terminal_summary') failure.classification = 'primary';
+    else if (!['terminal_summary', 'cancellation'].includes(failure.classification)) {
+      const groupId = failure.location.parallel_group_id;
+      failure.classification = failure.caused_by_event_id ? 'downstream' : groupId && (parallelCounts.get(groupId) || 0) > 1 ? 'concurrent' : 'contributing';
+    }
+  });
+  const groups = new Map<string, any>();
+  failures.filter((failure) => failure.classification !== 'terminal_summary').forEach((failure) => {
+    const location = failure.location;
+    const key = [failure.code, location.operation_id, location.tool_name, location.subagent_id].join(':');
+    const group = groups.get(key) || { code: failure.code, location, event_ids: [], occurrence_count: 0, classifications: [] };
+    group.event_ids.push(failure.event_id);
+    group.occurrence_count += 1;
+    if (!group.classifications.includes(failure.classification)) group.classifications.push(failure.classification);
+    groups.set(key, group);
+  });
+  const source = terminal || primary;
+  return {
+    outcome: terminal?.kind === 'run.failed' ? 'failed' : terminal ? 'cancelled' : 'completed',
+    summary: {
+      code: source?.code || 'run_completed',
+      message: source?.message || 'Run completed without a recorded failure.',
+      retryable: Boolean(source?.retryable),
+      primary_failure_event_id: primary?.event_id,
+      primary_basis: primaryBasis,
+      location: primary?.location || {},
+      failure_count: failures.filter((failure) => failure.classification !== 'cancellation').length,
+      cancellation_count: failures.filter((failure) => failure.classification === 'cancellation').length,
+    },
+    failures,
+    groups: [...groups.values()],
+    observability_gaps: terminal?.kind === 'run.failed' && nonTerminal.length === 0 ? [{ code: 'terminal_failure_without_lower_level_events', message: 'The runtime reported a terminal failure without lower-level diagnostic events.', terminal_event_id: terminal.event_id }] : [],
+  };
 };
 
 export const getRunTrace = (runDetails: AgentRunDetails): AgentDebugTrace | undefined => {
@@ -350,8 +451,7 @@ export const buildRunTraceView = (
     const memory = asObject(summary.memory);
     const retainedParallel = projectParallelEvents(asArray(metrics.parallel_attempts));
     const retainedParallelSummary = asObject(metrics.parallel_summary);
-    const canonicalFailures = asArray(debug.failures);
-    const projectedErrors = canonicalFailures.length > 0 ? canonicalFailures : asArray(summary.errors);
+    const diagnostics = debug.diagnostics as AgentTraceDiagnostics;
     return {
       debug,
       trace: getRunTrace(runDetails),
@@ -368,8 +468,8 @@ export const buildRunTraceView = (
       usedToolCount,
       availableToolCount: asNumber(summary.availableToolCount),
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
-      errorCount: canonicalFailures.length || asNumber(summary.errorCount) || Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
-      errors: projectedErrors,
+      errorCount: diagnostics.summary.failure_count,
+      diagnostics,
       memory: Object.keys(memory).length > 0 ? {
         recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
         searchedScopes: asArray(memory.searchedScopes),
@@ -401,7 +501,6 @@ export const buildLiveTraceView = (
   let finalOutput: AgentRunFinalOutput | undefined;
   let route: string | undefined;
   let routeReason: string | undefined;
-  const runErrors: Record<string, any>[] = [];
   const parallelProjection = projectParallelEvents(events as unknown as Record<string, any>[]);
   const timelineEvents: AgentTraceTimelineEvent[] = events.map((envelope, index) => ({
     event_id: String((envelope.data as any)?.event_id || `live:${index + 1}`),
@@ -409,7 +508,7 @@ export const buildLiveTraceView = (
     kind: envelope.event,
     occurred_at: (envelope.data as any)?.occurred_at,
     operation_id: (envelope.data as any)?.operation_id,
-    payload: asObject(envelope.data),
+    payload: Object.fromEntries(Object.entries(asObject(envelope.data)).filter(([key]) => !['response', 'runtime_binding', 'runtime_metadata', 'prompt', 'messages', 'headers', 'arguments', 'args', 'framework_details', 'framework_metadata'].includes(key))),
     framework_details: asObject((envelope.data as any)?.framework_details),
   }));
 
@@ -459,15 +558,9 @@ export const buildLiveTraceView = (
       route = asNonEmptyString(data.route) || route;
       routeReason = asNonEmptyString(data.route_reason) || routeReason;
     }
-    if (envelope.event === 'run.failed') {
-      const rawError = data.error;
-      runErrors.push(
-        rawError && typeof rawError === 'object'
-          ? asObject(rawError)
-          : { raw_message: String(rawError || data.message || 'Workflow test failed.') },
-      );
-    }
   });
+
+  const diagnostics = buildDiagnosticsFromTimeline(timelineEvents);
 
   return {
     route,
@@ -480,11 +573,8 @@ export const buildLiveTraceView = (
     usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: operations.filter((operation) => operation.status === 'error').length + tools.filter((tool) => !tool.ok).length + runErrors.length,
-    errors: [
-      ...operations.map((operation) => operation.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
-      ...runErrors,
-    ],
+    errorCount: diagnostics.summary.failure_count,
+    diagnostics,
     finalOutput,
     detailManifest: operations.filter((operation) => operation.raw.detail).map((operation) => ({
       operation_id: operation.id,
@@ -531,9 +621,8 @@ export const mergeLiveAndRetainedTraceViews = (
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0)
       + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: operations.filter((operation) => operation.status === 'error').length
-      + tools.filter((tool) => !tool.ok).length,
-    errors: operations.map((operation) => operation.error).filter((operationError): operationError is Record<string, any> => Boolean(operationError && Object.keys(operationError).length)),
+    errorCount: live.diagnostics.summary.failure_count || retained.diagnostics.summary.failure_count,
+    diagnostics: live.events.length > 0 ? live.diagnostics : retained.diagnostics,
     finalOutput: live.finalOutput || retained.finalOutput,
     detailManifest: [...detailManifest.values()],
     parallel: live.parallel || retained.parallel,

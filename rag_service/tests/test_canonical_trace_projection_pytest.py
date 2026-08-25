@@ -109,11 +109,13 @@ def test_parallel_failures_remain_distinct_and_terminal_failure_correlates_them(
     events = [
         _event(1, "tool.failed", {
             "operation_id": "research-a",
+            "parallel_group_id": "research-wave-1",
             "tool_name": "search_documents",
             "error": {"code": "document_search_failed", "message": "Index unavailable"},
         }, "hermes"),
         _event(2, "subagent.failed", {
             "operation_id": "research-b",
+            "parallel_group_id": "research-wave-1",
             "subagent_id": "delegate-b",
             "error": {"code": "delegate_timeout", "message": "Delegate timed out"},
         }, "hermes"),
@@ -125,17 +127,56 @@ def test_parallel_failures_remain_distinct_and_terminal_failure_correlates_them(
 
     projection = build_canonical_trace_projection(events=events, resolved_spec={}, framework="hermes")
 
-    assert [row["event_id"] for row in projection["failures"]] == ["event-1", "event-2", "event-3"]
-    assert projection["failures"][0]["classification"] == "primary"
-    assert projection["failures"][1]["classification"] == "contributing"
-    terminal = projection["failures"][-1]
-    assert terminal["classification"] == "terminal"
-    assert terminal["failure_count"] == 3
-    assert terminal["primary_failure_event_id"] == "event-1"
-    assert terminal["contributing_failure_event_ids"] == ["event-1", "event-2"]
+    diagnostics = projection["diagnostics"]
+    assert [row["event_id"] for row in diagnostics["failures"]] == ["event-1", "event-2", "event-3"]
+    assert diagnostics["failures"][0]["classification"] == "primary"
+    assert diagnostics["failures"][1]["classification"] == "concurrent"
+    terminal = diagnostics["failures"][-1]
+    assert terminal["classification"] == "terminal_summary"
+    assert diagnostics["summary"]["failure_count"] == 3
+    assert diagnostics["summary"]["primary_failure_event_id"] == "event-1"
+    assert diagnostics["summary"]["primary_basis"] == "earliest_observed"
     assert [row["event_id"] for row in projection["visualizations"]["hermes.session"]["failures"]] == [
         "event-1", "event-2", "event-3",
     ]
+
+
+def test_explicit_causal_chain_selects_root_without_framework_logic() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "tool.failed", {"tool_name": "search", "error": {"code": "provider_down", "message": "Provider unavailable"}}, "future"),
+            _event(2, "operation.failed", {"operation_id": "retrieve", "caused_by_event_id": "event-1", "error": {"code": "retrieval_failed"}}, "future"),
+            _event(3, "run.failed", {"caused_by_event_id": "event-2", "error": {"code": "run_failed"}}, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    diagnostics = projection["diagnostics"]
+    assert diagnostics["summary"]["primary_failure_event_id"] == "event-1"
+    assert diagnostics["summary"]["primary_basis"] == "explicit_cause"
+    assert diagnostics["failures"][1]["classification"] == "downstream"
+
+
+def test_terminal_only_failure_reports_observability_gap_and_omits_large_runtime_payloads() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "run.failed", {
+            "error": {"code": "opaque_failure", "message": "Runtime failed", "retryable": True},
+            "response": {"answer": "generated response that must not be duplicated"},
+            "runtime_binding": {"session_id": "private-session"},
+            "headers": {"authorization": "secret"},
+        }, "future")],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert projection["diagnostics"]["observability_gaps"][0]["code"] == "terminal_failure_without_lower_level_events"
+    assert projection["diagnostics"]["summary"]["retryable"] is True
+    payload = projection["events"][0]["payload"]
+    assert "response" not in payload
+    assert "runtime_binding" not in payload
+    assert "headers" not in payload
+    assert "generated response" not in str(projection)
 
 
 def test_trace_recorder_emits_version_two_from_canonical_events() -> None:
@@ -162,4 +203,5 @@ def test_trace_recorder_emits_version_two_from_canonical_events() -> None:
     assert payload["version"] == 2
     assert payload["operations"][0]["operation_id"] == "step-1"
     assert payload["trace"]["events"] == payload["events"]
+    assert payload["diagnostics"]["outcome"] == "completed"
     assert "graph" not in payload

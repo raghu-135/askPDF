@@ -64,9 +64,10 @@ function AgentRunDebugPanel({
     ? runtimeOperationAvailability(runCapabilities, responseOperation)
     : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
-  const unsupportedTraceVersion = runDetails?.debug && runDetails.debug.version !== 2
-    ? runDetails.debug.version
-    : undefined;
+  const unsupportedTraceFormat = Boolean(
+    runDetails?.debug
+    && (runDetails.debug.version !== 2 || !runDetails.debug.diagnostics),
+  );
   const executionTraceView = useMemo(
     () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
     [liveTraceView, traceView],
@@ -530,14 +531,14 @@ function AgentRunDebugPanel({
       )}
       {!loading && !error && runDetails && !debug && (
         <Typography variant="caption" color={retainedErrorMessage ? 'error' : 'text.secondary'} sx={{ px: 1, py: 0.75 }}>
-          {unsupportedTraceVersion !== undefined
-            ? `Trace format version ${unsupportedTraceVersion} is no longer supported.`
+          {unsupportedTraceFormat
+            ? 'Trace format is no longer supported.'
             : retainedErrorMessage || (traceRefreshExhausted ? 'Trace not captured for this run.' : 'Retained execution trace is finalizing…')}
         </Typography>
       )}
       {debug && !traceView && (
         <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
-          Trace payload is incomplete.
+          {unsupportedTraceFormat ? 'Trace format is no longer supported.' : 'Trace payload is incomplete.'}
         </Typography>
       )}
       {executionTraceView && (

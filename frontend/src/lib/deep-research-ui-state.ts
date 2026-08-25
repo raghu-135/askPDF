@@ -39,6 +39,12 @@ export function isTerminalAgentTaskEvent(payload: Record<string, unknown>): bool
   return payload.terminal === true || TERMINAL_EVENT_TYPES.has(String(payload.type || ''));
 }
 
+export function shouldRefreshAgentTaskTimeline(payload: Record<string, unknown>): boolean {
+  const type = String(payload.type || '');
+  return isTerminalAgentTaskEvent(payload)
+    || /^(runtime\.event|subagent\.|artifact\.|output\.)/.test(type);
+}
+
 export function isTaskOwnedAgentRun(run: AgentRunDetails | undefined): boolean {
   return Boolean(run?.task_id);
 }

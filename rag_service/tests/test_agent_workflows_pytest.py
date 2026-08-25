@@ -386,12 +386,18 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
         "version": 2,
         "trace": dict(trace),
         "summary": {},
+        "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
+        "events": [],
+        "operations": [],
         "details": [{"operation_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
     }
     incoming = {
         "version": 2,
         "trace": dict(trace),
         "summary": {},
+        "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
+        "events": [],
+        "operations": [],
         "details": [{"operation_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
     }
 

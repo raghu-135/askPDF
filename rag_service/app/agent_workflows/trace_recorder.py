@@ -850,13 +850,13 @@ class AgentTraceRecorder:
             "approvalCount": len(canonical["approvals"]),
             "subagentCount": len(canonical["subagents"]),
             "artifactCount": len(canonical["artifacts"]),
-            "errorCount": len(canonical["failures"]),
-            "errors": canonical["failures"],
+            "errorCount": int(canonical["diagnostics"]["summary"].get("failure_count") or 0),
             "usedOperationCount": len({row["operation_id"] for row in canonical["operations"] if row.get("status") != "skipped"}),
         }
         summary.pop("nodes", None)
         summary.pop("usedNodeCount", None)
         summary.pop("availableNodeCount", None)
+        summary.pop("errors", None)
         final_output = final_output_from_result(result)
         details = []
         for row in canonical["operations"]:
@@ -881,7 +881,7 @@ class AgentTraceRecorder:
             "approvals": canonical["approvals"],
             "subagents": canonical["subagents"],
             "artifacts": canonical["artifacts"],
-            "failures": canonical["failures"],
+            "diagnostics": canonical["diagnostics"],
             "visualizations": canonical["visualizations"],
             "details": details,
             "detail_safety": {

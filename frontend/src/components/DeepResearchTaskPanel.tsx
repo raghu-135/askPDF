@@ -43,6 +43,7 @@ import {
   mergeActiveAgentTaskRun,
   resolveDeepResearchContextWindow,
   shouldPollAgentTask,
+  shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
 } from '../lib/deep-research-ui-state';
 import { isCurrentRuntimeCapabilityRequest, isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
@@ -331,6 +332,13 @@ export default function DeepResearchTaskPanel({
     setRunIndex((current) => current >= 0 && current < nextRuns.length ? current : nextRuns.length - 1);
   }, [selectedTaskId, threadId]);
 
+  const refreshTimeline = useCallback(async (taskId: string, runId: string) => {
+    const value = await getAgentTaskTimeline(taskId, runId, threadId);
+    if (taskContextRef.current !== taskId) return;
+    setTask(value.task);
+    setItems(value.items);
+  }, [threadId]);
+
   useEffect(() => {
     setTask(null);
     setRuns([]);
@@ -445,13 +453,14 @@ export default function DeepResearchTaskPanel({
         const type = String(payload.type || '');
         const terminal = isTerminalAgentTaskEvent(payload);
         if (terminal) {
+          void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));
           close();
           void refresh().catch((value) => setError(String(value)));
           return;
         }
         if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
-        if (/^(runtime\.event|subagent\.|artifact\.|output\.)/.test(type)) {
-          void getAgentTaskTimeline(taskId, runId, threadId).then((value) => setItems(value.items));
+        if (shouldRefreshAgentTaskTimeline(payload)) {
+          void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));
         }
       });
       source.onerror = () => {
@@ -462,7 +471,7 @@ export default function DeepResearchTaskPanel({
     };
     connect();
     return close;
-  }, [selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status, threadId, refresh]);
+  }, [refresh, refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status, threadId]);
 
   const launch = async (objective: string) => {
     if (webSearchMode !== 'off' && webCapability !== true) {

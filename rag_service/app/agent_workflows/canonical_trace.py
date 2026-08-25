@@ -38,6 +38,42 @@ class HermesSessionVisualization(TypedDict):
     failures: list[dict[str, Any]]
 
 
+class AgentTraceLocation(TypedDict, total=False):
+    operation_id: str
+    operation_label: str
+    parent_operation_id: str
+    tool_call_id: str
+    tool_name: str
+    subagent_id: str
+    approval_id: str
+    parallel_group_id: str
+    attempt: int
+    sequence: int
+    topology_ref: dict[str, Any]
+
+
+class AgentTraceFailure(TypedDict, total=False):
+    event_id: str
+    kind: str
+    classification: str
+    code: str
+    message: str
+    retryable: bool
+    occurred_at: str
+    location: AgentTraceLocation
+    caused_by_event_id: str
+    related_event_ids: list[str]
+    details: dict[str, Any]
+
+
+class AgentTraceDiagnostics(TypedDict):
+    outcome: str
+    summary: dict[str, Any]
+    failures: list[AgentTraceFailure]
+    groups: list[dict[str, Any]]
+    observability_gaps: list[dict[str, Any]]
+
+
 TRACE_VISUALIZATION_GENERIC = TraceVisualizationId.GENERIC_TIMELINE.value
 TRACE_VISUALIZATION_LANGGRAPH = TraceVisualizationId.LANGGRAPH_GRAPH.value
 TRACE_VISUALIZATION_HERMES = TraceVisualizationId.HERMES_SESSION.value
@@ -61,12 +97,15 @@ def _framework_details(payload: Mapping[str, Any], framework: str) -> dict[str, 
 
 def _timeline_event(event: AgentRuntimeEvent, framework: str) -> dict[str, Any]:
     payload = dict(event.payload)
+    framework_details = _framework_details(payload, framework)
     if event.kind.startswith("tool."):
         arguments = payload.get("arguments") or payload.get("args") or payload.get("input")
         if isinstance(arguments, Mapping):
             payload.setdefault("provided_argument_names", sorted(str(key) for key in arguments))
         for key in ("arguments", "args", "input"):
             payload.pop(key, None)
+    for key in ("response", "runtime_binding", "runtime_metadata", "prompt", "messages", "headers", "framework_details", "framework_metadata"):
+        payload.pop(key, None)
     return {
         "event_id": event.event_id,
         "sequence": event.sequence,
@@ -77,7 +116,7 @@ def _timeline_event(event: AgentRuntimeEvent, framework: str) -> dict[str, Any]:
         "parent_operation_id": payload.get("parent_operation_id") or payload.get("parent_id"),
         "status": payload.get("status"),
         "payload": _bounded_value(payload),
-        "framework_details": _bounded_value(_framework_details(payload, framework)),
+        "framework_details": _bounded_value(framework_details),
     }
 
 
@@ -162,9 +201,13 @@ def _event_rows(events: Sequence[AgentRuntimeEvent], prefix: str, framework: str
     return [_timeline_event(event, framework) for event in events if event.kind.startswith(prefix)]
 
 
-def _failure_rows(events: Sequence[AgentRuntimeEvent], framework: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    terminal_failure_id: str | None = None
+def _string_list(value: Any) -> list[str]:
+    return [str(item) for item in value if str(item)] if isinstance(value, (list, tuple, set)) else []
+
+
+def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDiagnostics:
+    rows: list[AgentTraceFailure] = []
+    terminal: AgentTraceFailure | None = None
     for event in events:
         payload = dict(event.payload)
         status = str(payload.get("status") or "").lower()
@@ -176,31 +219,131 @@ def _failure_rows(events: Sequence[AgentRuntimeEvent], framework: str) -> list[d
             or bool(error)
             or (event.kind == "tool.completed" and payload.get("ok") is False)
         )
-        if not failed:
+        cancelled = event.kind.endswith(".cancelled") or status in {"cancelled", "canceled"}
+        if not failed and not cancelled:
             continue
-        if event.kind == "run.failed":
-            terminal_failure_id = event.event_id
         normalized_error = dict(error) if isinstance(error, Mapping) else {}
         if error and not normalized_error:
             normalized_error["message"] = str(error)
         if not normalized_error:
             message = payload.get("message") or payload.get("reason")
             normalized_error = {"message": str(message)} if message else {}
-        rows.append({
-            **_timeline_event(event, framework),
-            "error": _bounded_value(normalized_error),
-            "classification": "terminal" if event.kind == "run.failed" else "contributing",
-        })
-    contributing_ids = [row["event_id"] for row in rows if row["event_id"] != terminal_failure_id]
-    primary_failure_id = contributing_ids[0] if contributing_ids else terminal_failure_id
+        location = {
+            key: value
+            for key, value in {
+                "operation_id": payload.get("operation_id"),
+                "operation_label": payload.get("operation_label") or payload.get("label"),
+                "parent_operation_id": payload.get("parent_operation_id") or payload.get("parent_id"),
+                "tool_call_id": payload.get("tool_call_id"),
+                "tool_name": payload.get("tool_name"),
+                "subagent_id": payload.get("subagent_id"),
+                "approval_id": payload.get("approval_id"),
+                "parallel_group_id": payload.get("parallel_group_id") or payload.get("dispatch_id") or payload.get("wave_id"),
+                "attempt": event.attempt,
+                "sequence": event.sequence,
+                "topology_ref": payload.get("topology_ref") if isinstance(payload.get("topology_ref"), Mapping) else None,
+            }.items()
+            if value not in (None, "", [], {})
+        }
+        caused_by = str(payload.get("caused_by_event_id") or normalized_error.get("caused_by_event_id") or "")
+        related = _string_list(payload.get("related_event_ids") or normalized_error.get("related_event_ids"))
+        row: AgentTraceFailure = {
+            "event_id": event.event_id,
+            "kind": event.kind,
+            "classification": "terminal_summary" if event.kind in {"run.failed", "run.cancelled"} else "cancellation" if cancelled else "contributing",
+            "code": str(normalized_error.get("code") or payload.get("code") or event.kind.replace(".", "_")),
+            "message": str(normalized_error.get("safe_message") or normalized_error.get("message") or normalized_error.get("raw_message") or payload.get("message") or payload.get("reason") or event.kind),
+            "retryable": bool(normalized_error.get("retryable") or payload.get("retryable")),
+            "location": _bounded_value(location),
+        }
+        if event.occurred_at:
+            row["occurred_at"] = event.occurred_at
+        if caused_by:
+            row["caused_by_event_id"] = caused_by
+        if related:
+            row["related_event_ids"] = related
+        details = normalized_error.get("details")
+        if isinstance(details, Mapping):
+            row["details"] = _bounded_value(dict(details))
+        rows.append(row)
+        if event.kind in {"run.failed", "run.cancelled"}:
+            terminal = row
+
+    by_id = {row["event_id"]: row for row in rows}
+    non_terminal = [row for row in rows if row.get("classification") != "terminal_summary" and row.get("classification") != "cancellation"]
+    explicit_primary_id = str((terminal or {}).get("caused_by_event_id") or "")
+    primary = by_id.get(explicit_primary_id) if explicit_primary_id else None
+    visited: set[str] = set()
+    while primary is not None and primary.get("caused_by_event_id") and primary["event_id"] not in visited:
+        visited.add(primary["event_id"])
+        next_primary = by_id.get(str(primary["caused_by_event_id"]))
+        if next_primary is None:
+            break
+        primary = next_primary
+    if primary is None:
+        primary = non_terminal[0] if non_terminal else terminal
+    primary_basis = "explicit_cause" if explicit_primary_id and primary is not None else "earliest_observed"
+    parallel_counts: dict[str, int] = {}
+    for row in non_terminal:
+        group_id = str((row.get("location") or {}).get("parallel_group_id") or "")
+        if group_id:
+            parallel_counts[group_id] = parallel_counts.get(group_id, 0) + 1
     for row in rows:
-        if row["event_id"] == primary_failure_id and row["event_id"] != terminal_failure_id:
+        if primary is not None and row["event_id"] == primary["event_id"] and row.get("classification") != "terminal_summary":
             row["classification"] = "primary"
-        if row["event_id"] == terminal_failure_id:
-            row["contributing_failure_event_ids"] = contributing_ids
-            row["primary_failure_event_id"] = primary_failure_id
-            row["failure_count"] = len(rows)
-    return rows
+        elif row.get("classification") not in {"terminal_summary", "cancellation"}:
+            parallel_group_id = str((row.get("location") or {}).get("parallel_group_id") or "")
+            row["classification"] = "downstream" if row.get("caused_by_event_id") else "concurrent" if parallel_group_id and parallel_counts.get(parallel_group_id, 0) > 1 else "contributing"
+
+    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        if row.get("classification") == "terminal_summary":
+            continue
+        location = row.get("location") or {}
+        key = (
+            str(row.get("code") or "runtime_failure"),
+            str(location.get("operation_id") or ""),
+            str(location.get("tool_name") or ""),
+            str(location.get("subagent_id") or ""),
+        )
+        group = groups.setdefault(key, {
+            "code": key[0],
+            "location": location,
+            "event_ids": [],
+            "occurrence_count": 0,
+            "classifications": [],
+        })
+        group["event_ids"].append(row["event_id"])
+        group["occurrence_count"] += 1
+        if row["classification"] not in group["classifications"]:
+            group["classifications"].append(row["classification"])
+
+    gaps = []
+    if terminal is not None and terminal.get("kind") == "run.failed" and not non_terminal:
+        gaps.append({
+            "code": "terminal_failure_without_lower_level_events",
+            "message": "The runtime reported a terminal failure without lower-level diagnostic events.",
+            "terminal_event_id": terminal["event_id"],
+        })
+    outcome = str((terminal or {}).get("location", {}).get("status") or ("failed" if terminal and terminal.get("kind") == "run.failed" else "cancelled" if terminal else "completed"))
+    summary_source = terminal or primary
+    summary = {
+        "code": str((summary_source or {}).get("code") or "run_completed"),
+        "message": str((summary_source or {}).get("message") or "Run completed without a recorded failure."),
+        "retryable": bool((summary_source or {}).get("retryable")),
+        "primary_failure_event_id": (primary or {}).get("event_id"),
+        "primary_basis": primary_basis if primary is not None else None,
+        "location": (primary or {}).get("location") or {},
+        "failure_count": len([row for row in rows if row.get("classification") != "cancellation"]),
+        "cancellation_count": len([row for row in rows if row.get("classification") == "cancellation"]),
+    }
+    return {
+        "outcome": outcome,
+        "summary": _bounded_value(summary),
+        "failures": rows,
+        "groups": sorted(groups.values(), key=lambda group: (group["event_ids"][0], group["code"])),
+        "observability_gaps": gaps,
+    }
 
 
 def _langgraph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[Mapping[str, Any]], framework: str) -> LangGraphVisualization | None:
@@ -273,7 +416,8 @@ def build_canonical_trace_projection(
 ) -> dict[str, Any]:
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
     operations = _operations(ordered, framework)
-    failures = _failure_rows(ordered, framework)
+    diagnostics = build_trace_diagnostics(ordered)
+    failures = diagnostics["failures"]
     visualizations: dict[str, Any] = {
         TRACE_VISUALIZATION_GENERIC: {"id": TRACE_VISUALIZATION_GENERIC}
     }
@@ -290,6 +434,6 @@ def build_canonical_trace_projection(
         "approvals": _event_rows(ordered, "approval.", framework),
         "subagents": _event_rows(ordered, "subagent.", framework),
         "artifacts": _event_rows(ordered, "artifact.", framework),
-        "failures": failures,
+        "diagnostics": diagnostics,
         "visualizations": visualizations,
     }

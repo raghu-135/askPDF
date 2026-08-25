@@ -8,6 +8,18 @@ from app.time_utils import iso_utc_z
 
 
 DEBUG_PAYLOAD_VERSION = 2
+
+
+def is_current_debug_payload(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("version") == DEBUG_PAYLOAD_VERSION
+        and isinstance(value.get("diagnostics"), dict)
+        and isinstance(value.get("events"), list)
+        and isinstance(value.get("operations"), list)
+    )
+
+
 INTERRUPT_EVENT_NAMES = {
     "pending": "interrupt.requested",
     "requested": "interrupt.requested",
@@ -198,7 +210,7 @@ def append_interrupt_event_to_debug_payload(
 ) -> Any:
     """Append a HITL event to an already-stored canonical debug payload."""
 
-    if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+    if not is_current_debug_payload(debug_payload):
         return debug_payload
     trace = debug_payload.get("trace") if isinstance(debug_payload.get("trace"), dict) else None
     if trace is None:
@@ -247,7 +259,7 @@ def append_runtime_event_to_debug_payload(
 ) -> Any:
     """Append a generic root lifecycle event to a stored trace payload."""
 
-    if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+    if not is_current_debug_payload(debug_payload):
         return debug_payload
     trace = debug_payload.get("trace") if isinstance(debug_payload.get("trace"), dict) else None
     if trace is None:
@@ -325,9 +337,9 @@ def merge_debug_payloads(
 ) -> Any:
     """Merge a later execution phase into an already-stored debug payload."""
 
-    if not isinstance(base_payload, dict) or base_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+    if not is_current_debug_payload(base_payload):
         return base_payload
-    if not isinstance(incoming_payload, dict) or incoming_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+    if not is_current_debug_payload(incoming_payload):
         return base_payload
     base_trace = base_payload.get("trace") if isinstance(base_payload.get("trace"), dict) else None
     incoming_trace = incoming_payload.get("trace") if isinstance(incoming_payload.get("trace"), dict) else None
@@ -441,16 +453,32 @@ def merge_debug_payloads(
             rows[key] = {**rows.get(key, {}), **row}
         return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row.get("event_id") or row.get("operation_id") or "")))
 
+    merged_events = merge_rows("events", ("event_id",))
+    from app.agent_workflows.canonical_trace import build_trace_diagnostics
+    from app.runtime.contracts import AgentRuntimeEvent
+    diagnostic_events = [
+        AgentRuntimeEvent(
+            event_id=str(row.get("event_id") or f"merged:{index + 1}"),
+            run_id=str(base_trace.get("run_id") or "merged"),
+            sequence=int(row.get("sequence") or index + 1),
+            attempt=int(row.get("attempt") or 1),
+            kind=str(row.get("kind") or "runtime.event"),
+            payload=_as_dict(row.get("payload")),
+            occurred_at=row.get("occurred_at"),
+        )
+        for index, row in enumerate(merged_events)
+    ]
     payload = {
         **base_payload,
         "trace": base_trace,
         "summary": summary,
-        "events": merge_rows("events", ("event_id",)),
+        "events": merged_events,
         "operations": merge_rows("operations", ("operation_id", "visit_index")),
         "tools": merge_rows("tools", ("event_id",)),
         "approvals": merge_rows("approvals", ("event_id",)),
         "subagents": merge_rows("subagents", ("event_id",)),
         "artifacts": merge_rows("artifacts", ("event_id",)),
+        "diagnostics": build_trace_diagnostics(diagnostic_events),
         "visualizations": {
             **_as_dict(base_payload.get("visualizations")),
             **_as_dict(incoming_payload.get("visualizations")),
@@ -466,9 +494,11 @@ def merge_debug_payloads(
         for row in payload["operations"]
         if row.get("operation_id") and row.get("status") != "skipped"
     })
+    summary["errorCount"] = int(payload["diagnostics"]["summary"].get("failure_count") or 0)
+    summary.pop("errors", None)
     base_trace.update({
         key: payload[key]
-        for key in ("events", "operations", "tools", "approvals", "subagents", "artifacts", "visualizations")
+        for key in ("events", "operations", "tools", "approvals", "subagents", "artifacts", "diagnostics", "visualizations")
     })
     detail_by_visit: Dict[tuple[str, int], Dict[str, Any]] = {}
     for detail in [*_as_list(base_payload.get("details")), *_as_list(incoming_payload.get("details"))]:

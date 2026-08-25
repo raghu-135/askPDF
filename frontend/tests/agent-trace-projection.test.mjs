@@ -244,6 +244,11 @@ const canonicalDebug = (source) => {
   debug.version = 2;
   debug.events = [];
   debug.operations = operations;
+  debug.diagnostics = debug.diagnostics || {
+    outcome: 'completed',
+    summary: { code: 'run_completed', message: 'Run completed without a recorded failure.', retryable: false, primary_failure_event_id: null, primary_basis: null, location: {}, failure_count: 0, cancellation_count: 0 },
+    failures: [], groups: [], observability_gaps: [],
+  };
   debug.summary = { ...debug.summary, operations };
   debug.visualizations = {
     'generic.timeline': { id: 'generic.timeline' },
@@ -278,18 +283,23 @@ test('trace projection reads backend-provided summary and graph', () => {
   assert.equal(view.graph?.nodes[1].toolSummaries.length, 1);
 });
 
-test('retained trace prefers correlated canonical failures over aggregate counters', () => {
+test('retained trace uses required correlated canonical diagnostics', () => {
   const failures = [
-    { event_id: 'failure-1', sequence: 10, kind: 'tool.failed', classification: 'primary', error: { code: 'search_failed', message: 'Search unavailable' } },
-    { event_id: 'failure-2', sequence: 11, kind: 'run.failed', classification: 'terminal', failure_count: 2, primary_failure_event_id: 'failure-1', contributing_failure_event_ids: ['failure-1'], error: { code: 'evidence_unavailable', message: 'Evidence unavailable' } },
+    { event_id: 'failure-1', kind: 'tool.failed', classification: 'primary', code: 'search_failed', message: 'Search unavailable', retryable: true, location: { tool_name: 'search' } },
+    { event_id: 'failure-2', kind: 'run.failed', classification: 'terminal_summary', code: 'evidence_unavailable', message: 'Evidence unavailable', retryable: true, location: {} },
   ];
-  const debug = canonicalDebug({ ...backendDebug, failures, summary: { ...backendDebug.summary, errorCount: 99, errors: [] } });
+  const diagnostics = {
+    outcome: 'failed',
+    summary: { code: 'evidence_unavailable', message: 'Evidence unavailable', retryable: true, primary_failure_event_id: 'failure-1', primary_basis: 'earliest_observed', location: { tool_name: 'search' }, failure_count: 2, cancellation_count: 0 },
+    failures, groups: [], observability_gaps: [],
+  };
+  const debug = canonicalDebug({ ...backendDebug, diagnostics, summary: { ...backendDebug.summary, errorCount: 99, errors: [] } });
 
   const view = buildRunTraceView({ ...traceBackedRun, debug });
 
   assert.equal(view.errorCount, 2);
-  assert.deepEqual(view.errors.map((failure) => failure.event_id), ['failure-1', 'failure-2']);
-  assert.deepEqual(view.errors[1].contributing_failure_event_ids, ['failure-1']);
+  assert.deepEqual(view.diagnostics.failures.map((failure) => failure.event_id), ['failure-1', 'failure-2']);
+  assert.equal(view.diagnostics.summary.primary_basis, 'earliest_observed');
 });
 
 test('trace projection preserves custom node type metadata and normalizes graph labels', () => {
@@ -455,6 +465,7 @@ test('trace projection rejects empty or stale debug payloads', () => {
   assert.equal(buildRunTraceView({ id: 'run-empty-object', debug: {} }), undefined);
   assert.equal(buildRunTraceView({ id: 'run-stale', debug: { ...backendDebug, version: 0 } }), undefined);
   assert.equal(buildRunTraceView({ id: 'run-partial', debug: { version: 1, trace: backendDebug.trace } }), undefined);
+  assert.equal(buildRunTraceView({ id: 'run-old-v2', debug: { ...backendDebug, version: 2, events: [], operations: [] } }), undefined);
 });
 
 test('trace export returns full backend debug json', () => {
@@ -502,7 +513,7 @@ test('live trace projection preserves string node failures', () => {
 
   assert.equal(view.operations[0].status, 'error');
   assert.equal(view.operations[0].error.raw_message, 'Model connection failed');
-  assert.equal(view.errors[0].raw_message, 'Model connection failed');
+  assert.equal(view.diagnostics.failures[0].message, 'Model connection failed');
 });
 
 test('live trace projection surfaces terminal run failures without a node failure', () => {
@@ -513,8 +524,8 @@ test('live trace projection surfaces terminal run failures without a node failur
 
   assert.equal(view.operations[0].status, 'completed');
   assert.equal(view.errorCount, 1);
-  assert.equal(view.errors[0].code, 'workflow_failed');
-  assert.equal(view.errors[0].raw_message, 'No destination for route memory');
+  assert.equal(view.diagnostics.failures[0].code, 'workflow_failed');
+  assert.equal(view.diagnostics.failures[0].message, 'No destination for route memory');
 });
 
 test('live and retained projections merge repeated visits without duplicating identities', () => {

@@ -1039,7 +1039,7 @@ export interface AgentRunDebug {
   approvals?: AgentTraceTimelineEvent[];
   subagents?: AgentTraceTimelineEvent[];
   artifacts?: AgentTraceTimelineEvent[];
-  failures?: AgentTraceFailure[];
+  diagnostics?: AgentTraceDiagnostics;
   visualizations?: Record<string, AgentTraceVisualization>;
   detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
@@ -1064,12 +1064,65 @@ export interface AgentTraceTimelineEvent {
   framework_details?: Record<string, any>;
 }
 
-export interface AgentTraceFailure extends AgentTraceTimelineEvent {
-  error?: Record<string, any>;
-  classification?: 'terminal' | 'primary' | 'contributing';
-  contributing_failure_event_ids?: string[];
+export interface AgentTraceLocation {
+  operation_id?: string;
+  operation_label?: string;
+  parent_operation_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  subagent_id?: string;
+  approval_id?: string;
+  parallel_group_id?: string;
+  attempt?: number;
+  sequence?: number;
+  topology_ref?: Record<string, any>;
+}
+
+export interface AgentTraceFailure {
+  event_id: string;
+  kind: string;
+  classification: 'primary' | 'concurrent' | 'contributing' | 'downstream' | 'cancellation' | 'terminal_summary';
+  code: string;
+  message: string;
+  retryable: boolean;
+  occurred_at?: string | null;
+  location: AgentTraceLocation;
+  caused_by_event_id?: string | null;
+  related_event_ids?: string[];
+  details?: Record<string, any>;
+}
+
+export interface AgentTraceDiagnosticSummary {
+  code: string;
+  message: string;
+  retryable: boolean;
   primary_failure_event_id?: string | null;
-  failure_count?: number;
+  primary_basis?: 'explicit_cause' | 'earliest_observed' | null;
+  location: AgentTraceLocation;
+  failure_count: number;
+  cancellation_count: number;
+}
+
+export interface AgentTraceFailureGroup {
+  code: string;
+  location: AgentTraceLocation;
+  event_ids: string[];
+  occurrence_count: number;
+  classifications: AgentTraceFailure['classification'][];
+}
+
+export interface AgentTraceObservabilityGap {
+  code: string;
+  message: string;
+  terminal_event_id?: string;
+}
+
+export interface AgentTraceDiagnostics {
+  outcome: string;
+  summary: AgentTraceDiagnosticSummary;
+  failures: AgentTraceFailure[];
+  groups: AgentTraceFailureGroup[];
+  observability_gaps: AgentTraceObservabilityGap[];
 }
 
 export interface AgentTraceOperation {

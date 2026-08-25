@@ -8,6 +8,7 @@ import {
   mergeActiveAgentTaskRun,
   resolveDeepResearchContextWindow,
   shouldPollAgentTask,
+  shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
 } from '../src/lib/deep-research-ui-state.ts';
 
@@ -47,6 +48,13 @@ test('committed task terminal events are recognized without framework-specific p
   assert.equal(isTerminalAgentTaskEvent({ type: 'run.failed' }), true);
   assert.equal(isTerminalAgentTaskEvent({ type: 'run.cancelled' }), true);
   assert.equal(isTerminalAgentTaskEvent({ type: 'output.delta', terminal: false }), false);
+});
+
+test('terminal task events refresh the persisted timeline even when the run id is unchanged', () => {
+  assert.equal(shouldRefreshAgentTaskTimeline({ type: 'task.completed', terminal: true }), true);
+  assert.equal(shouldRefreshAgentTaskTimeline({ type: 'run.completed' }), true);
+  assert.equal(shouldRefreshAgentTaskTimeline({ type: 'output.delta', terminal: false }), true);
+  assert.equal(shouldRefreshAgentTaskTimeline({ type: 'task.running', terminal: false }), false);
 });
 
 test('task-owned runs cannot use Debug Trace as an approval surface', () => {

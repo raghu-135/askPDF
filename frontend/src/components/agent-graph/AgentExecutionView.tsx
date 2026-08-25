@@ -20,6 +20,7 @@ import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 import { formatDurationMs } from '../../lib/formatDuration';
 import { TraceLlmUsageTooltip, TraceOperationsTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
 import GenericTraceTimeline from '../agent-debug/GenericTraceTimeline';
+import TraceDiagnosticsPanel from '../agent-debug/TraceDiagnosticsPanel';
 import TraceVisualizationSlot from '../agent-debug/TraceVisualizationSlot';
 import { compactExecutionText } from './agent-execution-display';
 import {
@@ -32,16 +33,6 @@ import {
 } from './agent-node-visits';
 
 const visitKey = (operation: Pick<TraceOperationView, 'id' | 'visitIndex'>) => agentNodeVisitKey(operation);
-
-const failureTitle = (failure: Record<string, any>) => {
-  const error = failure.error || failure.payload?.error || failure;
-  return String(error.code || failure.kind || 'runtime_failure').replaceAll('_', ' ');
-};
-
-const failureMessage = (failure: Record<string, any>) => {
-  const error = failure.error || failure.payload?.error || failure;
-  return String(error.safe_message || error.message || error.raw_message || failure.payload?.message || 'No failure message was provided.');
-};
 
 const nodeSummary = (node: TraceOperationView) => {
   const raw = node.raw || {};
@@ -113,6 +104,7 @@ function AgentExecutionView({
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
   const [progressOpen, setProgressOpen] = useState(true);
   const [finalAnswerOpen, setFinalAnswerOpen] = useState(defaultFinalAnswerOpen);
+  const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
   const timelineSummaries = useRef(new Map<string, HTMLElement>());
@@ -134,6 +126,7 @@ function AgentExecutionView({
       setDetailErrors({});
       setProgressOpen(true);
       setFinalAnswerOpen(defaultFinalAnswerOpen);
+      setFocusedEventId(null);
       return;
     }
     setDetails((current) => {
@@ -300,25 +293,15 @@ function AgentExecutionView({
             </Stack>
           </Paper>
         )}
-        {traceView.errors.length > 0 && (
-          <Alert severity="error" icon={<ErrorOutlineIcon />} sx={{ mb: 0.75, '& .MuiAlert-message': { width: '100%' } }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              {traceView.errors.length === 1 ? 'Run failure' : `Failures (${traceView.errors.length})`}
-            </Typography>
-            <Stack spacing={0.5} sx={{ mt: 0.5 }}>
-              {traceView.errors.map((failure, index) => (
-                <Box component="details" key={String(failure.event_id || `${failureTitle(failure)}:${index}`)} open={index === traceView.errors.length - 1}>
-                  <Box component="summary" sx={{ cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
-                    {failureTitle(failure)} · {failureMessage(failure)}
-                  </Box>
-                  <Box component="pre" sx={{ mt: 0.4, mb: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.7rem' }}>
-                    {JSON.stringify(failure, null, 2)}
-                  </Box>
-                </Box>
-              ))}
-            </Stack>
-          </Alert>
-        )}
+        <TraceDiagnosticsPanel
+          diagnostics={traceView.diagnostics}
+          onShowEvent={setFocusedEventId}
+          onOpenOperation={(operationId, attempt) => {
+            const operation = traceView.operations.find((row) => row.id === operationId && (!attempt || row.visitIndex === attempt))
+              || [...traceView.operations].reverse().find((row) => row.id === operationId);
+            if (operation) revealVisit(toAgentNodeVisitRef(operation));
+          }}
+        />
         {traceView.operations.length === 0 ? (
           <Typography variant="body2" color="text.secondary">Start a run to see each operation.</Typography>
         ) : traceView.operations.map((node, index) => {
@@ -470,7 +453,7 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
-      <GenericTraceTimeline events={traceView.events} />
+      <GenericTraceTimeline events={traceView.events} focusedEventId={focusedEventId} />
       <TraceVisualizationSlot
         traceView={traceView}
         resolvedSpec={resolvedSpec}
