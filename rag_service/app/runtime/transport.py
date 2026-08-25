@@ -12,9 +12,11 @@ from app.runtime.contracts import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
+    RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
+    RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeSupportLevel,
     RuntimeApprovalResponse,
@@ -129,13 +131,14 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
     if not isinstance(raw_operations, Mapping):
         raise ValueError("runtime capabilities must contain an operations object")
 
-    operations: dict[str, RuntimeOperationDescriptor] = {}
+    operations: dict[RuntimeOperationId, RuntimeOperationDescriptor] = {}
     for operation, raw_descriptor in raw_operations.items():
         if not isinstance(operation, str) or not operation.strip():
             raise ValueError("runtime capability operation identifiers must be non-empty strings")
         if not isinstance(raw_descriptor, Mapping):
             raise ValueError(f"runtime capability descriptor for {operation!r} must be an object")
         try:
+            operation_id = RuntimeOperationId(operation)
             support = RuntimeSupportLevel(raw_descriptor["support"])
             owner = RuntimeOperationOwner(raw_descriptor["owner"])
             enabled = raw_descriptor["enabled"]
@@ -150,8 +153,11 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 raise ValueError("enabled must be a bool")
             if not all(isinstance(item, str) and item for item in modes + terminal_states):
                 raise ValueError("modes and terminal_states must contain non-empty strings")
-            if disabled_reason is not None and not isinstance(disabled_reason, str):
-                raise ValueError("disabled_reason must be a string or null")
+            disabled_reason = (
+                RuntimeCapabilityDisabledReason(disabled_reason)
+                if disabled_reason is not None
+                else None
+            )
             for field_name in ("semantics", "confirmation"):
                 field_value = raw_descriptor.get(field_name)
                 if field_value is not None and not isinstance(field_value, str):
@@ -178,7 +184,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid runtime capability descriptor for {operation!r}") from exc
-        operations[operation] = descriptor
+        operations[operation_id] = descriptor
     raw_features = value.get("features") or {}
     if not isinstance(raw_features, Mapping):
         raise ValueError("runtime capabilities features must be an object")
@@ -192,8 +198,11 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
             disabled_reason = raw_descriptor.get("disabled_reason")
             if not isinstance(enabled, bool):
                 raise ValueError("enabled must be a bool")
-            if disabled_reason is not None and not isinstance(disabled_reason, str):
-                raise ValueError("disabled_reason must be a string or null")
+            disabled_reason = (
+                RuntimeCapabilityDisabledReason(disabled_reason)
+                if disabled_reason is not None
+                else None
+            )
             semantics = raw_descriptor.get("semantics")
             if semantics is not None and not isinstance(semantics, str):
                 raise ValueError("semantics must be a string or null")

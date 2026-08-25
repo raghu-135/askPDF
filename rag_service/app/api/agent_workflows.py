@@ -507,11 +507,6 @@ async def list_agent_runtimes():
     deployments = []
     for adapter in registry.adapters():
         runtime_id = deployment_id(adapter)
-        definition = AgentDefinition(
-            definition_id=f"runtime:{runtime_id}",
-            framework=adapter.framework,
-            builder_id=adapter.builder_id,
-        )
         capabilities, error = await discover_adapter_capabilities(adapter)
         deployments.append(
             capability_envelope(
@@ -532,11 +527,6 @@ async def get_agent_runtime_capabilities(runtime_id: str):
     adapter = registry.get_deployment(runtime_id)
     if adapter is None:
         raise HTTPException(status_code=404, detail="Agent runtime deployment not found")
-    definition = AgentDefinition(
-        definition_id=f"runtime:{runtime_id}",
-        framework=adapter.framework,
-        builder_id=adapter.builder_id,
-    )
     capabilities, error = await discover_adapter_capabilities(adapter)
     return capability_envelope(
         capabilities=capabilities,

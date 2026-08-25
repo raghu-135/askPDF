@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Mapping
+from typing import Mapping
 
 from app.agent_workflows.trace_sanitization import _bounded_value
 
@@ -52,30 +51,3 @@ def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tup
         data.setdefault("visit_index", 1)
         data["operation_id"] = operation_id
     return kind, dict(_bounded_value(data))
-
-
-def project_event_to_trace_recorder(recorder: Any, kind: str, payload: Mapping[str, Any]) -> None:
-    """Feed normalized events to the retained v1 trace compatibility recorder."""
-
-    if kind in OPERATION_KINDS and kind != "operation.started":
-        operation_id = str(payload.get("operation_id") or "operation")
-        status = {
-            "operation.completed": "completed",
-            "operation.failed": "failed",
-            "operation.skipped": "skipped",
-        }.get(kind, str(payload.get("status") or "completed"))
-        recorder.record_node_event({
-            **dict(payload),
-            "node": operation_id,
-            "node_type": str(payload.get("operation_type") or operation_id),
-            "visit_index": max(1, int(payload.get("visit_index") or 1)),
-            "status": status,
-            "start_time": payload.get("started_at") or payload.get("start_time"),
-            "end_time": payload.get("completed_at") or payload.get("end_time") or datetime.utcnow().isoformat() + "Z",
-            "elapsed_ms": payload.get("duration_ms") or payload.get("elapsed_ms"),
-            "error": payload.get("error"),
-        })
-    elif kind in {"tool.completed", "tool.failed"}:
-        recorder.record_tool_event(dict(payload))
-    elif hasattr(recorder, "record_runtime_event") and kind not in {"run.started"}:
-        recorder.record_runtime_event(kind, attributes=dict(payload))

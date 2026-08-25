@@ -32,14 +32,8 @@ class _RecentEvents:
     def __init__(self, limit: int = 12) -> None:
         self.events: deque[dict[str, Any]] = deque(maxlen=limit)
 
-    async def emit(self, event: Any, payload: Any = None) -> None:
-        if hasattr(event, "to_dict"):
-            value = event.to_dict()
-        elif isinstance(event, str):
-            value = {"kind": event, "payload": dict(payload or {})}
-        else:
-            value = {"value": repr(event)}
-        self.events.append(value)
+    async def emit_runtime_event(self, event: Any) -> None:
+        self.events.append(event.to_dict())
 
 
 async def _timeout_diagnostics(adapter: HttpLangGraphRuntimeAdapter, request: AgentRuntimeRequest) -> dict[str, Any]:

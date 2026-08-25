@@ -13,7 +13,7 @@ from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
 from app.runtime.contracts import AgentRuntimeEvent
 from app.runtime.events import create_runtime_event, validate_runtime_event
-from app.runtime.observability import normalize_runtime_event, project_event_to_trace_recorder
+from app.runtime.observability import normalize_runtime_event
 
 
 logger = logging.getLogger(__name__)
@@ -279,7 +279,7 @@ class AgentExecutionEventSink:
         if event_id:
             self._runtime_event_ids[event_id] = candidate_hash
         if self._trace_recorder is not None:
-            project_event_to_trace_recorder(self._trace_recorder, canonical.kind, canonical.payload)
+            self._trace_recorder.record_agent_runtime_event(canonical)
         if event.startswith(PARALLEL_EVENT_PREFIXES):
             self._parallel_events.append(envelope)
             if len(self._parallel_events) > PARALLEL_EVENT_JOURNAL_LIMIT:

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from app.runtime.contracts import (
     AgentDefinition,
+    RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
     RuntimeOperationId,
     RuntimeOperationDescriptor,
@@ -28,48 +29,48 @@ TERMINAL_RUN_STATES = frozenset({
     "clarification",
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
-    RuntimeOperationId.RUN_CANCEL.value,
-    RuntimeOperationId.RUN_SEND_FOLLOWUP.value,
-    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value,
-    RuntimeOperationId.RUN_STEER_LIVE.value,
-    RuntimeOperationId.RUN_UPDATE_STATE.value,
-    RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value,
-    RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+    RuntimeOperationId.RUN_CANCEL,
+    RuntimeOperationId.RUN_SEND_FOLLOWUP,
+    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
+    RuntimeOperationId.RUN_STEER_LIVE,
+    RuntimeOperationId.RUN_UPDATE_STATE,
+    RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+    RuntimeOperationId.RUN_APPROVAL_RESPOND,
 })
 
 RESPONSE_OPERATIONS = frozenset({
-    RuntimeOperationId.RUN_RESUME.value,
-    RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+    RuntimeOperationId.RUN_RESUME,
+    RuntimeOperationId.RUN_APPROVAL_RESPOND,
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
-    RuntimeOperationId.TASK_START.value,
-    RuntimeOperationId.TASK_PAUSE.value,
-    RuntimeOperationId.TASK_RESUME.value,
-    RuntimeOperationId.TASK_CANCEL.value,
-    RuntimeOperationId.TASK_RETRY.value,
+    RuntimeOperationId.TASK_START,
+    RuntimeOperationId.TASK_PAUSE,
+    RuntimeOperationId.TASK_RESUME,
+    RuntimeOperationId.TASK_CANCEL,
+    RuntimeOperationId.TASK_RETRY,
 })
 
 OPERATION_METHODS = {
-    RuntimeOperationId.RUN_START.value: "start",
-    RuntimeOperationId.RUN_GET.value: "get_run",
-    RuntimeOperationId.RUN_LIST.value: "list_runs",
-    RuntimeOperationId.RUN_WAIT.value: "wait",
-    RuntimeOperationId.RUN_RESUME.value: "resume",
-    RuntimeOperationId.RUN_CANCEL.value: "cancel",
-    RuntimeOperationId.RUN_SEND_FOLLOWUP.value: "send_followup",
-    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value: "interrupt_with_input",
-    RuntimeOperationId.RUN_STEER_LIVE.value: "steer_live",
-    RuntimeOperationId.RUN_INSPECT_STATE.value: "inspect_state",
-    RuntimeOperationId.RUN_UPDATE_STATE.value: "update_state",
-    RuntimeOperationId.RUN_REPLAY.value: "replay",
-    RuntimeOperationId.RUN_FORK.value: "fork",
-    RuntimeOperationId.RUN_APPROVAL_RESPOND.value: "respond_to_approval",
-    RuntimeOperationId.SUBAGENT_LIST.value: "list_subagents",
-    RuntimeOperationId.SUBAGENT_SEND.value: "send_to_subagent",
-    RuntimeOperationId.SUBAGENT_CANCEL.value: "cancel_subagent",
-    RuntimeOperationId.ARTIFACT_LIST.value: "list_artifacts",
-    RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: "delete_continuation",
+    RuntimeOperationId.RUN_START: "start",
+    RuntimeOperationId.RUN_GET: "get_run",
+    RuntimeOperationId.RUN_LIST: "list_runs",
+    RuntimeOperationId.RUN_WAIT: "wait",
+    RuntimeOperationId.RUN_RESUME: "resume",
+    RuntimeOperationId.RUN_CANCEL: "cancel",
+    RuntimeOperationId.RUN_SEND_FOLLOWUP: "send_followup",
+    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT: "interrupt_with_input",
+    RuntimeOperationId.RUN_STEER_LIVE: "steer_live",
+    RuntimeOperationId.RUN_INSPECT_STATE: "inspect_state",
+    RuntimeOperationId.RUN_UPDATE_STATE: "update_state",
+    RuntimeOperationId.RUN_REPLAY: "replay",
+    RuntimeOperationId.RUN_FORK: "fork",
+    RuntimeOperationId.RUN_APPROVAL_RESPOND: "respond_to_approval",
+    RuntimeOperationId.SUBAGENT_LIST: "list_subagents",
+    RuntimeOperationId.SUBAGENT_SEND: "send_to_subagent",
+    RuntimeOperationId.SUBAGENT_CANCEL: "cancel_subagent",
+    RuntimeOperationId.ARTIFACT_LIST: "list_artifacts",
+    RuntimeOperationId.RUN_CONTINUATION_CLEANUP: "delete_continuation",
 }
 
 
@@ -79,7 +80,7 @@ def deployment_id(adapter: Any) -> str:
 
 def _disabled(
     descriptor: RuntimeOperationDescriptor,
-    reason: str,
+    reason: RuntimeCapabilityDisabledReason,
 ) -> RuntimeOperationDescriptor:
     if descriptor.support is RuntimeSupportLevel.UNSUPPORTED or not descriptor.enabled:
         return descriptor
@@ -92,31 +93,27 @@ def apply_definition_policy(
 ) -> RuntimeCapabilities:
     disabled = definition.capabilities.get("disabled_operations", ())
     disabled_ids = {
-        str(operation)
+        RuntimeOperationId(str(operation))
         for operation in disabled
     } if isinstance(disabled, (list, tuple, set, frozenset)) else set()
     operations = {
-        operation: _disabled(descriptor, "definition_policy")
-        if (operation.value if isinstance(operation, RuntimeOperationId) else str(operation)) in disabled_ids
+        operation: _disabled(descriptor, RuntimeCapabilityDisabledReason.DEFINITION_POLICY)
+        if operation in disabled_ids
         else descriptor
         for operation, descriptor in capabilities.operations.items()
     }
     if bool(definition.capabilities.get("supports_long_running_tasks")):
         for operation in TASK_ONLY_OPERATIONS:
             descriptor = operations.get(operation)
-            if descriptor is not None and descriptor.disabled_reason == "definition_not_task_runtime":
+            if descriptor is not None and descriptor.disabled_reason is RuntimeCapabilityDisabledReason.DEFINITION_NOT_TASK_RUNTIME:
                 operations[operation] = replace(descriptor, enabled=True, disabled_reason=None)
     else:
         for operation in TASK_ONLY_OPERATIONS:
             if operation in operations:
-                operations[operation] = _disabled(operations[operation], "definition_not_task_runtime")
-
-    features = dict(capabilities.features)
-    if definition.framework == "langgraph":
-        from app.runtime.langgraph_capabilities import langgraph_definition_features
-
-        features.update(langgraph_definition_features(definition))
-    return replace(capabilities, operations=operations, features=features)
+                operations[operation] = _disabled(
+                    operations[operation], RuntimeCapabilityDisabledReason.DEFINITION_NOT_TASK_RUNTIME
+                )
+    return replace(capabilities, operations=operations)
 
 
 def _reconcile_implementation(
@@ -129,20 +126,19 @@ def _reconcile_implementation(
     for operation_id, descriptor in operations.items():
         if not descriptor.enabled or descriptor.owner is RuntimeOperationOwner.PRODUCT:
             continue
-        operation_key = (
-            operation_id.value
-            if isinstance(operation_id, RuntimeOperationId)
-            else str(operation_id)
-        )
-        method_name = OPERATION_METHODS.get(operation_key)
+        method_name = OPERATION_METHODS.get(operation_id)
         if method_name is None:
-            operations[operation_id] = _disabled(descriptor, "adapter_operation_unmapped")
+            operations[operation_id] = _disabled(
+                descriptor, RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNMAPPED
+            )
             continue
         method = getattr(adapter, method_name, None)
         declared_method = getattr(type(adapter), method_name, None)
         base_method = getattr(AgentRuntimeAdapter, method_name, None)
         if method is None or declared_method is None or declared_method is base_method:
-            operations[operation_id] = _disabled(descriptor, "adapter_operation_unimplemented")
+            operations[operation_id] = _disabled(
+                descriptor, RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNIMPLEMENTED
+            )
     return replace(capabilities, operations=operations)
 
 
@@ -162,7 +158,7 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await _declaration_for_adapter(adapter)
+    capabilities = await adapter.capabilities(definition)
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
     return apply_definition_policy(capabilities, definition)
@@ -185,9 +181,13 @@ def pending_interrupt_response_operation(
     if pending_status != "pending" and not (include_resolved and pending_status in {"resumed", "resolved"}):
         return None
     value = payload.get("response_operation")
-    if not isinstance(value, str) or value not in RESPONSE_OPERATIONS:
+    if not isinstance(value, str):
         return None
-    return RuntimeOperationId(value)
+    try:
+        operation = RuntimeOperationId(value)
+    except ValueError:
+        return None
+    return operation if operation in RESPONSE_OPERATIONS else None
 
 
 async def resolve_capabilities(
@@ -199,25 +199,27 @@ async def resolve_capabilities(
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await _declaration_for_adapter(adapter)
+    capabilities = await adapter.capabilities(definition)
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
     capabilities = apply_definition_policy(capabilities, definition)
     operations = dict(capabilities.operations)
     if run is None:
-        for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START.value}:
+        for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
             if operation in operations:
-                operations[operation] = _disabled(operations[operation], "task_run_not_created")
+                operations[operation] = _disabled(
+                    operations[operation], RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+                )
         return replace(capabilities, operations=operations)
 
-    if RuntimeOperationId.RUN_START.value in operations and not getattr(run, "_fresh_runtime_run", False):
-        operations[RuntimeOperationId.RUN_START.value] = _disabled(
-            operations[RuntimeOperationId.RUN_START.value], "run_already_created"
+    if RuntimeOperationId.RUN_START in operations and not getattr(run, "_fresh_runtime_run", False):
+        operations[RuntimeOperationId.RUN_START] = _disabled(
+            operations[RuntimeOperationId.RUN_START], RuntimeCapabilityDisabledReason.RUN_ALREADY_CREATED
         )
     status = str(getattr(run, "status", "") or "")
-    if RuntimeOperationId.TASK_START.value in operations:
-        operations[RuntimeOperationId.TASK_START.value] = _disabled(
-            operations[RuntimeOperationId.TASK_START.value], "task_already_started"
+    if RuntimeOperationId.TASK_START in operations:
+        operations[RuntimeOperationId.TASK_START] = _disabled(
+            operations[RuntimeOperationId.TASK_START], RuntimeCapabilityDisabledReason.TASK_ALREADY_STARTED
         )
     pending_operation = pending_interrupt_response_operation(run, include_resolved=include_resolved_response)
     binding = getattr(run, "runtime_binding_json", None)
@@ -226,42 +228,48 @@ async def resolve_capabilities(
     if status in TERMINAL_RUN_STATES:
         for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS:
             if operation in operations:
-                operations[operation] = _disabled(operations[operation], "run_terminal")
+                operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.RUN_TERMINAL)
     else:
         for operation in RESPONSE_OPERATIONS:
-            if operation in operations and operation != (pending_operation.value if pending_operation else None):
-                operations[operation] = _disabled(operations[operation], "no_pending_interrupt")
+            if operation in operations and operation != pending_operation:
+                operations[operation] = _disabled(
+                    operations[operation], RuntimeCapabilityDisabledReason.NO_PENDING_INTERRUPT
+                )
 
     task_status = str(getattr(task, "status", "") or status)
-    if task_status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE.value in operations and task_status not in {"queued", "running"}:
-        operations[RuntimeOperationId.TASK_PAUSE.value] = _disabled(operations[RuntimeOperationId.TASK_PAUSE.value], "task_not_pauseable")
+    if task_status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE in operations and task_status not in {"queued", "running"}:
+        operations[RuntimeOperationId.TASK_PAUSE] = _disabled(
+            operations[RuntimeOperationId.TASK_PAUSE], RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE
+        )
     pending = getattr(run, "pending_interrupt_json", None)
     pending_type = str(pending.get("type") or "") if isinstance(pending, Mapping) else ""
-    if RuntimeOperationId.TASK_RESUME.value in operations and task_status not in {"paused", "awaiting_human"}:
-        operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
-    elif RuntimeOperationId.TASK_RESUME.value in operations and task_status == "awaiting_human" and pending_type != "task_pause":
-        operations[RuntimeOperationId.TASK_RESUME.value] = _disabled(operations[RuntimeOperationId.TASK_RESUME.value], "task_not_resumable")
-    if RuntimeOperationId.TASK_RETRY.value in operations and task_status not in {"failed", "expired"}:
-        operations[RuntimeOperationId.TASK_RETRY.value] = _disabled(operations[RuntimeOperationId.TASK_RETRY.value], "task_not_retryable")
+    if RuntimeOperationId.TASK_RESUME in operations and task_status not in {"paused", "awaiting_human"}:
+        operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
+    elif RuntimeOperationId.TASK_RESUME in operations and task_status == "awaiting_human" and pending_type != "task_pause":
+        operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
+    if RuntimeOperationId.TASK_RETRY in operations and task_status not in {"failed", "expired"}:
+        operations[RuntimeOperationId.TASK_RETRY] = _disabled(operations[RuntimeOperationId.TASK_RETRY], RuntimeCapabilityDisabledReason.TASK_NOT_RETRYABLE)
 
     if task is None and status in TERMINAL_RUN_STATES:
         for operation in TASK_ONLY_OPERATIONS:
             if operation in operations:
-                operations[operation] = _disabled(operations[operation], "task_terminal")
+                operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.TASK_TERMINAL)
     elif task_status in TERMINAL_RUN_STATES:
         for operation in (
-            RuntimeOperationId.TASK_START.value,
-            RuntimeOperationId.TASK_PAUSE.value,
-            RuntimeOperationId.TASK_RESUME.value,
-            RuntimeOperationId.TASK_CANCEL.value,
+            RuntimeOperationId.TASK_START,
+            RuntimeOperationId.TASK_PAUSE,
+            RuntimeOperationId.TASK_RESUME,
+            RuntimeOperationId.TASK_CANCEL,
         ):
             if operation in operations:
-                operations[operation] = _disabled(operations[operation], "task_terminal")
+                operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.TASK_TERMINAL)
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation, descriptor in operations.items():
             if descriptor.requires_runtime_binding:
-                operations[operation] = _disabled(descriptor, "runtime_binding_unavailable")
+                operations[operation] = _disabled(
+                    descriptor, RuntimeCapabilityDisabledReason.RUNTIME_BINDING_UNAVAILABLE
+                )
 
     return replace(capabilities, operations=operations)
 
@@ -276,7 +284,7 @@ async def require_capability(
 ) -> RuntimeOperationDescriptor:
     """Resolve one operation and fail before an adapter call when unavailable."""
 
-    operation_id = operation.value if isinstance(operation, RuntimeOperationId) else str(operation)
+    operation_id = operation if isinstance(operation, RuntimeOperationId) else RuntimeOperationId(operation)
     capabilities = await resolve_capabilities(
         definition,
         registry=registry,
@@ -286,18 +294,20 @@ async def require_capability(
     descriptor = capabilities.operations.get(operation_id)
     if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         raise RuntimeError.capability_unsupported(
-            operation_id=operation_id,
+            operation_id=operation_id.value,
             framework=definition.framework,
             builder_id=definition.builder_id,
             explanation="The runtime does not provide this operation",
         )
     if not descriptor.enabled:
         raise RuntimeError.capability_unavailable(
-            operation_id=operation_id,
+            operation_id=operation_id.value,
             framework=definition.framework,
             builder_id=definition.builder_id,
             support_level=descriptor.support.value,
-            disabled_reason=str(descriptor.disabled_reason or "runtime_capability_unavailable"),
+            disabled_reason=(
+                descriptor.disabled_reason or RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNAVAILABLE
+            ).value,
         )
     return descriptor
 
@@ -349,7 +359,8 @@ async def discover_adapter_capabilities(
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
         capabilities = await _declaration_for_adapter(adapter)
-        return _reconcile_implementation(capabilities, adapter), None
+        capabilities = _reconcile_implementation(capabilities, adapter)
+        return _with_product_operations(capabilities), None
     except RuntimeError as exc:
         return None, capability_discovery_error(exc, adapter)
     except Exception as exc:

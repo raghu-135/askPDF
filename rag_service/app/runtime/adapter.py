@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Mapping, NoReturn, Optional, Protocol
 
 from app.runtime.contracts import (
     AgentDefinition,
+    AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
@@ -35,7 +36,7 @@ class RuntimeExecutionContext:
 
 
 class AgentRuntimeEventSink(Protocol):
-    async def emit(self, event: Any) -> None: ...
+    async def emit_runtime_event(self, event: AgentRuntimeEvent) -> None: ...
 
 
 class AgentRuntimeAdapter(ABC):

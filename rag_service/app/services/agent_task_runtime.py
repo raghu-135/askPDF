@@ -859,7 +859,28 @@ async def run_task_worker(
         task = await tasks.claim_next_task(worker_id, lease_seconds=LEASE_SECONDS)
         if task is not None:
             try:
-                framework = "hermes" if task.workflow_id == "hermes_rag_agent" else "langgraph"
+                run = await tasks.get_task_run(task.id)
+                framework = str(getattr(run, "framework", "") or "").strip() if run is not None else ""
+                builder_id = str(getattr(run, "builder_id", "") or "").strip() if run is not None else ""
+                if (
+                    run is None
+                    or str(getattr(task, "active_run_id", "") or "") != str(run.id)
+                    or str(getattr(run, "task_id", "") or "") != str(task.id)
+                    or not framework
+                    or not builder_id
+                ):
+                    logger.error(
+                        "Claimed task has invalid persisted runtime identity | task_id=%s active_run_id=%s",
+                        task.id,
+                        getattr(task, "active_run_id", None),
+                    )
+                    await tasks.complete_task(
+                        task.id,
+                        status=AgentTaskStatus.FAILED.value,
+                        reason="task_runtime_identity_invalid",
+                    )
+                    await tasks.release_task_lease(task.id, worker_id)
+                    continue
                 wake_limit = deep_agent_budgets(framework)["wake_limit_seconds"]
                 await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)
             except asyncio.TimeoutError:

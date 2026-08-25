@@ -9,12 +9,15 @@ from typing import Any, Mapping
 
 from app.runtime.contracts import (
     AgentDefinition,
+    RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
-    RuntimeOperationOwner,
     RuntimeSupportLevel,
+    conditional,
+    native,
+    unsupported,
 )
 
 
@@ -104,15 +107,6 @@ class LangGraphDeploymentProfile:
         }
 
 
-def _unsupported() -> RuntimeOperationDescriptor:
-    return RuntimeOperationDescriptor(
-        RuntimeSupportLevel.UNSUPPORTED,
-        RuntimeOperationOwner.RUNTIME,
-        False,
-        disabled_reason="runtime_capability_unsupported",
-    )
-
-
 def _feature(
     enabled: bool,
     *,
@@ -122,7 +116,7 @@ def _feature(
     return RuntimeFeatureDescriptor(
         RuntimeSupportLevel.NATIVE if enabled else RuntimeSupportLevel.UNSUPPORTED,
         enabled,
-        disabled_reason=None if enabled else "definition_capability_unavailable",
+        disabled_reason=None if enabled else RuntimeCapabilityDisabledReason.DEFINITION_CAPABILITY_UNAVAILABLE,
         semantics=semantics,
         details=dict(details or {}),
     )
@@ -182,15 +176,17 @@ def langgraph_capabilities(
 ) -> RuntimeCapabilities:
     profile = profile or LangGraphDeploymentProfile.from_environment()
     checkpoint = profile.checkpoint_available
-    deployment_reason = "runtime_configuration_invalid" if profile.configuration_error else "runtime_unavailable"
+    deployment_reason = (
+        RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID
+        if profile.configuration_error
+        else RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+    )
 
     def enabled_descriptor(descriptor: RuntimeOperationDescriptor) -> RuntimeOperationDescriptor:
         if profile.runtime_available:
             return descriptor
         return RuntimeOperationDescriptor(
-            descriptor.support,
-            descriptor.owner,
-            False,
+            descriptor.support, descriptor.owner, False,
             disabled_reason=deployment_reason,
             modes=descriptor.modes,
             semantics=descriptor.semantics,
@@ -201,57 +197,46 @@ def langgraph_capabilities(
             requires_runtime_binding=descriptor.requires_runtime_binding,
         )
 
-    operations: dict[str, RuntimeOperationDescriptor] = {
-        RuntimeOperationId.RUN_START.value: enabled_descriptor(RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True)),
-        RuntimeOperationId.RUN_CANCEL.value: enabled_descriptor(RuntimeOperationDescriptor(
-            RuntimeSupportLevel.NATIVE,
-            RuntimeOperationOwner.RUNTIME,
-            True,
+    operations: dict[RuntimeOperationId, RuntimeOperationDescriptor] = {
+        RuntimeOperationId.RUN_START: enabled_descriptor(native()),
+        RuntimeOperationId.RUN_CANCEL: enabled_descriptor(native(
             modes=("interrupt",),
             confirmation="asynchronous",
             terminal_states=("cancelled", "interrupted"),
         )),
-        RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.RUNTIME,
-            checkpoint,
+        RuntimeOperationId.RUN_RESUME: conditional(
+            enabled=checkpoint,
             semantics="resume_from_interrupt",
-            disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
-        RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.RUNTIME,
-            checkpoint,
+        RuntimeOperationId.RUN_INSPECT_STATE: conditional(
+            enabled=checkpoint,
             semantics="checkpoint_state_inspection",
-            disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
-        RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.RUNTIME,
-            checkpoint,
+        RuntimeOperationId.RUN_UPDATE_STATE: conditional(
+            enabled=checkpoint,
             semantics="checkpoint_boundary_update",
-            disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(
-            RuntimeSupportLevel.CONDITIONAL,
-            RuntimeOperationOwner.RUNTIME,
-            checkpoint,
+        RuntimeOperationId.RUN_CONTINUATION_CLEANUP: conditional(
+            enabled=checkpoint,
             semantics="checkpoint_thread_cleanup",
-            disabled_reason=None if checkpoint else "checkpoint_store_unavailable",
+            disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
-        RuntimeOperationId.RUN_APPROVAL_RESPOND.value: _unsupported(),
-        RuntimeOperationId.RUN_STEER_LIVE.value: _unsupported(),
-        RuntimeOperationId.RUN_SEND_FOLLOWUP.value: _unsupported(),
-        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT.value: _unsupported(),
-        RuntimeOperationId.RUN_REPLAY.value: _unsupported(),
-        RuntimeOperationId.RUN_FORK.value: _unsupported(),
-        RuntimeOperationId.SUBAGENT_LIST.value: _unsupported(),
-        RuntimeOperationId.SUBAGENT_SEND.value: _unsupported(),
-        RuntimeOperationId.SUBAGENT_CANCEL.value: _unsupported(),
+        RuntimeOperationId.RUN_APPROVAL_RESPOND: unsupported(),
+        RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
+        RuntimeOperationId.RUN_SEND_FOLLOWUP: unsupported(),
+        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT: unsupported(),
+        RuntimeOperationId.RUN_REPLAY: unsupported(),
+        RuntimeOperationId.RUN_FORK: unsupported(),
+        RuntimeOperationId.SUBAGENT_LIST: unsupported(),
+        RuntimeOperationId.SUBAGENT_SEND: unsupported(),
+        RuntimeOperationId.SUBAGENT_CANCEL: unsupported(),
     }
     return RuntimeCapabilities(
         operations=operations,

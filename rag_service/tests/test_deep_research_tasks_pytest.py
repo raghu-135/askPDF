@@ -38,11 +38,14 @@ from app.runtime.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
+    RuntimeCapabilityDisabledReason,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeSupportLevel,
     RuntimeCapabilities,
+    native,
+    unsupported,
 )
 from app.runtime.registry import RuntimeRegistry
 
@@ -79,20 +82,11 @@ class TaskInvocationAdapter:
         self.resume_enabled = resume_enabled
 
     async def capabilities(self, definition):
-        resume = RuntimeOperationDescriptor(
-            RuntimeSupportLevel.NATIVE if self.resume_enabled else RuntimeSupportLevel.UNSUPPORTED,
-            RuntimeOperationOwner.RUNTIME,
-            self.resume_enabled,
-            disabled_reason=None if self.resume_enabled else "runtime_capability_unsupported",
-        )
+        resume = native() if self.resume_enabled else unsupported()
         return RuntimeCapabilities(operations={
-            RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(
-                RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True,
-            ),
-            RuntimeOperationId.RUN_RESUME.value: resume,
-            RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(
-                RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True,
-            ),
+            RuntimeOperationId.RUN_START: native(),
+            RuntimeOperationId.RUN_RESUME: resume,
+            RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
         })
 
     async def deployment_capabilities(self):
@@ -120,7 +114,7 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
         framework="hermes",
         builder_id="hermes_agent",
         support_level="conditional",
-        disabled_reason="runtime_unavailable",
+        disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE,
     )
     require = AsyncMock(side_effect=rejection)
     monkeypatch.setattr(agent_task_runtime, "require_capability", require)
@@ -1898,10 +1892,13 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_runs_maintenance_before_processing_a_busy_queue(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claim = AsyncMock(side_effect=[SimpleNamespace(id="task-1", workflow_id="deep_research_agent"), None])
+    claimed = SimpleNamespace(id="task-1", active_run_id="run-1")
+    claim = AsyncMock(side_effect=[claimed, None])
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", maintenance)
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True, poll_seconds=0.01)
@@ -1928,7 +1925,8 @@ async def test_task_worker_honors_pre_signalled_shutdown(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_stops_after_active_claim_without_claiming_more(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claim = AsyncMock(return_value=SimpleNamespace(id="task-1", workflow_id="deep_research_agent"))
+    claim = AsyncMock(return_value=SimpleNamespace(id="task-1", active_run_id="run-1"))
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
     stop_event = asyncio.Event()
 
     async def execute(_task_id, _worker_id):
@@ -1936,8 +1934,47 @@ async def test_task_worker_stops_after_active_claim_without_claiming_more(monkey
 
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", maintenance)
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(stop_event=stop_event, poll_seconds=60)
 
     claim.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_uses_persisted_framework_for_custom_hermes_definition(monkeypatch):
+    task = SimpleNamespace(id="task-1", workflow_id="custom-hermes", active_run_id="run-1")
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework="hermes", builder_id="hermes_agent")
+    selected_frameworks = []
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_task_runtime, "deep_agent_budgets", lambda framework: selected_frameworks.append(framework) or {"wake_limit_seconds": 30})
+    execute = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    assert selected_frameworks == ["hermes"]
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_fails_claim_without_persisted_runtime_identity(monkeypatch):
+    task = SimpleNamespace(id="task-1", active_run_id="run-1")
+    complete = AsyncMock()
+    release = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", complete)
+    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", release)
+    execute = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    complete.assert_awaited_once_with(task.id, status="failed", reason="task_runtime_identity_invalid")
+    release.assert_awaited_once()
+    execute.assert_not_awaited()

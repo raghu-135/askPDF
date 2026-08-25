@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult
+from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId
 from app.runtime.events import create_runtime_event
 from app.runtime.errors import RuntimeError
 from app.runtime.transport import (
@@ -78,49 +78,6 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         task_worker_id=value.get("task_worker_id"),
         cancellation_checker=cancellation_checker,
     )
-
-
-class _QueueSink:
-    def __init__(self, run_id: str) -> None:
-        self.run_id = run_id
-        self.queue: asyncio.Queue[AgentRuntimeEvent | None] = asyncio.Queue(maxsize=max(100, int(os.getenv("AGENT_RUNTIME_EVENT_BUFFER_SIZE", "1000"))))
-        self.sequence = 0
-
-    async def emit(self, *args: Any) -> None:
-        if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
-            source = args[0]
-            event = create_runtime_event(
-                event_id=source.event_id,
-                run_id=source.run_id or self.run_id,
-                sequence=max(1, source.sequence),
-                kind=source.kind,
-                payload=source.payload,
-                attempt=source.attempt,
-                occurred_at=source.occurred_at,
-                trace_id=source.trace_id,
-                source_metadata=source.source_metadata,
-                continuation=source.continuation,
-            )
-        else:
-            kind = str(args[0]) if args else "runtime.event"
-            payload = dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {}
-            self.sequence += 1
-            event = create_runtime_event(
-                event_id=str(payload.get("event_id") or f"{self.run_id}:{self.sequence}"),
-                run_id=self.run_id,
-                sequence=self.sequence,
-                kind=kind,
-                payload=payload,
-            )
-        self.sequence = max(self.sequence, event.sequence)
-        try:
-            self.queue.put_nowait(event)
-        except asyncio.QueueFull:
-            try:
-                self.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            self.queue.put_nowait(event)
 
 
 def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
@@ -334,6 +291,15 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         return json_envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
+            result={"capabilities": langgraph_capabilities(definition).to_dict()},
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        )
+
+    @app.get("/v1/capabilities")
+    async def deployment_capabilities(request: Request) -> dict[str, Any]:
+        return json_envelope(
+            status="ok",
+            request_id=request.headers.get("x-request-id"),
             result={"capabilities": langgraph_deployment_capabilities().to_dict()},
             runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
         )
@@ -361,30 +327,19 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 self.terminal_event_id: str | None = None
                 self.terminal_event: AgentRuntimeEvent | None = None
 
-            async def emit(self, *args: Any) -> None:
-                if len(args) == 1 and isinstance(args[0], AgentRuntimeEvent):
-                    source = args[0]
-                    event = create_runtime_event(
-                        event_id=source.event_id,
-                        run_id=source.run_id or run_id,
-                        sequence=max(1, source.sequence),
-                        kind=source.kind,
-                        payload=source.payload,
-                        attempt=source.attempt,
-                        occurred_at=source.occurred_at,
-                        trace_id=source.trace_id,
-                        source_metadata=source.source_metadata,
-                        continuation=source.continuation,
-                    )
-                else:
-                    kind = str(args[0]) if args else "runtime.event"
-                    event = create_runtime_event(
-                        event_id=f"{run_id}:{uuid.uuid4().hex}",
-                        run_id=run_id,
-                        sequence=1,
-                        kind=kind,
-                        payload=dict(args[1] or {}) if len(args) > 1 and isinstance(args[1], Mapping) else {},
-                    )
+            async def emit_runtime_event(self, source: AgentRuntimeEvent) -> None:
+                event = create_runtime_event(
+                    event_id=source.event_id,
+                    run_id=source.run_id,
+                    sequence=max(1, source.sequence),
+                    kind=source.kind,
+                    payload=source.payload,
+                    attempt=source.attempt,
+                    occurred_at=source.occurred_at,
+                    trace_id=source.trace_id,
+                    source_metadata=source.source_metadata,
+                    continuation=source.continuation,
+                )
                 if event.terminal:
                     if self.terminal_event_id is not None and self.terminal_event_id != event.event_id:
                         raise RuntimeError("runtime_protocol_error", "Runtime emitted more than one terminal event")
@@ -491,9 +446,9 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     ) -> AsyncIterator[str]:
         request = request_from_dict(payload["request"])
         operation_id_by_endpoint = {
-            "start": "run.start",
-            "resume": "run.resume",
-            "retry": "run.start",
+            "start": RuntimeOperationId.RUN_START,
+            "resume": RuntimeOperationId.RUN_RESUME,
+            "retry": RuntimeOperationId.RUN_START,
         }
         capability_id = operation_id_by_endpoint.get(operation)
         if capability_id and allow_start:
@@ -502,7 +457,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             if descriptor is None or not descriptor.enabled:
                 raise HTTPException(
                     status_code=409,
-                    detail={"code": "runtime_capability_unsupported", "operation": capability_id, "safe_message": "The requested runtime operation is unavailable", "retryable": False},
+                    detail={"code": "runtime_capability_unsupported", "operation": capability_id.value, "safe_message": "The requested runtime operation is unavailable", "retryable": False},
                 )
         if expected_run_id and request.run_id != expected_run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")

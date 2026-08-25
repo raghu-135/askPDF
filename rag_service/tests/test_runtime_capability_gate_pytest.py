@@ -20,6 +20,9 @@ from app.runtime.contracts import (
     RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeSupportLevel,
+    conditional,
+    native,
+    unsupported,
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
@@ -38,21 +41,16 @@ class RecordingAdapter:
 
     async def capabilities(self, definition):
         operations = {
-            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_SEND_FOLLOWUP.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-            RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
-            RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
+            RuntimeOperationId.RUN_CANCEL: native(),
+            RuntimeOperationId.RUN_INSPECT_STATE: native(),
+            RuntimeOperationId.RUN_RESUME: conditional(enabled=True),
+            RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
+            RuntimeOperationId.RUN_SEND_FOLLOWUP: native(),
+            RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
+            RuntimeOperationId.RUN_CONTINUATION_CLEANUP: unsupported(),
         }
         for operation in self.unsupported:
-            operations[operation] = RuntimeOperationDescriptor(
-                RuntimeSupportLevel.UNSUPPORTED,
-                RuntimeOperationOwner.RUNTIME,
-                False,
-                disabled_reason="runtime_capability_unsupported",
-            )
+            operations[RuntimeOperationId(operation)] = unsupported()
         return RuntimeCapabilities(operations=operations)
 
     async def deployment_capabilities(self):
@@ -123,7 +121,7 @@ class FakeRepository:
 
 
 class Sink:
-    async def emit(self, *args, **kwargs):
+    async def emit_runtime_event(self, *args, **kwargs):
         return None
 
 

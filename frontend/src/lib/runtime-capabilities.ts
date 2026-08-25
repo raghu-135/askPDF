@@ -1,5 +1,6 @@
 import type {
   AgentRuntimeCapabilityResponse,
+  RuntimeCapabilityDisabledReason,
   RuntimeOperationDescriptor,
 } from './api';
 
@@ -44,8 +45,10 @@ export type RuntimeOperationAvailability = {
   descriptor?: RuntimeOperationDescriptor;
   visible: boolean;
   enabled: boolean;
-  disabledReason?: string;
+  disabledReason?: RuntimeCapabilityDisabledReason;
 };
+
+export const RUNTIME_CAPABILITY_UNAVAILABLE: RuntimeCapabilityDisabledReason = 'runtime_capability_unavailable';
 
 export function runtimeOperationAvailability(
   response: AgentRuntimeCapabilityResponse | null | undefined,
@@ -59,7 +62,7 @@ export function runtimeOperationAvailability(
     descriptor,
     visible: true,
     enabled: descriptor.enabled,
-    disabledReason: descriptor.enabled ? undefined : descriptor.disabled_reason || 'runtime_capability_unavailable',
+    disabledReason: descriptor.enabled ? undefined : descriptor.disabled_reason || RUNTIME_CAPABILITY_UNAVAILABLE,
   };
 }
 
@@ -73,7 +76,7 @@ export function isRuntimeOperationEnabled(
 export function runtimeOperationDisabledReason(
   response: AgentRuntimeCapabilityResponse | null | undefined,
   operation: RuntimeControlOperation,
-): string | undefined {
+): RuntimeCapabilityDisabledReason | undefined {
   return runtimeOperationAvailability(response, operation).disabledReason;
 }
 

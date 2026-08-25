@@ -12,7 +12,7 @@ from app.runtime.registry import adapter_for_definition
 
 async def delete_run_continuation(run: Any) -> Any:
     definition = definition_from_run(run)
-    if definition.framework != "langgraph" and not getattr(run, "runtime_binding_json", None):
+    if not getattr(run, "runtime_binding_json", None):
         return []
     binding = continuation_from_run(run)
     if binding is None:
@@ -21,7 +21,7 @@ async def delete_run_continuation(run: Any) -> Any:
     capabilities, _error = await discover_adapter_capabilities(adapter)
     if capabilities is None:
         return []
-    descriptor = capabilities.operations.get(RuntimeOperationId.RUN_CONTINUATION_CLEANUP.value)
+    descriptor = capabilities.operations.get(RuntimeOperationId.RUN_CONTINUATION_CLEANUP)
     if descriptor is None or not descriptor.enabled or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         return []
     return await adapter.delete_continuation(binding)

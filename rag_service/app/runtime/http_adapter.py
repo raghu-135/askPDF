@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import hashlib
 import json
-import inspect
 import asyncio
 from typing import Any, Mapping
 
@@ -197,6 +196,13 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         except (TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
+        value = await self._json("GET", "/v1/capabilities")
+        try:
+            return capabilities_from_dict(value.get("capabilities") or value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
+
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
         return validation_from_dict(value.get("validation") or value)
@@ -280,9 +286,8 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     last_sequence = event.sequence
                     last_event_id = event.event_id
                     if event_sink is not None:
-                        emit = getattr(event_sink, "emit", None)
-                        if emit is not None and not event.terminal:
-                            await self._emit_to_sink(emit, event)
+                        if not event.terminal:
+                            await event_sink.emit_runtime_event(event)
                         if event.continuation is not None:
                             persist_binding = getattr(event_sink, "persist_runtime_binding", None)
                             if persist_binding is not None:
@@ -352,33 +357,6 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         if terminal is None:
             raise RuntimeError("runtime_protocol_error", "Agent runtime stream ended without a terminal result")
         return terminal
-
-    @staticmethod
-    async def _emit_to_sink(emit: Any, event: AgentRuntimeEvent) -> None:
-        """Bridge neutral events to the existing legacy SSE sink when needed."""
-
-        owner = getattr(emit, "__self__", None)
-        emit_runtime_event = getattr(owner, "emit_runtime_event", None)
-        if emit_runtime_event is not None:
-            await emit_runtime_event(event)
-            return
-
-        try:
-            parameters = inspect.signature(emit).parameters.values()
-            positional = [
-                parameter
-                for parameter in parameters
-                if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            ]
-            accepts_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters)
-        except (TypeError, ValueError):
-            positional = []
-            accepts_varargs = False
-
-        if accepts_varargs or len(positional) >= 2:
-            await emit(event.kind, dict(event.payload))
-        else:
-            await emit(event)
 
     async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
         return await self._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)

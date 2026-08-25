@@ -1212,12 +1212,34 @@ export interface AgentRunSummary {
 }
 
 export type RuntimeSupportLevel = 'native' | 'emulated' | 'conditional' | 'unsupported';
+export type RuntimeCapabilityDisabledReason =
+  | 'runtime_capability_unsupported'
+  | 'runtime_capability_unavailable'
+  | 'runtime_configuration_invalid'
+  | 'runtime_unavailable'
+  | 'definition_capability_unavailable'
+  | 'definition_policy'
+  | 'definition_not_task_runtime'
+  | 'adapter_operation_unmapped'
+  | 'adapter_operation_unimplemented'
+  | 'checkpoint_store_unavailable'
+  | 'task_run_not_created'
+  | 'run_already_created'
+  | 'task_already_started'
+  | 'run_terminal'
+  | 'no_pending_interrupt'
+  | 'task_not_pauseable'
+  | 'task_not_resumable'
+  | 'task_not_retryable'
+  | 'task_terminal'
+  | 'runtime_binding_unavailable'
+  | 'run_not_checkpoint_boundary';
 
 export interface RuntimeOperationDescriptor {
   support: RuntimeSupportLevel;
   owner: 'product' | 'runtime';
   enabled: boolean;
-  disabled_reason?: string | null;
+  disabled_reason?: RuntimeCapabilityDisabledReason | null;
   modes?: string[];
   semantics?: string | null;
   confirmation?: string | null;
@@ -1229,7 +1251,7 @@ export interface RuntimeOperationDescriptor {
 export interface RuntimeFeatureDescriptor {
   support: RuntimeSupportLevel;
   enabled: boolean;
-  disabled_reason?: string | null;
+  disabled_reason?: RuntimeCapabilityDisabledReason | null;
   semantics?: string | null;
   details?: Record<string, any>;
 }

@@ -60,7 +60,7 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
             nonlocal calls
             calls += 1
             if event_sink is not None:
-                await event_sink.emit(
+                await event_sink.emit_runtime_event(
                     AgentRuntimeEvent(
                         event_id=f"{request.run_id}:progress",
                         run_id=request.run_id,

@@ -46,27 +46,27 @@ class AgentRuntimeProjection:
             await self.apply_event(run=run, event=event)
 
     async def rebuild_trace_from_events(self, *, run: Any, result: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
-        """Rebuild the retained compatibility trace from the canonical journal."""
+        """Rebuild the product trace from the canonical runtime journal."""
 
         from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
         from app.agent_workflows.repository import AgentWorkflowRepository
-        from app.runtime.observability import project_event_to_trace_recorder
+        from app.runtime.contracts import AgentRuntimeEvent
 
         repository = AgentWorkflowRepository()
-        if not hasattr(repository, "list_run_events") or not hasattr(repository, "set_run_debug_trace"):
-            # Compatibility for injected repositories used by older callers;
-            # the canonical repository always exposes both operations.
-            return None
         events = await repository.list_run_events(run.id)
         if not events:
             return None
         recorder = AgentTraceRecorder(run)
         for event in events:
-            project_event_to_trace_recorder(
-                recorder,
-                str(event.kind),
-                event.payload_json if isinstance(event.payload_json, dict) else {},
-            )
+            recorder.record_agent_runtime_event(AgentRuntimeEvent(
+                event_id=str(event.event_id),
+                run_id=str(event.agent_run_id),
+                sequence=int(event.sequence),
+                attempt=int(event.attempt),
+                kind=str(event.kind),
+                payload=event.payload_json if isinstance(event.payload_json, dict) else {},
+                occurred_at=str(event.occurred_at) if event.occurred_at else None,
+            ))
         result_payload = dict(result or {})
         debug = finalize_and_merge_debug_payload(
             recorder=recorder,

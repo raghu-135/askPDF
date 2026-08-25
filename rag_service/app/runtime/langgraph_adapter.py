@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping, Optional
 
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
@@ -44,8 +45,46 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
         trace_id=data.get("trace_id"),
         source_metadata={"framework": "langgraph", "source_event": kind},
     )
+
+
+class _LangGraphEventBridge:
+    """Translate LangGraph's event callback shape into the canonical runtime sink."""
+
+    def __init__(self, run_id: str, sink: Any) -> None:
+        self.run_id = run_id
+        self.sink = sink
+        self.sequence = 0
+        self._pending: set[asyncio.Task[None]] = set()
+
+    def _runtime_event(self, kind: str, payload: Mapping[str, Any] | None) -> AgentRuntimeEvent:
+        self.sequence += 1
+        return _event_from_graph(
+            {"event": kind, "data": dict(payload or {})},
+            run_id=self.run_id,
+            sequence=self.sequence,
+        )
+
+    async def emit(self, kind: str, payload: Mapping[str, Any] | None = None) -> None:
+        await self.sink.emit_runtime_event(self._runtime_event(str(kind), payload))
+
+    def emit_nowait(self, kind: str, payload: Mapping[str, Any] | None = None) -> None:
+        task = asyncio.create_task(self.emit(kind, payload))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    def parallel_events(self) -> list[Mapping[str, Any]]:
+        getter = getattr(self.sink, "parallel_events", None)
+        return list(getter()) if getter is not None else []
+
+    async def drain(self) -> None:
+        if self._pending:
+            await asyncio.gather(*tuple(self._pending))
+
+
+def _event_bridge(run_id: str, sink: Any) -> _LangGraphEventBridge | None:
+    return _LangGraphEventBridge(run_id, sink) if sink is not None else None
 from app.runtime.errors import RuntimeError
-from app.runtime.langgraph_capabilities import langgraph_deployment_capabilities
+from app.runtime.langgraph_capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from app.runtime.langgraph import checkpointing, router_runtime
 
 
@@ -54,6 +93,9 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     builder_id = "langgraph_graph"
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
+        return langgraph_capabilities(definition)
+
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
         return langgraph_deployment_capabilities()
 
     async def validate(
@@ -109,19 +151,24 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     ) -> AgentRuntimeResult:
         from app.runtime.langgraph import checkpointing, router_runtime
 
+        bridge = _event_bridge(request.run_id, event_sink)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            result = await router_runtime.execute_compiled_rag_chat(
-                request.thread_id,
-                context.request,
-                context.embedding_model,
-                resolved_spec=dict(context.resolved_spec),
-                agent_run_context=self._execution_context(request, context),
-                trace_recorder=context.trace_recorder,
-                checkpointer=checkpointer,
-                execution_event_sink=event_sink,
-                cancellation_checker=context.cancellation_checker,
-                persist_product_records=False,
-            )
+            try:
+                result = await router_runtime.execute_compiled_rag_chat(
+                    request.thread_id,
+                    context.request,
+                    context.embedding_model,
+                    resolved_spec=dict(context.resolved_spec),
+                    agent_run_context=self._execution_context(request, context),
+                    trace_recorder=context.trace_recorder,
+                    checkpointer=checkpointer,
+                    execution_event_sink=bridge,
+                    cancellation_checker=context.cancellation_checker,
+                    persist_product_records=False,
+                )
+            finally:
+                if bridge is not None:
+                    await bridge.drain()
         return _result_from_graph(result)
 
     async def resume(
@@ -144,12 +191,17 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "cancellation_checker": context.cancellation_checker,
             "persist_product_records": False,
         }
-        if event_sink is not None:
-            kwargs["execution_event_sink"] = event_sink
+        bridge = _event_bridge(request.run_id, event_sink)
+        if bridge is not None:
+            kwargs["execution_event_sink"] = bridge
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            result = await router_runtime.resume_compiled_rag_chat(
-                run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
-            )
+            try:
+                result = await router_runtime.resume_compiled_rag_chat(
+                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
+                )
+            finally:
+                if bridge is not None:
+                    await bridge.drain()
         return _result_from_graph(result)
 
     async def continue_run(
@@ -169,15 +221,20 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         # before invoking the graph continuation.
         if context.resolved_spec:
             run.resolved_spec_json = dict(context.resolved_spec)
+        bridge = _event_bridge(request.run_id, event_sink)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            result = await router_runtime.continue_compiled_rag_chat(
-                run,
-                checkpointer=checkpointer,
-                trace_recorder=context.trace_recorder,
-                execution_event_sink=event_sink,
-                cancellation_checker=context.cancellation_checker,
-                persist_product_records=False,
-            )
+            try:
+                result = await router_runtime.continue_compiled_rag_chat(
+                    run,
+                    checkpointer=checkpointer,
+                    trace_recorder=context.trace_recorder,
+                    execution_event_sink=bridge,
+                    cancellation_checker=context.cancellation_checker,
+                    persist_product_records=False,
+                )
+            finally:
+                if bridge is not None:
+                    await bridge.drain()
         return _result_from_graph(result) if result is not None else None
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any:

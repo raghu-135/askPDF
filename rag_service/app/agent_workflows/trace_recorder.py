@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional
 
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -33,6 +34,7 @@ from app.agent_workflows.trace_otel import (
     _warning_events,
     enrich_tool_event,
 )
+from app.runtime.contracts import AgentRuntimeEvent
 from app.agent_workflows.trace_payloads import (
     DEBUG_PAYLOAD_VERSION,
     build_interrupt_trace_event,
@@ -709,6 +711,33 @@ class AgentTraceRecorder:
                     event.get("name") or "runtime.event",
                     attributes={k: v for k, v in ((_key, _otel_attr_value(_value)) for _key, _value in attrs.items()) if v is not None},
                 )
+
+    def record_agent_runtime_event(self, event: AgentRuntimeEvent) -> None:
+        """Record one canonical runtime event in the product trace."""
+
+        payload = dict(event.payload)
+        if event.kind in {"operation.completed", "operation.failed", "operation.skipped"}:
+            operation_id = str(payload.get("operation_id") or "operation")
+            status = {
+                "operation.completed": "completed",
+                "operation.failed": "failed",
+                "operation.skipped": "skipped",
+            }[event.kind]
+            self.record_node_event({
+                **payload,
+                "node": operation_id,
+                "node_type": str(payload.get("operation_type") or operation_id),
+                "visit_index": max(1, int(payload.get("visit_index") or 1)),
+                "status": status,
+                "start_time": payload.get("started_at") or payload.get("start_time"),
+                "end_time": payload.get("completed_at") or payload.get("end_time") or datetime.utcnow().isoformat() + "Z",
+                "elapsed_ms": payload.get("duration_ms") or payload.get("elapsed_ms"),
+                "error": payload.get("error"),
+            })
+        elif event.kind in {"tool.completed", "tool.failed"}:
+            self.record_tool_event(payload)
+        elif event.kind != "run.started":
+            self.record_runtime_event(event.kind, attributes=payload)
 
     def _record_parallel_runtime_span(self, event_name: str, attributes: Mapping[str, Any]) -> None:
         if event_name not in PARALLEL_EVENT_NAMES:

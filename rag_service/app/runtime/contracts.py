@@ -106,6 +106,30 @@ class RuntimeOperationOwner(str, Enum):
     RUNTIME = "runtime"
 
 
+class RuntimeCapabilityDisabledReason(str, Enum):
+    RUNTIME_CAPABILITY_UNSUPPORTED = "runtime_capability_unsupported"
+    RUNTIME_CAPABILITY_UNAVAILABLE = "runtime_capability_unavailable"
+    RUNTIME_CONFIGURATION_INVALID = "runtime_configuration_invalid"
+    RUNTIME_UNAVAILABLE = "runtime_unavailable"
+    DEFINITION_CAPABILITY_UNAVAILABLE = "definition_capability_unavailable"
+    DEFINITION_POLICY = "definition_policy"
+    DEFINITION_NOT_TASK_RUNTIME = "definition_not_task_runtime"
+    ADAPTER_OPERATION_UNMAPPED = "adapter_operation_unmapped"
+    ADAPTER_OPERATION_UNIMPLEMENTED = "adapter_operation_unimplemented"
+    CHECKPOINT_STORE_UNAVAILABLE = "checkpoint_store_unavailable"
+    TASK_RUN_NOT_CREATED = "task_run_not_created"
+    RUN_ALREADY_CREATED = "run_already_created"
+    TASK_ALREADY_STARTED = "task_already_started"
+    RUN_TERMINAL = "run_terminal"
+    NO_PENDING_INTERRUPT = "no_pending_interrupt"
+    TASK_NOT_PAUSEABLE = "task_not_pauseable"
+    TASK_NOT_RESUMABLE = "task_not_resumable"
+    TASK_NOT_RETRYABLE = "task_not_retryable"
+    TASK_TERMINAL = "task_terminal"
+    RUNTIME_BINDING_UNAVAILABLE = "runtime_binding_unavailable"
+    RUN_NOT_CHECKPOINT_BOUNDARY = "run_not_checkpoint_boundary"
+
+
 def _dict(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return dict(value or {})
 
@@ -184,7 +208,7 @@ class RuntimeOperationDescriptor:
     support: RuntimeSupportLevel
     owner: RuntimeOperationOwner
     enabled: bool
-    disabled_reason: Optional[str] = None
+    disabled_reason: Optional[RuntimeCapabilityDisabledReason] = None
     modes: tuple[str, ...] = ()
     semantics: Optional[str] = None
     confirmation: Optional[str] = None
@@ -204,6 +228,10 @@ class RuntimeOperationDescriptor:
             raise ValueError("enabled operation descriptors cannot have disabled_reason")
         if not self.enabled and not self.disabled_reason:
             raise ValueError("disabled operation descriptors require disabled_reason")
+        if self.disabled_reason is not None and not isinstance(
+            self.disabled_reason, RuntimeCapabilityDisabledReason
+        ):
+            raise ValueError("disabled_reason must be a RuntimeCapabilityDisabledReason")
         if self.support is RuntimeSupportLevel.UNSUPPORTED and self.enabled:
             raise ValueError("unsupported operation descriptors cannot be enabled")
         for values, field_name in ((self.modes, "modes"), (self.terminal_states, "terminal_states")):
@@ -223,7 +251,7 @@ class RuntimeOperationDescriptor:
             "support": self.support.value,
             "owner": self.owner.value,
             "enabled": self.enabled,
-            "disabled_reason": self.disabled_reason,
+            "disabled_reason": self.disabled_reason.value if self.disabled_reason else None,
         }
         if self.modes:
             value["modes"] = list(self.modes)
@@ -248,7 +276,7 @@ class RuntimeFeatureDescriptor:
 
     support: RuntimeSupportLevel
     enabled: bool
-    disabled_reason: Optional[str] = None
+    disabled_reason: Optional[RuntimeCapabilityDisabledReason] = None
     semantics: Optional[str] = None
     details: Mapping[str, Any] = field(default_factory=dict)
 
@@ -261,6 +289,10 @@ class RuntimeFeatureDescriptor:
             raise ValueError("enabled feature descriptors cannot have disabled_reason")
         if not self.enabled and not self.disabled_reason:
             raise ValueError("disabled feature descriptors require disabled_reason")
+        if self.disabled_reason is not None and not isinstance(
+            self.disabled_reason, RuntimeCapabilityDisabledReason
+        ):
+            raise ValueError("disabled_reason must be a RuntimeCapabilityDisabledReason")
         if self.support is RuntimeSupportLevel.UNSUPPORTED and self.enabled:
             raise ValueError("unsupported feature descriptors cannot be enabled")
         if self.semantics is not None and not isinstance(self.semantics, str):
@@ -270,7 +302,7 @@ class RuntimeFeatureDescriptor:
         value: Dict[str, Any] = {
             "support": self.support.value,
             "enabled": self.enabled,
-            "disabled_reason": self.disabled_reason,
+            "disabled_reason": self.disabled_reason.value if self.disabled_reason else None,
         }
         if self.semantics is not None:
             value["semantics"] = self.semantics
@@ -281,14 +313,14 @@ class RuntimeFeatureDescriptor:
 
 @dataclass(frozen=True)
 class RuntimeCapabilities:
-    operations: Mapping[str, RuntimeOperationDescriptor] = field(default_factory=dict)
+    operations: Mapping[RuntimeOperationId, RuntimeOperationDescriptor] = field(default_factory=dict)
     features: Mapping[str, RuntimeFeatureDescriptor] = field(default_factory=dict)
     deployment: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for operation, descriptor in self.operations.items():
-            if not isinstance(operation, str) or not operation.strip():
-                raise ValueError("capability operation identifiers must be non-empty strings")
+            if not isinstance(operation, RuntimeOperationId):
+                raise ValueError("capability operation identifiers must be RuntimeOperationId values")
             if not isinstance(descriptor, RuntimeOperationDescriptor):
                 raise TypeError("capability operations must contain RuntimeOperationDescriptor values")
         for feature, descriptor in self.features.items():
@@ -298,13 +330,10 @@ class RuntimeCapabilities:
                 raise TypeError("capability features must contain RuntimeFeatureDescriptor values")
 
     def to_dict(self) -> Dict[str, Any]:
-        ordered_operations = sorted(
-            self.operations.items(),
-            key=lambda item: item[0].value if isinstance(item[0], RuntimeOperationId) else str(item[0]),
-        )
+        ordered_operations = sorted(self.operations.items(), key=lambda item: item[0].value)
         return {
             "operations": {
-                operation.value if isinstance(operation, RuntimeOperationId) else str(operation): descriptor.to_dict()
+                operation.value: descriptor.to_dict()
                 for operation, descriptor in ordered_operations
             },
             "features": {
@@ -313,6 +342,69 @@ class RuntimeCapabilities:
             },
             "deployment": dict(self.deployment),
         }
+
+
+def native(
+    *,
+    owner: RuntimeOperationOwner = RuntimeOperationOwner.RUNTIME,
+    enabled: bool = True,
+    disabled_reason: RuntimeCapabilityDisabledReason | None = None,
+    **kwargs: Any,
+) -> RuntimeOperationDescriptor:
+    return RuntimeOperationDescriptor(
+        RuntimeSupportLevel.NATIVE,
+        owner,
+        enabled,
+        disabled_reason=disabled_reason,
+        **kwargs,
+    )
+
+
+def conditional(
+    *,
+    owner: RuntimeOperationOwner = RuntimeOperationOwner.RUNTIME,
+    enabled: bool,
+    disabled_reason: RuntimeCapabilityDisabledReason | None = None,
+    **kwargs: Any,
+) -> RuntimeOperationDescriptor:
+    return RuntimeOperationDescriptor(
+        RuntimeSupportLevel.CONDITIONAL,
+        owner,
+        enabled,
+        disabled_reason=disabled_reason,
+        **kwargs,
+    )
+
+
+def emulated(
+    *,
+    owner: RuntimeOperationOwner = RuntimeOperationOwner.RUNTIME,
+    enabled: bool = True,
+    disabled_reason: RuntimeCapabilityDisabledReason | None = None,
+    **kwargs: Any,
+) -> RuntimeOperationDescriptor:
+    return RuntimeOperationDescriptor(
+        RuntimeSupportLevel.EMULATED,
+        owner,
+        enabled,
+        disabled_reason=disabled_reason,
+        **kwargs,
+    )
+
+
+def unsupported(
+    *,
+    owner: RuntimeOperationOwner = RuntimeOperationOwner.RUNTIME,
+    disabled_reason: RuntimeCapabilityDisabledReason = RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+    **kwargs: Any,
+) -> RuntimeOperationDescriptor:
+    return RuntimeOperationDescriptor(
+        RuntimeSupportLevel.UNSUPPORTED,
+        owner,
+        False,
+        disabled_reason=disabled_reason,
+        **kwargs,
+    )
 
 
 @dataclass(frozen=True)

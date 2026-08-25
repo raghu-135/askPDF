@@ -12,11 +12,15 @@ from app.runtime.capability_resolver import (
 )
 from app.runtime.contracts import (
     AgentDefinition,
+    RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
     RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeOperationDescriptor,
     RuntimeSupportLevel,
+    conditional,
+    native,
+    unsupported,
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
@@ -29,38 +33,32 @@ class CapabilityAdapter:
     def __init__(self, *, unsupported=()):
         self.calls = {"cancel": 0, "resume": 0, "update_state": 0, "replay": 0, "inspect_state": 0}
         self.unsupported = set(unsupported)
+        self.capability_definition_ids = []
+        self.deployment_capability_calls = 0
 
     async def capabilities(self, definition):
+        self.capability_definition_ids.append(definition.definition_id)
         operations = {
-                RuntimeOperationId.RUN_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.RUN_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.RUN_APPROVAL_RESPOND.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.TASK_START.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.TASK_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.TASK_RESUME.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.TASK_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.TASK_RETRY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
-                RuntimeOperationId.RUN_INSPECT_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.RUN_UPDATE_STATE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
-                RuntimeOperationId.RUN_REPLAY.value: RuntimeOperationDescriptor(RuntimeSupportLevel.UNSUPPORTED, RuntimeOperationOwner.RUNTIME, False, disabled_reason="runtime_capability_unsupported"),
-                RuntimeOperationId.RUN_STEER_LIVE.value: RuntimeOperationDescriptor(
-                    RuntimeSupportLevel.UNSUPPORTED,
-                    RuntimeOperationOwner.RUNTIME,
-                    False,
-                    disabled_reason="runtime_capability_unsupported",
-                ),
+                RuntimeOperationId.RUN_START: native(),
+                RuntimeOperationId.RUN_CANCEL: native(),
+                RuntimeOperationId.RUN_RESUME: native(),
+                RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
+                RuntimeOperationId.TASK_START: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+                RuntimeOperationId.TASK_PAUSE: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+                RuntimeOperationId.TASK_RESUME: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+                RuntimeOperationId.TASK_CANCEL: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+                RuntimeOperationId.TASK_RETRY: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+                RuntimeOperationId.RUN_INSPECT_STATE: native(),
+                RuntimeOperationId.RUN_UPDATE_STATE: unsupported(),
+                RuntimeOperationId.RUN_REPLAY: unsupported(),
+                RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
             }
         for operation in self.unsupported:
-            operations[operation] = RuntimeOperationDescriptor(
-                RuntimeSupportLevel.UNSUPPORTED,
-                RuntimeOperationOwner.RUNTIME,
-                False,
-                disabled_reason="runtime_capability_unsupported",
-            )
+            operations[RuntimeOperationId(operation)] = unsupported()
         return RuntimeCapabilities(operations=operations)
 
     async def deployment_capabilities(self):
+        self.deployment_capability_calls += 1
         return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
 
     async def cancel(self, request):
@@ -190,6 +188,45 @@ async def test_definition_capabilities_are_requested_from_adapter_and_drive_task
     ))
     assert resolved.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     assert "run.continue" not in task_capabilities.operations
+    assert adapter.capability_definition_ids[:2] == [task_definition.definition_id, non_task_definition.definition_id]
+    assert adapter.deployment_capability_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_definitions_on_one_deployment_keep_distinct_adapter_capabilities():
+    class DefinitionAwareAdapter(CapabilityAdapter):
+        async def capabilities(self, definition):
+            capabilities = await super().capabilities(definition)
+            operations = dict(capabilities.operations)
+            operations[RuntimeOperationId.RUN_SEND_FOLLOWUP] = (
+                native() if definition.definition_id == "followup-enabled" else unsupported()
+            )
+            return RuntimeCapabilities(operations=operations)
+
+    adapter = DefinitionAwareAdapter()
+    registry = RuntimeRegistry(adapters=[adapter])
+    enabled = await capabilities_for_definition(
+        AgentDefinition("followup-enabled", "fake", "fake_builder"), registry=registry
+    )
+    disabled = await capabilities_for_definition(
+        AgentDefinition("followup-disabled", "fake", "fake_builder"), registry=registry
+    )
+
+    assert enabled.operations[RuntimeOperationId.RUN_SEND_FOLLOWUP].enabled is True
+    assert disabled.operations[RuntimeOperationId.RUN_SEND_FOLLOWUP].support is RuntimeSupportLevel.UNSUPPORTED
+    assert adapter.deployment_capability_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_deployment_discovery_uses_deployment_declaration_and_adds_product_operations():
+    adapter = CapabilityAdapter()
+    capabilities, error = await discover_adapter_capabilities(adapter)
+
+    assert error is None
+    assert adapter.deployment_capability_calls == 1
+    assert adapter.capability_definition_ids == ["deployment"]
+    assert capabilities.operations[RuntimeOperationId.RUN_EVENTS].owner is RuntimeOperationOwner.PRODUCT
+    assert capabilities.operations[RuntimeOperationId.TASK_START].owner is RuntimeOperationOwner.PRODUCT
 
 
 @pytest.mark.asyncio
@@ -453,8 +490,8 @@ class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
 
     async def capabilities(self, definition):
         return RuntimeCapabilities(operations={
-            RuntimeOperationId.RUN_CANCEL.value: RuntimeOperationDescriptor(RuntimeSupportLevel.NATIVE, RuntimeOperationOwner.RUNTIME, True),
-                RuntimeOperationId.TASK_PAUSE.value: RuntimeOperationDescriptor(RuntimeSupportLevel.CONDITIONAL, RuntimeOperationOwner.PRODUCT, True),
+            RuntimeOperationId.RUN_CANCEL: native(),
+            RuntimeOperationId.TASK_PAUSE: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
         })
 
     async def validate(self, definition, spec, *, options=None):

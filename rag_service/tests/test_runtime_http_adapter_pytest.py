@@ -109,6 +109,8 @@ def test_capability_parser_rejects_flat_or_malformed_payloads():
         capabilities_from_dict({"operations": {"run.start": {"support": "native", "enabled": True}}})
     with pytest.raises(ValueError):
         capabilities_from_dict({"operations": {"run.start": {"support": "native", "owner": "adapter", "enabled": True}}})
+    with pytest.raises(ValueError):
+        capabilities_from_dict({"operations": {"run.future": {"support": "native", "owner": "runtime", "enabled": True}}})
 
 
 @pytest.mark.asyncio
@@ -143,7 +145,7 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
     received = []
 
     class Sink:
-        async def emit(self, value):
+        async def emit_runtime_event(self, value):
             received.append(value)
 
     result = await adapter.start(request, context=RuntimeExecutionContext(resolved_spec={"nodes": []}), event_sink=Sink())
@@ -273,31 +275,6 @@ async def test_http_adapter_does_not_retry_structured_stream_conflict():
         await adapter.start(request, context=RuntimeExecutionContext())
     assert caught.value.code == "runtime_operation_conflict"
     assert calls == ["POST /v1/runs/start"]
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_http_adapter_translates_events_for_legacy_two_argument_sink():
-    request = _request()
-    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}
-
-    def handler(http_request: httpx.Request) -> httpx.Response:
-        body = (
-            f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': event})}\n\n"
-            f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': {**event, 'event_id': 'evt-terminal', 'sequence': 2, 'kind': 'run.completed', 'terminal': True}, 'result': {'status': 'completed'}})}\n\n"
-        )
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    received = []
-
-    class LegacySink:
-        async def emit(self, event_name, data):
-            received.append((event_name, data))
-
-    await adapter.start(request, context=RuntimeExecutionContext(), event_sink=LegacySink())
-    assert received[0] == ("operation.started", {"node": "router"})
     await client.aclose()
 
 
