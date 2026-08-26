@@ -136,11 +136,18 @@ const parseFailure = (runId: string, reason: string): AgentRunDebugParseResult =
 
 const validStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
 
-const validateParallelGroups = (value: unknown, events: unknown): string | null => {
+const validateParallelGroups = (
+  value: unknown,
+  events: unknown,
+  { requireEventReferences = true }: { requireEventReferences?: boolean } = {},
+): string | null => {
   if (!Array.isArray(value)) return 'parallel_groups must be an array.';
   if (!Array.isArray(events)) return 'Canonical events must be an array.';
   const eventIds = new Set(events.map((event) => asNonEmptyString(asObject(event).event_id)).filter(Boolean));
-  const validReferences = (references: unknown) => validStringArray(references) && references.every((eventId) => eventIds.has(eventId));
+  const validReferences = (references: unknown) => (
+    validStringArray(references)
+    && (!requireEventReferences || references.every((eventId) => eventIds.has(eventId)))
+  );
   const groupIds = new Set<string>();
   const memberOwners = new Map<string, string>();
   for (const group of value) {
@@ -551,7 +558,12 @@ export const buildLiveTraceView = (
   }));
   const latestParallelSnapshot = [...events].reverse().find((envelope) => Array.isArray((envelope.data as any)?.parallel_groups));
   const liveParallelGroups = latestParallelSnapshot ? (latestParallelSnapshot.data as any).parallel_groups : [];
-  const parallelError = validateParallelGroups(liveParallelGroups, timelineEvents);
+  // A live snapshot may be projected from the runtime's complete canonical
+  // journal while this client still has only a suffix of that journal (for
+  // example after reconnecting with an after-sequence cursor). Structural
+  // validation remains strict, but referential validation must wait for the
+  // retained/full trace, where the complete event set is available.
+  const parallelError = validateParallelGroups(liveParallelGroups, timelineEvents, { requireEventReferences: false });
   if (parallelError) {
     return {
       parseError: parallelError.slice(0, 240),

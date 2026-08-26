@@ -205,6 +205,7 @@ async def test_state_update_requires_a_checkpoint_binding_at_run_level():
             "pending_interrupt_json": None,
             "runtime_binding_json": {"binding_type": "langgraph_checkpoint"},
             "runtime_binding_status": "active",
+            "run_metadata_json": {"runtime_started": True, "checkpoint_boundary_available": True},
         })(),
     )
     assert bound.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].enabled is True

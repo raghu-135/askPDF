@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
+from app.runtime.catalog import definition_from_workflow
+from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
@@ -23,6 +25,35 @@ async def test_hermes_adapter_has_independent_identity():
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     assert adapter.framework == "hermes"
     assert adapter.builder_id == "hermes_agent"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_validates_the_canonical_builtin_definition(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    builtin = next(item for item in load_builtin_workflows() if item["builtin_key"] == "hermes_rag_agent")
+    workflow = type("Workflow", (), {
+        "id": builtin["builtin_key"],
+        "name": builtin["name"],
+        "framework": builtin["framework"],
+        "builder_id": builtin["builder_id"],
+        "category": builtin["category"],
+        "metadata_json": {},
+        "spec_json": builtin["spec_json"],
+    })()
+    definition = definition_from_workflow(workflow)
+
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=hermes_api.create_app()),
+        base_url="http://hermes.test",
+    )
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    result = await adapter.validate(definition, builtin["spec_json"])
+    assert result.valid is True
+    mismatch = dict(builtin["spec_json"])
+    mismatch["schema_version"] = 2
+    rejected = await adapter.validate(definition, mismatch)
+    assert rejected.valid is False
+    await client.aclose()
 
 
 @pytest.mark.asyncio

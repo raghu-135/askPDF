@@ -1419,6 +1419,7 @@ export interface RuntimeOperationDescriptor {
   terminal_states?: string[];
   preserves_run_id?: boolean | null;
   preserves_session_id?: boolean | null;
+  requires_runtime_binding?: boolean;
 }
 
 export interface RuntimeFeatureDescriptor {

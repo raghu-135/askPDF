@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 COPY hermes_runtime/requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 COPY hermes_runtime hermes_runtime
+COPY rag_service/runtime_protocol runtime_protocol
 
 EXPOSE 8200
 CMD ["uvicorn", "hermes_runtime.main:app", "--host", "0.0.0.0", "--port", "8200"]

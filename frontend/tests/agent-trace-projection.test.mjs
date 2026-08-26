@@ -582,6 +582,36 @@ test('malformed live parallel data returns a bounded parse error instead of thro
   assert.deepEqual(view.visualizations, {});
 });
 
+test('live parallel snapshots tolerate references outside the current event window', () => {
+  const view = buildLiveTraceView([{
+    id: 4,
+    event: 'worker.completed',
+    data: {
+      event_id: 'event-4',
+      sequence: 4,
+      dispatch_id: 'dispatch-1',
+      work_id: 'work-1',
+      parallel_groups: [{
+        group_id: 'dispatch-1', status: 'completed', planned: 1, first_sequence: 1, last_sequence: 4,
+        event_ids: ['event-1', 'event-2', 'event-3', 'event-4'],
+        members: [{
+          member_id: 'work-1', status: 'completed', first_sequence: 2, last_sequence: 4,
+          event_ids: ['event-2', 'event-3', 'event-4'], attempts: [{
+            attempt: 1, status: 'completed', first_sequence: 2, last_sequence: 4,
+            event_ids: ['event-2', 'event-3', 'event-4'], failure_event_ids: [],
+            caused_by_event_ids: [], related_event_ids: [],
+          }],
+        }],
+        barrier: { status: 'reached' }, aggregation: { status: 'completed', counts: { completed: 1 } },
+      }],
+    },
+  }]);
+
+  assert.equal(view.parseError, undefined);
+  assert.equal(view.parallelGroups[0].group_id, 'dispatch-1');
+  assert.equal(view.parallelGroups[0].members[0].status, 'completed');
+});
+
 test('live trace projection correlates model and tool lifecycle activity without sensitive payloads', () => {
   const view = buildLiveTraceView([
     { id: 1, event: 'operation.started', data: { operation_id: 'deep_task_planner', operation_type: 'deep_task_planner', visit_index: 1 } },

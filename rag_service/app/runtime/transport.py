@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, Mapping
+
+from runtime_protocol import iter_sse, json_envelope, sse_encode, validate_event_mapping
 
 from app.runtime.contracts import (
     AgentDefinition,
@@ -26,16 +27,6 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.events import create_runtime_event
-
-
-def json_envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None, runtime_metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    return {
-        "request_id": request_id,
-        "status": status,
-        "result": dict(result or {}),
-        "error": dict(error or {}),
-        "runtime_metadata": dict(runtime_metadata or {}),
-    }
 
 
 def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
@@ -78,18 +69,8 @@ def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
 
 
 def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
-    required = {"event_id", "run_id", "sequence", "kind"}
-    if not isinstance(value, Mapping) or not required.issubset(value):
-        raise ValueError("runtime event has an incomplete canonical shape")
+    validate_event_mapping(value)
     kind = value["kind"]
-    if not isinstance(kind, str) or kind not in CANONICAL_RUNTIME_EVENT_KINDS:
-        raise ValueError("runtime event kind is not canonical")
-    if "payload" in value and not isinstance(value["payload"], Mapping):
-        raise ValueError("runtime event payload must be an object")
-    if "source_metadata" in value and not isinstance(value["source_metadata"], Mapping):
-        raise ValueError("runtime event source_metadata must be an object")
-    if "terminal" in value and not isinstance(value["terminal"], bool):
-        raise ValueError("runtime event terminal must be a bool")
     return create_runtime_event(
         event_id=str(value["event_id"]),
         run_id=str(value["run_id"]),
@@ -259,32 +240,3 @@ class ServerEnvelope:
             "error": dict(self.error or {}),
             "runtime_metadata": dict(self.runtime_metadata or {}),
         }
-
-
-def sse_encode(event: AgentRuntimeEvent, *, result: AgentRuntimeResult | None = None) -> str:
-    payload: dict[str, Any] = {"event": event.to_dict()}
-    if result is not None:
-        payload["result"] = result.to_dict()
-    return f"id: {event.event_id}\nevent: {event.kind}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
-
-
-async def iter_sse(response: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    """Parse SSE without depending on a framework-specific response type."""
-
-    event_id = ""
-    event_name = "message"
-    data: list[str] = []
-    async for line in response.aiter_lines():
-        if line == "":
-            if data:
-                yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}
-            event_id, event_name, data = "", "message", []
-            continue
-        if line.startswith("id:"):
-            event_id = line[3:].strip()
-        elif line.startswith("event:"):
-            event_name = line[6:].strip()
-        elif line.startswith("data:"):
-            data.append(line[5:].lstrip())
-    if data:
-        yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}

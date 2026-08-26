@@ -34,6 +34,7 @@ from hermes_runtime.profile_manager import (
     configured_provider,
     validate_provider_context,
 )
+from runtime_protocol import json_envelope, sse_encode, structured_error, validate_event_mapping
 
 
 logger = logging.getLogger(__name__)
@@ -46,13 +47,13 @@ _DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this docum
 
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
-    return {
-        "request_id": request_id,
-        "status": status,
-        "result": dict(result or {}),
-        "error": dict(error or {}),
-        "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent"},
-    }
+    return json_envelope(
+        status=status,
+        result=result,
+        error=error,
+        request_id=request_id,
+        runtime_metadata={"framework": "hermes", "builder_id": "hermes_agent"},
+    )
 
 
 def _error(
@@ -62,12 +63,7 @@ def _error(
     retryable: bool = False,
     details: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
-        "code": code,
-        "safe_message": message,
-        "retryable": retryable,
-        "details": dict(details or {}),
-    }
+    return structured_error(code, message, retryable=retryable, details=details)
 
 
 def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
@@ -193,14 +189,12 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
         event["continuation"] = dict(continuation)
     if source_event_id is not None:
         event["source_event_id"] = str(source_event_id)
+    validate_event_mapping(event)
     return event
 
 
 def _sse(event: Mapping[str, Any], result: Mapping[str, Any] | None = None) -> str:
-    payload = {"event": dict(event)}
-    if result is not None:
-        payload["result"] = dict(result)
-    return f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
+    return sse_encode(event, result=result)
 
 
 def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -613,8 +607,8 @@ def create_app() -> FastAPI:
         issues = []
         if definition.get("framework") != "hermes" or definition.get("builder_id") != "hermes_agent":
             issues.append({"code": "invalid_runtime_identity", "message": "Hermes runtime requires framework=hermes and builder_id=hermes_agent"})
-        if spec.get("schema_version") != 2:
-            issues.append({"code": "unsupported_schema_version", "message": "Hermes definitions must use schema_version 2"})
+        if spec.get("schema_version") != 1:
+            issues.append({"code": "unsupported_schema_version", "message": "Hermes definitions must use schema_version 1"})
         config = spec.get("config")
         if not isinstance(config, Mapping):
             issues.append({"code": "missing_config", "message": "Hermes spec requires config"})

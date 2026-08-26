@@ -11,5 +11,6 @@ RUN pip install -r requirements-runtime.txt
 
 COPY app app
 COPY runtime_service runtime_service
+COPY runtime_protocol runtime_protocol
 EXPOSE 8100
 CMD ["uvicorn", "runtime_service.main:app", "--host", "0.0.0.0", "--port", "8100"]

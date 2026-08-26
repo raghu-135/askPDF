@@ -621,3 +621,77 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "boundary", "binding_status", "expected_reason"),
+    [
+        ("running", False, "active", "run_not_checkpoint_boundary"),
+        ("paused", True, "active", None),
+        ("awaiting_human", True, "active", None),
+        ("completed", True, "active", "run_terminal"),
+        ("running", True, "stale", "runtime_binding_unavailable"),
+    ],
+)
+async def test_checkpoint_operations_use_explicit_run_boundary_fact(
+    status, boundary, binding_status, expected_reason,
+):
+    class CheckpointCapabilityAdapter(CapabilityAdapter):
+        async def capabilities(self, definition):
+            capabilities = await super().capabilities(definition)
+            operations = dict(capabilities.operations)
+            operations[RuntimeOperationId.RUN_UPDATE_STATE] = native()
+            return RuntimeCapabilities(operations=operations)
+
+    run = SimpleNamespace(
+        status=status,
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status=binding_status,
+        run_metadata_json={"checkpoint_boundary_available": boundary},
+    )
+    capabilities = await resolve_capabilities(
+        _definition(), registry=RuntimeRegistry(adapters=[CheckpointCapabilityAdapter()]), run=run,
+    )
+    descriptor = capabilities.operations[RuntimeOperationId.RUN_UPDATE_STATE]
+    assert descriptor.enabled is (expected_reason is None)
+    assert (descriptor.disabled_reason.value if hasattr(descriptor.disabled_reason, "value") else descriptor.disabled_reason) == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_submitted_task_cancel_requires_effective_run_cancel():
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+        run_metadata_json={"runtime_started": True},
+    )
+    capabilities = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter(unsupported=[RuntimeOperationId.RUN_CANCEL.value])]),
+        run=run,
+        task=SimpleNamespace(status="running"),
+    )
+    descriptor = capabilities.operations[RuntimeOperationId.TASK_CANCEL]
+    assert descriptor.enabled is False
+    assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_unsubmitted_task_cancel_remains_product_local():
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={},
+        runtime_binding_status="active",
+        run_metadata_json={"runtime_started": False},
+    )
+    capabilities = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter(unsupported=[RuntimeOperationId.RUN_CANCEL.value])]),
+        run=run,
+        task=SimpleNamespace(status="queued"),
+    )
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL].enabled is True

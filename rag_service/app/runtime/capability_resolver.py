@@ -51,6 +51,15 @@ TASK_ONLY_OPERATIONS = frozenset({
     RuntimeOperationId.TASK_RETRY,
 })
 
+CHECKPOINT_OPERATIONS = frozenset({
+    RuntimeOperationId.RUN_RESUME,
+    RuntimeOperationId.RUN_INSPECT_STATE,
+    RuntimeOperationId.RUN_UPDATE_STATE,
+    RuntimeOperationId.RUN_REPLAY,
+    RuntimeOperationId.RUN_FORK,
+    RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+})
+
 OPERATION_METHODS = {
     RuntimeOperationId.RUN_START: "start",
     RuntimeOperationId.RUN_GET: "get_run",
@@ -146,6 +155,40 @@ def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabi
     operations = dict(capabilities.operations)
     operations.update(product_operation_descriptors())
     return replace(capabilities, operations=operations)
+
+
+def checkpoint_boundary_available(run: Any) -> bool:
+    """Read the persisted explicit run fact; a binding is not a boundary."""
+
+    metadata = getattr(run, "run_metadata_json", None)
+    return isinstance(metadata, Mapping) and metadata.get("checkpoint_boundary_available") is True
+
+
+def _apply_task_cancel_dependency(
+    operations: dict[RuntimeOperationId, RuntimeOperationDescriptor],
+    *,
+    submitted: bool,
+) -> None:
+    """A submitted task can cancel only when its effective runtime run can."""
+
+    task_cancel = operations.get(RuntimeOperationId.TASK_CANCEL)
+    if task_cancel is None or not submitted:
+        return
+    run_cancel = operations.get(RuntimeOperationId.RUN_CANCEL)
+    if run_cancel is None:
+        operations[RuntimeOperationId.TASK_CANCEL] = replace(
+            task_cancel,
+            enabled=False,
+            disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+        )
+        return
+    if not run_cancel.enabled or run_cancel.support is RuntimeSupportLevel.UNSUPPORTED:
+        operations[RuntimeOperationId.TASK_CANCEL] = replace(
+            task_cancel,
+            enabled=False,
+            disabled_reason=run_cancel.disabled_reason
+            or RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+        )
 
 
 def _unavailable_capabilities(exc: RuntimeError) -> RuntimeCapabilities:
@@ -261,6 +304,8 @@ async def resolve_capabilities(
     pending_operation = pending_interrupt_response_operation(run, include_resolved=include_resolved_response)
     binding = getattr(run, "runtime_binding_json", None)
     binding_available = bool(binding) and str(getattr(run, "runtime_binding_status", "active")) == "active"
+    run_metadata = getattr(run, "run_metadata_json", None)
+    submitted = isinstance(run_metadata, Mapping) and run_metadata.get("runtime_started") is True
 
     if status in TERMINAL_RUN_STATES:
         for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS:
@@ -300,6 +345,16 @@ async def resolve_capabilities(
         ):
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.TASK_TERMINAL)
+
+    _apply_task_cancel_dependency(operations, submitted=submitted)
+
+    if not checkpoint_boundary_available(run):
+        for operation in CHECKPOINT_OPERATIONS:
+            descriptor = operations.get(operation)
+            if descriptor is not None and descriptor.enabled:
+                operations[operation] = _disabled(
+                    descriptor, RuntimeCapabilityDisabledReason.RUN_NOT_CHECKPOINT_BOUNDARY
+                )
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation, descriptor in operations.items():

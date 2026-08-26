@@ -78,6 +78,7 @@ async def create_run(
             raise ValueError("Run builder identity conflicts with the persisted workflow")
 
         run_metadata: Dict[str, Any] = dict(run_metadata_json or {})
+        run_metadata.setdefault("checkpoint_boundary_available", False)
         if workflow_version_id is not None:
             run_metadata["workflow_version_id"] = workflow_version_id
         if workflow_version is not None:

@@ -100,3 +100,14 @@ test('capability responses are applied only to their selected run', () => {
   assert.equal(isCurrentRuntimeCapabilityRequest(3, 4), false);
   assert.equal(isCurrentRuntimeCapabilityRequest(4, 4), true);
 });
+
+test('runtime binding requirement is preserved as descriptor metadata', () => {
+  const descriptor = {
+    support: 'native',
+    owner: 'runtime',
+    enabled: true,
+    requires_runtime_binding: true,
+  };
+  const result = runtimeOperationAvailability(response({ 'run.cancel': descriptor }), 'run.cancel');
+  assert.equal(result.descriptor.requires_runtime_binding, true);
+});

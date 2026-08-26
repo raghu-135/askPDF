@@ -818,6 +818,7 @@ class AgentWorkflowRepository:
                 return None
             metadata = dict(run.run_metadata_json or {})
             metadata["runtime_started"] = True
+            metadata["checkpoint_boundary_available"] = run.framework == "langgraph"
             replace_jsonb_field(run, "run_metadata_json", metadata)
             return run
 
