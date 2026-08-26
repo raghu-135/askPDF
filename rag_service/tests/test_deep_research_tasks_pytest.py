@@ -547,7 +547,7 @@ async def _seed_deep_workflow(test_session_maker) -> None:
         async with session.begin():
             session.add(AgentWorkflow(
                 id="deep_research_agent", name="Deep", description="test",
-                visibility="builtin", is_builtin=True, schema_version=2,
+                visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
 
@@ -804,7 +804,7 @@ async def test_child_retry_synthesizes_inherited_evidence_and_projects_source_li
         async with session.begin():
             session.add(AgentWorkflow(
                 id="deep_research_agent", name="Deep", description="test",
-                visibility="builtin", is_builtin=True, schema_version=2,
+                visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
     task, _ = await repository.create_task(
@@ -1112,7 +1112,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     debug_payload = finalize_task_run.await_args.kwargs["debug_trace"]
     assert debug_payload["trace"]["run_id"] == run.id
     assert debug_payload["trace"]["status"] == "completed"
-    assert debug_payload["summary"]["usedNodeCount"] == 0
+    assert debug_payload["summary"]["usedOperationCount"] == 0
 
 
 @pytest.mark.asyncio
@@ -1206,8 +1206,11 @@ async def test_compiled_deep_graph_trace_covers_parallel_nodes_tools_and_hitl_br
     success_payload = success_recorder.finalize(
         run=success_run, chat_turn_id=None, metrics={}, result=result,
     )
-    success_nodes = success_payload["summary"]["nodes"]
-    node_types = [node["type"] for node in success_nodes]
+    node_spans = [
+        span for span in success_payload["trace"]["spans"]
+        if str(span.get("span_id") or "").startswith("node:")
+    ]
+    node_types = [span["attributes"]["askpdf.node.type"] for span in node_spans]
     assert node_types.count("deep_research_subagent") == 2
     assert {
         "context_loader", "deep_task_planner", "deep_task_scheduler",
@@ -1215,7 +1218,9 @@ async def test_compiled_deep_graph_trace_covers_parallel_nodes_tools_and_hitl_br
         "evidence_critic", "finalizer",
     }.issubset(set(node_types))
     assert sorted(
-        node["visitIndex"] for node in success_nodes if node["type"] == "deep_research_subagent"
+        span["attributes"]["askpdf.node.visit_index"]
+        for span in node_spans
+        if span["attributes"]["askpdf.node.type"] == "deep_research_subagent"
     ) == [11, 12]
     tool_spans = [
         span for span in success_payload["trace"]["spans"]
@@ -1225,7 +1230,8 @@ async def test_compiled_deep_graph_trace_covers_parallel_nodes_tools_and_hitl_br
     assert {span["attributes"]["askpdf.parallel.work_id"] for span in tool_spans} == {
         "execution-0", "execution-1",
     }
-    assert success_payload["summary"]["usedNodeCount"] == len(success_nodes)
+    assert success_payload["operations"] == []
+    assert success_payload["summary"]["usedOperationCount"] == 0
 
     async def empty_scheduler(_state, _config):
         return {"task_work_items": [], "task_todos": []}
@@ -1279,7 +1285,10 @@ async def test_compiled_deep_graph_trace_covers_parallel_nodes_tools_and_hitl_br
     pause_payload = pause_recorder.finalize(
         run=pause_run, chat_turn_id=None, metrics={}, result=pause_result,
     )
-    assert any(node["type"] == "hitl_gate" for node in pause_payload["summary"]["nodes"])
+    assert any(
+        span.get("attributes", {}).get("askpdf.node.type") == "hitl_gate"
+        for span in pause_payload["trace"]["spans"]
+    )
     assert any(
         event.get("name") == "interrupt.requested"
         for span in pause_payload["trace"]["spans"]
@@ -1300,7 +1309,7 @@ async def test_task_commands_are_idempotent_versioned_and_terminal_cancel(
                 description="test",
                 visibility="builtin",
                 is_builtin=True,
-                schema_version=2,
+                schema_version=1,
                 spec_json=_spec(),
                 metadata_json={"version": 1},
             ))
@@ -1397,7 +1406,7 @@ async def test_cancelling_task_is_reclaimable_without_returning_to_running(
                 description="test",
                 visibility="builtin",
                 is_builtin=True,
-                schema_version=2,
+                schema_version=1,
                 spec_json=_spec(),
                 metadata_json={"version": 1},
             ))
@@ -1443,7 +1452,7 @@ async def test_scheduler_respects_dependencies_and_replays_unstarted_claim(
         async with session.begin():
             session.add(AgentWorkflow(
                 id="deep_research_agent", name="Deep", description="test",
-                visibility="builtin", is_builtin=True, schema_version=2,
+                visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
     task, _ = await repository.create_task(
@@ -1504,7 +1513,7 @@ async def test_terminal_retry_preserves_completed_todos_and_resets_failed_projec
         async with session.begin():
             session.add(AgentWorkflow(
                 id="deep_research_agent", name="Deep", description="test",
-                visibility="builtin", is_builtin=True, schema_version=2,
+                visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
     task, _ = await repository.create_task(
@@ -1566,7 +1575,7 @@ async def test_todo_identity_is_task_scoped_and_budget_terminal_guards_are_atomi
         async with session.begin():
             session.add(AgentWorkflow(
                 id="deep_research_agent", name="Deep", description="test",
-                visibility="builtin", is_builtin=True, schema_version=2,
+                visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
 

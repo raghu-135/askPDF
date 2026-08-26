@@ -150,7 +150,6 @@ class AgentWorkflowRepository:
         builder_id: Optional[str] = None,
         description: str = "",
         visibility: str = "internal",
-        increment_version: bool = True,
     ) -> AgentWorkflow:
         session = await self._get_session()
         return await workflow_store_save_custom_workflow(
@@ -162,7 +161,6 @@ class AgentWorkflowRepository:
             builder_id=builder_id,
             description=description,
             visibility=visibility,
-            increment_version=increment_version,
         )
 
     async def save_internal_workflow_version(
@@ -176,7 +174,6 @@ class AgentWorkflowRepository:
         description: str = "",
         visibility: str = "internal",
         changelog: str = "",
-        increment_version: bool = True,
     ) -> tuple[AgentWorkflow, AgentWorkflowVersion]:
         session = await self._get_session()
         return await workflow_store_save_internal_workflow_version(
@@ -189,7 +186,6 @@ class AgentWorkflowRepository:
             description=description,
             visibility=visibility,
             changelog=changelog,
-            increment_version=increment_version,
         )
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
@@ -311,12 +307,12 @@ class AgentWorkflowRepository:
         *,
         thread_id: str,
         workflow_id: str,
+        resolved_spec_json: Dict[str, Any],
         workflow_version_id: Optional[str] = None,
         workflow_version: Optional[int] = None,
-        framework: str,
-        builder_id: str,
+        framework: Optional[str] = None,
+        builder_id: Optional[str] = None,
         definition_category: Optional[str] = None,
-        resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
         runtime_binding_json: Optional[Dict[str, Any]] = None,

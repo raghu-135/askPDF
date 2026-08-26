@@ -24,7 +24,7 @@ class BuilderCapabilities:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (2,)
+    schema_versions: tuple[int, ...] = (1,)
     validation: bool = True
     normalization: bool = True
     catalog: bool = True
@@ -54,7 +54,7 @@ class BuilderCatalog:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (2,)
+    schema_versions: tuple[int, ...] = (1,)
     capabilities: BuilderCapabilities | None = None
     payload: Mapping[str, Any] = field(default_factory=dict)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any, Dict, Literal, Mapping, Optional
 
@@ -35,9 +36,11 @@ from app.agent_workflows.chat_cancellation import (
     ChatRunCancelResult,
 )
 from app.agent_workflows.trace_details import detail_manifest
+from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.canonical_trace import build_parallel_groups
 from app.runtime.contracts import AgentRuntimeEvent
 BUILDER_TEST_RUN_KIND = "builder_test"
+logger = logging.getLogger(__name__)
 
 
 async def delete_agent_checkpoints(*args: Any, **kwargs: Any):
@@ -285,7 +288,7 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
 
 
 def _is_valid_workflow_for_service(workflow) -> bool:
-    if not workflow or workflow.schema_version != 2 or not isinstance(workflow.spec_json, dict):
+    if not workflow or workflow.schema_version != 1 or not isinstance(workflow.spec_json, dict):
         return False
     validation = workflow.validation_result_json if isinstance(workflow.validation_result_json, dict) else {}
     return bool(validation.get("valid", True))
@@ -295,13 +298,19 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
     if not debug:
         return None
-    if debug.get("version") != 2:
-        return {"version": debug.get("version"), "unsupported": True}
+    if not is_current_debug_payload(debug):
+        logger.error(
+            "Invalid retained debug trace contract | correlation_id=trace:%s version=%r",
+            run.id,
+            debug.get("version"),
+        )
+        return dict(debug)
     trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else None
     summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
     if trace is None or summary is None:
+        logger.error("Malformed retained debug trace | run_id=%s", run.id)
         return None
-    compact_debug = {key: value for key, value in debug.items() if key not in {"details", "graph"}}
+    compact_debug = {key: value for key, value in debug.items() if key != "graph"}
     visualizations = compact_debug.get("visualizations") if isinstance(compact_debug.get("visualizations"), dict) else {}
     topology_available = "langgraph.graph" in visualizations
     return {
@@ -1050,7 +1059,6 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
             spec_json=spec_json,
             framework=req.framework,
             builder_id=req.builder_id,
-            increment_version=False,
         )
     except (BuilderSelectionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1129,7 +1137,6 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         raise HTTPException(status_code=404, detail="Agent workflow not found")
 
     if not workflow_is_chat_eligible(workflow.spec_json or {}):
-        default_workflow = await repo.get_workflow(default_agent_workflow_key(), include_custom=False)
         return {
             "valid": False,
             "workflow_id": workflow.id,
@@ -1143,8 +1150,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
                     "message": "This workflow is available only through the Deep Research task workspace.",
                 }],
             },
-            "resolved_spec_json": dict(default_workflow.spec_json or {}) if default_workflow else {},
-            "fallback_workflow_id": default_agent_workflow_key(),
+            "resolved_spec_json": {},
         }
 
     provider = _provider_for_workflow(workflow)

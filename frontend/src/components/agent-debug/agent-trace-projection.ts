@@ -69,6 +69,7 @@ export interface TraceGraphView {
 
 export interface TraceRunView {
   parseError?: string;
+  parseCorrelationId?: string;
   debug?: AgentRunDebug;
   trace?: AgentDebugTrace;
   graph?: TraceGraphView;
@@ -125,7 +126,13 @@ const asNonEmptyString = (value: any): string | undefined => (
 
 export type AgentRunDebugParseResult =
   | { ok: true; debug: AgentRunDebug }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; correlationId: string };
+
+const parseFailure = (runId: string, reason: string): AgentRunDebugParseResult => ({
+  ok: false,
+  reason: reason.slice(0, 240),
+  correlationId: `trace:${runId}`,
+});
 
 const validStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
 
@@ -169,14 +176,24 @@ const validateParallelGroups = (value: unknown, events: unknown): string | null 
 
 export const parseRunDebug = (runDetails: AgentRunDetails): AgentRunDebugParseResult => {
   const debug = runDetails.debug;
-  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return { ok: false, reason: 'The debug payload is missing.' };
-  if (debug.version !== 2) return { ok: false, reason: 'The trace marker is not supported.' };
-  if (Object.keys(asObject(debug.diagnostics)).length === 0) return { ok: false, reason: 'The diagnostics contract is missing.' };
-  if (!Array.isArray(debug.events) || !Array.isArray(debug.operations)) return { ok: false, reason: 'Canonical events or operations are missing.' };
+  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return parseFailure(runDetails.id, 'The debug payload is missing.');
+  if (debug.version !== 1) return parseFailure(runDetails.id, 'The trace marker is not supported.');
+  if (Object.keys(asObject(debug.diagnostics)).length === 0) return parseFailure(runDetails.id, 'The diagnostics contract is missing.');
+  if (!Array.isArray(debug.events) || !Array.isArray(debug.operations)) return parseFailure(runDetails.id, 'Canonical events or operations are missing.');
   const parallelError = validateParallelGroups(debug.parallel_groups, debug.events);
-  if (parallelError) return { ok: false, reason: parallelError.slice(0, 240) };
-  if (Object.keys(asObject(debug.trace)).length === 0) return { ok: false, reason: 'The canonical trace is missing.' };
-  if (Object.keys(asObject(debug.summary)).length === 0) return { ok: false, reason: 'The trace summary is missing.' };
+  if (parallelError) return parseFailure(runDetails.id, parallelError);
+  if (
+    !Array.isArray(debug.tools)
+    || !Array.isArray(debug.approvals)
+    || !Array.isArray(debug.subagents)
+    || !Array.isArray(debug.artifacts)
+    || !Array.isArray(debug.details)
+  ) return parseFailure(runDetails.id, 'Trace detail or resource collections are missing.');
+  if (!debug.visualizations || typeof debug.visualizations !== 'object' || Array.isArray(debug.visualizations)) {
+    return parseFailure(runDetails.id, 'The visualization contract is missing.');
+  }
+  if (Object.keys(asObject(debug.trace)).length === 0) return parseFailure(runDetails.id, 'The canonical trace is missing.');
+  if (Object.keys(asObject(debug.summary)).length === 0) return parseFailure(runDetails.id, 'The trace summary is missing.');
   return { ok: true, debug: debug as AgentRunDebug };
 };
 
@@ -538,6 +555,7 @@ export const buildLiveTraceView = (
   if (parallelError) {
     return {
       parseError: parallelError.slice(0, 240),
+      parseCorrelationId: 'trace:live',
       metrics: {},
       events: [],
       visualizations: {},

@@ -67,12 +67,12 @@ ORCHESTRATOR_WORKER_RAG_AGENT_ID = "orchestrator_worker_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 CORRECTIVE_SELF_RAG_AGENT_ID = "corrective_self_rag_agent"
 DEEP_RESEARCH_AGENT_ID = "deep_research_agent"
-ROUTER_RAG_AGENT_VERSION = 4
-PLAN_EXECUTE_RAG_AGENT_VERSION = 5
-EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 5
-ROUTER_RAG_AGENT_V2_VERSION = 4
-PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 5
-EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 5
+ROUTER_RAG_AGENT_VERSION = 1
+PLAN_EXECUTE_RAG_AGENT_VERSION = 1
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 1
+ROUTER_RAG_AGENT_V1_VERSION = 1
+PLAN_EXECUTE_RAG_AGENT_V1_VERSION = 1
+EVALUATOR_REPLANNER_RAG_AGENT_V1_VERSION = 1
 
 
 def _is_answer_quality_review(messages) -> bool:
@@ -188,13 +188,13 @@ def builtin_router_rag_spec() -> dict:
     return _builtin_spec(ROUTER_RAG_AGENT_ID)
 
 
-def builtin_router_rag_v2_spec() -> dict:
+def builtin_router_rag_v1_spec() -> dict:
     return _builtin_spec(ROUTER_RAG_AGENT_ID)
 
 
-def legacy_builtin_router_rag_v1_spec() -> dict:
+def unsupported_builtin_router_rag_v2_spec() -> dict:
     spec = _builtin_spec(ROUTER_RAG_AGENT_ID)
-    spec["schema_version"] = 1
+    spec["schema_version"] = 2
     return spec
 
 
@@ -206,7 +206,7 @@ def builtin_plan_execute_rag_spec() -> dict:
     return _builtin_spec(PLAN_EXECUTE_RAG_AGENT_ID)
 
 
-def builtin_plan_execute_rag_v2_spec() -> dict:
+def builtin_plan_execute_rag_v1_spec() -> dict:
     return _builtin_spec(PLAN_EXECUTE_RAG_AGENT_ID)
 
 
@@ -214,7 +214,7 @@ def builtin_evaluator_replanner_rag_spec() -> dict:
     return _builtin_spec(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
 
-def builtin_evaluator_replanner_rag_v2_spec() -> dict:
+def builtin_evaluator_replanner_rag_v1_spec() -> dict:
     return _builtin_spec(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
 
@@ -297,7 +297,7 @@ def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_ans
         thread_id="thread-full-details",
         user_id=None,
         workflow_id=ROUTER_RAG_AGENT_ID,
-        resolved_spec_json=builtin_router_rag_v2_spec(),
+        resolved_spec_json=builtin_router_rag_v1_spec(),
         status="completed",
         started_at=utc_now(),
         completed_at=utc_now(),
@@ -383,23 +383,25 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
     monkeypatch.setattr(trace_details, "TRACE_DETAIL_RUN_LIMIT", 900)
     trace = {"schema_version": 1, "spans": [], "metrics": {}}
     base = {
-        "version": 2,
+        "version": 1,
         "trace": dict(trace),
         "summary": {},
         "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
         "events": [],
         "operations": [],
         "parallel_groups": [],
+        "tools": [], "approvals": [], "subagents": [], "artifacts": [], "visualizations": {},
         "details": [{"operation_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
     }
     incoming = {
-        "version": 2,
+        "version": 1,
         "trace": dict(trace),
         "summary": {},
         "diagnostics": {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []},
         "events": [],
         "operations": [],
         "parallel_groups": [],
+        "tools": [], "approvals": [], "subagents": [], "artifacts": [], "visualizations": {},
         "details": [{"operation_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
     }
 
@@ -412,7 +414,15 @@ def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
 
 def test_resumed_trace_rebuilds_parallel_groups_from_merged_canonical_events():
     empty_diagnostics = {"outcome": "completed", "summary": {"failure_count": 0}, "failures": [], "groups": [], "observability_gaps": []}
-    common = {"version": 2, "trace": {"schema_version": 1, "spans": [], "metrics": {}}, "summary": {}, "diagnostics": empty_diagnostics, "operations": [], "parallel_groups": []}
+    common = {
+        "version": 1,
+        "trace": {"schema_version": 1, "spans": [], "metrics": {}},
+        "summary": {},
+        "diagnostics": empty_diagnostics,
+        "operations": [],
+        "parallel_groups": [],
+        "tools": [], "approvals": [], "subagents": [], "artifacts": [], "details": [], "visualizations": {},
+    }
     base = {
         **common,
         "events": [
@@ -937,7 +947,7 @@ class TestRouterRagWorkflowValidator:
         ],
     )
     def test_rejects_invalid_router_rag_specs(self, mutate, expected):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         mutate(spec)
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -947,7 +957,7 @@ class TestRouterRagWorkflowValidator:
 
     def test_resolver_freezes_thread_and_request_overrides(self):
         resolved = WorkflowResolver().resolve(
-            builtin_router_rag_v2_spec(),
+            builtin_router_rag_v1_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
         )
@@ -957,7 +967,7 @@ class TestRouterRagWorkflowValidator:
         assert resolved["config"]["use_web_search"] is True
 
         evaluator_resolved = WorkflowResolver().resolve(
-            builtin_evaluator_replanner_rag_v2_spec(),
+            builtin_evaluator_replanner_rag_v1_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
         )
@@ -979,7 +989,7 @@ class TestRouterRagWorkflowValidator:
         assert corrective_resolved["config"]["loop_policy"]["node_visit_limits"]["grounded_answer_verifier"] == 4
 
     def test_rejects_zero_replan_budget(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         spec["config"]["replans"] = 0
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -995,7 +1005,7 @@ class TestRouterRagWorkflowValidator:
         ],
     )
     def test_rejects_unsupported_context_policy_modes(self, policy_update, expected):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["context_policy"].update(policy_update)
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1003,34 +1013,34 @@ class TestRouterRagWorkflowValidator:
 
         assert expected in str(exc.value)
 
-    def test_rejects_legacy_v1_builtin_specs(self):
-        with pytest.raises(WorkflowValidationError, match="schema_version must be 2"):
-            WorkflowValidator().validate(legacy_builtin_router_rag_v1_spec())
+    def test_rejects_unsupported_v2_builtin_specs(self):
+        with pytest.raises(WorkflowValidationError, match="schema_version must be 1"):
+            WorkflowValidator().validate(unsupported_builtin_router_rag_v2_spec())
 
     def test_accepts_builtin_router_rag_spec(self):
-        result = WorkflowValidator().validate(builtin_router_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_router_rag_v1_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_router_rag_hitl_web_spec(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
         result = WorkflowValidator().validate(spec)
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_plan_execute_rag_spec(self):
-        result = WorkflowValidator().validate(builtin_plan_execute_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_plan_execute_rag_v1_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_evaluator_replanner_rag_spec(self):
-        result = WorkflowValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_evaluator_replanner_rag_v1_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_rejects_incomplete_conditional_routes_with_structured_edge_issue(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         router_edge = next(
             edge for edge in spec["config"]["graph"]["edges"] if edge.get("from") == "router"
         )
@@ -1043,7 +1053,7 @@ class TestRouterRagWorkflowValidator:
         assert issue["edge_index"] == spec["config"]["graph"]["edges"].index(router_edge)
 
     def test_rejects_semantically_invalid_route_target(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         router_edge = next(
             edge for edge in spec["config"]["graph"]["edges"] if edge.get("from") == "router"
         )
@@ -1056,7 +1066,7 @@ class TestRouterRagWorkflowValidator:
         assert issue["route"] == "direct"
 
     def test_rejects_reachable_branch_that_cannot_terminate(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         graph = spec["config"]["graph"]
         graph["nodes"].append({"id": "orphan_finalizer", "type": "finalizer"})
         router_edge = next(edge for edge in graph["edges"] if edge.get("from") == "router")
@@ -1067,7 +1077,7 @@ class TestRouterRagWorkflowValidator:
         assert any(issue["code"] == "non_terminating_path" for issue in report["issues"])
 
     def test_rejects_evaluator_path_without_worker_evidence(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         graph = spec["config"]["graph"]
         planner_edge = next(edge for edge in graph["edges"] if edge.get("from") == "planner")
         evaluator_id = next(
@@ -1080,7 +1090,7 @@ class TestRouterRagWorkflowValidator:
         assert any(issue["code"] == "missing_evidence_flow" for issue in report["issues"])
 
     def test_rejects_cycle_budget_that_cannot_revisit(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         node_ids = [node["id"] for node in spec["config"]["graph"]["nodes"]]
         spec["config"]["loop_policy"] = {
             "max_total_visits": len(node_ids),
@@ -1093,7 +1103,7 @@ class TestRouterRagWorkflowValidator:
         assert any(issue["code"] == "insufficient_loop_budget" for issue in report["issues"])
 
     def test_accepts_state_flow_after_hitl_gate_materialization(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
 
         report = WorkflowValidator().report(spec)
@@ -1101,7 +1111,7 @@ class TestRouterRagWorkflowValidator:
         assert report["valid"] is True
 
     def test_accepts_hitl_gate_between_context_loader_and_planner(self):
-        spec = builtin_plan_execute_rag_v2_spec()
+        spec = builtin_plan_execute_rag_v1_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -1125,15 +1135,14 @@ class TestRouterRagWorkflowValidator:
 
         assert result == {"valid": True, "errors": []}
 
-    def test_materialized_legacy_snapshot_gets_v2_schema_marker(self):
-        spec = builtin_router_rag_v2_spec()
+    def test_materializer_rejects_unsupported_schema_marker(self):
+        spec = builtin_router_rag_v1_spec()
         spec.pop("schema_version", None)
 
-        materialized = WorkflowCompiler().materialize_spec(spec)
-
-        assert materialized["schema_version"] == 2
-        assert WorkflowValidator().validate(materialized) == {"valid": True, "errors": []}
-        assert WorkflowCompiler().compile(spec) is not None
+        with pytest.raises(ValueError, match="schema_version must be 1"):
+            WorkflowCompiler().materialize_spec(spec)
+        with pytest.raises(WorkflowValidationError, match="schema_version must be 1"):
+            WorkflowCompiler().compile(spec)
 
     def test_hitl_materializer_omits_ambiguous_unconfigured_bypass(self):
         graph = {
@@ -1199,7 +1208,7 @@ class TestRouterRagWorkflowValidator:
         assert gate_edge["routes"]["continue_without"] == "final_1"
 
     def test_evaluator_replanner_loop_policy_matches_replan_budget(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         spec["config"]["replans"] = 2
         spec["config"]["loop_policy"] = {
             "max_total_visits": 25,
@@ -1274,7 +1283,7 @@ class TestRouterRagWorkflowValidator:
         "spec_factory, expected",
         [
             (
-                builtin_router_rag_v2_spec,
+                builtin_router_rag_v1_spec,
                 {
                     "node_ids": ["context_loader", "router", "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
@@ -1318,7 +1327,7 @@ class TestRouterRagWorkflowValidator:
                 },
             ),
             (
-                builtin_plan_execute_rag_v2_spec,
+                builtin_plan_execute_rag_v1_spec,
                 {
                     "node_ids": ["context_loader", "planner", "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
@@ -1358,7 +1367,7 @@ class TestRouterRagWorkflowValidator:
                 },
             ),
             (
-                builtin_evaluator_replanner_rag_v2_spec,
+                builtin_evaluator_replanner_rag_v1_spec,
                 {
                     "node_ids": [
                         "context_loader",
@@ -1465,7 +1474,7 @@ class TestRouterRagWorkflowValidator:
         assert hitl_gate_route_for("approval_1")({"hitl_gate_routes": {}}) == "continue_without"
 
     def test_rejects_router_rag_graph_topology_changes(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1474,7 +1483,7 @@ class TestRouterRagWorkflowValidator:
         assert "graph contains unreachable nodes: surprise" in str(exc.value)
 
     def test_rejects_router_rag_specs_missing_required_tools(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["allowed_tool_ids"].remove("document_evidence")
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1483,13 +1492,13 @@ class TestRouterRagWorkflowValidator:
         assert "missing required allowed_tool_ids: document_evidence" in str(exc.value)
 
     def test_compiles_builtin_router_rag_spec(self):
-        graph = WorkflowCompiler().compile(builtin_router_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_router_rag_v1_spec())
 
         assert graph is not None
 
     def test_compiler_requires_explicit_route_function_after_materialization(self):
         compiler = WorkflowCompiler()
-        materialized = compiler.materialize_spec(builtin_router_rag_v2_spec())
+        materialized = compiler.materialize_spec(builtin_router_rag_v1_spec())
         router_edge = next(
             edge
             for edge in materialized["config"]["graph"]["edges"]
@@ -1505,14 +1514,14 @@ class TestRouterRagWorkflowValidator:
             )
 
     def test_compiles_builtin_router_rag_hitl_web_spec(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
         graph = WorkflowCompiler().compile(spec)
 
         assert graph is not None
 
     def test_materializes_generic_hitl_gate_overlay_for_action_node(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -1543,7 +1552,7 @@ class TestRouterRagWorkflowValidator:
         assert gate_edge["routes"] == {"approve": "serial_dispatch", "continue_without": "direct_answer"}
 
     def test_materializes_multi_select_choice_gate_overlay(self):
-        spec = builtin_plan_execute_rag_v2_spec()
+        spec = builtin_plan_execute_rag_v1_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -1587,7 +1596,7 @@ class TestRouterRagWorkflowValidator:
         }
 
     def test_materializes_final_review_as_hitl_policy_overlay(self):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -1627,17 +1636,17 @@ class TestRouterRagWorkflowValidator:
         }
 
     def test_compiles_builtin_plan_execute_rag_spec(self):
-        graph = WorkflowCompiler().compile(builtin_plan_execute_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_plan_execute_rag_v1_spec())
 
         assert graph is not None
 
     def test_compiles_builtin_evaluator_replanner_rag_spec(self):
-        graph = WorkflowCompiler().compile(builtin_evaluator_replanner_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_evaluator_replanner_rag_v1_spec())
 
         assert graph is not None
 
     def test_rejects_plan_execute_graph_topology_changes(self):
-        spec = builtin_plan_execute_rag_v2_spec()
+        spec = builtin_plan_execute_rag_v1_spec()
         spec["config"]["graph"]["edges"].append({"from": "planner", "to": "synthesizer"})
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1646,7 +1655,7 @@ class TestRouterRagWorkflowValidator:
         assert "node planner type planner cannot connect to child synthesizer type synthesizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_graph_topology_changes(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         spec["config"]["graph"]["edges"].append({"from": "evidence_evaluator", "to": "finalizer"})
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1655,7 +1664,7 @@ class TestRouterRagWorkflowValidator:
         assert "node evidence_evaluator type evidence_evaluator cannot connect to child finalizer type finalizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_unbounded_replans(self):
-        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec = builtin_evaluator_replanner_rag_v1_spec()
         spec["config"]["replans"] = REPLANS_LIMIT + 1
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -1967,11 +1976,11 @@ class TestRouterRagGraphToolConsumers:
                 tool_name="search_documents",
             )
 
-    def test_v2_custom_graph_validates_and_compiles_with_instance_ids(self):
+    def test_v1_custom_graph_validates_and_compiles_with_instance_ids(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
-            "runtime": builtin_router_rag_v2_spec()["runtime"],
+            "runtime": builtin_router_rag_v1_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -2003,7 +2012,7 @@ class TestRouterRagGraphToolConsumers:
         assert WorkflowValidator().validate(spec)["valid"] is True
         assert WorkflowCompiler().compile(spec) is not None
 
-    def test_v2_custom_graph_rejects_parent_side_edge_incompatibility(self, monkeypatch):
+    def test_v1_custom_graph_rejects_parent_side_edge_incompatibility(self, monkeypatch):
         catalog = get_node_catalog()
         catalog["retrieval_worker"] = {
             **catalog["retrieval_worker"],
@@ -2011,9 +2020,9 @@ class TestRouterRagGraphToolConsumers:
         }
         monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
-            "runtime": builtin_router_rag_v2_spec()["runtime"],
+            "runtime": builtin_router_rag_v1_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence"],
                 "graph": {
@@ -2047,8 +2056,8 @@ class TestRouterRagGraphToolConsumers:
 
         assert "node retrieval_1 type retrieval_worker cannot accept parent planner_1 type planner" in str(exc.value)
 
-    def test_v2_custom_graph_rejects_start_edge_incompatibility(self):
-        spec = builtin_router_rag_v2_spec()
+    def test_v1_custom_graph_rejects_start_edge_incompatibility(self):
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["graph"]["edges"][0] = {"from": "START", "to": "retrieval_worker"}
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -2056,8 +2065,8 @@ class TestRouterRagGraphToolConsumers:
 
         assert "node retrieval_worker type retrieval_worker cannot accept parent START type START" in str(exc.value)
 
-    def test_v2_custom_graph_rejects_end_edge_incompatibility(self):
-        spec = builtin_plan_execute_rag_v2_spec()
+    def test_v1_custom_graph_rejects_end_edge_incompatibility(self):
+        spec = builtin_plan_execute_rag_v1_spec()
         spec["config"]["graph"]["edges"].append({"from": "planner", "to": "END"})
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -2065,8 +2074,8 @@ class TestRouterRagGraphToolConsumers:
 
         assert "node planner type planner cannot connect to child END type END" in str(exc.value)
 
-    def test_v2_custom_graph_rejects_direct_start_to_end_edge(self):
-        spec = builtin_router_rag_v2_spec()
+    def test_v1_custom_graph_rejects_direct_start_to_end_edge(self):
+        spec = builtin_router_rag_v1_spec()
         spec["config"]["graph"]["edges"].append({"from": "START", "to": "END"})
 
         with pytest.raises(WorkflowValidationError) as exc:
@@ -2074,55 +2083,55 @@ class TestRouterRagGraphToolConsumers:
 
         assert "START cannot connect directly to END" in str(exc.value)
 
-    def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
+    def test_v1_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
         catalog["router"].pop("context_policy")
         monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
 
         with pytest.raises(WorkflowValidationError, match="node catalog incompatible"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
+    def test_v1_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["route_labels"] = ["document", ""]
         monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
 
         with pytest.raises(WorkflowValidationError, match="route function registry incompatible"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
+    def test_v1_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["allowed_source_types"] = ["planner"]
         monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
 
         with pytest.raises(WorkflowValidationError, match="node catalog type router allows route_fn router_route"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_incompatible_tool_contract_registry(self, monkeypatch):
+    def test_v1_custom_graph_rejects_incompatible_tool_contract_registry(self, monkeypatch):
         contracts = tool_contracts_by_id()
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["artifact_keys"] = ["document_sources", ""]
         monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
 
         with pytest.raises(WorkflowValidationError, match="tool contract registry incompatible"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_catalog_tool_contract_mismatch(self, monkeypatch):
+    def test_v1_custom_graph_rejects_catalog_tool_contract_mismatch(self, monkeypatch):
         contracts = tool_contracts_by_id()
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["allowed_node_types"] = ["thread_conversation_history_worker"]
         contracts["document_evidence"][0]["required_node_capabilities"] = ["retrieval.memory"]
         monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
 
         with pytest.raises(
             WorkflowValidationError,
@@ -2130,11 +2139,11 @@ class TestRouterRagGraphToolConsumers:
         ):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_node_type_instance_limit_overflow(self):
+    def test_v1_custom_graph_rejects_node_type_instance_limit_overflow(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
-            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
+            "runtime": builtin_evaluator_replanner_rag_v1_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["thread_shape", "document_evidence", "clarify_intent"],
                 "graph": {
@@ -2165,11 +2174,11 @@ class TestRouterRagGraphToolConsumers:
 
         assert "graph has 2 nodes of type context_loader; maximum allowed is 1" in errors
 
-    def test_v2_custom_graph_rejects_node_contract_metadata_not_allowed_by_catalog(self):
+    def test_v1_custom_graph_rejects_node_contract_metadata_not_allowed_by_catalog(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
-            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
+            "runtime": builtin_evaluator_replanner_rag_v1_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -2230,7 +2239,7 @@ class TestRouterRagGraphToolConsumers:
             ({"routes": {"document": "missing_node"}}, "target is unknown: missing_node"),
         ],
     )
-    def test_v2_custom_graph_rejects_unsafe_conditional_edges(self, edge_update, match):
+    def test_v1_custom_graph_rejects_unsafe_conditional_edges(self, edge_update, match):
         edge = {
             "from": "router_1",
             "conditional": True,
@@ -2244,7 +2253,7 @@ class TestRouterRagGraphToolConsumers:
         if "routes" in edge_update:
             edge["routes"] = edge_update["routes"]
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
@@ -2269,9 +2278,9 @@ class TestRouterRagGraphToolConsumers:
         with pytest.raises(WorkflowValidationError, match=match):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_tool_ids_not_supported_by_graph_nodes(self):
+    def test_v1_custom_graph_rejects_tool_ids_not_supported_by_graph_nodes(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence"],
@@ -2301,9 +2310,9 @@ class TestRouterRagGraphToolConsumers:
         with pytest.raises(WorkflowValidationError, match="not supported by any node"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_rejects_unbounded_cycles(self):
+    def test_v1_custom_graph_rejects_unbounded_cycles(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
@@ -2344,11 +2353,11 @@ class TestRouterRagGraphToolConsumers:
         with pytest.raises(WorkflowValidationError, match="requires loop_policy"):
             WorkflowValidator().validate(spec)
 
-    def test_v2_custom_graph_accepts_bounded_cycles(self):
+    def test_v1_custom_graph_accepts_bounded_cycles(self):
         spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "custom_rag_agent",
-            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
+            "runtime": builtin_evaluator_replanner_rag_v1_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "loop_policy": {
@@ -3153,31 +3162,31 @@ class TestAgentWorkflowRepository:
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
-        assert router_version.schema_version == 2
-        assert router_version.spec_json["schema_version"] == 2
+        assert router_version.schema_version == 1
+        assert router_version.spec_json["schema_version"] == 1
         assert router_version.validation_result_json == {"valid": True, "errors": []}
         assert plan_workflow.metadata_json["version_id"] == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
-        assert plan_version.schema_version == 2
-        assert plan_version.spec_json["schema_version"] == 2
+        assert plan_version.schema_version == 1
+        assert plan_version.spec_json["schema_version"] == 1
         assert plan_version.validation_result_json == {"valid": True, "errors": []}
         assert evaluator_workflow.metadata_json["version_id"] == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
-        assert evaluator_version.schema_version == 2
-        assert evaluator_version.spec_json["schema_version"] == 2
+        assert evaluator_version.schema_version == 1
+        assert evaluator_version.spec_json["schema_version"] == 1
         assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
 
     @pytest.mark.asyncio
-    async def test_seed_builtin_current_v2_versions_validate_and_compile(self, repo):
+    async def test_seed_builtin_current_v1_versions_validate_and_compile(self, repo):
         await repo.seed_builtin_workflows()
 
         current_specs = [
-            (ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION, builtin_router_rag_v2_spec),
-            (PLAN_EXECUTE_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_V2_VERSION, builtin_plan_execute_rag_v2_spec),
+            (ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V1_VERSION, builtin_router_rag_v1_spec),
+            (PLAN_EXECUTE_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_V1_VERSION, builtin_plan_execute_rag_v1_spec),
             (
                 EVALUATOR_REPLANNER_RAG_AGENT_ID,
-                EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,
-                builtin_evaluator_replanner_rag_v2_spec,
+                EVALUATOR_REPLANNER_RAG_AGENT_V1_VERSION,
+                builtin_evaluator_replanner_rag_v1_spec,
             ),
         ]
         for workflow_id, version_number, spec_factory in current_specs:
@@ -3188,14 +3197,14 @@ class TestAgentWorkflowRepository:
 
             assert workflow.id == workflow_id
             assert current_version.version == version_number
-            assert current_version.schema_version == 2
+            assert current_version.schema_version == 1
             assert current_version.spec_json == spec_factory()
             assert current_version.validation_result_json == {"valid": True, "errors": []}
             WorkflowCompiler().compile(current_version.spec_json)
 
     @pytest.mark.asyncio
-    async def test_db_loaded_invalid_v2_spec_fails_validation(self, repo):
-        bad_spec = builtin_router_rag_v2_spec()
+    async def test_db_loaded_invalid_v1_spec_fails_validation(self, repo):
+        bad_spec = builtin_router_rag_v1_spec()
         bad_spec["config"]["graph"]["nodes"].append({"id": "unsafe_1", "type": "unsafe_type"})
         bad_spec["config"]["graph"]["edges"].append({"from": "router", "to": "unsafe_1"})
 
@@ -3207,7 +3216,7 @@ class TestAgentWorkflowRepository:
                     description="Invalid internal test agent.",
                     visibility="internal",
                     is_builtin=False,
-                    schema_version=2,
+                    schema_version=1,
                     spec_json=bad_spec,
                     validation_result_json={},
                     metadata_json={
@@ -3225,8 +3234,8 @@ class TestAgentWorkflowRepository:
             WorkflowValidator().validate(version.spec_json)
 
     @pytest.mark.asyncio
-    async def test_create_internal_custom_v2_workflow_version_validates_and_stores_current_version(self, repo):
-        spec = builtin_router_rag_v2_spec()
+    async def test_create_internal_custom_v1_workflow_version_validates_and_stores_current_version(self, repo):
+        spec = builtin_router_rag_v1_spec()
         spec["workflow_id"] = "internal_custom_rag_agent"
 
         workflow, version = await repo.save_internal_workflow_version(
@@ -3234,6 +3243,8 @@ class TestAgentWorkflowRepository:
             name="Internal Custom RAG Agent",
             description="Internal JSON-authored custom workflow.",
             spec_json=spec,
+            framework="langgraph",
+            builder_id="langgraph_graph",
             changelog="Initial internal custom workflow.",
         )
         public_workflow = await repo.get_workflow("internal_custom_rag_agent")
@@ -3246,7 +3257,7 @@ class TestAgentWorkflowRepository:
         assert workflow.visibility == "internal"
         assert workflow.is_builtin is False
         assert workflow.metadata_json["version_id"] == "internal_custom_rag_agent:v1"
-        assert version.schema_version == 2
+        assert version.schema_version == 1
         assert version.validation_result_json == {"valid": True, "errors": []}
         assert public_workflow is None
         assert loaded_workflow.id == workflow.id
@@ -3254,21 +3265,27 @@ class TestAgentWorkflowRepository:
         assert WorkflowCompiler().compile(loaded_version.spec_json) is not None
 
     @pytest.mark.asyncio
-    async def test_create_internal_custom_workflow_rejects_invalid_or_non_v2_specs(self, repo):
-        invalid_spec = builtin_router_rag_v2_spec()
+    async def test_create_internal_custom_workflow_rejects_invalid_or_non_v1_specs(self, repo):
+        invalid_spec = builtin_router_rag_v1_spec()
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
         with pytest.raises(WorkflowValidationError, match="must declare route_fn"):
             await repo.save_internal_workflow_version(
                 workflow_id="internal_invalid_agent",
                 name="Internal Invalid Agent",
                 spec_json=invalid_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
-        with pytest.raises(WorkflowValidationError, match="schema_version 2"):
+        unsupported_spec = builtin_router_rag_v1_spec()
+        unsupported_spec["schema_version"] = 2
+        with pytest.raises(WorkflowValidationError, match="schema_version 1"):
             await repo.save_internal_workflow_version(
-                workflow_id="internal_v1_agent",
-                name="Internal v1 Agent",
-                spec_json=legacy_builtin_router_rag_v1_spec(),
+                workflow_id="internal_v2_agent",
+                name="Internal v2 Agent",
+                spec_json=unsupported_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
         missing_workflow, missing_version = await repo.get_workflow_with_current_version(
@@ -3302,6 +3319,20 @@ class TestAgentWorkflowRepository:
         assert completed.workflow_version_id == version.id
 
     @pytest.mark.asyncio
+    async def test_create_run_rejects_runtime_identity_that_conflicts_with_workflow(self, repo, sample_thread):
+        await repo.seed_builtin_workflows()
+        workflow, _version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
+
+        with pytest.raises(ValueError, match="framework identity conflicts"):
+            await repo.create_run(
+                thread_id=sample_thread.id,
+                workflow_id=workflow.id,
+                framework="hermes",
+                builder_id="langgraph_graph",
+                resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID},
+            )
+
+    @pytest.mark.asyncio
     async def test_mark_run_awaiting_human_persists_bounded_pending_interrupt(self, repo, sample_thread):
         await repo.seed_builtin_workflows()
         workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -3310,7 +3341,7 @@ class TestAgentWorkflowRepository:
             workflow_id=workflow.id,
             workflow_version_id=version.id,
             workflow_version=version.version,
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=builtin_router_rag_v1_spec(),
         )
 
         paused = await repo.mark_run_awaiting_human(
@@ -3334,7 +3365,7 @@ class TestAgentWorkflowRepository:
         assert len(paused.pending_interrupt_json["prompt"]) <= 2003
         assert len(paused.pending_interrupt_json["input_summary"]["source_text"]) <= 2003
         resume_guard = paused.pending_interrupt_json["resume_guard"]
-        assert resume_guard["spec_schema_version"] == 2
+        assert resume_guard["spec_schema_version"] == 1
         assert resume_guard["workflow_id"] == ROUTER_RAG_AGENT_ID
         assert resume_guard["workflow_version_id"] == version.id
         assert resume_guard["workflow_version"] == version.version
@@ -3354,7 +3385,7 @@ class TestAgentWorkflowRepository:
             workflow_id=workflow.id,
             workflow_version_id=version.id,
             workflow_version=version.version,
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=builtin_router_rag_v1_spec(),
         )
         debug_payload = build_debug_payload(
             run=run,
@@ -3421,7 +3452,7 @@ class TestAgentWorkflowRepository:
     @pytest.mark.asyncio
     async def test_failed_runtime_approval_is_restored_for_retry(self, repo, sample_thread):
         await repo.seed_builtin_workflows()
-        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
+        workflow, version = await repo.get_workflow_with_current_version("hermes_rag_agent")
         run = await repo.create_run(
             thread_id=sample_thread.id,
             workflow_id=workflow.id,
@@ -3429,7 +3460,7 @@ class TestAgentWorkflowRepository:
             workflow_version=version.version,
             framework="hermes",
             builder_id="hermes_agent",
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=_builtin_spec("hermes_rag_agent"),
         )
         await repo.mark_run_awaiting_human(
             run.id,
@@ -3478,7 +3509,7 @@ class TestAgentWorkflowRepository:
             workflow_id=workflow.id,
             workflow_version_id=version.id,
             workflow_version=version.version,
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=builtin_router_rag_v1_spec(),
         )
         await repo.mark_run_awaiting_human(
             run.id,
@@ -3518,7 +3549,7 @@ class TestAgentWorkflowRepository:
             workflow_id=workflow.id,
             workflow_version_id=version.id,
             workflow_version=version.version,
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=builtin_router_rag_v1_spec(),
         )
         run_id = run.id
         await repo.mark_run_awaiting_human(
@@ -3568,7 +3599,7 @@ class TestAgentWorkflowRepository:
             workflow_id=workflow.id,
             workflow_version_id=version.id,
             workflow_version=version.version,
-            resolved_spec_json=builtin_router_rag_v2_spec(),
+            resolved_spec_json=builtin_router_rag_v1_spec(),
         )
         await repo.mark_run_awaiting_human(
             run.id,
@@ -4439,18 +4470,18 @@ class TestAgentRunService:
             running = await repo.create_run(
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
-                resolved_spec_json=builtin_router_rag_v2_spec(),
+                resolved_spec_json=builtin_router_rag_v1_spec(),
             )
             builder = await repo.create_run(
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
-                resolved_spec_json=builtin_router_rag_v2_spec(),
+                resolved_spec_json=builtin_router_rag_v1_spec(),
                 run_metadata_json={"run_kind": "builder_test"},
             )
             awaiting = await repo.create_run(
                 thread_id=sample_thread.id,
                 workflow_id=workflow.id,
-                resolved_spec_json=builtin_router_rag_v2_spec(),
+                resolved_spec_json=builtin_router_rag_v1_spec(),
             )
             await repo.complete_run(awaiting.id, status="awaiting_human")
 
@@ -4604,13 +4635,13 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
         assert run.metrics_json["tool_event_count"] == 1
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
-        assert run.debug_trace_json["version"] == 2
+        assert run.debug_trace_json["version"] == 1
         assert run.debug_trace_json["trace"]["run_id"] == run.id
         assert any(operation["operation_id"] == "router" for operation in run.debug_trace_json["operations"])
         assert "langgraph.graph" in run.debug_trace_json["visualizations"]
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_uses_current_v2_builtin(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_uses_current_v1_builtin(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -4670,9 +4701,9 @@ class TestAgentRunService:
             if edge.get("from") == "router" and edge.get("conditional")
         )
         assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert result["agent_workflow_version"] == ROUTER_RAG_AGENT_V2_VERSION
-        assert run.workflow_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
-        assert run.resolved_spec_json["schema_version"] == 2
+        assert result["agent_workflow_version"] == ROUTER_RAG_AGENT_V1_VERSION
+        assert run.workflow_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V1_VERSION}"
+        assert run.resolved_spec_json["schema_version"] == 1
         assert router_edge["route_fn"] == "router_route"
         assert captured_spec["config"]["loop_policy"]["max_total_visits"] >= len(captured_spec["config"]["graph"]["nodes"])
 
@@ -4689,12 +4720,14 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            custom_spec = builtin_router_rag_v2_spec()
+            custom_spec = builtin_router_rag_v1_spec()
             custom_spec["workflow_id"] = "internal_custom_rag_agent"
             await repo.save_internal_workflow_version(
                 workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
             async def fake_get_thread_settings(_thread_id):
@@ -4753,12 +4786,14 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            custom_spec = builtin_router_rag_v2_spec()
+            custom_spec = builtin_router_rag_v1_spec()
             custom_spec["workflow_id"] = "internal_custom_rag_agent"
             await repo.save_internal_workflow_version(
                 workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
             async def fake_get_thread_settings(_thread_id):
@@ -4800,7 +4835,7 @@ class TestAgentRunService:
         assert result["agent_workflow_id"] == "internal_custom_rag_agent"
         assert result["agent_workflow_version"] == 1
         assert run.workflow_version_id == "internal_custom_rag_agent:v1"
-        assert run.resolved_spec_json["schema_version"] == 2
+        assert run.resolved_spec_json["schema_version"] == 1
         assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
@@ -4908,7 +4943,7 @@ class TestAgentRunService:
         assert validation_errors[0].levelno == logging.ERROR
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_uses_current_custom_db_workflow_version(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_updates_custom_workflow_with_revision_one(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -4920,19 +4955,23 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            v1_spec = builtin_router_rag_v2_spec()
+            v1_spec = builtin_router_rag_v1_spec()
             v1_spec["workflow_id"] = "internal_custom_rag_agent_v1"
-            v2_spec = builtin_router_rag_v2_spec()
+            v2_spec = builtin_router_rag_v1_spec()
             v2_spec["workflow_id"] = "internal_custom_rag_agent_v2"
             await repo.save_internal_workflow_version(
                 workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=v1_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
             await repo.save_internal_workflow_version(
                 workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=v2_spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
             async def fake_get_thread_settings(_thread_id):
@@ -4978,8 +5017,8 @@ class TestAgentRunService:
             run = await repo.get_run(result["agent_run_id"])
 
         assert result["agent_workflow_id"] == "internal_custom_rag_agent"
-        assert result["agent_workflow_version"] == 2
-        assert run.workflow_version_id == "internal_custom_rag_agent:v2"
+        assert result["agent_workflow_version"] == 1
+        assert run.workflow_version_id == "internal_custom_rag_agent:v1"
         assert captured_spec["workflow_id"] == "internal_custom_rag_agent_v2"
 
     @pytest.mark.asyncio
@@ -4989,7 +5028,7 @@ class TestAgentRunService:
         monkeypatch,
     ):
         custom_spec = {
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow_id": "internal_e2e_custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence"],
@@ -6276,7 +6315,7 @@ class TestRouterRagRuntime:
                 custom_instructions_override="",
             ),
             "test-embedding",
-            resolved_spec=builtin_router_rag_v2_spec(),
+            resolved_spec=builtin_router_rag_v1_spec(),
             agent_run_context={
                 "agent_run_id": "run-cancel",
                 "agent_workflow_id": ROUTER_RAG_AGENT_ID,
@@ -6475,7 +6514,7 @@ class TestRouterRagRuntime:
             client_now_iso="2026-07-02T12:00:00.000Z",
         )
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         await create_agent_run_record(
             session_factory,
             run_id="run-1",
@@ -6783,7 +6822,7 @@ class TestRouterRagRuntime:
         )
 
         run_id = f"run-{route}"
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         await create_agent_run_record(
             session_factory,
             run_id=run_id,
@@ -7010,7 +7049,7 @@ class TestRouterRagRuntime:
             client_now_iso=None,
         )
 
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         await create_agent_run_record(
             session_factory,
             run_id="run-failed",
@@ -7089,7 +7128,7 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
         SimpleNamespace(
             builder_session_id="builder-session-unsaved",
             base_workflow_id=ROUTER_RAG_AGENT_ID,
-            spec=builtin_router_rag_v2_spec(),
+            spec=builtin_router_rag_v1_spec(),
             thread_id="thread-1",
             use_web_search=False,
             allow_external_tools=False,
@@ -7475,7 +7514,7 @@ async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
 
     async def fake_get_run(_self, run_id):
         assert run_id == "run-loop-details"
-        return SimpleNamespace(id=run_id, thread_id="thread-loop-details", debug_trace_json={"version": 2, "details": details})
+        return SimpleNamespace(id=run_id, thread_id="thread-loop-details", debug_trace_json={"version": 1, "details": details})
 
     async def fake_get_thread(thread_id):
         return SimpleNamespace(id=thread_id) if thread_id == "thread-loop-details" else None
@@ -7603,7 +7642,7 @@ class TestAgentWorkflowApi:
         assert response.status_code == 400
         assert response.json()["detail"] == "Agent workflow is not available for chat"
 
-    def test_chat_settings_report_fallback_for_stored_task_workflow(
+    def test_chat_settings_preserve_and_reject_stored_task_workflow(
         self, api_client, sample_thread, monkeypatch
     ):
         async def fake_get_thread_settings(_thread_id):
@@ -7614,22 +7653,23 @@ class TestAgentWorkflowApi:
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["agent_workflow"] == {"workflow_id": ROUTER_RAG_AGENT_ID}
+        assert payload["agent_workflow"] == {"workflow_id": DEEP_RESEARCH_AGENT_ID}
         assert payload["agent_workflow_validation"] == {
             "valid": False,
             "code": "workflow_not_available_for_chat",
             "requested_workflow_id": DEEP_RESEARCH_AGENT_ID,
-            "fallback_workflow_id": ROUTER_RAG_AGENT_ID,
         }
 
     def test_internal_custom_agent_workflow_is_globally_listed(self, api_client):
         async def seed_internal_workflow():
-            spec = builtin_router_rag_v2_spec()
+            spec = builtin_router_rag_v1_spec()
             spec["workflow_id"] = "internal_api_global_agent"
             await AgentWorkflowRepository().save_internal_workflow_version(
                 workflow_id="internal_api_global_agent",
                 name="Internal API Global Agent",
                 spec_json=spec,
+                framework="langgraph",
+                builder_id="langgraph_graph",
             )
 
         # The TestClient owns the application portal loop and the patched
@@ -7648,8 +7688,8 @@ class TestAgentWorkflowApi:
         assert detail.status_code == 200
         assert detail.json()["agent_workflow"]["id"] == "internal_api_global_agent"
 
-    def test_internal_agent_workflow_endpoint_creates_and_fetches_custom_v2_spec(self, api_client):
-        spec = builtin_router_rag_v2_spec()
+    def test_internal_agent_workflow_endpoint_creates_and_fetches_custom_v1_spec(self, api_client):
+        spec = builtin_router_rag_v1_spec()
         spec["workflow_id"] = "internal_api_agent"
 
         created = api_client.post(
@@ -7670,7 +7710,7 @@ class TestAgentWorkflowApi:
         assert created_payload["agent_workflow"]["id"] == "internal_api_agent"
         assert created_payload["agent_workflow"]["visibility"] == "internal"
         assert created_payload["version"]["id"] == "internal_api_agent:v1"
-        assert created_payload["version"]["schema_version"] == 2
+        assert created_payload["version"]["schema_version"] == 1
         assert created_payload["version"]["validation"]["valid"] is True
         assert created_payload["version"]["validation_result_json"] == {"valid": True, "errors": []}
         assert fetched.status_code == 200
@@ -7679,7 +7719,7 @@ class TestAgentWorkflowApi:
         assert public_detail.json()["current_version"]["id"] == "internal_api_agent:v1"
 
     def test_internal_agent_workflow_endpoint_generates_ids_and_updates_latest_spec(self, api_client):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["workflow_id"] = "client_side_placeholder"
 
         created = api_client.post(
@@ -7698,7 +7738,7 @@ class TestAgentWorkflowApi:
         assert created_payload["version"]["version"] == 1
         assert created_payload["version"]["spec_json"]["workflow_id"] == workflow_id
 
-        updated_spec = builtin_router_rag_v2_spec()
+        updated_spec = builtin_router_rag_v1_spec()
         updated_spec["workflow_id"] = "another_placeholder"
         updated_spec["config"]["context_policy"]["evidence_packet_limit"] = 4
         updated = api_client.post(
@@ -7721,7 +7761,7 @@ class TestAgentWorkflowApi:
         assert fetched.json()["current_version"]["spec_json"]["config"]["context_policy"]["evidence_packet_limit"] == 4
 
     def test_internal_agent_workflow_delete_hides_custom_workflow(self, api_client):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         spec["workflow_id"] = "internal_api_delete_agent"
 
         created = api_client.post(
@@ -7754,7 +7794,7 @@ class TestAgentWorkflowApi:
         assert "built-in agent workflows cannot be deleted" in deleted.json()["detail"]
 
     def test_internal_agent_workflow_endpoint_rejects_invalid_specs_without_storing(self, api_client):
-        invalid_spec = builtin_router_rag_v2_spec()
+        invalid_spec = builtin_router_rag_v1_spec()
         invalid_spec["workflow_id"] = "internal_api_invalid_agent"
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
 
@@ -7773,7 +7813,7 @@ class TestAgentWorkflowApi:
         assert fetched.status_code == 404
 
     def test_internal_agent_workflow_endpoint_rejects_builtin_ids(self, api_client):
-        spec = builtin_router_rag_v2_spec()
+        spec = builtin_router_rag_v1_spec()
         rejected = api_client.post(
             "/api/internal/agent-workflows",
             json={
@@ -7791,8 +7831,8 @@ class TestAgentWorkflowApi:
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["schema_version"] == 2
-        assert payload["spec_schema_version"] == 2
+        assert payload["schema_version"] == 1
+        assert payload["spec_schema_version"] == 1
         assert payload["graph_spec"]["requires_explicit_route_fn"] is True
         assert payload["graph_spec"]["reserved_node_ids"] == ["START", "END"]
 
@@ -7842,7 +7882,7 @@ class TestAgentWorkflowApi:
             json={
                 "builder_session_id": "builder-session-confirmation",
                 "base_workflow_id": ROUTER_RAG_AGENT_ID,
-                "spec": builtin_router_rag_v2_spec(),
+                "spec": builtin_router_rag_v1_spec(),
                 "thread_id": sample_thread.id,
                 "question": "What changed today?",
                 "llm_model": "test-model",
@@ -7876,7 +7916,7 @@ class TestAgentWorkflowApi:
             json={
                 "builder_session_id": "builder-session-web-approved",
                 "base_workflow_id": ROUTER_RAG_AGENT_ID,
-                "spec": builtin_router_rag_v2_spec(),
+                "spec": builtin_router_rag_v1_spec(),
                 "thread_id": sample_thread.id,
                 "question": "What changed today?",
                 "llm_model": "test-model",
@@ -7913,11 +7953,11 @@ class TestAgentWorkflowApi:
     def test_validate_agent_workflow_endpoint(self, api_client):
         valid = api_client.post(
             "/api/agent-workflows/validate",
-            json={"spec": builtin_router_rag_v2_spec()},
+            json={"spec": builtin_router_rag_v1_spec()},
         )
-        invalid_spec = builtin_router_rag_v2_spec()
+        invalid_spec = builtin_router_rag_v1_spec()
         invalid_spec["config"]["allowed_tool_ids"] = ["mystery_tool"]
-        stale_spec = legacy_builtin_router_rag_v1_spec()
+        stale_spec = unsupported_builtin_router_rag_v2_spec()
         stale_spec["workflow_id"] = "simple_rag_agent"
         invalid = api_client.post(
             "/api/agent-workflows/validate",
@@ -7982,7 +8022,7 @@ class TestAgentWorkflowApi:
         assert payload["validation"]["valid"] is False
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
-    def test_validate_thread_task_workflow_returns_chat_fallback(
+    def test_validate_thread_task_workflow_fails_without_replacement(
         self, api_client, sample_thread, monkeypatch
     ):
         async def fake_get_thread_settings(_thread_id):
@@ -7999,7 +8039,7 @@ class TestAgentWorkflowApi:
         assert payload["valid"] is False
         assert payload["workflow_id"] == DEEP_RESEARCH_AGENT_ID
         assert payload["validation"]["errors"] == ["long_running_workflow_requires_agent_task"]
-        assert payload["fallback_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert "fallback_workflow_id" not in payload
         assert "malicious" not in payload["resolved_spec_json"]["config"]
 
     @pytest.mark.asyncio
@@ -8328,13 +8368,15 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) >= {"version", "trace", "summary", "operations", "events", "parallel_groups", "visualizations", "detail_manifest", "detail_safety"}
+        assert set(payload["debug"]) >= {"version", "trace", "summary", "operations", "events", "parallel_groups", "visualizations", "details", "detail_manifest", "detail_safety"}
+        assert len(payload["debug"]["details"]) == 1
+        assert payload["debug"]["details"][0]["operation_id"] == "router"
         assert len(payload["debug"]["detail_manifest"]) == 1
         assert payload["debug"]["detail_manifest"][0]["operation_id"] == "router"
         assert payload["debug"]["detail_manifest"][0]["visit_index"] == 1
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]
-        assert payload["debug"]["version"] == 2
+        assert payload["debug"]["version"] == 1
         assert payload["debug"]["summary"]["route"] == "web"
         assert "graph" not in payload["debug"]
         assert payload["debug"]["visualizations"]["langgraph.graph"]["nodes"]

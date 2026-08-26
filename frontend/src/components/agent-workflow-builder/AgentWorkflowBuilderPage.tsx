@@ -96,6 +96,15 @@ const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
 
+const loadCatalogForWorkflow = (workflow: AgentWorkflow) => {
+  const framework = workflow.framework?.trim();
+  const builderId = workflow.builder_id?.trim();
+  if (!framework || !builderId) {
+    throw new Error(`Workflow ${workflow.id} does not declare a runtime builder identity.`);
+  }
+  return getInternalAgentWorkflowCatalog(framework, builderId);
+};
+
 const builderStateFromWorkflowSpec = (
   catalog: AgentWorkflowCatalogResponse,
   spec: Record<string, any>,
@@ -241,14 +250,17 @@ export default function AgentWorkflowBuilderPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([getInternalAgentWorkflowCatalog(), listAgentWorkflows()])
-      .then(async ([nextCatalog, workflowList]) => {
+    listAgentWorkflows()
+      .then(async (workflowList) => {
         if (cancelled) return;
         const workflowOptions = workflowList.agent_workflows || [];
         const defaultWorkflow = workflowOptions.find((workflow) => workflow.is_builtin && workflow.is_default)
           || workflowOptions.find((workflow) => workflow.is_builtin);
         if (!defaultWorkflow) throw new Error('The backend did not return a built-in workflow starter.');
-        const source = await getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(defaultWorkflow));
+        const [nextCatalog, source] = await Promise.all([
+          loadCatalogForWorkflow(defaultWorkflow),
+          getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(defaultWorkflow)),
+        ]);
         if (cancelled) return;
         setCatalog(nextCatalog);
         setWorkflows(workflowOptions);
@@ -335,14 +347,17 @@ export default function AgentWorkflowBuilderPage() {
   }, [isDirty]);
 
   const resetToStarter = useCallback(async (workflowId?: string) => {
-    if (!catalog) return;
     const workflow = workflows.find((option) => option.id === workflowId)
       || workflows.find((option) => option.is_builtin && option.is_default)
       || workflows.find((option) => option.is_builtin);
     if (!workflow?.is_builtin) return;
     try {
-      const source = await getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(workflow));
-      setBuilderState(builderStateFromWorkflowSpec(catalog, source.spec_json));
+      const [nextCatalog, source] = await Promise.all([
+        loadCatalogForWorkflow(workflow),
+        getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(workflow)),
+      ]);
+      setCatalog(nextCatalog);
+      setBuilderState(builderStateFromWorkflowSpec(nextCatalog, source.spec_json));
       setStarter(workflow.id);
       setSelection(null);
       setValidation(null);
@@ -361,14 +376,15 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [catalog, workflows]);
+  }, [workflows]);
 
   const loadCustomWorkflow = useCallback(async (workflowId: string) => {
-    if (!catalog) return;
     try {
       setError(null);
       const response = await getInternalAgentWorkflow(workflowId);
-      const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(response.spec.spec_json));
+      const nextCatalog = await loadCatalogForWorkflow(response.agent_workflow);
+      const loadedState = normalizeBuilderState(nextCatalog, loadBuilderStateFromSpec(response.spec.spec_json));
+      setCatalog(nextCatalog);
       setBuilderState({
         ...loadedState,
         allowed_tool_ids: collectNodeToolIds(loadedState.nodes),
@@ -391,7 +407,7 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [catalog]);
+  }, []);
 
   const handleStarterChange = (workflowId: string) => {
     const workflow = workflows.find((option) => option.id === workflowId);

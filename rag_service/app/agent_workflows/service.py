@@ -278,8 +278,7 @@ class AgentRunService:
             }
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-        default_workflow_key = default_agent_workflow_key()
-        workflow_id = agent_settings.get("workflow_id") or default_workflow_key
+        workflow_id = agent_settings.get("workflow_id") or default_agent_workflow_key()
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -300,15 +299,12 @@ class AgentRunService:
             )
             raise RuntimeError(f"Selected agent workflow is unavailable: {workflow_id}")
         if not workflow_is_chat_eligible(workflow.spec_json):
-            logger.warning(
-                "Ignoring a task-only workflow stored in chat settings | thread_id=%s workflow=%s fallback=%s",
+            logger.error(
+                "Selected agent workflow is not chat eligible; aborting run | thread_id=%s workflow=%s",
                 thread_id,
                 workflow.id,
-                default_workflow_key,
             )
-            workflow = await self.repository.get_workflow(default_workflow_key, include_custom=False)
-            if workflow is None:
-                raise RuntimeError(f"Default agent workflow is unavailable: {default_workflow_key}")
+            raise RuntimeError(f"Selected agent workflow is not chat eligible: {workflow.id}")
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
@@ -632,9 +628,11 @@ class AgentRunService:
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = {
-                "code": "agent_run_failed",
+                "code": str(getattr(exc, "code", "agent_run_failed")),
                 "raw_message": str(exc),
-                "retryable": True,
+                "retryable": bool(getattr(exc, "retryable", True)),
+                **({"field_path": str(exc.field_path)} if getattr(exc, "field_path", None) else {}),
+                **({"correlation_id": str(exc.correlation_id)} if getattr(exc, "correlation_id", None) else {}),
             }
             metrics = build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms)
             completed_run = await self.repository.complete_run(
@@ -682,6 +680,11 @@ class AgentRunService:
             and str(getattr(current_run, "thread_id", "")) != str(expected_thread_id)
         ):
             return None
+        if (getattr(current_run, "run_metadata_json", None) or {}).get("trace_invalidated_reason"):
+            raise AgentRunInterruptError(
+                "workflow_contract_invalidated",
+                "This run uses an invalidated workflow contract and cannot resume.",
+            )
         pending_interrupt = getattr(current_run, "pending_interrupt_json", None)
         pending_operation = pending_interrupt_response_operation(current_run)
         if (

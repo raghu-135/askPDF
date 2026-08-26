@@ -259,6 +259,11 @@ def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTrac
     for event in ordered:
         payload = dict(event.payload)
         group_id = _parallel_group_id(payload)
+        dispatch_mode = str(payload.get("dispatch_mode") or payload.get("mode") or "parallel").strip().lower()
+        if dispatch_mode not in {"serial", "parallel"}:
+            raise TraceProjectionError(f"parallel event {event.event_id} has invalid dispatch mode")
+        if dispatch_mode == "serial":
+            continue
         is_lifecycle = event.kind.startswith(_PARALLEL_EVENT_PREFIXES)
         is_correlated_operation = event.kind.startswith("operation.") and group_id is not None
         if not is_lifecycle and not is_correlated_operation:

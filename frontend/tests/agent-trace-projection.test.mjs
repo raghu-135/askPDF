@@ -242,10 +242,14 @@ const canonicalDebug = (source) => {
     ...row,
   }));
   const graph = debug.graph;
-  debug.version = 2;
+  debug.version = 1;
   debug.events = [];
   debug.operations = operations;
   debug.tools = structuredClone(debug.summary?.tools || []);
+  debug.approvals = debug.approvals || [];
+  debug.subagents = debug.subagents || [];
+  debug.artifacts = debug.artifacts || [];
+  debug.details = debug.details || [];
   debug.parallel_groups = [];
   debug.diagnostics = debug.diagnostics || {
     outcome: 'completed',
@@ -489,7 +493,7 @@ test('trace export returns full backend debug json', () => {
   const view = buildRunTraceView(traceBackedRun);
   const exported = JSON.parse(buildTraceExportJson(view));
 
-  assert.equal(exported.version, 2);
+  assert.equal(exported.version, 1);
   assert.equal(exported.trace.trace_id, 'run-1');
   assert.equal(exported.summary.route, 'execute');
   assert.equal(exported.visualizations['langgraph.graph'].selected_route, 'execute');

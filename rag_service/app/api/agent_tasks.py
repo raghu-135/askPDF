@@ -11,6 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.agent.tool_registry import TOOL_LIVE_WEB_RECON
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.service import AgentRunService
 from app.db import get_thread
 from app.models.deep_research import (
@@ -168,14 +169,13 @@ def _artifact_payload(artifact: Any) -> dict[str, Any]:
 
 def _run_payload(run: Any) -> dict[str, Any]:
     retained_debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
-    if retained_debug and retained_debug.get("version") != 2:
-        debug = {"version": retained_debug.get("version"), "unsupported": True}
-    else:
-        debug = (
-            {key: value for key, value in retained_debug.items() if key != "details"}
-            if retained_debug
-            else None
+    if retained_debug is not None and not is_current_debug_payload(retained_debug):
+        logger.error(
+            "Invalid retained debug trace contract | correlation_id=trace:%s version=%r",
+            run.id,
+            retained_debug.get("version"),
         )
+    debug = dict(retained_debug) if retained_debug else None
     return {
         "id": run.id,
         "task_id": run.task_id,
@@ -333,6 +333,11 @@ async def command_agent_task(
     if action not in {"start", "pause", "resume", "cancel", "retry"}:
         raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
     task = await _owned_task(task_id, thread_id)
+    if bool((task.config_json or {}).get("workflow_contract_invalidated")):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "workflow_contract_invalidated", "retryable": False},
+        )
     await _require_task_capability(task, action)
     try:
         task, command, duplicate = await repository.apply_command(

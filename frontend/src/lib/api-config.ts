@@ -9,3 +9,12 @@ export function resolveApiBase(
 }
 
 export const API_BASE = resolveApiBase();
+
+export function buildAgentWorkflowCatalogUrl(
+  apiBase: string,
+  framework: string,
+  builderId: string,
+): string {
+  const params = new URLSearchParams({ framework, builder_id: builderId });
+  return `${apiBase}/api/internal/agent-workflows/catalog?${params.toString()}`;
+}

@@ -128,8 +128,8 @@
       "prompt_preview": "planner",
       "success_context": "Context retrieved by the Orchestrator-Worker Agent workflow."
     },
-    "schema_version": 2,
-    "version": 2
+    "schema_version": 1,
+    "version": 1
   },
   "visibility": "builtin"
 }

@@ -107,12 +107,10 @@ async def _normalize_chat_workflow_setting(settings: dict) -> tuple[dict, Option
     workflow_id = str(workflow_id or default_agent_workflow_key())
     if await _resolve_chat_workflow(workflow_id):
         return settings, None
-    normalized = {**settings, "agent_workflow": {"workflow_id": default_agent_workflow_key()}}
-    return normalized, {
+    return settings, {
         "valid": False,
         "code": "workflow_not_available_for_chat",
         "requested_workflow_id": workflow_id,
-        "fallback_workflow_id": default_agent_workflow_key(),
     }
 
 
@@ -246,8 +244,10 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             workflow_id,
             include_custom=workflow_id not in supported_builtin_workflow_keys,
         )
-        if workflow is None or not workflow_is_chat_eligible(workflow.spec_json):
-            workflow = await repo.get_workflow(default_agent_workflow_key())
+        if workflow is None:
+            raise HTTPException(status_code=404, detail={"code": "agent_workflow_not_found"})
+        if not workflow_is_chat_eligible(workflow.spec_json):
+            raise HTTPException(status_code=422, detail={"code": "agent_workflow_not_chat_eligible"})
         spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
         runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
         prompt = build_agent_workflow_prompt_preview(

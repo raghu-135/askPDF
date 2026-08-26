@@ -156,8 +156,8 @@
       "prompt_preview": "planner",
       "success_context": "Context retrieved by the Plan-and-Execute Agent workflow."
     },
-    "schema_version": 2,
-    "version": 5
+    "schema_version": 1,
+    "version": 1
   },
   "visibility": "builtin"
 }

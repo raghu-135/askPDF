@@ -34,8 +34,8 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         if payload.get("builtin_key") != builtin_key:
             raise ValueError(f"Builtin workflow file {path} has mismatched builtin_key")
         spec_json = payload.get("spec_json")
-        if not isinstance(spec_json, dict) or spec_json.get("schema_version") != 2:
-            raise ValueError(f"Builtin workflow file {path} must contain schema_version 2 spec_json")
+        if not isinstance(spec_json, dict) or spec_json.get("schema_version") != 1:
+            raise ValueError(f"Builtin workflow file {path} must contain schema_version 1 spec_json")
         runtime = spec_json.get("runtime")
         framework = str(payload.get("framework") or "").strip()
         if not framework:

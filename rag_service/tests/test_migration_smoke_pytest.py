@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import subprocess
 import asyncio
+import importlib.util
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -50,20 +52,21 @@ def _reset_test_schema(test_database_url: str) -> None:
     asyncio.run(reset())
 
 
-def test_historical_migrations_upgrade_and_latest_downgrade(test_database_url: str):
-    """Upgrade an empty database through history and smoke-test the head downgrade."""
+def test_historical_migrations_upgrade_to_irreversible_contract_reset(test_database_url: str):
+    """Upgrade through both historical branches into the contract reset head."""
 
     # Other database fixtures create/drop SQLModel metadata but do not own
     # Alembic-managed functions or its version table. Use a guarded test-only
     # schema reset before treating the shared database as an empty target.
     _reset_test_schema(test_database_url)
-    _alembic(test_database_url, "upgrade", "k5e2a8c4d7f1")
+    _alembic(test_database_url, "upgrade", "head")
     current = _alembic(test_database_url, "current")
-    assert "k5e2a8c4d7f1" in current.stdout
+    assert "5c1e8a7d9b3f" in current.stdout
 
-    try:
-        _alembic(test_database_url, "downgrade", "-1")
-        downgraded = _alembic(test_database_url, "current")
-        assert "j4d9e6f1b3c5" in downgraded.stdout
-    finally:
-        _alembic(test_database_url, "upgrade", "k5e2a8c4d7f1")
+    migration_path = SERVICE_ROOT / "alembic" / "versions" / "5c1e8a7d9b3f_reset_trace_workflow_contract_v1.py"
+    spec = importlib.util.spec_from_file_location("contract_reset_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with pytest.raises(RuntimeError, match="intentionally irreversible"):
+        migration.downgrade()

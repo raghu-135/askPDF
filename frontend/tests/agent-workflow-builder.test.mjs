@@ -29,7 +29,7 @@ import {
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
 
-test('uses the backend canonical key to load a legacy built-in workflow row', () => {
+test('uses the backend canonical key to load a canonical built-in workflow row', () => {
   assert.equal(getAgentWorkflowSourceKey({
     id: 'legacy-database-uuid',
     builtin_key: 'router_rag_agent',
@@ -105,9 +105,9 @@ const node = (overrides) => ({
 
 const catalog = {
   schema_version: 1,
-  spec_schema_version: 2,
+  spec_schema_version: 1,
   graph_spec: {
-    required_schema_version: 2,
+    required_schema_version: 1,
     requires_explicit_route_fn: true,
     reserved_node_ids: ['START', 'END'],
     start_node: 'START',
@@ -428,7 +428,7 @@ test('creates a router starter spec with canonical node ids and route function m
     'answer_reviser',
     'finalizer',
   ]);
-  assert.equal(spec.schema_version, 2);
+  assert.equal(spec.schema_version, 1);
   assert.equal(spec.workflow_id, 'router_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
   assert.deepEqual(spec.config.allowed_tool_ids, ['thread_shape', 'document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);

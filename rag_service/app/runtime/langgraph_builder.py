@@ -70,7 +70,7 @@ class LangGraphBuilderProvider:
         return BuilderCapabilities(
             framework=self.framework,
             builder_id=self.builder_id,
-            schema_versions=(2,),
+            schema_versions=(1,),
             authoring=True,
             transient_tests=True,
             runtime_capabilities=dict(definition.capabilities or {}),
@@ -196,10 +196,10 @@ class LangGraphBuilderProvider:
         ))
         node_catalog = get_node_catalog()
         payload = {
-            "schema_version": 2,
-            "spec_schema_version": 2,
+            "schema_version": 1,
+            "spec_schema_version": 1,
             "graph_spec": {
-                "required_schema_version": 2,
+                "required_schema_version": 1,
                 "requires_explicit_route_fn": True,
                 "reserved_node_ids": ["START", "END"],
                 "start_node": "START",

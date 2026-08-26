@@ -56,8 +56,8 @@ class GenericGraphValidator:
         errors: list[str] = []
         if not isinstance(spec, dict):
             return ["spec must be an object"]
-        if spec.get("schema_version") != 2:
-            errors.append("schema_version must be 2")
+        if spec.get("schema_version") != 1:
+            errors.append("schema_version must be 1")
 
         workflow_id = spec.get("workflow_id")
         if not isinstance(workflow_id, str) or not workflow_id:

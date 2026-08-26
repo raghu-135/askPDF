@@ -13,7 +13,7 @@ from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT,
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
 from app.runtime.contracts import AgentRuntimeEvent
-from app.runtime.events import create_runtime_event, validate_runtime_event
+from app.runtime.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
 from app.runtime.observability import normalize_runtime_event
 
 
@@ -260,18 +260,24 @@ class AgentExecutionEventSink:
             if product_terminal
             else f"{self._run_id or 'run'}:{self._sequence}"
         )
-        canonical = create_runtime_event(
-            event_id=event_id or generated_event_id,
-            run_id=self._run_id or str(normalized_payload.get("run_id") or normalized_payload.get("agent_run_id") or "unbound"),
-            sequence=self._sequence,
-            attempt=int(normalized_payload.get("attempt") or 1),
-            kind=normalized_kind,
-            payload=normalized_payload,
-            occurred_at=normalized_payload.get("occurred_at") or normalized_payload.get("timestamp"),
-            trace_id=normalized_payload.get("trace_id"),
-            source_metadata=source_metadata,
-        )
-        validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
+        try:
+            canonical = create_runtime_event(
+                event_id=event_id or generated_event_id,
+                run_id=self._run_id or str(normalized_payload.get("run_id") or normalized_payload.get("agent_run_id") or "unbound"),
+                sequence=self._sequence,
+                attempt=int(normalized_payload.get("attempt") or 1),
+                kind=normalized_kind,
+                payload=normalized_payload,
+                occurred_at=normalized_payload.get("occurred_at") or normalized_payload.get("timestamp"),
+                trace_id=normalized_payload.get("trace_id"),
+                source_metadata=source_metadata,
+            )
+            validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeEventContractViolation(
+                str(exc),
+                correlation_id=f"trace:{self._run_id or 'unbound'}",
+            ) from exc
         if terminal_committer is not None:
             # The terminal debug payload is built by the committer, so the
             # canonical terminal event must already be part of the recorder.

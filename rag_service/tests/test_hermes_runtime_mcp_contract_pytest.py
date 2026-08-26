@@ -18,7 +18,7 @@ def _payload(allowed_tools):
     return {
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
         "spec": {
-            "schema_version": 2,
+            "schema_version": 1,
             "config": {
                 "mcp_server": "askpdf",
                 "allowed_tool_ids": allowed_tools,

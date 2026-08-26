@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import AgentRun, AgentRunEvent, ChatTurn
+from app.db.models_sqlmodel import AgentRun, AgentRunEvent, AgentWorkflow, ChatTurn
 from app.time_utils import parse_datetime_utc, utc_now
 
 
@@ -54,8 +54,8 @@ async def create_run(
     workflow_id: str,
     workflow_version_id: Optional[str] = None,
     workflow_version: Optional[int] = None,
-    framework: str,
-    builder_id: str,
+    framework: Optional[str],
+    builder_id: Optional[str],
     definition_category: Optional[str] = None,
     resolved_spec_json: Dict[str, Any],
     user_id: Optional[str] = None,
@@ -64,42 +64,54 @@ async def create_run(
     running_status: str = "running",
     run_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> AgentRun:
-    run_metadata: Dict[str, Any] = dict(run_metadata_json or {})
-    if workflow_version_id is not None:
-        run_metadata["workflow_version_id"] = workflow_version_id
-    if workflow_version is not None:
-        run_metadata["workflow_version"] = workflow_version
-    run_id = str(uuid.uuid4())
-    is_langgraph = framework == "langgraph"
-    effective_checkpoint_thread_id = (checkpoint_thread_id or run_id) if is_langgraph else checkpoint_thread_id
-    default_runtime_binding = (
-        {
-            "binding_type": "langgraph_checkpoint",
-            "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
-        }
-        if is_langgraph
-        else {
-            "binding_type": f"{framework}_session",
-            "payload": {},
-        }
-    )
-    run = AgentRun(
-        id=run_id,
-        thread_id=thread_id,
-        user_id=user_id,
-        workflow_id=workflow_id,
-        framework=framework,
-        builder_id=builder_id,
-        definition_category=definition_category,
-        run_metadata_json=run_metadata,
-        resolved_spec_json=resolved_spec_json,
-        status=running_status,
-        checkpoint_thread_id=effective_checkpoint_thread_id,
-        runtime_binding_json=dict(runtime_binding_json or default_runtime_binding),
-        runtime_binding_status="active",
-        started_at=utc_now(),
-    )
     async with session.begin():
+        workflow = await session.get(AgentWorkflow, workflow_id)
+        if workflow is None:
+            raise ValueError(f"Agent workflow is unavailable: {workflow_id}")
+        persisted_framework = str(getattr(workflow, "framework", "") or "").strip()
+        persisted_builder_id = str(getattr(workflow, "builder_id", "") or "").strip()
+        if not persisted_framework or not persisted_builder_id:
+            raise ValueError("Agent workflow runtime identity is required")
+        if framework is not None and str(framework) != persisted_framework:
+            raise ValueError("Run framework identity conflicts with the persisted workflow")
+        if builder_id is not None and str(builder_id) != persisted_builder_id:
+            raise ValueError("Run builder identity conflicts with the persisted workflow")
+
+        run_metadata: Dict[str, Any] = dict(run_metadata_json or {})
+        if workflow_version_id is not None:
+            run_metadata["workflow_version_id"] = workflow_version_id
+        if workflow_version is not None:
+            run_metadata["workflow_version"] = workflow_version
+        run_id = str(uuid.uuid4())
+        is_langgraph = persisted_framework == "langgraph"
+        effective_checkpoint_thread_id = (checkpoint_thread_id or run_id) if is_langgraph else checkpoint_thread_id
+        default_runtime_binding = (
+            {
+                "binding_type": "langgraph_checkpoint",
+                "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
+            }
+            if is_langgraph
+            else {
+                "binding_type": f"{persisted_framework}_session",
+                "payload": {},
+            }
+        )
+        run = AgentRun(
+            id=run_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            workflow_id=workflow_id,
+            framework=persisted_framework,
+            builder_id=persisted_builder_id,
+            definition_category=definition_category,
+            run_metadata_json=run_metadata,
+            resolved_spec_json=resolved_spec_json,
+            status=running_status,
+            checkpoint_thread_id=effective_checkpoint_thread_id,
+            runtime_binding_json=dict(runtime_binding_json or default_runtime_binding),
+            runtime_binding_status="active",
+            started_at=utc_now(),
+        )
         session.add(run)
         await session.flush()
         await session.refresh(run)

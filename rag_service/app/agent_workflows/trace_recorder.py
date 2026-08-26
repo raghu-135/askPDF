@@ -61,7 +61,7 @@ from app.agent.reasoning import normalize_ai_response
 from app.time_utils import iso_utc_z
 
 
-TRACE_SCHEMA_VERSION = 2
+TRACE_SCHEMA_VERSION = 1
 
 
 class AgentTraceRecorder:

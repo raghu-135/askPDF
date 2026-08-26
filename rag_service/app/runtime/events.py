@@ -13,6 +13,16 @@ from app.runtime.contracts import (
 )
 
 
+class RuntimeEventContractViolation(ValueError):
+    code = "debug_trace_contract_violation"
+    retryable = False
+
+    def __init__(self, message: str, *, field_path: str = "runtime_event", correlation_id: str | None = None) -> None:
+        super().__init__(message)
+        self.field_path = field_path
+        self.correlation_id = correlation_id
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -149,6 +159,34 @@ def validate_runtime_event(event: AgentRuntimeEvent, *, previous: AgentRuntimeEv
         raise ValueError(f"unsupported runtime event kind: {event.kind}")
     if event.terminal != (event.kind in TERMINAL_RUNTIME_EVENT_KINDS):
         raise ValueError(f"terminal flag does not match event kind {event.kind}")
+    payload = dict(event.payload or {})
+    if payload.get("parent_operation_id") and payload.get("parent_operation_id") == payload.get("operation_id"):
+        raise ValueError("runtime event operation cannot parent itself")
+    caused_by = payload.get("caused_by_event_id")
+    if caused_by is not None and (not isinstance(caused_by, str) or not caused_by.strip()):
+        raise ValueError("runtime event caused_by_event_id must be a non-empty string")
+    related = payload.get("related_event_ids")
+    if related is not None and (
+        not isinstance(related, list)
+        or any(not isinstance(value, str) or not value.strip() for value in related)
+    ):
+        raise ValueError("runtime event related_event_ids must be an array of non-empty strings")
+    if event.kind.startswith(("dispatch.", "worker.", "aggregation.")):
+        group_id = payload.get("parallel_group_id", payload.get("dispatch_id", payload.get("wave_id")))
+        if group_id is None or not str(group_id).strip():
+            raise ValueError("parallel runtime event requires a group identity")
+        mode = str(payload.get("dispatch_mode") or payload.get("mode") or "parallel").strip().lower()
+        if mode not in {"serial", "parallel"}:
+            raise ValueError("parallel runtime event dispatch_mode must be serial or parallel")
+        if event.kind.startswith("worker."):
+            member_id = payload.get("work_id") or payload.get("operation_id")
+            if member_id is None or not str(member_id).strip():
+                raise ValueError("worker runtime event requires a member identity")
+            try:
+                if int(payload.get("attempt") or event.attempt) < 1:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ValueError("worker runtime event attempt must be positive") from exc
     if previous is not None:
         if event.sequence <= previous.sequence:
             raise ValueError("runtime event sequence must be monotonic")

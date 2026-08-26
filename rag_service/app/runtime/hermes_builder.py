@@ -35,8 +35,8 @@ class HermesBuilderProvider:
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
-        if spec.get("schema_version") != 2:
-            issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 2", "schema_version"))
+        if spec.get("schema_version") != 1:
+            issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 1", "schema_version"))
         runtime = spec.get("runtime")
         if not isinstance(runtime, Mapping) or runtime.get("kind") != "hermes_agent":
             issues.append(RuntimeValidationIssue("invalid_runtime_kind", "Hermes definitions must use runtime.kind=hermes_agent", "runtime.kind"))
@@ -69,7 +69,7 @@ class HermesBuilderProvider:
         return BuilderCapabilities(
             framework=self.framework,
             builder_id=self.builder_id,
-            schema_versions=(2,),
+            schema_versions=(1,),
             authoring=False,
             transient_tests=False,
             runtime_capabilities=dict(definition.capabilities or {}),
@@ -156,7 +156,7 @@ class HermesBuilderProvider:
             framework=self.framework,
             builder_id=self.builder_id,
             capabilities=capabilities,
-            payload={"schema_version": 2, "definition_ids": ["hermes_rag_agent"], "graph": {"supported": False}},
+            payload={"schema_version": 1, "definition_ids": ["hermes_rag_agent"], "graph": {"supported": False}},
         )
 
     async def source(self, definition_id: str) -> Mapping[str, Any]:

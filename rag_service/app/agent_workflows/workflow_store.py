@@ -96,8 +96,8 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                 "framework": framework,
                 "builder_id": builder_id,
                 "category": workflow_def.get("category"),
-                "version": spec_json.get("version") or 2,
-                "version_id": f"{builtin_key}:v{spec_json.get('version') or 2}",
+                "version": 1,
+                "version_id": f"{builtin_key}:v1",
             }
 
             workflow = await get_workflow_by_builtin_key(session, builtin_key)
@@ -225,7 +225,6 @@ async def save_custom_workflow(
     builder_id: Optional[str] = None,
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
-    increment_version: bool = True,
 ) -> AgentWorkflow:
     """Create or update a mutable internal/custom workflow spec."""
     if workflow_id in builtin_workflow_keys():
@@ -234,8 +233,8 @@ async def save_custom_workflow(
         raise ValueError("name must be a non-empty string")
     if not isinstance(spec_json, dict):
         raise WorkflowValidationError("spec must be an object")
-    if spec_json.get("schema_version") != 2:
-        raise WorkflowValidationError("internal custom agent workflow specs must use schema_version 2")
+    if spec_json.get("schema_version") != 1:
+        raise WorkflowValidationError("internal custom agent workflow specs must use schema_version 1")
 
     async with session.begin():
         workflow = await session.get(AgentWorkflow, workflow_id) if workflow_id else None
@@ -249,11 +248,7 @@ async def save_custom_workflow(
             raise ValueError("workflow framework identity is immutable")
         if workflow is not None and builder_id is not None and builder_id != stored_builder_id:
             raise ValueError("workflow builder identity is immutable")
-        previous_version = previous_metadata.get("version")
-        try:
-            next_version = int(previous_version) + 1 if workflow is not None and increment_version else int(previous_version or 1)
-        except (TypeError, ValueError):
-            next_version = 1
+        next_version = 1
         workflow_key = workflow_id or spec_json.get("workflow_id") or name
         framework = stored_framework or str(framework or "").strip()
         builder_id = stored_builder_id or str(builder_id or "").strip()
@@ -295,7 +290,7 @@ async def save_custom_workflow(
                 description=description,
                 visibility=visibility,
                 is_builtin=False,
-                schema_version=2,
+                schema_version=1,
                 framework=framework,
                 builder_id=builder_id,
                 spec_json=normalized_spec,
@@ -310,7 +305,7 @@ async def save_custom_workflow(
             workflow.description = description
             workflow.visibility = visibility
             workflow.is_builtin = False
-            workflow.schema_version = 2
+            workflow.schema_version = 1
             workflow.framework = framework
             workflow.builder_id = builder_id
             replace_jsonb_field(workflow, "spec_json", normalized_spec)
@@ -333,7 +328,6 @@ async def save_internal_workflow_version(
     description: str = "",
     visibility: str = WorkflowVisibility.INTERNAL.value,
     changelog: str = "",
-    increment_version: bool = True,
 ) -> tuple[AgentWorkflow, AgentWorkflowVersion]:
     workflow = await save_custom_workflow(
         session,
@@ -344,6 +338,5 @@ async def save_internal_workflow_version(
         spec_json=spec_json,
         framework=framework,
         builder_id=builder_id,
-        increment_version=increment_version,
     )
     return workflow, workflow_version(workflow)

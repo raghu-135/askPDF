@@ -406,6 +406,7 @@ class NodeRegistry:
                 **lifecycle,
                 "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": item.get("dispatch_id"),
+                "dispatch_mode": item.get("dispatch_mode") or state.get("dispatch_mode"),
                 "work_id": item.get("work_id"),
                 "ordinal": item.get("ordinal"),
                 "worker_node_id": item.get("worker_node_id") or node_id,
@@ -890,11 +891,14 @@ class NodeRegistry:
                 "node_type": item.get("worker_type"),
                 "agent_run_id": state.get("agent_run_id"),
                 "parent_node_id": state.get("dispatch_node_id") or WorkflowNodeType.PARALLEL_DISPATCH.value,
+                "parent_operation_id": item.get("parent_operation_id") or state.get("dispatch_node_id") or WorkflowNodeType.PARALLEL_DISPATCH.value,
                 "dispatch_id": item.get("dispatch_id"),
                 "work_id": item.get("work_id"),
                 "ordinal": item.get("ordinal"),
                 "worker_node_id": item.get("worker_node_id"),
                 "worker_type": item.get("worker_type"),
+                "operation_id": item.get("operation_id") or item.get("worker_node_id"),
+                "operation_label": item.get("operation_label") or item.get("worker_node_id"),
                 "status": lifecycle_status,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                 **data,
@@ -1071,6 +1075,7 @@ class NodeRegistry:
             work_items = [
                 {
                     **item,
+                    "dispatch_mode": "serial",
                     "dispatch_node_id": node_id,
                     "dispatch_started_epoch_ms": dispatch_started_epoch_ms,
                     "dispatch_deadline_epoch_ms": deadline_epoch_ms,
@@ -1079,7 +1084,7 @@ class NodeRegistry:
             ]
         else:
             visit = int(state.get("dispatch_visit") or 1)
-            work_items = existing_items
+            work_items = [{**item, "dispatch_mode": "serial"} for item in existing_items]
             dispatch_id = current_dispatch_id
             dispatch_started_epoch_ms = int(state.get("dispatch_started_epoch_ms") or int(time.time() * 1000))
             deadline_epoch_ms = int(state.get("dispatch_deadline_epoch_ms") or 0)
@@ -1148,6 +1153,7 @@ class NodeRegistry:
             "agent_run_id": state.get("agent_run_id"),
             "dispatch_id": dispatch_id,
             "parent_node_id": node_id,
+            "parent_operation_id": node_id,
             "planned": len(work_items),
             "status": "planned",
             "barrier_state": "pending",
@@ -1160,6 +1166,7 @@ class NodeRegistry:
         work_items = [
             {
                 **item,
+                "dispatch_mode": "parallel",
                 "dispatch_node_id": node_id,
                 "dispatch_started_epoch_ms": dispatch_started_epoch_ms,
                 "dispatch_deadline_epoch_ms": deadline_epoch_ms,
@@ -1239,17 +1246,20 @@ class NodeRegistry:
             await sink.emit(ParallelEventName.BARRIER_REACHED, {
                 "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
+                "parent_operation_id": state.get("dispatch_node_id") or WorkflowNodeType.PARALLEL_DISPATCH.value,
                 "result_count": len(state.get("worker_result_packets") or []),
             })
         elif is_parallel and studio_queue is not None:
             await studio_queue.put({"event": ParallelEventName.BARRIER_REACHED, "data": {
                 "agent_run_id": state.get("agent_run_id"),
                 "dispatch_id": state.get("dispatch_id"),
+                "parent_operation_id": state.get("dispatch_node_id") or WorkflowNodeType.PARALLEL_DISPATCH.value,
                 "result_count": len(state.get("worker_result_packets") or []),
             }})
         update = aggregate_parallel_results(state)
         summary = dict(update.get("dispatch_summary") or update.get("parallel_summary") or {})
         summary.setdefault("agent_run_id", state.get("agent_run_id"))
+        summary.setdefault("parent_operation_id", state.get("dispatch_node_id") or WorkflowNodeType.PARALLEL_DISPATCH.value)
         summary["barrier_state"] = "reached"
         summary["aggregation_state"] = "partial" if summary.get("partial_evidence") else "completed"
         if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:

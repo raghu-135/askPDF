@@ -4,7 +4,7 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
-import { API_BASE } from "./api-config";
+import { API_BASE, buildAgentWorkflowCatalogUrl } from "./api-config";
 import { consumeAgentExecutionStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
 import {
   ProcessStatus as ProcessStatusEnum,
@@ -246,7 +246,6 @@ export interface ThreadSettings {
     valid: boolean;
     code: string;
     requested_workflow_id: string;
-    fallback_workflow_id: string;
   } | null;
   memory: {
     memory_enabled: boolean;
@@ -633,7 +632,7 @@ export interface AgentWorkflowGraphSpec {
 }
 
 export interface AgentWorkflowBuilderSpec {
-  schema_version: 2;
+  schema_version: 1;
   workflow_id: string;
   workflow_type: 'custom_rag_agent' | string;
   config: {
@@ -729,9 +728,9 @@ export interface AgentWorkflowToolContract {
 
 export interface AgentWorkflowCatalogResponse {
   schema_version: number;
-  spec_schema_version: 2 | number;
+  spec_schema_version: 1 | number;
   graph_spec: {
-    required_schema_version: 2 | number;
+    required_schema_version: 1 | number;
     requires_explicit_route_fn: boolean;
     reserved_node_ids: string[];
     start_node: string;
@@ -1035,14 +1034,15 @@ export interface AgentRunDebug {
   summary?: AgentDebugSummary;
   events: AgentTraceTimelineEvent[];
   operations: AgentTraceOperation[];
-  tools?: AgentTraceTimelineEvent[];
+  tools: AgentTraceTimelineEvent[];
   models?: AgentTraceTimelineEvent[];
-  approvals?: AgentTraceTimelineEvent[];
-  subagents?: AgentTraceTimelineEvent[];
-  artifacts?: AgentTraceTimelineEvent[];
+  approvals: AgentTraceTimelineEvent[];
+  subagents: AgentTraceTimelineEvent[];
+  artifacts: AgentTraceTimelineEvent[];
   diagnostics: AgentTraceDiagnostics;
   parallel_groups: AgentTraceParallelGroup[];
-  visualizations?: Record<string, AgentTraceVisualization>;
+  visualizations: Record<string, AgentTraceVisualization>;
+  details: Record<string, any>[];
   detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
@@ -1817,8 +1817,11 @@ export async function getPromptPreview(payload: {
   return res.json();
 }
 
-export async function getInternalAgentWorkflowCatalog(): Promise<AgentWorkflowCatalogResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-workflows/catalog`);
+export async function getInternalAgentWorkflowCatalog(
+  framework: string,
+  builderId: string,
+): Promise<AgentWorkflowCatalogResponse> {
+  const res = await fetch(buildAgentWorkflowCatalogUrl(API_BASE, framework, builderId));
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }

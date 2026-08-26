@@ -9,7 +9,7 @@ from app.agent_workflows.execution_stream import (
     drain_retained_executions,
     retain_background_task,
 )
-from app.runtime.events import create_runtime_event
+from app.runtime.events import RuntimeEventContractViolation, create_runtime_event
 
 
 @pytest.mark.asyncio
@@ -61,6 +61,19 @@ async def test_live_delivery_includes_backend_projected_parallel_groups():
     assert group["members"][0]["member_id"] == "work-1"
     assert group["members"][0]["operation_id"] == "retrieval-worker"
     await sink.finish("run.completed", {"status": "completed"})
+
+
+@pytest.mark.asyncio
+async def test_event_writer_fails_fast_for_malformed_parallel_identity():
+    sink = AgentExecutionEventSink()
+    sink.bind_runtime_event_persister("run-contract", lambda _run_id, event: _append([], event))
+
+    with pytest.raises(RuntimeEventContractViolation, match="group identity") as error:
+        await sink.emit("worker.started", {"work_id": "work-1", "attempt": 1})
+
+    assert error.value.code == "debug_trace_contract_violation"
+    assert error.value.retryable is False
+    assert error.value.correlation_id == "trace:run-contract"
 
 
 @pytest.mark.asyncio

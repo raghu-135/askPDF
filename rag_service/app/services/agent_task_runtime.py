@@ -830,10 +830,12 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     except Exception as exc:
         logger.exception("Deep research task execution failed | task_id=%s run_id=%s", task.id, run.id)
         terminal_error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
-            "code": "deep_research_execution_failed",
+            "code": str(getattr(exc, "code", "deep_research_execution_failed")),
             "type": type(exc).__name__,
             "raw_message": str(exc)[:1000],
-            "retryable": True,
+            "retryable": bool(getattr(exc, "retryable", True)),
+            **({"field_path": str(exc.field_path)} if getattr(exc, "field_path", None) else {}),
+            **({"correlation_id": str(exc.correlation_id)} if getattr(exc, "correlation_id", None) else {}),
         }
         failure_metrics = {"duration_ms": round((time.perf_counter() - started) * 1000, 2), "error_count": 1}
         await _finalize_task_run(

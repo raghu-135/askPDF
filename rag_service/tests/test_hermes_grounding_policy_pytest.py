@@ -41,20 +41,20 @@ def test_no_document_task_accepts_research_evidence_but_not_context_discovery():
     ], documents_present=False)["grounded"] is True
 
 
-def test_agent_task_run_payload_exposes_compact_retained_trace():
+def test_agent_task_run_payload_preserves_required_trace_details():
     run = SimpleNamespace(
         id="run-1", task_id="task-1", task_attempt=1, parent_run_id=None,
         status="failed", checkpoint_thread_id=None, pending_interrupt_json=None,
         runtime_binding_status=None,
         metrics_json={}, error_json={"code": "runtime_limit_exceeded"},
         started_at=None, completed_at=None,
-        debug_trace_json={"version": 2, "trace": {"status": "failed"}, "summary": {}, "details": {"large": True}},
+        debug_trace_json={"version": 1, "trace": {"status": "failed"}, "summary": {}, "details": [{"operation_id": "hermes"}]},
     )
 
     payload = _run_payload(run)
 
     assert payload["debug"]["trace"]["status"] == "failed"
-    assert "details" not in payload["debug"]
+    assert payload["debug"]["details"] == [{"operation_id": "hermes"}]
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,7 @@ async def test_terminal_run_and_trace_are_written_atomically(monkeypatch):
     monkeypatch.setattr(
         agent_task_runtime,
         "finalize_and_merge_debug_payload",
-        lambda **kwargs: {"version": 2, "trace": {"status": kwargs["run_status"]}, "summary": {}},
+        lambda **kwargs: {"version": 1, "trace": {"status": kwargs["run_status"]}, "summary": {}},
     )
 
     await agent_task_runtime._complete_run_with_trace(

@@ -68,12 +68,9 @@ class WorkflowMaterializer:
         spec: Dict[str, Any],
     ) -> Dict[str, Any]:
         materialized = deepcopy(spec)
-        # Persisted workflow snapshots are compiled by the v2 validator.  The
-        # resolver can return a v1-shaped envelope for older built-in/task
-        # rows, even though the graph payload is otherwise compatible.  Make
-        # the materialized snapshot self-describing so continuations do not
-        # fail solely because the marker was omitted.
-        materialized["schema_version"] = 2
+        if materialized.get("schema_version") != 1:
+            raise ValueError("workflow schema_version must be 1")
+        materialized["schema_version"] = 1
         config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
         graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
@@ -278,14 +275,6 @@ class WorkflowCompiler(WorkflowMaterializer):
     ):
         from app.agent_workflows.validator import WorkflowValidator
 
-        # Continuations persist the resolved snapshot and may predate the v2
-        # envelope marker. Normalize that compatibility detail before the
-        # validator runs; otherwise the validator rejects a graph that the
-        # materializer can safely compile. The graph shape is still validated
-        # below, so this does not bypass workflow validation.
-        if isinstance(spec, dict) and spec.get("schema_version") != 2:
-            spec = deepcopy(spec)
-            spec["schema_version"] = 2
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
         if not graph_spec.get("hitl_compiled"):
             WorkflowValidator().validate(spec)

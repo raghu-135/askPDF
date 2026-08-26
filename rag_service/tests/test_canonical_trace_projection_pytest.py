@@ -247,7 +247,7 @@ def test_terminal_only_failure_reports_observability_gap_and_omits_large_runtime
     assert "generated response" not in str(projection)
 
 
-def test_trace_recorder_emits_version_two_from_canonical_events() -> None:
+def test_trace_recorder_emits_version_one_from_canonical_events() -> None:
     run = SimpleNamespace(
         id="run-1",
         thread_id="thread-1",
@@ -268,7 +268,7 @@ def test_trace_recorder_emits_version_two_from_canonical_events() -> None:
 
     payload = recorder.finalize(run=run, chat_turn_id=None, metrics={})
 
-    assert payload["version"] == 2
+    assert payload["version"] == 1
     assert payload["operations"][0]["operation_id"] == "step-1"
     assert payload["trace"]["events"] == payload["events"]
     assert payload["diagnostics"]["outcome"] == "completed"
@@ -327,6 +327,35 @@ def test_parallel_projection_preserves_required_empty_structural_collections() -
     assert attempt["failure_event_ids"] == []
     assert attempt["caused_by_event_ids"] == []
     assert attempt["related_event_ids"] == []
+
+
+def test_serial_dispatch_events_never_create_parallel_groups() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "operation.completed", {
+                "dispatch_id": "serial-1",
+                "mode": "serial",
+                "operation_id": "serial_dispatch",
+            }, "future"),
+            _event(2, "worker.started", {
+                "dispatch_id": "serial-1",
+                "dispatch_mode": "serial",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+            }, "future"),
+            _event(3, "worker.completed", {
+                "dispatch_id": "serial-1",
+                "dispatch_mode": "serial",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert projection["parallel_groups"] == []
+    assert "generic.parallel" not in projection["visualizations"]
 
 
 @pytest.mark.parametrize(

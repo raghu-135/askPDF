@@ -6,7 +6,7 @@
   "builder_id": "langgraph_graph",
   "name": "Corrective/Self-RAG Agent",
   "spec_json": {
-    "schema_version": 2,
+    "schema_version": 1,
     "version": 1,
     "workflow_id": "corrective_self_rag_agent",
     "runtime": {

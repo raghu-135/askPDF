@@ -67,6 +67,7 @@ function AgentRunDebugPanel({
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
   const debugParseResult = useMemo(() => runDetails?.debug && runDetails ? parseRunDebug(runDetails) : null, [runDetails]);
   const debugParseError = debugParseResult && 'reason' in debugParseResult ? debugParseResult.reason : null;
+  const debugParseCorrelationId = debugParseResult && 'correlationId' in debugParseResult ? debugParseResult.correlationId : null;
   const liveParseError = liveTraceView?.parseError;
   const executionTraceView = useMemo(
     () => liveTraceView?.parseError ? liveTraceView : liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
@@ -497,12 +498,16 @@ function AgentRunDebugPanel({
           {debugParseError && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{debugParseError}</Typography>
           )}
+          {debugParseCorrelationId && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {debugParseCorrelationId}</Typography>
+          )}
         </Box>
       )}
       {liveParseError && (
         <Box sx={{ px: 1, py: 0.75 }}>
           <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{liveParseError}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {liveTraceView?.parseCorrelationId || `trace:${runId}`}</Typography>
         </Box>
       )}
       {executionTraceView && !liveParseError && (

@@ -48,7 +48,7 @@ def test_hermes_provider_is_registered_without_changing_langgraph_provider():
 async def test_hermes_provider_rejects_graph_fields():
     provider = HermesBuilderProvider()
     spec = {
-        "schema_version": 2,
+        "schema_version": 1,
         "runtime": {"kind": "hermes_agent"},
         "config": {"system_prompt": "x", "mcp_server": "askpdf", "allowed_tool_ids": ["x"], "graph": {}},
     }

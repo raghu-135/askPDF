@@ -41,8 +41,8 @@ class WorkflowValidator:
     def collect_errors(self, spec: Dict[str, Any]) -> list[str]:
         if not isinstance(spec, dict):
             return ["spec must be an object"]
-        if spec.get("schema_version") != 2:
-            return ["schema_version must be 2"]
+        if spec.get("schema_version") != 1:
+            return ["schema_version must be 1"]
         errors = self._collect_runtime_errors(spec)
         errors.extend(GenericGraphValidator().collect_errors(spec))
         return errors

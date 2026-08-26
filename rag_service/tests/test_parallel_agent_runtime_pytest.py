@@ -123,6 +123,9 @@ def test_work_item_normalization_is_stable_bounded_and_read_only():
     assert [item["ordinal"] for item in first] == [0, 1]
     assert len({item["work_id"] for item in first}) == 2
     assert first[0]["timeout_ms"] == 30_000
+    assert first[0]["parent_operation_id"] == "dispatch"
+    assert first[0]["operation_id"] == "documents"
+    assert first[0]["operation_label"] == "documents"
 
 
 def test_explicit_work_items_cannot_omit_workers_selected_by_execution_plan():

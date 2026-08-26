@@ -22,6 +22,7 @@ import { TraceOperationsTooltip } from '../agent-debug/AgentRunTraceTooltips';
 import GenericTraceTimeline from '../agent-debug/GenericTraceTimeline';
 import TraceDiagnosticsPanel from '../agent-debug/TraceDiagnosticsPanel';
 import TraceVisualizationSlot from '../agent-debug/TraceVisualizationSlot';
+import ParallelTraceLanes from '../agent-debug/ParallelTraceLanes';
 import { compactExecutionText } from './agent-execution-display';
 import {
   agentNodeVisitKey,
@@ -228,6 +229,28 @@ function AgentExecutionView({
   const finalOutput = traceView.finalOutput;
   const memoryDebug = traceView.memory;
   const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
+  const operationLabels = useMemo(
+    () => Object.fromEntries(traceView.operations.map((operation) => [operation.id, operation.label])),
+    [traceView.operations],
+  );
+  const operationIds = useMemo(() => new Set(traceView.operations.map((operation) => operation.id)), [traceView.operations]);
+  const parallelGroupOwners = useMemo(() => new Map(traceView.parallelGroups.map((group) => {
+    const topologyOwner = typeof group.topology_ref?.id === 'string' ? group.topology_ref.id : undefined;
+    const correlatedOwner = [...traceView.events]
+      .sort((left, right) => left.sequence - right.sequence)
+      .find((event) => event.parallel_group_id === group.group_id && event.operation_id && operationIds.has(event.operation_id))
+      ?.operation_id;
+    const owner = group.parent_operation_id && operationIds.has(group.parent_operation_id)
+      ? group.parent_operation_id
+      : topologyOwner && operationIds.has(topologyOwner)
+        ? topologyOwner
+        : correlatedOwner;
+    return [group.group_id, owner] as const;
+  })), [operationIds, traceView.events, traceView.parallelGroups]);
+  const unassignedParallelGroups = useMemo(
+    () => traceView.parallelGroups.filter((group) => !parallelGroupOwners.get(group.group_id)),
+    [parallelGroupOwners, traceView.parallelGroups],
+  );
   const copyAnswer = useCallback(async () => {
     if (finalOutput?.answer && navigator.clipboard) await navigator.clipboard.writeText(finalOutput.answer);
   }, [finalOutput?.answer]);
@@ -325,9 +348,12 @@ function AgentExecutionView({
             event.operation_id === node.id
             && Number(event.payload?.visit_index || 1) === visitRef.visitIndex
           ));
+          const ownedParallelGroups = visitPosition === nodeVisits.length - 1
+            ? traceView.parallelGroups.filter((group) => parallelGroupOwners.get(group.group_id) === node.id)
+            : [];
           return (
+            <React.Fragment key={`${key}:${index}`}>
             <Accordion
-              key={`${key}:${index}`}
               ref={(element) => {
                 if (element) timelineRows.current.set(key, element);
                 else timelineRows.current.delete(key);
@@ -479,8 +505,32 @@ function AgentExecutionView({
                 )}
               </AccordionDetails>}
             </Accordion>
+            {ownedParallelGroups.length > 0 && (
+              <Box sx={{ ml: 1.5, mb: 0.5 }}>
+                <ParallelTraceLanes
+                  groups={ownedParallelGroups}
+                  operationLabels={operationLabels}
+                  onEventFocus={focusEvent}
+                  onOperationFocus={focusOperation}
+                />
+              </Box>
+            )}
+            </React.Fragment>
           );
         })}
+        {unassignedParallelGroups.length > 0 && (
+          <Box component="details" sx={{ mt: 0.5 }}>
+            <Box component="summary" sx={{ cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+              Unassigned parallel work ({unassignedParallelGroups.length})
+            </Box>
+            <ParallelTraceLanes
+              groups={unassignedParallelGroups}
+              operationLabels={operationLabels}
+              onEventFocus={focusEvent}
+              onOperationFocus={focusOperation}
+            />
+          </Box>
+        )}
         {!chatMode && finalOutput?.answer && (
           <Box
             component="details"
@@ -507,19 +557,6 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
-      <TraceVisualizationSlot
-        traceView={traceView}
-        resolvedSpec={resolvedSpec}
-        framework={framework}
-        workflowId={workflowId}
-        focusedTraceRefs={focusedTraceRefs}
-        selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
-        onGraphSelection={handleGraphSelection}
-        onEventFocus={focusEvent}
-        onOperationFocus={focusOperation}
-        live={running}
-        visualizationIds={['generic.parallel']}
-      />
       <GenericTraceTimeline events={traceView.events} focusedEventId={focusedEventId} />
       <TraceVisualizationSlot
         traceView={traceView}

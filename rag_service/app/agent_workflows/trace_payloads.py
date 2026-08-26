@@ -7,7 +7,7 @@ from app.agent_workflows.trace_sanitization import _as_dict, _as_list, _bounded_
 from app.time_utils import iso_utc_z
 
 
-DEBUG_PAYLOAD_VERSION = 2
+DEBUG_PAYLOAD_VERSION = 1
 
 
 def is_current_debug_payload(value: Any) -> bool:
@@ -18,6 +18,14 @@ def is_current_debug_payload(value: Any) -> bool:
         and isinstance(value.get("events"), list)
         and isinstance(value.get("operations"), list)
         and isinstance(value.get("parallel_groups"), list)
+        and isinstance(value.get("tools"), list)
+        and isinstance(value.get("approvals"), list)
+        and isinstance(value.get("subagents"), list)
+        and isinstance(value.get("artifacts"), list)
+        and isinstance(value.get("details"), list)
+        and isinstance(value.get("visualizations"), dict)
+        and isinstance(value.get("trace"), dict)
+        and isinstance(value.get("summary"), dict)
     )
 
 

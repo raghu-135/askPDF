@@ -323,7 +323,7 @@ class AgentWorkflow(SQLModel, table=True):
     framework: str = Field(default="langgraph", index=True)
     builder_id: str = Field(default="langgraph_graph", index=True)
     category: Optional[str] = Field(default=None, index=True)
-    schema_version: int = Field(default=2)
+    schema_version: int = Field(default=1)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)

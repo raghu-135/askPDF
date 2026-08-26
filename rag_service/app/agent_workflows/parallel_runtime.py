@@ -252,6 +252,7 @@ def normalize_work_items(
         candidates.append({
             "worker_node_id": worker_id,
             "worker_type": worker_type,
+            "operation_label": str(worker.get("label") or worker_id),
             "query": query,
             "tool_name": str(raw.get("tool_name") or "").strip() if isinstance(raw, dict) else "",
             "file_hash": file_hash or None,
@@ -304,11 +305,14 @@ def normalize_work_items(
         normalized.append({
             "dispatch_id": dispatch_id,
             "dispatch_visit": dispatch_visit,
+            "parent_operation_id": dispatch_node_id,
             "work_id": work_id,
             "query_id": query_id,
             "ordinal": ordinal,
             "worker_node_id": worker_id,
             "worker_type": worker_type,
+            "operation_id": worker_id,
+            "operation_label": str(candidate.get("operation_label") or worker_id),
             "query": query,
             "tool_name": candidate.get("tool_name"),
             "file_hash": candidate.get("file_hash"),
