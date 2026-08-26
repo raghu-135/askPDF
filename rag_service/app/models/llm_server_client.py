@@ -694,6 +694,77 @@ async def check_model_supports_tools(model_name: str) -> bool:
         return _update_model_ready_cache(cache_key, False)
 
 
+async def check_model_can_invoke_tools(model_name: str) -> bool:
+    """Verify that a model returns an actual native function call when required."""
+    cache_key = f"tool-invocation:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
+    base_url = _get_base_url()
+    try:
+        async with _managed_http_client("llm") as client:
+            if not await _check_model_exists(client, base_url, model_name):
+                return _update_model_ready_cache(cache_key, False)
+            probe_name = "askpdf_tool_capability_probe"
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": "Call the provided capability probe tool now."}],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": probe_name,
+                        "description": "Verifies native tool invocation support.",
+                        "parameters": {"type": "object", "properties": {}, "required": []},
+                    },
+                }],
+                # LM Studio's OpenAI-compatible endpoint accepts the string
+                # form and rejects the function-object form.
+                "tool_choice": "required",
+                # Reasoning models may consume a meaningful prefix before
+                # emitting the required call. Keep this bounded but usable.
+                "max_tokens": 256,
+            }
+
+            def invocation_validator(resp: httpx.Response) -> bool:
+                if resp.status_code != 200:
+                    return False
+                try:
+                    return _response_invokes_tool(resp.json(), probe_name)
+                except (AttributeError, IndexError, TypeError, ValueError):
+                    return False
+
+            result = await _probe_with_retry(
+                client,
+                f"{base_url}/chat/completions",
+                payload,
+                invocation_validator,
+                model_name,
+                "ToolInvocation",
+                max_retries=1,
+            )
+            return _update_model_ready_cache(cache_key, result)
+    except Exception:
+        logger.exception("Exception during native tool-invocation check")
+        return _update_model_ready_cache(cache_key, False)
+
+
+def _response_invokes_tool(payload: object, expected_name: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    message = choices[0].get("message")
+    calls = message.get("tool_calls") if isinstance(message, dict) else None
+    return isinstance(calls, list) and any(
+        isinstance(call, dict)
+        and isinstance(call.get("function"), dict)
+        and call["function"].get("name") == expected_name
+        for call in calls
+    )
+
+
 async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.

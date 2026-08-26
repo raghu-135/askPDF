@@ -7,9 +7,22 @@ import pytest
 
 from app.models.llm_server_client import (
     ReasoningChatOpenAI,
+    _response_invokes_tool,
     close_model_client,
     get_llm,
 )
+
+
+def test_native_tool_probe_requires_an_actual_matching_tool_call():
+    assert _response_invokes_tool({"choices": [{"message": {"content": "plain text"}}]}, "probe") is False
+    assert _response_invokes_tool(
+        {"choices": [{"message": {"tool_calls": [{"function": {"name": "other"}}]}}]},
+        "probe",
+    ) is False
+    assert _response_invokes_tool(
+        {"choices": [{"message": {"tool_calls": [{"function": {"name": "probe", "arguments": "{}"}}]}}]},
+        "probe",
+    ) is True
 
 
 @pytest.mark.asyncio

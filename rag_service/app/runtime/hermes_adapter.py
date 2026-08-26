@@ -9,6 +9,7 @@ from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRun
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
+from app.models.llm_server_client import check_model_can_invoke_tools
 
 
 class HermesRuntimeAdapter(HttpRuntimeAdapter):
@@ -35,8 +36,19 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
             headers.pop("authorization", None)
         return headers
 
+    def _replay_params(self, *, last_sequence: int, last_event_id: str | None) -> dict[str, Any]:
+        return {"after_event_id": last_event_id} if last_event_id else {}
+
     async def start(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult:
         self._ensure_enabled()
+        resolved_spec = dict(getattr(context, "resolved_spec", None) or {})
+        model = str(((resolved_spec.get("managed_profile") or {}).get("model_policy") or {}).get("model") or "").strip()
+        if not model or not await check_model_can_invoke_tools(model):
+            raise RuntimeError(
+                "runtime_model_tool_calling_unsupported",
+                "The selected model cannot invoke the tools required by Hermes",
+                details={"framework": self.framework, "model": model or None},
+            )
         return await super().start(request, context=context, event_sink=event_sink)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:

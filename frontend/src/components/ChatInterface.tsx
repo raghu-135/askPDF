@@ -726,6 +726,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
+    const [canLlmInvokeTools, setCanLlmInvokeTools] = useState<boolean | null>(null);
     const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
@@ -1237,9 +1238,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             const result = await checkLlmModelReady(model);
             setIsLlmModelValid(result.ready);
             setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
+            setCanLlmInvokeTools(result.ready ? result.canInvokeTools : null);
         } catch (err) {
             setIsLlmModelValid(false);
             setIsLlmToolsSupported(null);
+            setCanLlmInvokeTools(null);
         }
     }, []);
 
@@ -1248,6 +1251,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setLlmModel(model);
         setIsLlmModelValid(null);
         setIsLlmToolsSupported(null);
+        setCanLlmInvokeTools(null);
         if (model) {
             // Persist as last selected LLM in browser memory
             if (typeof window !== 'undefined') {
@@ -2640,7 +2644,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     loading={loading}
                     llmModel={llmModel}
                     isLlmModelValid={isLlmModelValid}
-                    isLlmToolsSupported={isLlmToolsSupported}
+                    isLlmToolsSupported={
+                        agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.framework === 'hermes'
+                            ? canLlmInvokeTools
+                            : isLlmToolsSupported
+                    }
                     isEmbeddingModelValid={isEmbeddingModelValid}
                     indexingStatus={indexingStatus}
                     liveExecution={liveExecution}

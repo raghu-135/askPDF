@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
@@ -182,6 +183,12 @@ def test_task_context_without_documents_does_not_require_document_discovery():
 
     assert "Hermes bridge requirement" not in value
     assert "askPDF task context:" in value
+
+
+def test_initial_tool_requirement_is_enabled_only_for_document_backed_tasks():
+    assert hermes_api._requires_initial_tool({"documents": [{"file_hash": "file-1"}]}) is True
+    assert hermes_api._requires_initial_tool({"documents": []}) is False
+    assert hermes_api._requires_initial_tool(None) is False
 
 
 @pytest.mark.parametrize(
@@ -472,6 +479,75 @@ async def test_hermes_live_steering_makes_no_transport_request():
     assert error.value.details["operation_id"] == "run.steer_live"
     assert requested == []
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    async def tool_capable(_model):
+        return True
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_capable)
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    progress = {
+        "event_id": "run-1:346",
+        "run_id": "run-1",
+        "sequence": 346,
+        "kind": "output.delta",
+        "payload": {"delta": "partial"},
+    }
+    terminal = {
+        "event_id": "run-1:347",
+        "run_id": "run-1",
+        "sequence": 347,
+        "kind": "run.completed",
+        "payload": {},
+        "terminal": True,
+    }
+    calls: list[str] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method)
+        if http_request.method == "POST":
+            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps({'event': progress})}\n\n"
+        else:
+            assert http_request.url.params["after_event_id"] == "run-1:346"
+            assert "after_sequence" not in http_request.url.params
+            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    result = await adapter.start(
+        request,
+        context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
+    )
+
+    assert result.output == "recovered"
+    assert calls == ["POST", "GET"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    async def tool_incapable(_model):
+        return False
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_incapable)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+
+    with pytest.raises(RuntimeError) as error:
+        await adapter.start(
+            request,
+            context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
+        )
+
+    assert error.value.code == "runtime_model_tool_calling_unsupported"
+    assert error.value.details == {"framework": "hermes", "model": "text-only"}
 
 
 def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):

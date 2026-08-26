@@ -15,6 +15,7 @@ from app.models.llm_server_client import (
     check_chat_model_ready,
     check_embedding_model_ready,
     check_model_supports_tools,
+    check_model_can_invoke_tools,
     fetch_available_models,
 )
 
@@ -42,7 +43,8 @@ async def is_chat_model_ready_endpoint(model: str):
         if not ready:
             return {"model": model, "chat_model_ready": False, "supports_tools": False}
         supports_tools = await check_model_supports_tools(model)
-        return {"model": model, "chat_model_ready": True, "supports_tools": supports_tools}
+        can_invoke_tools = await check_model_can_invoke_tools(model) if supports_tools else False
+        return {"model": model, "chat_model_ready": True, "supports_tools": supports_tools, "can_invoke_tools": can_invoke_tools}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

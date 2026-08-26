@@ -133,6 +133,10 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             await self._client.aclose()
             self._client = None
 
+    def _replay_params(self, *, last_sequence: int, last_event_id: str | None) -> dict[str, Any]:
+        """Encode the runtime transport's durable replay cursor."""
+        return {"after_sequence": last_sequence}
+
     def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}
         if request is not None:
@@ -240,7 +244,10 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             headers = {**self._headers(request), "accept": "text/event-stream"}
             params: dict[str, Any] | None = None
             if replay:
-                params = {"after_sequence": last_sequence}
+                params = self._replay_params(
+                    last_sequence=last_sequence,
+                    last_event_id=last_event_id,
+                )
                 if last_event_id:
                     headers["last-event-id"] = last_event_id
             kwargs: dict[str, Any] = {"headers": headers}

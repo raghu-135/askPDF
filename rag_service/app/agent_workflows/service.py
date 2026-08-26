@@ -39,6 +39,7 @@ from app.services.runtime_operation_repository import (
     fail_runtime_operation,
 )
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
+from app.models.llm_server_client import check_model_can_invoke_tools
 
 
 logger = logging.getLogger(__name__)
@@ -345,6 +346,17 @@ class AgentRunService:
             raise RuntimeError(
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
+        if definition.framework == "hermes":
+            selected_model = str(
+                (((stored_resolved_spec.get("managed_profile") or {}).get("model_policy") or {}).get("model"))
+                or ""
+            ).strip()
+            if not selected_model or not await check_model_can_invoke_tools(selected_model):
+                raise RuntimeContractError(
+                    "runtime_model_tool_calling_unsupported",
+                    "The selected model cannot invoke the tools required by Hermes",
+                    details={"framework": definition.framework, "model": selected_model or None},
+                )
         workflow_version = _workflow_version_info(workflow)
 
         try:

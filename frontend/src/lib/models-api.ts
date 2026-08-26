@@ -91,15 +91,16 @@ export const checkEmbeddingModelReady = async (model: string): Promise<boolean> 
  */
 export const checkLlmModelReady = async (
   model: string
-): Promise<{ ready: boolean; supportsTools: boolean }> => {
+): Promise<{ ready: boolean; supportsTools: boolean; canInvokeTools: boolean }> => {
   try {
     const res = await fetch(`${API_BASE}/api/health/chat-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return {
       ready: data.ready === true || data.chat_model_ready === true,
       supportsTools: data.supports_tools === true,
+      canInvokeTools: data.can_invoke_tools === true,
     };
   } catch {
-    return { ready: false, supportsTools: false };
+    return { ready: false, supportsTools: false, canInvokeTools: false };
   }
 };
