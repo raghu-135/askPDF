@@ -20,6 +20,16 @@ PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
 logger = logging.getLogger("askpdf.hermes_compat")
 
 
+def _apply_initial_tool_requirement(agent: Any, api_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Consume askPDF's profile-local first-turn tool requirement once."""
+    if not bool(getattr(agent, "_askpdf_require_initial_tool", False)):
+        return api_kwargs
+    agent._askpdf_require_initial_tool = False
+    if api_kwargs.get("tools"):
+        api_kwargs["tool_choice"] = "required"
+    return api_kwargs
+
+
 def _registered_tools(server_names: list[str]) -> list[str]:
     from tools import mcp_tool
 
@@ -86,9 +96,26 @@ def _install() -> None:
     from gateway.platforms.api_server import APIServerAdapter
     from hermes_cli.config import load_config
     from tools.mcp_tool import _load_mcp_config, register_mcp_servers
+    from agent import chat_completion_helpers
 
     original_toolsets = APIServerAdapter._handle_toolsets
     original_events = APIServerAdapter._handle_run_events
+    original_create_agent = APIServerAdapter._create_agent
+    original_build_api_kwargs = chat_completion_helpers.build_api_kwargs
+
+    def create_agent(self: Any, *args: Any, **kwargs: Any) -> Any:
+        model_options = kwargs.get("model_options")
+        require_initial_tool = bool(
+            isinstance(model_options, dict)
+            and model_options.get("askpdf_require_initial_tool") is True
+        )
+        agent = original_create_agent(self, *args, **kwargs)
+        agent._askpdf_require_initial_tool = require_initial_tool
+        return agent
+
+    def build_api_kwargs(agent: Any, api_messages: list[Any], tools_for_api: list[Any] | None = None) -> dict[str, Any]:
+        kwargs = original_build_api_kwargs(agent, api_messages, tools_for_api=tools_for_api)
+        return _apply_initial_tool_requirement(agent, kwargs)
 
     async def handle_toolsets(self: Any, request: Any) -> Any:
         config = load_config()
@@ -127,6 +154,8 @@ def _install() -> None:
 
     APIServerAdapter._handle_toolsets = handle_toolsets
     APIServerAdapter._handle_run_events = handle_run_events
+    APIServerAdapter._create_agent = create_agent
+    chat_completion_helpers.build_api_kwargs = build_api_kwargs
     logger.info("Installed askPDF Hermes compatibility hook for %s", PINNED_REVISION)
 
 

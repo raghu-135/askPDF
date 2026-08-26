@@ -4,7 +4,18 @@ import time
 
 import pytest
 
-from hermes_runtime.hermes_compat.sitecustomize import _context_header_digests
+from hermes_runtime.hermes_compat.sitecustomize import _apply_initial_tool_requirement, _context_header_digests
+
+
+def test_initial_tool_requirement_is_profile_local_and_consumed_once() -> None:
+    agent = type("Agent", (), {"_askpdf_require_initial_tool": True})()
+    first = _apply_initial_tool_requirement(agent, {"tools": [{"type": "function"}]})
+    second = _apply_initial_tool_requirement(agent, {"tools": [{"type": "function"}]})
+    unrelated = _apply_initial_tool_requirement(type("Agent", (), {})(), {"tools": [{"type": "function"}]})
+
+    assert first["tool_choice"] == "required"
+    assert "tool_choice" not in second
+    assert "tool_choice" not in unrelated
 from hermes_runtime.profile_manager import RunProfileManager, configured_context_length
 
 

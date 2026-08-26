@@ -88,6 +88,14 @@ def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> 
     return "\n\n".join(section for section in sections if section)
 
 
+def _requires_initial_tool(task_context: object) -> bool:
+    return bool(
+        isinstance(task_context, Mapping)
+        and isinstance(task_context.get("documents"), list)
+        and task_context.get("documents")
+    )
+
+
 def _rendered_model_context_length() -> int:
     config_path = Path(os.getenv("HERMES_RENDERED_CONFIG_PATH", "/opt/data/config.yaml"))
     match = re.search(r"(?m)^\s{2}context_length:\s*([0-9]+)\s*$", config_path.read_text())
@@ -660,6 +668,7 @@ def create_app() -> FastAPI:
             "instructions": system_prompt or None,
             "model": ((managed_profile.get("model_policy") or {}).get("model")) or "",
             "provider": ((managed_profile.get("model_policy") or {}).get("provider")) or "custom",
+            "model_options": {"askpdf_require_initial_tool": _requires_initial_tool(task_context)},
             "metadata": {
                 "askpdf_run_id": run_id,
                 "askpdf_thread_id": neutral_request.get("thread_id"),
