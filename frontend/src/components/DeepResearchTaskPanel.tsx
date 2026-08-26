@@ -707,7 +707,6 @@ export default function DeepResearchTaskPanel({
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
       {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
-      {task?.terminal_reason === 'required_evidence_unavailable' && <Alert severity="error" sx={{ mb: 1 }}>Hermes could not retrieve the evidence required for this report. The generated text was not published as a grounded result.</Alert>}
       {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
           <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'primary'} />

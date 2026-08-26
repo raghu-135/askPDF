@@ -6,7 +6,7 @@ from app.runtime.hermes_config import (
     hermes_model_context_length,
     validate_hermes_model_compatibility,
 )
-from app.runtime.hermes_compatibility import provider_requires_api_key
+from app.runtime.hermes_pinned_contract import provider_requires_api_key
 
 
 @pytest.mark.parametrize("profiles", ["hermes", "langgraph,hermes", " HERMES "])

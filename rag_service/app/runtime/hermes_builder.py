@@ -69,7 +69,6 @@ class HermesBuilderProvider:
         return BuilderCapabilities(
             framework=self.framework,
             builder_id=self.builder_id,
-            schema_versions=(1,),
             authoring=False,
             transient_tests=False,
             runtime_capabilities=dict(definition.capabilities or {}),

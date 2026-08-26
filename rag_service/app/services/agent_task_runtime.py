@@ -9,7 +9,7 @@ import time
 from contextlib import suppress
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
@@ -151,13 +151,43 @@ def _hermes_grounding_summary(events: list[Any], *, documents_present: bool) -> 
     eligible = HERMES_DOCUMENT_EVIDENCE_TOOLS if documents_present else HERMES_RESEARCH_EVIDENCE_TOOLS
     qualifying = [item for item in successful if item.get("tool_name") in eligible]
     return {
-        "required": True,
         "requirement": "document" if documents_present else "research",
         "grounded": bool(qualifying),
         "evidence_result_count": sum(int(item.get("result_count") or 0) for item in qualifying),
         "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
         "failed_tool_count": len(failures),
         "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
+    }
+
+
+def _grounding_summary(
+    result: Mapping[str, Any],
+    events: list[Any],
+    *,
+    framework: str,
+    documents_present: bool,
+) -> dict[str, Any]:
+    """Summarize evidence activity for diagnostics without enforcing tool use."""
+
+    if framework == "hermes":
+        return _hermes_grounding_summary(events, documents_present=documents_present)
+
+    report = result.get("grounding_report")
+    if not isinstance(report, Mapping):
+        report = result.get("grounding") if isinstance(result.get("grounding"), Mapping) else {}
+    verified_claims = report.get("verified_claims") if isinstance(report, Mapping) else None
+    evidence_manifest = result.get("task_evidence_manifest")
+    grounded = bool(
+        (isinstance(verified_claims, list) and verified_claims)
+        or (isinstance(evidence_manifest, list) and evidence_manifest)
+    )
+    return {
+        "requirement": "document" if documents_present else "research",
+        "grounded": grounded,
+        "evidence_result_count": len(verified_claims) if isinstance(verified_claims, list) else len(evidence_manifest) if isinstance(evidence_manifest, list) else 0,
+        "successful_evidence_tools": [],
+        "failed_tool_count": 0,
+        "failure_codes": [],
     }
 
 
@@ -779,9 +809,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 )
                 return
             evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
-            if definition.framework == "hermes" and evidence_policy == "document_when_available":
-                grounding = _hermes_grounding_summary(
+            if evidence_policy == "document_when_available":
+                grounding = _grounding_summary(
+                    result,
                     await repository.list_run_events(run.id),
+                    framework=definition.framework,
                     documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
                 )
                 metrics["grounding"] = grounding

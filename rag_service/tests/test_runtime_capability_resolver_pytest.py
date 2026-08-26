@@ -272,6 +272,11 @@ async def test_runtime_unavailable_deployment_disables_task_start():
     descriptor = capabilities.operations[RuntimeOperationId.TASK_START]
     assert descriptor.enabled is False
     assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+    assert capabilities.operations[RuntimeOperationId.RUN_EVENTS].enabled is True
+    assert capabilities.operations[RuntimeOperationId.RUN_EVENTS].owner is RuntimeOperationOwner.PRODUCT
+    assert capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is True
+    assert capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].owner is RuntimeOperationOwner.PRODUCT
+    assert RuntimeOperationId.RUN_CANCEL not in capabilities.operations
 
     resolved = await resolve_capabilities(
         _definition(supports_long_running_tasks=True),

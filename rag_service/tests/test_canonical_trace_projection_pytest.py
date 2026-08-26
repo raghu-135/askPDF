@@ -189,7 +189,7 @@ def test_parallel_failures_remain_distinct_and_terminal_failure_correlates_them(
         }, "hermes"),
         _event(3, "run.failed", {
             "status": "failed",
-            "error": {"code": "required_evidence_unavailable", "message": "Evidence unavailable"},
+            "error": {"code": "runtime_failed", "message": "Runtime failed"},
         }, "hermes"),
     ]
 

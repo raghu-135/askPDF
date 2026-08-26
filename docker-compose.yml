@@ -135,7 +135,7 @@ services:
       - GATEWAY_MULTIPLEX_PROFILES=true
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}
       - ASKPDF_HERMES_COMPAT_ENABLED=1
-      - PYTHONPATH=/opt/askpdf-hermes-compat
+      - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
     env_file:
       - path: .env
         required: true
@@ -150,7 +150,7 @@ services:
       - ./.env:/opt/data/.env:ro
       - ./.env:/opt/data/profiles/askpdf-deep-offline/.env:ro
       - ./.env:/opt/data/profiles/askpdf-deep-external/.env:ro
-      - ./hermes_runtime/hermes_compat:/opt/askpdf-hermes-compat:ro
+      - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 10s

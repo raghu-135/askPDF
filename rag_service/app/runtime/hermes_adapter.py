@@ -59,9 +59,12 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         value = await self._json("GET", "/v1/capabilities")
         from app.runtime.transport import capabilities_from_dict
         try:
-            return capabilities_from_dict(value.get("capabilities") or value)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("runtime_protocol_error", "Hermes returned malformed capabilities") from exc
+            capabilities = value["capabilities"]
+            if not isinstance(capabilities, Mapping):
+                raise ValueError("capabilities must be an object")
+            return capabilities_from_dict(capabilities)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
     async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
         self._unsupported("run.resume", "Hermes resume is not supported by the pinned runs API")

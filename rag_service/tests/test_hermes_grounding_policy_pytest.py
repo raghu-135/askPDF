@@ -5,7 +5,7 @@ import pytest
 
 from app.api.agent_tasks import _run_payload
 from app.services import agent_task_runtime
-from app.services.agent_task_runtime import _hermes_grounding_summary
+from app.services.agent_task_runtime import _grounding_summary, _hermes_grounding_summary
 
 
 def _event(kind, **payload):
@@ -39,6 +39,38 @@ def test_no_document_task_accepts_research_evidence_but_not_context_discovery():
     assert _hermes_grounding_summary([
         _event("tool.completed", tool_name="wikipedia", ok=True, result_count=2),
     ], documents_present=False)["grounded"] is True
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "hermes"])
+def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
+    result = {
+        "final_answer": "draft",
+        "task_evidence_manifest": [],
+        "grounding_report": {"verified_claims": []},
+    }
+    events = [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})]
+
+    summary = _grounding_summary(
+        result,
+        events,
+        framework=framework,
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["requirement"] == "document"
+
+
+def test_missing_retrieval_does_not_define_a_terminal_error():
+    summary = _grounding_summary(
+        {"final_answer": "answer", "task_evidence_manifest": [], "grounding_report": {"verified_claims": []}},
+        [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})],
+        framework="hermes",
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["failure_codes"] == ["missing"]
 
 
 def test_agent_task_run_payload_preserves_required_trace_details():

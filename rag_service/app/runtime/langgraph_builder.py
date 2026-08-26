@@ -70,7 +70,6 @@ class LangGraphBuilderProvider:
         return BuilderCapabilities(
             framework=self.framework,
             builder_id=self.builder_id,
-            schema_versions=(1,),
             authoring=True,
             transient_tests=True,
             runtime_capabilities=dict(definition.capabilities or {}),

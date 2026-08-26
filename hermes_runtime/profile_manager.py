@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from hermes_runtime.compatibility import (
+from hermes_runtime.pinned_contract import (
     HERMES_CONFIG_SCHEMA_VERSION, HERMES_PROFILE_NAMES, provider_requires_api_key,
     validate_provider_context,
 )

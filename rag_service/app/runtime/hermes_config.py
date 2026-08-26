@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from app.runtime.hermes_compatibility import (
+from app.runtime.hermes_pinned_contract import (
     HERMES_MIN_CONTEXT_LENGTH, validate_provider_context,
 )
 

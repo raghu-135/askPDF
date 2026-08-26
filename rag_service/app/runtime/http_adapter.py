@@ -195,7 +195,9 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                 details=dict(error.get("details") or {}),
                 runtime_metadata=dict(payload.get("runtime_metadata") or {}),
             )
-        return payload.get("result") if "result" in payload else payload
+        if "result" not in payload or not isinstance(payload["result"], Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response envelope")
+        return payload["result"]
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
         value = await self._json(
@@ -204,20 +206,32 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             json={"definition": definition.to_dict()},
         )
         try:
-            return capabilities_from_dict(value.get("capabilities") or value)
-        except (TypeError, ValueError) as exc:
+            capabilities = value["capabilities"]
+            if not isinstance(capabilities, Mapping):
+                raise ValueError("capabilities must be an object")
+            return capabilities_from_dict(capabilities)
+        except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         value = await self._json("GET", "/v1/capabilities")
         try:
-            return capabilities_from_dict(value.get("capabilities") or value)
-        except (TypeError, ValueError) as exc:
+            capabilities = value["capabilities"]
+            if not isinstance(capabilities, Mapping):
+                raise ValueError("capabilities must be an object")
+            return capabilities_from_dict(capabilities)
+        except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
-        return validation_from_dict(value.get("validation") or value)
+        try:
+            validation = value["validation"]
+            if not isinstance(validation, Mapping):
+                raise ValueError("validation must be an object")
+            return validation_from_dict(validation)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed validation") from exc
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
         resolved_spec = context.resolved_spec if isinstance(context.resolved_spec, Mapping) else {}
@@ -359,9 +373,11 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     envelope = item["data"]
                     if not isinstance(envelope, Mapping):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event envelope")
-                    event_payload = envelope.get("event") or envelope
+                    event_payload = envelope.get("event")
                     if not isinstance(event_payload, Mapping):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event")
+                    if _name != str(event_payload.get("kind") or ""):
+                        raise RuntimeError("runtime_protocol_error", "Agent runtime event name does not match its kind")
                     event = event_from_dict(event_payload)
                     if event.run_id != request.run_id:
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a mismatched run ID")

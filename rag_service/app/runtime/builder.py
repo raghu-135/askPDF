@@ -24,7 +24,6 @@ class BuilderCapabilities:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (1,)
     validation: bool = True
     normalization: bool = True
     catalog: bool = True
@@ -37,7 +36,6 @@ class BuilderCapabilities:
         return {
             "framework": self.framework,
             "builder_id": self.builder_id,
-            "schema_versions": list(self.schema_versions),
             "validation": self.validation,
             "normalization": self.normalization,
             "catalog": self.catalog,
@@ -54,7 +52,6 @@ class BuilderCatalog:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (1,)
     capabilities: BuilderCapabilities | None = None
     payload: Mapping[str, Any] = field(default_factory=dict)
 
@@ -62,7 +59,6 @@ class BuilderCatalog:
         return {
             "framework": self.framework,
             "builder_id": self.builder_id,
-            "schema_versions": list(self.schema_versions),
             "capabilities": self.capabilities.to_dict() if self.capabilities else None,
             "payload": dict(self.payload),
         }

@@ -1,4 +1,4 @@
-"""askPDF compatibility hooks for the pinned Hermes gateway revision.
+"""askPDF pinned-revision hooks for the Hermes gateway.
 
 The pinned gateway discovers MCP servers at process startup. askPDF creates
 isolated profiles after startup, so a profile-scoped /v1/toolsets request must
@@ -17,7 +17,7 @@ from typing import Any
 
 
 PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
-logger = logging.getLogger("askpdf.hermes_compat")
+logger = logging.getLogger("askpdf.hermes_pinned_patch")
 
 
 def _apply_initial_tool_requirement(agent: Any, api_kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -156,7 +156,7 @@ def _install() -> None:
     APIServerAdapter._handle_run_events = handle_run_events
     APIServerAdapter._create_agent = create_agent
     chat_completion_helpers.build_api_kwargs = build_api_kwargs
-    logger.info("Installed askPDF Hermes compatibility hook for %s", PINNED_REVISION)
+    logger.info("Installed askPDF pinned Hermes patch for %s", PINNED_REVISION)
 
 
 if (

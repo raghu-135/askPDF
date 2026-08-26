@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any, Mapping
-from app.runtime.hermes_compatibility import (
+from app.runtime.hermes_pinned_contract import (
     HERMES_EXTERNAL_PROFILE, HERMES_OFFLINE_PROFILE,
 )
 from app.runtime.budgets import configured_budget_value

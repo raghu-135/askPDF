@@ -11,6 +11,7 @@ from app.runtime.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
+    CANONICAL_RUNTIME_EVENT_KINDS,
     ContinuationBinding,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
@@ -77,15 +78,28 @@ def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
 
 
 def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
+    required = {"event_id", "run_id", "sequence", "kind"}
+    if not isinstance(value, Mapping) or not required.issubset(value):
+        raise ValueError("runtime event has an incomplete canonical shape")
+    kind = value["kind"]
+    if not isinstance(kind, str) or kind not in CANONICAL_RUNTIME_EVENT_KINDS:
+        raise ValueError("runtime event kind is not canonical")
+    if "payload" in value and not isinstance(value["payload"], Mapping):
+        raise ValueError("runtime event payload must be an object")
+    if "source_metadata" in value and not isinstance(value["source_metadata"], Mapping):
+        raise ValueError("runtime event source_metadata must be an object")
+    if "terminal" in value and not isinstance(value["terminal"], bool):
+        raise ValueError("runtime event terminal must be a bool")
     return create_runtime_event(
         event_id=str(value["event_id"]),
         run_id=str(value["run_id"]),
         sequence=int(value["sequence"]),
-        kind=str(value["kind"]),
+        kind=kind,
         attempt=int(value.get("attempt") or 1),
         payload=dict(value.get("payload") or {}),
         occurred_at=value.get("occurred_at"),
         trace_id=value.get("trace_id"),
+        terminal=value.get("terminal"),
         source_metadata=dict(value.get("source_metadata") or {}),
         continuation=_binding(value.get("continuation")),
     )

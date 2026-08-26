@@ -14,7 +14,7 @@ from app.runtime.capability_resolver import capabilities_for_definition, discove
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
-from hermes_runtime.compatibility import HERMES_REVISION
+from hermes_runtime.pinned_contract import HERMES_REVISION
 from hermes_runtime.execution_store import HermesExecutionStore
 
 

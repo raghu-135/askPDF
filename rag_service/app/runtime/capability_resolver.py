@@ -181,7 +181,14 @@ async def _reconciled_capabilities(
         capabilities = replace(
             capabilities,
             operations={
-                operation: _disabled(descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE)
+                operation: descriptor
+                if operation in {
+                    RuntimeOperationId.RUN_GET,
+                    RuntimeOperationId.RUN_LIST,
+                    RuntimeOperationId.RUN_EVENTS,
+                    RuntimeOperationId.ARTIFACT_LIST,
+                }
+                else _disabled(descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE)
                 for operation, descriptor in capabilities.operations.items()
             },
         )

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from hermes_runtime.hermes_compat.sitecustomize import _apply_initial_tool_requirement, _context_header_digests
+from hermes_runtime.hermes_pinned_patch.sitecustomize import _apply_initial_tool_requirement, _context_header_digests
 
 
 def test_initial_tool_requirement_is_profile_local_and_consumed_once() -> None:

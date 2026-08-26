@@ -26,7 +26,7 @@ from hermes_runtime.execution_store import (
     HermesExecutionStore,
 )
 from hermes_runtime.operational_limits import required_positive_float, required_positive_int
-from hermes_runtime.compatibility import HERMES_REVISION, HERMES_TERMINAL_EVENTS
+from hermes_runtime.pinned_contract import HERMES_REVISION, HERMES_TERMINAL_EVENTS
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,

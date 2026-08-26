@@ -81,10 +81,10 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
         if request.url.path == "/v1/capabilities":
             assert request.method == "POST"
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
-            return httpx.Response(200, json={"capabilities": {"operations": {
+            return httpx.Response(200, json={"result": {"capabilities": {"operations": {
                 "run.resume": {"support": "conditional", "owner": "runtime", "enabled": True, "semantics": "resume_from_interrupt"},
-            }}})
-        return httpx.Response(200, json={"validation": {"valid": True, "issues": []}})
+            }}}})
+        return httpx.Response(200, json={"result": {"validation": {"valid": True, "issues": []}}})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -94,6 +94,30 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
     assert capabilities.operations["run.resume"].support.value == "conditional"
     assert validation.valid
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_rejects_bare_success_responses_at_the_wire_boundary():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"capabilities": {"operations": {}}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError, match="response envelope") as caught:
+        await adapter.deployment_capabilities()
+    assert caught.value.code == "runtime_protocol_error"
+    assert calls == ["/v1/capabilities"]
+    await client.aclose()
+
+
+def test_event_parser_rejects_alias_kinds_and_bare_event_shapes():
+    from app.runtime.transport import event_from_dict
+
+    with pytest.raises(ValueError):
+        event_from_dict({"event_id": "evt", "run_id": "run", "sequence": 1, "kind": "node.started"})
 
 
 def test_capability_parser_rejects_flat_or_malformed_payloads():
@@ -118,7 +142,7 @@ def test_capability_parser_rejects_flat_or_malformed_payloads():
 @pytest.mark.asyncio
 async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_terminal_internal():
     request = _request()
-    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}
+    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}}
     terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
 
     def handler(http_request: httpx.Request) -> httpx.Response:
@@ -138,7 +162,7 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
             },
         }
         def body():
-            yield f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': event})}\n\n".encode()
+            yield f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': event})}\n\n".encode()
             yield f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'ok'}})}\n\n".encode()
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b"".join(body()))
 
@@ -453,13 +477,13 @@ async def test_http_adapter_maps_no_continuation_to_none():
 @pytest.mark.asyncio
 async def test_http_adapter_rejects_conflicting_duplicate_event_ids():
     request = _request()
-    first = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {"node": "router"}}
+    first = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}}
     conflicting = {**first, "payload": {"node": "planner"}}
 
     def handler(_request: httpx.Request) -> httpx.Response:
         body = (
-            f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': first})}\n\n"
-            f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': conflicting})}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': first})}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': conflicting})}\n\n"
         )
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
@@ -473,10 +497,10 @@ async def test_http_adapter_rejects_conflicting_duplicate_event_ids():
 @pytest.mark.asyncio
 async def test_http_adapter_rejects_result_on_nonterminal_event():
     request = _request()
-    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {}}
+    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}}
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        body = f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': event, 'result': {'status': 'completed'}})}\n\n"
+        body = f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': event, 'result': {'status': 'completed'}})}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -490,7 +514,7 @@ async def test_http_adapter_rejects_result_on_nonterminal_event():
 async def test_http_adapter_replays_after_transport_disconnect_before_terminal():
     request = _request()
     calls: list[str] = []
-    progress = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "node.started", "payload": {}}
+    progress = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}}
     terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
 
     def handler(http_request: httpx.Request) -> httpx.Response:
@@ -498,7 +522,7 @@ async def test_http_adapter_replays_after_transport_disconnect_before_terminal()
         if http_request.method == "POST":
             raise httpx.ReadError("subscriber disconnected", request=http_request)
         body = (
-            f"id: evt-1\nevent: node.started\ndata: {json.dumps({'event': progress})}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': progress})}\n\n"
             f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
         )
         assert http_request.url.params["after_sequence"] == "0"
