@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -115,6 +116,14 @@ def test_public_capability_projection_excludes_spi_only_operations():
 class HermesCapabilityAdapter(CapabilityAdapter):
     framework = "hermes"
     builder_id = "hermes_agent"
+
+
+class UnavailableCapabilityAdapter(CapabilityAdapter):
+    async def capabilities(self, definition):
+        raise RuntimeError("runtime_unavailable", "Runtime is unavailable", retryable=True)
+
+    async def deployment_capabilities(self):
+        return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
 
 
 def _definition(**capabilities):
@@ -254,6 +263,24 @@ async def test_deployment_discovery_uses_deployment_declaration_and_adds_product
 
 
 @pytest.mark.asyncio
+async def test_runtime_unavailable_deployment_disables_task_start():
+    adapter = UnavailableCapabilityAdapter()
+    capabilities, error = await discover_adapter_capabilities(adapter)
+
+    assert capabilities is not None
+    assert error["code"] == "runtime_unavailable"
+    descriptor = capabilities.operations[RuntimeOperationId.TASK_START]
+    assert descriptor.enabled is False
+    assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+    resolved = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[adapter]),
+    )
+    assert resolved.operations[RuntimeOperationId.TASK_START].disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.asyncio
 async def test_hermes_live_steering_remains_disabled_at_all_capability_levels():
     registry = RuntimeRegistry(adapters=[HermesCapabilityAdapter()])
     definition = AgentDefinition(
@@ -350,6 +377,59 @@ async def test_task_and_run_states_are_resolved_independently():
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is True
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "task_terminal"
     assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
+
+
+@pytest.mark.asyncio
+async def test_task_command_admission_uses_the_same_task_state_as_run_capabilities(monkeypatch):
+    from app.api import agent_tasks as task_api
+
+    task = SimpleNamespace(id="task-1", status="failed", workflow_id="definition-1")
+    run = SimpleNamespace(
+        id="run-1",
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+    workflow = SimpleNamespace(
+        id="definition-1",
+        framework="fake",
+        builder_id="fake_builder",
+        category="deep",
+        name="Definition",
+        metadata_json={},
+        spec_json={"runtime": {"features": {"supports_long_running_tasks": True}}},
+    )
+    adapter = CapabilityAdapter()
+    registry = RuntimeRegistry(adapters=[adapter])
+    observed = {}
+
+    class Repository:
+        async def get_workflow(self, workflow_id, *, include_custom):
+            assert workflow_id == workflow.id
+            assert include_custom is True
+            return workflow
+
+    async def capture_require(definition, operation, *, registry, run=None, task=None, **kwargs):
+        observed[operation] = await resolve_capabilities(
+            definition, registry=registry, run=run, task=task, **kwargs,
+        )
+
+    monkeypatch.setattr(task_api, "AgentWorkflowRepository", Repository)
+    monkeypatch.setattr(task_api.repository, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(task_api, "get_runtime_registry", lambda: registry)
+    monkeypatch.setattr(task_api, "require_capability", capture_require)
+
+    await task_api._require_task_capability(task, "retry")
+
+    definition = AgentDefinition(
+        "definition-1", "fake", "fake_builder", category="deep",
+        capabilities={"supports_long_running_tasks": True},
+    )
+    expected = await resolve_capabilities(
+        definition, registry=registry, run=run, task=task,
+    )
+    assert observed[RuntimeOperationId.TASK_RETRY].operations == expected.operations
 
 
 @pytest.mark.asyncio

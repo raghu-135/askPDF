@@ -13,7 +13,7 @@ import asyncpg
 from app.agent_workflows.repository import AgentWorkflowRepository
 
 
-async def mark_runs_unresolved(*, limit: int = 500, dry_run: bool = True) -> dict[str, int]:
+async def mark_runs_deferred(*, limit: int = 500, dry_run: bool = True) -> dict[str, int]:
     """Mark active runs deferred before native checkpoint data is discarded."""
     repository = AgentWorkflowRepository()
     runs = await repository.list_nonterminal_runtime_runs(limit=limit)
@@ -25,7 +25,6 @@ async def mark_runs_unresolved(*, limit: int = 500, dry_run: bool = True) -> dic
             run.id,
             {
                 "reconciliation_status": "deferred",
-                "binding_status": "legacy_unresolved",
                 "checkpoint_reset": {
                     "status": "native_state_discarded",
                     "checkpoint_thread_id": run.checkpoint_thread_id,
@@ -33,7 +32,7 @@ async def mark_runs_unresolved(*, limit: int = 500, dry_run: bool = True) -> dic
             },
         )
         marked += 1
-    return {"inspected": len(runs), "marked_unresolved": marked, "dry_run": int(dry_run)}
+    return {"inspected": len(runs), "marked_deferred": marked, "dry_run": int(dry_run)}
 
 
 async def reset_database() -> None:
@@ -53,7 +52,7 @@ async def reset_database() -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Mark active runs unresolved before resetting runtime checkpoints")
+    parser = argparse.ArgumentParser(description="Mark active runs deferred before resetting runtime checkpoints")
     parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--reset", action="store_true", help="drop and recreate only runtime_checkpoints")
@@ -63,7 +62,7 @@ def main() -> int:
         parser.error("--reset requires --confirm-runtime-checkpoint-reset")
 
     async def execute() -> dict[str, int]:
-        result = await mark_runs_unresolved(limit=args.limit, dry_run=args.dry_run or not args.reset)
+        result = await mark_runs_deferred(limit=args.limit, dry_run=args.dry_run or not args.reset)
         if args.reset:
             await reset_database()
             result["reset"] = 1

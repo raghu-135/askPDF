@@ -121,6 +121,9 @@ class FakeRepository:
 
 
 class Sink:
+    async def emit(self, *args, **kwargs):
+        return None
+
     async def emit_runtime_event(self, *args, **kwargs):
         return None
 

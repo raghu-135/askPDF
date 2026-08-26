@@ -32,6 +32,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
+from app.runtime.product_capabilities import project_public_capabilities
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():
@@ -107,6 +108,26 @@ def test_advertised_operations_have_concrete_adapter_methods():
     assert OPERATION_METHODS["run.start"] == "start"
     for method_name in OPERATION_METHODS.values():
         assert callable(getattr(AgentRuntimeAdapter, method_name, None)), method_name
+
+
+def test_public_capability_projection_preserves_approval_response():
+    capabilities = RuntimeCapabilities(operations={
+        RuntimeOperationId.RUN_APPROVAL_RESPOND: RuntimeOperationDescriptor(
+            support=RuntimeSupportLevel.NATIVE,
+            owner=RuntimeOperationOwner.RUNTIME,
+            enabled=True,
+        ),
+    })
+
+    projected = project_public_capabilities(capabilities)
+
+    assert projected.operations[RuntimeOperationId.RUN_APPROVAL_RESPOND].enabled is True
+
+
+def test_continuation_requires_authoritative_runtime_binding():
+    run = SimpleNamespace(id="run-1", checkpoint_thread_id="checkpoint-1", runtime_binding_json={})
+
+    assert continuation_from_run(run) is None
 
 
 @pytest.mark.asyncio

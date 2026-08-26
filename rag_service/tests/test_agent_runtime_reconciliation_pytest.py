@@ -7,7 +7,7 @@ import pytest
 from app.services import agent_runtime_reconciliation as reconciliation
 from app.services.agent_runtime_reconciliation import reconcile_known_result, result_hash
 from app.services.agent_runtime_projection import AgentRuntimeProjection
-from app.services.runtime_checkpoint_reset import mark_runs_unresolved
+from app.services.runtime_checkpoint_reset import mark_runs_deferred
 
 
 def test_runtime_result_hash_is_stable():
@@ -128,6 +128,62 @@ async def test_reconciliation_does_not_project_unknown_result():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_run_by_id_projects_persisted_terminal_result(monkeypatch):
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        framework="fake",
+        builder_id="fake_builder",
+        definition_category=None,
+        task_id=None,
+        status="running",
+        resolved_spec_json={},
+        runtime_binding_json={"binding_type": "fake", "payload": {}},
+        runtime_binding_status="active",
+        run_metadata_json={
+            "projection": {
+                "runtime_result": {"status": "completed", "answer": "durable answer"},
+            },
+        },
+    )
+    persisted = SimpleNamespace(**vars(run))
+    updates = []
+    projected = []
+
+    class Repository:
+        async def get_run(self, run_id):
+            assert run_id == run.id
+            return persisted
+
+        async def update_runtime_projection(self, run_id, projection):
+            assert run_id == run.id
+            updates.append(dict(projection))
+            persisted.run_metadata_json = {"projection": dict(projection)}
+            return persisted
+
+    class Adapter:
+        async def inspect_state(self, request):
+            raise AssertionError("known terminal results do not require inspection")
+
+    class Projector:
+        async def reconcile_run(self, **kwargs):
+            projected.append(kwargs)
+            return persisted
+
+    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.runtime.registry.get_runtime_registry", lambda: SimpleNamespace(get=lambda definition: Adapter()))
+    monkeypatch.setattr("app.services.agent_runtime_projection.AgentRuntimeProjection", Projector)
+
+    result = await reconciliation.reconcile_run_by_id(run.id)
+
+    assert result == "projected"
+    assert projected and projected[0]["result"]["answer"] == "durable answer"
+    assert updates[-1]["reconciliation_status"] == "projected"
+
+
+@pytest.mark.asyncio
 async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
     runs = [SimpleNamespace(id="run-1"), SimpleNamespace(id="run-2"), SimpleNamespace(id="run-3")]
 
@@ -155,7 +211,7 @@ async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_reset_preflight_marks_active_runs_unresolved(monkeypatch):
+async def test_checkpoint_reset_preflight_marks_active_runs_deferred(monkeypatch):
     run = SimpleNamespace(id="run-1", checkpoint_thread_id="checkpoint-1")
     updates = []
 
@@ -168,12 +224,13 @@ async def test_checkpoint_reset_preflight_marks_active_runs_unresolved(monkeypat
             updates.append((run_id, projection))
 
     monkeypatch.setattr("app.services.runtime_checkpoint_reset.AgentWorkflowRepository", Repository)
-    result = await mark_runs_unresolved(limit=10)
+    result = await mark_runs_deferred(limit=10)
 
-    assert result == {"inspected": 1, "marked_unresolved": 0, "dry_run": 1}
+    assert result == {"inspected": 1, "marked_deferred": 0, "dry_run": 1}
     assert updates == []
 
-    result = await mark_runs_unresolved(limit=10, dry_run=False)
-    assert result["marked_unresolved"] == 1
+    result = await mark_runs_deferred(limit=10, dry_run=False)
+    assert result["marked_deferred"] == 1
     assert updates[0][0] == "run-1"
-    assert updates[0][1]["binding_status"] == "legacy_unresolved"
+    assert updates[0][1]["reconciliation_status"] == "deferred"
+    assert "binding_status" not in updates[0][1]

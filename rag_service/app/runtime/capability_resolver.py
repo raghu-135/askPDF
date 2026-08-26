@@ -148,8 +148,44 @@ def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabi
     return replace(capabilities, operations=operations)
 
 
-async def _declaration_for_adapter(adapter: Any) -> RuntimeCapabilities:
-    return await adapter.deployment_capabilities()
+def _unavailable_capabilities(exc: RuntimeError) -> RuntimeCapabilities:
+    """Return a usable capability document when deployment discovery fails."""
+
+    return RuntimeCapabilities(
+        deployment={
+            "runtime_available": False,
+            "discovery_error": exc.code,
+        },
+    )
+
+
+async def _reconciled_capabilities(
+    adapter: Any,
+    definition: AgentDefinition | None = None,
+) -> RuntimeCapabilities:
+    """Apply the common capability pipeline for every resolution level."""
+
+    unavailable = False
+    try:
+        capabilities = await (
+            adapter.capabilities(definition)
+            if definition is not None
+            else adapter.deployment_capabilities()
+        )
+    except RuntimeError as exc:
+        capabilities = _unavailable_capabilities(exc)
+        unavailable = True
+    capabilities = _reconcile_implementation(capabilities, adapter)
+    capabilities = _with_product_operations(capabilities)
+    if unavailable:
+        capabilities = replace(
+            capabilities,
+            operations={
+                operation: _disabled(descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE)
+                for operation, descriptor in capabilities.operations.items()
+            },
+        )
+    return apply_definition_policy(capabilities, definition) if definition is not None else capabilities
 
 
 async def capabilities_for_definition(
@@ -158,10 +194,7 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await adapter.capabilities(definition)
-    capabilities = _reconcile_implementation(capabilities, adapter)
-    capabilities = _with_product_operations(capabilities)
-    return apply_definition_policy(capabilities, definition)
+    return await _reconciled_capabilities(adapter, definition)
 
 
 def pending_interrupt_response_operation(
@@ -199,10 +232,7 @@ async def resolve_capabilities(
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await adapter.capabilities(definition)
-    capabilities = _reconcile_implementation(capabilities, adapter)
-    capabilities = _with_product_operations(capabilities)
-    capabilities = apply_definition_policy(capabilities, definition)
+    capabilities = await _reconciled_capabilities(adapter, definition)
     operations = dict(capabilities.operations)
     if run is None:
         for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
@@ -280,6 +310,7 @@ async def require_capability(
     *,
     registry: RuntimeRegistry,
     run: Any | None = None,
+    task: Any | None = None,
     include_resolved_response: bool = False,
 ) -> RuntimeOperationDescriptor:
     """Resolve one operation and fail before an adapter call when unavailable."""
@@ -289,9 +320,19 @@ async def require_capability(
         definition,
         registry=registry,
         run=run,
+        task=task,
         include_resolved_response=include_resolved_response,
     )
     descriptor = capabilities.operations.get(operation_id)
+    if capabilities.deployment.get("runtime_available") is False:
+        raise RuntimeError.capability_unavailable(
+            operation_id=operation_id.value,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            support_level=(descriptor.support.value if descriptor is not None else RuntimeSupportLevel.CONDITIONAL.value),
+            disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE.value,
+            retryable=True,
+        )
     if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         raise RuntimeError.capability_unsupported(
             operation_id=operation_id.value,
@@ -308,6 +349,7 @@ async def require_capability(
             disabled_reason=(
                 descriptor.disabled_reason or RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNAVAILABLE
             ).value,
+            retryable=descriptor.disabled_reason is RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE,
         )
     return descriptor
 
@@ -358,9 +400,15 @@ async def discover_adapter_capabilities(
     adapter: Any,
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
-        capabilities = await _declaration_for_adapter(adapter)
-        capabilities = _reconcile_implementation(capabilities, adapter)
-        return _with_product_operations(capabilities), None
+        capabilities = await _reconciled_capabilities(adapter)
+        if capabilities.deployment.get("runtime_available") is False:
+            return capabilities, {
+                "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
+                "safe_message": "Agent runtime deployment is unavailable",
+                "retryable": True,
+                "details": dict(capabilities.deployment),
+            }
+        return capabilities, None
     except RuntimeError as exc:
         return None, capability_discovery_error(exc, adapter)
     except Exception as exc:

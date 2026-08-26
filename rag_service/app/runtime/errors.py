@@ -53,11 +53,12 @@ class RuntimeError(Exception):
         builder_id: str,
         support_level: str,
         disabled_reason: str,
+        retryable: bool = False,
     ) -> "RuntimeError":
         return cls(
             code="runtime_capability_unavailable",
             safe_message="The requested runtime operation is unavailable for this run",
-            retryable=False,
+            retryable=retryable,
             details={
                 "operation_id": operation_id,
                 "framework": framework,

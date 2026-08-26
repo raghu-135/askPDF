@@ -20,6 +20,7 @@ PUBLIC_OPERATION_IDS = frozenset({
     RuntimeOperationId.RUN_EVENTS,
     RuntimeOperationId.RUN_CANCEL,
     RuntimeOperationId.RUN_RESUME,
+    RuntimeOperationId.RUN_APPROVAL_RESPOND,
     RuntimeOperationId.RUN_SEND_FOLLOWUP,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
     RuntimeOperationId.RUN_STEER_LIVE,

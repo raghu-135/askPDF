@@ -82,12 +82,6 @@ def continuation_from_run(run: Any) -> ContinuationBinding | None:
         if not binding_type:
             raise ValueError(f"Run {run.id!r} has an invalid runtime binding")
         return ContinuationBinding(binding_type=binding_type, payload=dict(payload.get("payload") or {}))
-    checkpoint_id = getattr(run, "checkpoint_thread_id", None)
-    if checkpoint_id:
-        return ContinuationBinding(
-            binding_type="langgraph_checkpoint",
-            payload={"checkpoint_thread_id": str(checkpoint_id)},
-        )
     return None
 
 

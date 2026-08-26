@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeSteeringInput
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
 from app.runtime.errors import RuntimeError
@@ -72,8 +72,10 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
 
     capabilities, error = await discover_adapter_capabilities(adapter)
 
-    assert capabilities is None
+    assert capabilities is not None
     assert error["code"] == "runtime_disabled"
+    assert capabilities.operations[RuntimeOperationId.TASK_START].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_START].disabled_reason == "runtime_unavailable"
     adapter._json.assert_not_awaited()
 
 

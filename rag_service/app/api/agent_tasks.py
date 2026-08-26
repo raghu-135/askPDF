@@ -230,6 +230,7 @@ async def _require_task_capability(task: Any, action: str) -> None:
             operation,
             registry=get_runtime_registry(),
             run=run,
+            task=task,
         )
     except AgentRuntimeError as exc:
         logger.warning(

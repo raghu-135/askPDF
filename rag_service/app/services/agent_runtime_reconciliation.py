@@ -88,8 +88,7 @@ async def reconcile_request(run: Any, adapter: Any, request: AgentRuntimeRequest
 async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     """Reconcile one persisted run without creating a replacement run."""
     from app.agent_workflows.repository import AgentWorkflowRepository
-    from app.runtime.catalog import continuation_from_run
-    from app.runtime.catalog import AgentDefinition
+    from app.runtime.catalog import continuation_from_run, definition_from_run
     from app.runtime.registry import get_runtime_registry
     from app.runtime.adapter import RuntimeExecutionContext
     from app.services.agent_runtime_projection import AgentRuntimeProjection
