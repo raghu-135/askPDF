@@ -19,6 +19,7 @@ from app.mcp.execution_context_token import issue_execution_context_token
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
+from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
@@ -81,12 +82,15 @@ async def _invoke_task_runtime(
             registry=registry,
             run=run,
         )
+        # Submission may commit upstream before the streaming response is
+        # established. Persist ownership first so cancellation and recovery
+        # never mistake an active external execution for an unsubmitted run.
+        await repository.mark_runtime_started(run.id)
         result = await adapter.start(
             runtime_request,
             context=runtime_context,
             event_sink=runtime_event_sink,
         )
-        await repository.mark_runtime_started(run.id)
         return result
 
     if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
@@ -425,16 +429,21 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             AgentRunStatus.RUNNING.value,
             AgentRunStatus.AWAITING_HUMAN.value,
         }:
-            await AgentWorkflowRepository().complete_run(
-                active_run.id,
-                status=AgentRunStatus.CANCELLED.value,
-                error_json={"code": "agent_task_cancelled", "retryable": False},
+            try:
+                await request_task_cancellation(task, active_run)
+            except AgentRuntimeError as exc:
+                logger.warning(
+                    "Runtime cancellation remains pending after worker recovery | task_id=%s run_id=%s code=%s",
+                    task_id,
+                    active_run.id,
+                    exc.code,
+                )
+        elif active_run is None:
+            await tasks.complete_task(
+                task_id,
+                status=AgentTaskStatus.CANCELLED.value,
+                reason="cancelled_by_user",
             )
-        await tasks.complete_task(
-            task_id,
-            status=AgentTaskStatus.CANCELLED.value,
-            reason="cancelled_by_user",
-        )
         await tasks.release_task_lease(task_id, worker_id, lease_seconds=LEASE_SECONDS)
         return
     if await tasks.active_runtime_budget_exhausted(task_id):
@@ -570,15 +579,13 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     try:
         definition = definition_from_run(run)
         adapter = adapter_for_definition(definition)
-        # Task runs created before the external runtime was introduced may
-        # contain a materialized graph without the v2 envelope marker.  Keep
-        # the same run/continuation identity and normalize only the in-flight
-        # snapshot sent to the runtime so those paused runs remain resumable.
-        resolved_spec = dict(await builder_for_definition(definition).normalize(
-            definition, dict(run.resolved_spec_json or {})
-        ))
-        if resolved_spec != (run.resolved_spec_json or {}):
-            run.resolved_spec_json = resolved_spec
+        resolved_spec = dict(run.resolved_spec_json or {})
+        if not resolved_spec:
+            raise AgentRuntimeError(
+                "runtime_definition_invalid",
+                "The task run has no materialized runtime definition",
+                retryable=False,
+            )
         runtime_input: dict[str, Any] = {"question": task.objective}
         if definition.framework == "hermes":
             snapshot = await _task_context_snapshot(task, thread, config)

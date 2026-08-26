@@ -28,7 +28,6 @@ async def record_runtime_event(run: Any, event: Any) -> bool:
     if event_id and event_id == projection.get("last_event_id"):
         return False
     projection.update({
-        "version": 1,
         "status": projection.get("status") or "pending",
         "last_event_id": event_id,
         "last_event_sequence": int(getattr(event, "sequence", 0) or 0),
@@ -54,7 +53,6 @@ async def record_terminal_result(run: Any, result: Mapping[str, Any], *, termina
     if existing and existing != digest:
         raise ValueError("runtime_terminal_result_conflict")
     projection.update({
-        "version": 1,
         "status": projection.get("status") or "pending",
         "result_hash": digest,
         "terminal_event_id": terminal_event_id or projection.get("terminal_event_id"),
@@ -95,6 +93,8 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     from app.runtime.registry import get_runtime_registry
     from app.runtime.adapter import RuntimeExecutionContext
     from app.services.agent_runtime_projection import AgentRuntimeProjection
+    from app.services import agent_task_repository as tasks
+    from app.services.agent_run_cancellation import confirm_task_cancellation, request_task_cancellation
 
     repository = AgentWorkflowRepository()
     run = await repository.get_run(run_id)
@@ -123,15 +123,36 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         task_id=getattr(run, "task_id", None),
     )
     status = "preserved"
+    task = await tasks.get_task(str(run.task_id)) if getattr(run, "task_id", None) else None
+    if task is not None and str(task.status) == "cancelling" and str(run.status) in {"running", "awaiting_human"}:
+        inspection = await adapter.inspect_state(request)
+        runtime_status = str(inspection.get("status") or (inspection.get("result") or {}).get("status") or "")
+        if runtime_status in {"cancelled", "canceled"}:
+            cancelled_result = inspection.get("result") if isinstance(inspection.get("result"), Mapping) else {
+                "status": "cancelled",
+                "error": {"code": "run_cancelled", "message": "Runtime cancellation confirmed", "retryable": False},
+            }
+            await confirm_task_cancellation(
+                task,
+                run,
+                result=cancelled_result,
+                terminal_event_id=str(inspection.get("terminal_event_id") or "") or None,
+            )
+            status = "projected"
+        else:
+            await request_task_cancellation(task, run)
+            status = "deferred"
     if result:
         await reconcile_known_result(run, result, AgentRuntimeProjection())
         status = "projected"
-    else:
+    elif status == "preserved":
         inspection = await adapter.inspect_state(request)
         if inspection.get("continuation_available"):
             status = "preserved"
         else:
             status = "deferred"
+    refreshed = await AgentWorkflowRepository().get_run(run.id)
+    projection = dict(((refreshed.run_metadata_json if refreshed is not None else {}) or {}).get("projection") or projection)
     await AgentWorkflowRepository().update_runtime_projection(
         run.id,
         {**projection, "reconciliation_status": status},

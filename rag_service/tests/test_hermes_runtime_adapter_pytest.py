@@ -414,7 +414,7 @@ def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp
 
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
-    monkeypatch.setenv("HERMES_STOP_CONFIRM_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "0.01")
     monkeypatch.setattr(
         hermes_api.httpx,
         "AsyncClient",

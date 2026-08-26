@@ -40,6 +40,10 @@ async def test_terminal_projection_replay_does_not_repeat_product_side_effects(m
             assert run_id == run.id
             return list(turns)
 
+        async def list_run_events(self, run_id):
+            assert run_id == run.id
+            return []
+
         async def update_runtime_projection(self, run_id, projection):
             assert run_id == run.id
             projection_updates.append(dict(projection))

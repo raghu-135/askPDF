@@ -107,11 +107,10 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         await dependency_monitor.refresh()
         dependency_task = asyncio.create_task(dependency_monitor.run(dependency_stop), name="agent-runtime-dependency-monitor")
         recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-        recovery_interval = max(
-            1.0,
-            float(os.getenv("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS", str(max(1.0, execution_store.lease_seconds / 3)))),
-        )
-        recovery_batch_size = max(1, min(1000, int(os.getenv("AGENT_RUNTIME_RECOVERY_BATCH_SIZE", "100"))))
+        from app.runtime.operational_limits import required_positive_float, required_positive_int
+
+        recovery_interval = required_positive_float("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS")
+        recovery_batch_size = required_positive_int("AGENT_RUNTIME_RECOVERY_BATCH_SIZE")
 
         async def recover_once() -> None:
             for record in await execution_store.list_terminal_reconciliation_candidates(recovery_batch_size):
@@ -182,10 +181,12 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 await recovery_task
             except asyncio.CancelledError:
                 pass
-        grace = max(1.0, float(os.getenv("AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS", "30")))
+        from app.runtime.operational_limits import required_positive_float
+
+        grace = required_positive_float("AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS")
         deadline = time.monotonic() + grace
         while runtime_state["active"] and time.monotonic() < deadline:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(required_positive_float("AGENT_CANCELLATION_POLL_INTERVAL_SECONDS"))
         for task in list(runtime_state["active"].values()):
             task.cancel()
         await execution_store.close()
@@ -417,6 +418,12 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
             result = AgentRuntimeResult(status="failed", error=error.to_dict())
             await finalize(result, error=error.to_dict())
+        except asyncio.CancelledError:
+            if not await cancellation_probe():
+                raise
+            error = RuntimeError("run_cancelled", "Agent runtime execution was cancelled", retryable=False)
+            result = AgentRuntimeResult(status="cancelled", error=error.to_dict())
+            await finalize(result, error=error.to_dict())
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
             result = AgentRuntimeResult(status="failed", error=exc.to_dict())
@@ -530,7 +537,9 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             if record and record.status in {"completed", "failed", "cancelled", "no_continuation"}:
                 return
             yield ": keep-alive\n\n"
-            await asyncio.sleep(0.1)
+            from app.runtime.operational_limits import required_positive_float
+
+            await asyncio.sleep(required_positive_float("AGENT_EVENT_POLL_INTERVAL_SECONDS"))
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:

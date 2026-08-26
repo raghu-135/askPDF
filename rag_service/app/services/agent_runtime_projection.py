@@ -23,7 +23,6 @@ class AgentRuntimeProjection:
             return False
         projection.update(
             {
-                "version": 1,
                 "status": projection.get("status") or "pending",
                 "last_event_id": event_id,
                 "last_event_sequence": int(getattr(event, "sequence", 0) or 0),
@@ -209,7 +208,6 @@ class AgentRuntimeProjection:
                     str(run_id),
                     {
                         **projection,
-                        "version": max(int(projection.get("version") or 0), 1),
                         "status": "applied",
                         "result_hash": digest,
                         "terminal_event_id": (

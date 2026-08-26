@@ -15,6 +15,10 @@ from sqlalchemy import select
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows import deep_research_nodes, router_runtime
+from app.agent_workflows.deep_research_execution import (
+    product_execution_services_factory,
+    runtime_execution_services_factory,
+)
 from app.agent_workflows.debug_trace import AgentTraceRecorder
 from app.agent_workflows.enums import WorkflowNodeType
 from app.agent_workflows.graph import NodeRegistry
@@ -70,6 +74,16 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
             "profile_id": profile,
         }],
     })
+
+
+def _deep_config(*, runtime: bool = False, **configurable) -> dict:
+    return {"configurable": {
+        "deep_research_services_factory": (
+            runtime_execution_services_factory if runtime else product_execution_services_factory
+        ),
+        "cancellation_checker": lambda: False,
+        **configurable,
+    }}
 
 
 class TaskInvocationAdapter:
@@ -402,7 +416,7 @@ async def test_deep_planner_repairs_invalid_output_once(monkeypatch):
     }
 
     result = await deep_research_nodes.deep_task_planner(
-        state, {"configurable": {"execution_event_sink": sink}},
+        state, _deep_config(runtime=True, execution_event_sink=sink),
     )
 
     assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
@@ -431,7 +445,7 @@ async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypat
     }
 
     result = await deep_research_nodes.deep_task_planner(
-        state, {"configurable": {"execution_event_sink": sink}},
+        state, _deep_config(runtime=True, execution_event_sink=sink),
     )
 
     assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
@@ -699,13 +713,13 @@ async def test_artifact_context_selects_only_completed_todo_evidence(monkeypatch
         sha256="hash-failed", byte_size=100, summary_json={}, todo_id="failed",
         agent_run_id="run-1",
     )
-    monkeypatch.setattr(deep_research_nodes, "list_artifacts", AsyncMock(return_value=[completed, failed]))
+    monkeypatch.setattr(repository, "list_artifacts", AsyncMock(return_value=[completed, failed]))
     monkeypatch.setattr(
-        deep_research_nodes,
+        repository,
         "list_task_runs",
         AsyncMock(return_value=[SimpleNamespace(id="run-1", task_attempt=1)]),
     )
-    monkeypatch.setattr(deep_research_nodes, "invalidate_context_summaries", AsyncMock())
+    monkeypatch.setattr(repository, "invalidate_context_summaries", AsyncMock())
 
     result = await deep_research_nodes.assemble_artifact_context({
         "agent_task_id": "task-1",
@@ -715,7 +729,7 @@ async def test_artifact_context_selects_only_completed_todo_evidence(monkeypatch
             {"id": "done", "status": "completed", "artifact_ids": [completed.id]},
             {"id": "failed", "status": "failed", "artifact_ids": [failed.id]},
         ],
-    }, {})
+    }, _deep_config())
 
     assert [value["id"] for value in result["task_evidence_manifest"]] == [completed.id]
 
@@ -729,16 +743,16 @@ async def test_artifact_context_reports_missing_and_invalid_completed_evidence(m
         agent_run_id="run-1",
     )
     monkeypatch.setattr(
-        deep_research_nodes,
+        repository,
         "list_artifacts",
         AsyncMock(return_value=[] if artifact is None else [artifact]),
     )
     monkeypatch.setattr(
-        deep_research_nodes,
+        repository,
         "list_task_runs",
         AsyncMock(return_value=[SimpleNamespace(id="run-1", task_attempt=1)]),
     )
-    monkeypatch.setattr(deep_research_nodes, "invalidate_context_summaries", AsyncMock())
+    monkeypatch.setattr(repository, "invalidate_context_summaries", AsyncMock())
 
     result = await deep_research_nodes.assemble_artifact_context({
         "agent_task_id": "task-1",
@@ -747,7 +761,7 @@ async def test_artifact_context_reports_missing_and_invalid_completed_evidence(m
         "task_todos": [{
             "id": "done", "status": "completed", "artifact_ids": ["inherited-evidence"],
         }],
-    }, {})
+    }, _deep_config())
 
     expected_reason = "missing" if validity is None else validity
     assert result["task_evidence_manifest"] == []
@@ -765,16 +779,16 @@ async def test_synthesizer_reports_hash_mismatched_inherited_evidence(monkeypatc
         agent_run_id="run-1", object_key="agent-tasks/task-1/run-1/evidence/1",
         provenance_json={}, source_refs_json={},
     )
-    monkeypatch.setattr(deep_research_nodes, "list_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(repository, "list_artifacts", AsyncMock(return_value=[artifact]))
     monkeypatch.setattr(
-        deep_research_nodes,
+        repository,
         "list_task_runs",
         AsyncMock(return_value=[
             SimpleNamespace(id="run-1", task_attempt=1),
             SimpleNamespace(id="run-2", task_attempt=2),
         ]),
     )
-    monkeypatch.setattr(deep_research_nodes, "invalidate_context_summaries", AsyncMock())
+    monkeypatch.setattr(repository, "invalidate_context_summaries", AsyncMock())
     monkeypatch.setattr(deep_research_nodes, "_call_model", AsyncMock(return_value=("Incomplete report", {})))
     try:
         result = await deep_research_nodes.deep_task_synthesizer({
@@ -784,7 +798,7 @@ async def test_synthesizer_reports_hash_mismatched_inherited_evidence(monkeypatc
                 "id": "done", "status": "completed", "required": True,
                 "artifact_ids": [artifact.id],
             }],
-        }, {})
+        }, _deep_config())
     finally:
         set_content_store(None)
 
@@ -871,7 +885,7 @@ async def test_child_retry_synthesizes_inherited_evidence_and_projects_source_li
         AsyncMock(return_value=("Final report grounded in attempt one.", {"model": "test"})),
     )
     try:
-        synthesized = await deep_research_nodes.deep_task_synthesizer(state, {})
+        synthesized = await deep_research_nodes.deep_task_synthesizer(state, _deep_config())
         assert synthesized["task_evidence_manifest"] == [{
             "id": inherited.id,
             "kind": "intermediate_report",
@@ -939,15 +953,15 @@ def _ready_web_todo() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_deep_scheduler_reuses_task_wide_web_approval(monkeypatch):
     todo = _ready_web_todo()
-    monkeypatch.setattr(deep_research_nodes, "schedule_ready_todos", AsyncMock(return_value=[todo]))
-    monkeypatch.setattr(deep_research_nodes, "list_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "schedule_ready_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "list_todos", AsyncMock(return_value=[todo]))
     monkeypatch.setattr(deep_research_nodes, "interrupt", lambda *_args, **_kwargs: pytest.fail("approved task must not interrupt again"))
 
     result = await deep_research_nodes.deep_task_scheduler({
         "agent_task_id": "task-1", "agent_run_id": "run-1", "task_plan_revision": 2,
         "task_limits": {"max_concurrency": 2, "max_fanout": 2}, "web_search_mode": "ask",
         "task_web_access": "allowed_for_task",
-    }, {})
+    }, _deep_config())
 
     assert [item["todo"]["id"] for item in result["task_work_items"]] == [todo.id]
 
@@ -956,8 +970,8 @@ async def test_deep_scheduler_reuses_task_wide_web_approval(monkeypatch):
 async def test_deep_scheduler_ask_mode_offers_once_and_task_scope(monkeypatch):
     todo = _ready_web_todo()
     captured = {}
-    monkeypatch.setattr(deep_research_nodes, "schedule_ready_todos", AsyncMock(return_value=[todo]))
-    monkeypatch.setattr(deep_research_nodes, "list_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "schedule_ready_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "list_todos", AsyncMock(return_value=[todo]))
 
     def approve_for_task(payload):
         captured.update(payload)
@@ -968,7 +982,7 @@ async def test_deep_scheduler_ask_mode_offers_once_and_task_scope(monkeypatch):
         "agent_task_id": "task-1", "agent_run_id": "run-1", "task_plan_revision": 1,
         "task_limits": {"max_concurrency": 2, "max_fanout": 2}, "web_search_mode": "ask",
         "task_web_access": "undecided",
-    }, {})
+    }, _deep_config())
 
     assert captured["allowed_actions"] == ["approve", "approve_for_scope", "continue_without"]
     assert captured["approval_scope_kind"] == "task"
@@ -1361,10 +1375,10 @@ async def test_task_commands_are_idempotent_versioned_and_terminal_cancel(
 
 
 @pytest.mark.asyncio
-async def test_restarted_runner_terminalizes_reclaimed_cancellation(monkeypatch):
+async def test_restarted_runner_resubmits_reclaimed_cancellation_without_terminalizing(monkeypatch):
     task = SimpleNamespace(id="task-1", status="cancelling")
     active_run = SimpleNamespace(id="run-1", status="running")
-    complete_run = AsyncMock()
+    request_cancel = AsyncMock(return_value={"status": "cancelling"})
     complete_task = AsyncMock()
     release_lease = AsyncMock()
 
@@ -1372,29 +1386,17 @@ async def test_restarted_runner_terminalizes_reclaimed_cancellation(monkeypatch)
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=active_run))
     monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", complete_task)
     monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", release_lease)
-    monkeypatch.setattr(
-        agent_task_runtime,
-        "AgentWorkflowRepository",
-        lambda: SimpleNamespace(complete_run=complete_run),
-    )
+    monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", request_cancel)
 
     await agent_task_runtime.execute_claimed_task(task.id, "replacement-worker")
 
-    complete_run.assert_awaited_once_with(
-        active_run.id,
-        status="cancelled",
-        error_json={"code": "agent_task_cancelled", "retryable": False},
-    )
-    complete_task.assert_awaited_once_with(
-        task.id,
-        status="cancelled",
-        reason="cancelled_by_user",
-    )
+    request_cancel.assert_awaited_once_with(task, active_run)
+    complete_task.assert_not_awaited()
     release_lease.assert_awaited_once_with(task.id, "replacement-worker", lease_seconds=60)
 
 
 @pytest.mark.asyncio
-async def test_cancelling_task_is_reclaimable_without_returning_to_running(
+async def test_queued_task_without_runtime_cancels_immediately(
     test_session_maker,
     sample_thread,
 ):
@@ -1425,22 +1427,16 @@ async def test_cancelling_task_is_reclaimable_without_returning_to_running(
         idempotency_key="cancel-reclaim-start",
         expected_version=task.version,
     )
-    claimed = await repository.claim_next_task("original-worker")
-    assert claimed is not None and claimed.id == task.id
     cancelling, _, _ = await repository.apply_command(
         task.id,
         action="cancel",
         idempotency_key="cancel-reclaim-command",
-        expected_version=claimed.version,
+        expected_version=queued.version,
     )
-    assert cancelling.status == "cancelling"
+    assert cancelling.status == "cancelled"
 
-    await repository.release_task_lease(task.id, "original-worker")
     reclaimed = await repository.claim_next_task("replacement-worker")
-
-    assert reclaimed is not None and reclaimed.id == task.id
-    assert reclaimed.status == "cancelling"
-    assert reclaimed.current_phase == "cancelling"
+    assert reclaimed is None
 
 
 @pytest.mark.asyncio
@@ -1748,6 +1744,7 @@ async def test_selected_run_event_stream_advances_cursor_across_filtered_events(
     monkeypatch.setattr(agent_tasks_api.asyncio, "sleep", AsyncMock())
     response = await agent_tasks_api.stream_agent_task_events(
         "task-1",
+        request=SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
         thread_id="thread-1",
         after_sequence=0,
         run_id="run-selected",
@@ -1790,6 +1787,7 @@ async def test_product_run_event_stream_reads_persisted_run_journal(monkeypatch)
     monkeypatch.setattr(agent_workflows_api.asyncio, "sleep", AsyncMock())
     response = await agent_workflows_api.stream_agent_run_events(
         run.id,
+        request=SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
         thread_id="thread-1",
         after_sequence=0,
     )

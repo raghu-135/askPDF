@@ -260,7 +260,12 @@ async def thread_chat_endpoint(
             try:
                 while True:
                     try:
-                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                        from app.runtime.operational_limits import required_positive_float
+
+                        item = await asyncio.wait_for(
+                            sink.queue.get(),
+                            timeout=required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS"),
+                        )
                     except asyncio.TimeoutError:
                         sequence += 1
                         yield _chat_sse({"event": "heartbeat", "data": {}}, sequence)

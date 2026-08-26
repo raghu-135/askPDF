@@ -7,23 +7,23 @@ import re
 from typing import Any, Mapping
 
 
-DEEP_AGENT_DEFAULTS: dict[str, int] = {
-    "max_active_runtime_ms": 3_600_000,
-    "max_duration_seconds": 3_600,
-    "max_output_chars": 12_000,
-    "max_event_count": 200,
-    "wake_limit_seconds": 900,
-    "subagent_timeout_ms": 180_000,
-    "dispatch_timeout_ms": 60_000,
-    "worker_timeout_ms": 30_000,
-    "web_worker_timeout_ms": 45_000,
-}
+DEEP_AGENT_BUDGET_KEYS = frozenset({
+    "max_active_runtime_ms",
+    "max_duration_seconds",
+    "max_output_chars",
+    "max_event_count",
+    "wake_limit_seconds",
+    "subagent_timeout_ms",
+    "dispatch_timeout_ms",
+    "worker_timeout_ms",
+    "web_worker_timeout_ms",
+})
 
 # These are the limits each framework can consume. An absent key is
 # intentional: framework adapters must not infer support for another runtime's
 # execution model.
 DEEP_AGENT_FRAMEWORK_KEYS: dict[str, frozenset[str]] = {
-    "langgraph": frozenset(DEEP_AGENT_DEFAULTS),
+    "langgraph": DEEP_AGENT_BUDGET_KEYS,
     "hermes": frozenset({
         "max_active_runtime_ms",
         "max_duration_seconds",
@@ -82,21 +82,21 @@ def _positive_env(name: str) -> int | None:
 
 
 def deep_agent_budgets(framework: str | None = None) -> dict[str, int]:
-    """Return effective deployment defaults for a framework."""
+    """Return required deployment budgets for a framework."""
 
     normalized = framework.lower() if framework else None
     if normalized is not None and normalized not in DEEP_AGENT_FRAMEWORK_KEYS:
         raise ValueError(f"unsupported Deep Agent framework: {framework}")
-    keys = DEEP_AGENT_FRAMEWORK_KEYS.get(normalized, frozenset(DEEP_AGENT_DEFAULTS))
+    keys = DEEP_AGENT_FRAMEWORK_KEYS.get(normalized, DEEP_AGENT_BUDGET_KEYS)
     result: dict[str, int] = {}
-    for name, default in DEEP_AGENT_DEFAULTS.items():
-        if name not in keys:
-            continue
+    for name in keys:
         value = _positive_env(_env_key(normalized, name))
         if value is None:
             value = _positive_env(_env_key(None, name))
+        if value is None:
+            raise ValueError(f"{_env_key(normalized, name)} or {_env_key(None, name)} is required")
         divisor = _ENV_SPECS[name][1]
-        result[name] = default if value is None else max(1, (value + divisor - 1) // divisor)
+        result[name] = max(1, (value + divisor - 1) // divisor)
     return result
 
 
@@ -118,14 +118,7 @@ def apply_deep_agent_env_overrides(
 
 
 def configured_budget_value(config: Mapping[str, Any], name: str, framework: str) -> int:
-    """Resolve an adapter limit: env override, then definition, then default."""
+    """Resolve an adapter limit from required deployment configuration."""
 
     budgets = deep_agent_budgets(framework)
-    framework_name = _env_key(framework, name)
-    common_name = _env_key(None, name)
-    if os.getenv(framework_name) is not None or os.getenv(common_name) is not None:
-        return budgets[name]
-    configured = config.get(name)
-    if configured is not None:
-        return max(1, int(configured))
     return budgets[name]

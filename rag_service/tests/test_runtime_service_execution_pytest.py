@@ -228,3 +228,43 @@ async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
         "cancellation_requested": False,
         "no_op": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class BlockingAdapter:
+        async def start(self, request, *, context, event_sink=None):
+            started.set()
+            try:
+                while not await context.cancellation_checker():
+                    await asyncio.sleep(0.001)
+                raise asyncio.CancelledError
+            finally:
+                stopped.set()
+
+    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", BlockingAdapter)
+    store = ExecutionStore()
+    app = create_app(execution_store=store)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        stream_task = asyncio.create_task(
+            _read_events(client, "POST", "/v1/runs/start", json=_payload("run-blocking-cancel"))
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        response = await client.post(
+            "/v1/runs/run-blocking-cancel/cancel",
+            json={"request": _request("run-blocking-cancel")},
+        )
+        events = await asyncio.wait_for(stream_task, timeout=1)
+
+    assert response.status_code == 200
+    assert stopped.is_set()
+    terminals = [event for event in events if event["event"]["terminal"]]
+    assert len(terminals) == 1
+    assert terminals[0]["event"]["kind"] == "run.cancelled"
+    assert terminals[0]["result"]["status"] == "cancelled"
+    record = await store.get("run-blocking-cancel")
+    assert record is not None and record.status == "cancelled"

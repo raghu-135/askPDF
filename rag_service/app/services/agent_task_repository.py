@@ -152,6 +152,25 @@ async def task_cancel_requested(task_id: str) -> bool:
     return bool(task and task.status in {AgentTaskStatus.CANCELLING.value, AgentTaskStatus.CANCELLED.value})
 
 
+async def run_cancel_requested(run_id: str) -> bool:
+    """Resolve durable product cancellation from a canonical agent run."""
+
+    if not str(run_id or "").strip():
+        raise ValueError("A canonical agent run id is required for cancellation")
+    async with async_session_maker() as session:
+        run = await session.get(AgentRun, run_id)
+        if run is None:
+            raise ValueError(f"Agent run {run_id!r} does not exist")
+        if run.status == AgentRunStatus.CANCELLED.value:
+            return True
+        if not run.task_id:
+            return False
+        task = await session.get(AgentTask, run.task_id)
+        if task is None:
+            raise ValueError(f"Agent run {run_id!r} has no owning task")
+        return task.status in {AgentTaskStatus.CANCELLING.value, AgentTaskStatus.CANCELLED.value}
+
+
 async def consume_budget(
     task_id: str,
     *,
@@ -652,9 +671,18 @@ async def apply_command(
             )
             session.add(command)
             now = utc_now()
+            runtime_submitted = False
+            if action == "cancel" and task.active_run_id is not None:
+                active_run = (await session.execute(
+                    select(AgentRun).where(AgentRun.id == task.active_run_id).with_for_update()
+                )).scalar_one_or_none()
+                runtime_submitted = bool(
+                    active_run
+                    and (active_run.run_metadata_json or {}).get("runtime_started") is True
+                )
             if action == "pause" and task.status == AgentTaskStatus.QUEUED.value:
                 target = AgentTaskStatus.PAUSED.value
-            elif action == "cancel" and task.status in {
+            elif action == "cancel" and not runtime_submitted and task.status in {
                 AgentTaskStatus.CREATED.value,
                 AgentTaskStatus.QUEUED.value,
                 AgentTaskStatus.PAUSED.value,
@@ -707,10 +735,10 @@ async def apply_command(
                 task.terminal_reason = "cancelled_by_user"
                 task.lease_owner = None
                 task.lease_expires_at = None
-            command.status = "completed"
+            command.status = "accepted" if action == "cancel" and target == AgentTaskStatus.CANCELLING.value else "completed"
             command.result_version = task.version
             replace_jsonb_field(command, "result_json", {"task_id": task.id, "status": task.status, "version": task.version})
-            command.completed_at = now
+            command.completed_at = None if command.status == "accepted" else now
             await _append_event(
                 session,
                 task,
@@ -733,6 +761,25 @@ async def complete_control_command(command_id: str, *, result: dict[str, Any] | 
                 command.status = "rejected" if rejected else "completed"
                 command.result_json = dict(result or {})
                 command.completed_at = utc_now()
+
+
+async def complete_pending_cancel_commands(task_id: str, *, result: dict[str, Any]) -> None:
+    """Close accepted cancel commands after authoritative runtime confirmation."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            commands = list((await session.execute(
+                select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task_id,
+                    AgentTaskCommand.action == "cancel",
+                    AgentTaskCommand.status == "accepted",
+                ).with_for_update()
+            )).scalars().all())
+            now = utc_now()
+            for command in commands:
+                command.status = "completed"
+                command.result_json = dict(result)
+                command.completed_at = now
 
 
 async def request_task_deletion(
@@ -1365,6 +1412,23 @@ async def finalize_task_run(
             task.lease_expires_at = None
             task.heartbeat_at = None
             task.version += 1
+
+            pending_cancel_commands = list((await session.execute(
+                select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task_id,
+                    AgentTaskCommand.action == "cancel",
+                    AgentTaskCommand.status == "accepted",
+                ).with_for_update()
+            )).scalars().all())
+            for command in pending_cancel_commands:
+                command.status = "completed"
+                command.result_json = {
+                    "status": task_status,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "runtime_confirmation": "confirmed" if task_status == AgentTaskStatus.CANCELLED.value else "terminal_before_cancellation",
+                }
+                command.completed_at = completed_at
 
             if existing_terminal is None:
                 latest_sequence = (await session.execute(

@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from app.agent.tool_registry import TOOL_LIVE_WEB_RECON
@@ -24,6 +24,7 @@ from app.services import agent_task_repository as repository
 from app.services.agent_task_runtime import (
     ensure_task_run,
 )
+from app.services.agent_run_cancellation import require_task_cancellation, request_task_cancellation
 from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
@@ -40,6 +41,7 @@ from app.runtime.catalog import definition_from_workflow
 from app.runtime.contracts import RuntimeOperationId
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.registry import get_runtime_registry
+from app.runtime.operational_limits import required_positive_float
 
 
 router = APIRouter(tags=["agent-tasks"])
@@ -333,12 +335,22 @@ async def command_agent_task(
     if action not in {"start", "pause", "resume", "cancel", "retry"}:
         raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
     task = await _owned_task(task_id, thread_id)
-    if bool((task.config_json or {}).get("workflow_contract_invalidated")):
+    if bool((getattr(task, "config_json", None) or {}).get("workflow_contract_invalidated")):
         raise HTTPException(
             status_code=409,
             detail={"code": "workflow_contract_invalidated", "retryable": False},
         )
     await _require_task_capability(task, action)
+    existing_run = await repository.get_task_run(task.id) if action == "cancel" else None
+    if (
+        action == "cancel"
+        and existing_run is not None
+        and (existing_run.run_metadata_json or {}).get("runtime_started") is True
+    ):
+        try:
+            await require_task_cancellation(task, existing_run)
+        except AgentRuntimeError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     try:
         task, command, duplicate = await repository.apply_command(
             task.id, action=action, idempotency_key=idempotency_key,
@@ -360,33 +372,25 @@ async def command_agent_task(
                     expected_thread_id=thread_id,
                 )
         if action == "cancel" and not duplicate:
-            run = await repository.get_task_run(task.id)
-            if run is not None:
-                if getattr(run, "framework", None) == "hermes":
-                    try:
-                        await AgentRunService().cancel_agent_run(run.id, thread_id=thread_id)
-                    except Exception as exc:
-                        if getattr(exc, "code", None) != "runtime_binding_missing":
-                            logger.warning("Hermes /stop failed for task %s: %s", task.id, exc)
-                pending = dict(run.pending_interrupt_json or {})
-                if pending.get("status") == "pending" and "reject" in (pending.get("allowed_actions") or []):
-                    await AgentWorkflowRepository().resolve_pending_interrupt(
-                        run.id,
-                        interrupt_id=str(pending.get("interrupt_id")),
-                        action="reject",
-                        resume_token=pending.get("resume_token"),
-                        resume_version=int(pending.get("resume_version") or 1),
-                        expected_thread_id=thread_id,
+            run = existing_run or await repository.get_task_run(task.id)
+            if run is not None and task.status == "cancelling":
+                try:
+                    result = await request_task_cancellation(task, run)
+                except AgentRuntimeError as exc:
+                    await repository.complete_control_command(
+                        command.id,
+                        result={"error": exc.to_dict(), "runtime_confirmation": "pending"},
+                        rejected=True,
                     )
-                if task.status == "cancelled":
-                    await AgentWorkflowRepository().complete_run(
-                        run.id,
-                        status="cancelled",
-                        error_json={"code": "agent_task_cancelled", "retryable": False},
-                    )
+                    raise
+                await repository.complete_control_command(command.id, result=dict(result))
+                task = await repository.get_task(task.id) or task
         return {"task": _task_payload(task), "command_id": command.id, "duplicate": duplicate}
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc
+    except AgentRuntimeError as exc:
+        logger.warning("Runtime cancellation submission failed | task_id=%s code=%s", task.id, exc.code)
+        raise HTTPException(status_code=503 if exc.retryable else 409, detail=exc.to_dict()) from exc
     except Exception as exc:
         logger.exception(
             "Failed to initialize agent task run",
@@ -670,6 +674,7 @@ async def delete_agent_task(
 @router.get("/agent-tasks/{task_id}/events")
 async def stream_agent_task_events(
     task_id: str,
+    request: Request,
     thread_id: str = Query(min_length=1),
     after_sequence: int = Query(default=0, ge=0),
     run_id: Optional[str] = Query(default=None),
@@ -684,12 +689,18 @@ async def stream_agent_task_events(
 
     async def events():
         sequence = after_sequence
-        idle = 0
+        poll_interval = required_positive_float("AGENT_EVENT_POLL_INTERVAL_SECONDS")
+        heartbeat_interval = required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS")
+        idle_seconds = 0.0
         while True:
+            if await request.is_disconnected():
+                return
             rows = await repository.list_events(task_id, after_sequence=sequence)
             if rows:
-                idle = 0
+                idle_seconds = 0.0
                 for row in rows:
+                    if await request.is_disconnected():
+                        return
                     sequence = row.sequence
                     if scope == "run" and row.agent_run_id != run_id:
                         continue
@@ -712,10 +723,12 @@ async def stream_agent_task_events(
                     if terminal:
                         return
             else:
-                idle += 1
-                if idle >= 12:
+                idle_seconds += poll_interval
+                if idle_seconds >= heartbeat_interval:
+                    if await request.is_disconnected():
+                        return
                     yield f": heartbeat {sequence}\n\n"
-                    idle = 0
-            await asyncio.sleep(1)
+                    idle_seconds = 0.0
+            await asyncio.sleep(poll_interval)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})

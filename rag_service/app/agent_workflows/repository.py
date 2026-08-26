@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import functools
+import inspect
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -59,6 +62,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
     AgentRunStatus,
+    AgentTask,
     AgentWorkflow,
     AgentRun,
     ChatTurn,
@@ -80,11 +84,18 @@ class AgentWorkflowRepository:
 
     def __init__(self, session: Optional[AsyncSession] = None):
         self._session = session
+        self._operation_session: ContextVar[AsyncSession | None] = ContextVar(
+            f"agent_workflow_repository_session_{id(self)}",
+            default=None,
+        )
 
     async def _get_session(self) -> AsyncSession:
         if self._session is not None:
             return self._session
-        return async_session_maker()
+        session = self._operation_session.get()
+        if session is None:
+            raise RuntimeError("AgentWorkflowRepository operation has no managed database session")
+        return session
 
     async def seed_builtin_workflows(self) -> None:
         session = await self._get_session()
@@ -221,7 +232,9 @@ class AgentWorkflowRepository:
         candidates: list[AgentRun] = []
         for run in runs:
             projection = dict((run.run_metadata_json or {}).get("projection") or {})
-            if projection.get("runtime_result") or projection.get("terminal_event_id") or projection.get("reconciliation_status") in {"pending", "deferred", "failed"}:
+            task = await session.get(AgentTask, run.task_id) if run.task_id else None
+            cancellation_pending = task is not None and str(task.status) == "cancelling"
+            if cancellation_pending or projection.get("runtime_result") or projection.get("terminal_event_id") or projection.get("reconciliation_status") in {"pending", "deferred", "failed"}:
                 candidates.append(run)
             if len(candidates) >= bounded:
                 break
@@ -738,14 +751,7 @@ class AgentWorkflowRepository:
 
     async def list_run_events(self, run_id: str) -> list[Any]:
         session = await self._get_session()
-        try:
-            return await run_store_list_run_events(session, run_id)
-        finally:
-            # Polling SSE consumers close their request as soon as a terminal
-            # event arrives. Repository-owned sessions must be returned to the
-            # pool even when that cancellation interrupts the poll.
-            if self._session is None:
-                await session.close()
+        return await run_store_list_run_events(session, run_id)
 
     async def update_runtime_projection(
         self,
@@ -814,3 +820,25 @@ class AgentWorkflowRepository:
             metadata["runtime_started"] = True
             replace_jsonb_field(run, "run_metadata_json", metadata)
             return run
+
+
+def _managed_repository_operation(method: Any) -> Any:
+    """Give one public repository operation deterministic session ownership."""
+
+    @functools.wraps(method)
+    async def wrapped(self: AgentWorkflowRepository, *args: Any, **kwargs: Any) -> Any:
+        if self._session is not None or self._operation_session.get() is not None:
+            return await method(self, *args, **kwargs)
+        async with async_session_maker() as session:
+            token = self._operation_session.set(session)
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                self._operation_session.reset(token)
+
+    return wrapped
+
+
+for _operation_name, _operation in tuple(vars(AgentWorkflowRepository).items()):
+    if not _operation_name.startswith("_") and inspect.iscoroutinefunction(_operation):
+        setattr(AgentWorkflowRepository, _operation_name, _managed_repository_operation(_operation))

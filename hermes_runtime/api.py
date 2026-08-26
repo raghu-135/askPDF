@@ -25,6 +25,7 @@ from hermes_runtime.execution_store import (
     HermesExecutionConflictError,
     HermesExecutionStore,
 )
+from hermes_runtime.operational_limits import required_positive_float, required_positive_int
 from hermes_runtime.compatibility import HERMES_REVISION, HERMES_TERMINAL_EVENTS
 from hermes_runtime.profile_manager import (
     RunProfile,
@@ -74,9 +75,13 @@ def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
     read_timeout = (
         float(max_seconds)
         if max_seconds is not None
-        else float(os.getenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30"))
+        else required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
     )
-    return httpx.Timeout(read_timeout, connect=5, write=10)
+    return httpx.Timeout(
+        read_timeout,
+        connect=required_positive_float("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS"),
+        write=required_positive_float("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS"),
+    )
 
 
 def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> str:
@@ -353,7 +358,7 @@ async def _confirm_upstream_terminal(
         float(
             timeout_seconds
             if timeout_seconds is not None
-            else os.getenv("HERMES_STOP_CONFIRM_TIMEOUT_SECONDS", "15")
+            else required_positive_float("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS")
         ),
     )
     interval = max(
@@ -361,7 +366,7 @@ async def _confirm_upstream_terminal(
         float(
             poll_interval_seconds
             if poll_interval_seconds is not None
-            else os.getenv("HERMES_STOP_POLL_INTERVAL_SECONDS", "0.25")
+            else required_positive_float("AGENT_CANCELLATION_POLL_INTERVAL_SECONDS")
         ),
     )
     status_url = (
@@ -370,7 +375,7 @@ async def _confirm_upstream_terminal(
     )
     deadline = time.monotonic() + timeout
     last_status = "stopping"
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=_upstream_timeout()) as client:
         while True:
             response = await client.get(status_url, headers=dict(headers))
             response.raise_for_status()
@@ -419,7 +424,7 @@ def create_app() -> FastAPI:
             "HERMES_API_URL is required for the Hermes runtime"
         )
     storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "file").strip().lower()
-    worker_count = int(os.getenv("HERMES_RUNTIME_WORKERS", os.getenv("WEB_CONCURRENCY", "1")))
+    worker_count = required_positive_int("HERMES_RUNTIME_WORKERS")
     if storage_backend != "file":
         raise RuntimeError("Hermes PostgreSQL execution storage is not enabled")
     if worker_count > 1:
@@ -440,10 +445,10 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         state["draining"] = False
-        profile_max_age = int(os.getenv("HERMES_RUN_PROFILE_MAX_AGE_SECONDS", "86400"))
+        profile_max_age = required_positive_int("HERMES_RUN_PROFILE_MAX_AGE_SECONDS")
         profile_manager.sweep_stale(max_age_seconds=profile_max_age)
         async def sweep_profiles() -> None:
-            interval = max(60, int(os.getenv("HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS", "3600")))
+            interval = required_positive_int("HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS")
             while True:
                 await asyncio.sleep(interval)
                 profile_manager.sweep_stale(max_age_seconds=profile_max_age)
@@ -656,7 +661,9 @@ def create_app() -> FastAPI:
         effective_limits = managed_limits
         max_events = max(1, int(effective_limits.get("max_event_count") or 200))
         max_output_chars = max(1, int(effective_limits.get("max_output_chars") or 12000))
-        max_duration_seconds = max(1, int(effective_limits.get("max_duration_seconds") or 3600))
+        if effective_limits.get("max_duration_seconds") is None:
+            raise ValueError("max_duration_seconds is required in the resolved runtime limits")
+        max_duration_seconds = max(1, int(effective_limits["max_duration_seconds"]))
         deadline = time.monotonic() + max_duration_seconds
         system_prompt = str(managed_profile.get("instructions") or "").strip()
         task_context = input_data.get("task_context")
@@ -1110,7 +1117,7 @@ def create_app() -> FastAPI:
                         execution_profile,
                         upstream_run_id,
                         headers,
-                        timeout_seconds=float(os.getenv("HERMES_TERMINAL_CONFIRM_TIMEOUT_SECONDS", "5")),
+                        timeout_seconds=required_positive_float("AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS"),
                     ) if upstream_run_id and execution_profile else {"confirmed": True}
                     if not upstream_terminal["confirmed"]:
                         stop_result = await _stop_and_confirm_upstream_run(

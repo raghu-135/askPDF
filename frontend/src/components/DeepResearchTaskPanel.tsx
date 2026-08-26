@@ -71,6 +71,23 @@ import {
   SourceList,
 } from './conversation';
 
+function requiredPositiveMilliseconds(name: string, raw: string | undefined): number {
+  const value = Number(raw);
+  if (!raw || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`Required environment variable ${name} must be a positive number`);
+  }
+  return value;
+}
+
+const AGENT_TASK_POLL_INTERVAL_MS = requiredPositiveMilliseconds(
+  'NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS',
+  process.env.NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS,
+);
+const AGENT_SSE_RECONNECT_INTERVAL_MS = requiredPositiveMilliseconds(
+  'NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS',
+  process.env.NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS,
+);
+
 
 export function DeepResearchTaskPicker({
   threadId,
@@ -369,9 +386,9 @@ export default function DeepResearchTaskPanel({
     const poll = async () => {
       try { await refresh(); }
       catch (value) { if (!cancelled) setError(String(value)); }
-      if (!cancelled) timer = window.setTimeout(poll, 2000);
+      if (!cancelled) timer = window.setTimeout(poll, AGENT_TASK_POLL_INTERVAL_MS);
     };
-    timer = window.setTimeout(poll, 2000);
+    timer = window.setTimeout(poll, AGENT_TASK_POLL_INTERVAL_MS);
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
   }, [refresh, task?.status]);
   useEffect(() => {
@@ -446,7 +463,7 @@ export default function DeepResearchTaskPanel({
       source.onerror = () => {
         source?.close();
         source = null;
-        if (active) window.setTimeout(connect, 2000);
+        if (active) window.setTimeout(connect, AGENT_SSE_RECONNECT_INTERVAL_MS);
       };
     };
     connect();
@@ -455,7 +472,7 @@ export default function DeepResearchTaskPanel({
       source?.close();
       source = null;
     };
-  }, [onOpenTrace, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task, threadId, traceLiveRequested]);
+  }, [onOpenTrace, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task?.status, threadId, traceLiveRequested]);
 
   useEffect(() => {
     let active = true;
@@ -544,7 +561,7 @@ export default function DeepResearchTaskPanel({
       source.onerror = () => {
         source?.close();
         source = null;
-        if (active) reconnectTimer = window.setTimeout(connect, 2000);
+        if (active) reconnectTimer = window.setTimeout(connect, AGENT_SSE_RECONNECT_INTERVAL_MS);
       };
     };
     connect();

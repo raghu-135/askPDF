@@ -6,10 +6,8 @@ services:
 
   rag-service:
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -42,10 +40,8 @@ services:
 
   db-migrate:
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf

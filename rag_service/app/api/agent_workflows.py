@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any, Dict, Literal, Mapping, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -96,6 +96,7 @@ from app.runtime.capability_resolver import (
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
+from app.runtime.operational_limits import required_positive_float
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -603,6 +604,7 @@ async def get_agent_workflow_capabilities(workflow_id: str):
 @router.get("/agent-runs/{run_id}/events")
 async def stream_agent_run_events(
     run_id: str,
+    request: Request,
     thread_id: str = Query(..., min_length=1),
     after_sequence: int = Query(default=0, ge=0),
 ):
@@ -611,7 +613,9 @@ async def stream_agent_run_events(
 
     async def events():
         sequence = after_sequence
-        idle = 0
+        poll_interval = required_positive_float("AGENT_EVENT_POLL_INTERVAL_SECONDS")
+        heartbeat_interval = required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS")
+        idle_seconds = 0.0
         canonical_events: list[AgentRuntimeEvent] = []
 
         def canonical_event(row: Any) -> AgentRuntimeEvent:
@@ -628,13 +632,17 @@ async def stream_agent_run_events(
             )
 
         while True:
+            if await request.is_disconnected():
+                return
             all_rows = await repository.list_run_events(run.id)
             if not canonical_events and sequence > 0:
                 canonical_events.extend(canonical_event(row) for row in all_rows if int(getattr(row, "sequence", 0) or 0) <= sequence)
             rows = [row for row in all_rows if int(getattr(row, "sequence", 0) or 0) > sequence]
             if rows:
-                idle = 0
+                idle_seconds = 0.0
                 for row in rows:
+                    if await request.is_disconnected():
+                        return
                     sequence = int(getattr(row, "sequence", sequence) or sequence)
                     canonical_events.append(canonical_event(row))
                     payload = dict(getattr(row, "payload_json", None) or {})
@@ -658,11 +666,13 @@ async def stream_agent_run_events(
                     if terminal:
                         return
             else:
-                idle += 1
-                if idle >= 12:
+                idle_seconds += poll_interval
+                if idle_seconds >= heartbeat_interval:
+                    if await request.is_disconnected():
+                        return
                     yield f": heartbeat {sequence}\n\n"
-                    idle = 0
-            await asyncio.sleep(1)
+                    idle_seconds = 0.0
+            await asyncio.sleep(poll_interval)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
@@ -1381,7 +1391,10 @@ async def resume_agent_run(
             try:
                 while True:
                     try:
-                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                        item = await asyncio.wait_for(
+                            sink.queue.get(),
+                            timeout=required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS"),
+                        )
                     except asyncio.TimeoutError:
                         sequence += 1
                         yield _sse({"event": "heartbeat", "data": {"run_id": run_id}}, sequence)

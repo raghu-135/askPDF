@@ -10,6 +10,7 @@ import os
 import hashlib
 import json
 import asyncio
+import time
 from typing import Any, Mapping
 
 import httpx
@@ -26,6 +27,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
+from app.runtime.operational_limits import required_positive_float, required_positive_int
 from app.runtime.transport import (
     capabilities_from_dict,
     event_from_dict,
@@ -62,10 +64,8 @@ def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
 
     return {
         "embedding_model": context.embedding_model,
-        # Task execution historically carried request-only fields (objective,
-        # limits, model selection, and tool policy) on the legacy request
-        # object. Preserve that input explicitly across the HTTP boundary;
-        # it is execution input, not a product repository or writer.
+        # Objective, limits, model selection, and tool policy are explicit
+        # execution inputs, not product repositories or writers.
         "request_payload": request_payload,
         "resolved_spec": _safe_json(context.resolved_spec),
         "agent_run_context": _safe_json(context.agent_run_context),
@@ -117,11 +117,19 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         self._client = client
         self._owns_client = client is None
         self._timeout = httpx.Timeout(
-            read_timeout or float(os.getenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")),
-            connect=connect_timeout or float(os.getenv("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS", "5")),
-            write=float(os.getenv("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS", "10")),
+            read_timeout or required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS"),
+            connect=connect_timeout or required_positive_float("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS"),
+            write=required_positive_float("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS"),
         )
         self._execution_timeout = float(deep_agent_budgets(self.framework)["max_duration_seconds"])
+        self._reconnect_attempts = required_positive_int("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS")
+        self._reconnect_backoff = required_positive_float("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS")
+        self._reconnect_deadline = min(
+            self._execution_timeout,
+            required_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS"),
+        )
+        self._output_delta_flush_seconds = required_positive_float("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS")
+        self._output_delta_flush_bytes = required_positive_int("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES")
 
     async def _client_for_request(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -236,14 +244,97 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         terminal_event_seen = False
         last_sequence = 0
         last_event_id: str | None = None
+        pending_deltas: list[AgentRuntimeEvent] = []
+        pending_delta_bytes = 0
+        pending_delta_started: float | None = None
+        delta_flush_task: asyncio.Task[None] | None = None
+        delta_lock = asyncio.Lock()
+        last_persisted_binding_hash: str | None = None
+
+        async def flush_output_deltas() -> None:
+            nonlocal pending_delta_bytes, pending_delta_started, delta_flush_task
+            timer = delta_flush_task
+            current = asyncio.current_task()
+            if timer is not current:
+                delta_flush_task = None
+            if timer is not None and timer is not current and not timer.done():
+                timer.cancel()
+                await asyncio.gather(timer, return_exceptions=True)
+            async with delta_lock:
+                if not pending_deltas:
+                    return
+                first, last = pending_deltas[0], pending_deltas[-1]
+                text = "".join(
+                    str(event.payload.get("delta") or event.payload.get("content") or event.payload.get("text") or "")
+                    for event in pending_deltas
+                )
+                source_ids = [event.event_id for event in pending_deltas]
+                source_metadata = dict(first.source_metadata or {})
+                source_metadata.update({
+                    "first_source_sequence": first.sequence,
+                    "last_source_sequence": last.sequence,
+                    "first_source_event_id": first.event_id,
+                    "last_source_event_id": last.event_id,
+                    "source_event_ids": source_ids,
+                    "chunk_count": len(pending_deltas),
+                })
+                coalesced = AgentRuntimeEvent(
+                    event_id=f"coalesced:{first.event_id}:{last.event_id}",
+                    run_id=last.run_id,
+                    sequence=last.sequence,
+                    kind="output.delta",
+                    attempt=last.attempt,
+                    payload={"delta": text, "chunk_count": len(pending_deltas)},
+                    occurred_at=last.occurred_at,
+                    trace_id=last.trace_id or first.trace_id,
+                    source_metadata=source_metadata,
+                    continuation=last.continuation,
+                )
+                pending_deltas.clear()
+                pending_delta_bytes = 0
+                pending_delta_started = None
+                if event_sink is not None:
+                    await event_sink.emit_runtime_event(coalesced)
+            if timer is current:
+                delta_flush_task = None
+
+        async def emit_product_event(event: AgentRuntimeEvent) -> None:
+            nonlocal pending_delta_bytes, pending_delta_started, delta_flush_task
+            if event.kind != "output.delta":
+                await flush_output_deltas()
+                if event_sink is not None and not event.terminal:
+                    await event_sink.emit_runtime_event(event)
+                return
+            async with delta_lock:
+                if pending_delta_started is None:
+                    pending_delta_started = time.monotonic()
+
+                    async def flush_after_interval() -> None:
+                        await asyncio.sleep(self._output_delta_flush_seconds)
+                        await flush_output_deltas()
+
+                    delta_flush_task = asyncio.create_task(
+                        flush_after_interval(), name=f"runtime-delta-flush-{request.run_id}"
+                    )
+                pending_deltas.append(event)
+                pending_delta_bytes += len(
+                    str(event.payload.get("delta") or event.payload.get("content") or event.payload.get("text") or "").encode("utf-8")
+                )
+                should_flush = (
+                    pending_delta_bytes >= self._output_delta_flush_bytes
+                    or time.monotonic() - pending_delta_started >= self._output_delta_flush_seconds
+                )
+            if should_flush:
+                await flush_output_deltas()
 
         async def consume(method: str, stream_path: str, *, replay: bool = False) -> None:
             nonlocal terminal, terminal_hash, terminal_event_id, terminal_event_seen, last_sequence
-            nonlocal last_event_id
+            nonlocal last_event_id, last_persisted_binding_hash
             client = await self._client_for_request()
             headers = {**self._headers(request), "accept": "text/event-stream"}
             params: dict[str, Any] | None = None
             if replay:
+                await flush_output_deltas()
                 params = self._replay_params(
                     last_sequence=last_sequence,
                     last_event_id=last_event_id,
@@ -293,12 +384,16 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     last_sequence = event.sequence
                     last_event_id = event.event_id
                     if event_sink is not None:
-                        if not event.terminal:
-                            await event_sink.emit_runtime_event(event)
+                        await emit_product_event(event)
                         if event.continuation is not None:
-                            persist_binding = getattr(event_sink, "persist_runtime_binding", None)
-                            if persist_binding is not None:
-                                await persist_binding(request.run_id, event.continuation)
+                            binding_hash = hashlib.sha256(
+                                json.dumps(event.continuation.to_dict(), sort_keys=True, default=str).encode()
+                            ).hexdigest()
+                            if binding_hash != last_persisted_binding_hash:
+                                persist_binding = getattr(event_sink, "persist_runtime_binding", None)
+                                if persist_binding is not None:
+                                    await persist_binding(request.run_id, event.continuation)
+                                last_persisted_binding_hash = binding_hash
                     if envelope.get("result") is not None:
                         resumable_boundary = (
                             isinstance(envelope.get("result"), Mapping)
@@ -317,13 +412,7 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                         terminal_hash = candidate_hash
                         terminal_event_id = event.event_id
 
-        reconnect_attempts = max(0, int(os.getenv("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS", "5")))
-        reconnect_backoff = max(0.01, float(os.getenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.25")))
-        reconnect_deadline = min(
-            self._execution_timeout,
-            max(1.0, float(os.getenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "30"))),
-        )
-        reconnect_started = asyncio.get_running_loop().time()
+        reconnect_started: float | None = None
         reconnect_count = 0
         try:
             try:
@@ -334,15 +423,25 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                 # replay before surfacing a transport error.
                 pass
             while terminal is None:
-                if reconnect_count >= reconnect_attempts or asyncio.get_running_loop().time() - reconnect_started >= reconnect_deadline:
+                if reconnect_started is None:
+                    reconnect_started = asyncio.get_running_loop().time()
+                if reconnect_count > 0 and (
+                    reconnect_count >= self._reconnect_attempts
+                    or asyncio.get_running_loop().time() - reconnect_started >= self._reconnect_deadline
+                ):
                     raise RuntimeError("runtime_stream_error", "Agent runtime stream ended before a terminal result", retryable=True)
-                await asyncio.sleep(min(reconnect_backoff * (2 ** reconnect_count), 5.0))
+                await asyncio.sleep(min(self._reconnect_backoff * (2 ** reconnect_count), self._reconnect_deadline))
                 reconnect_count += 1
+                replay_start_sequence = last_sequence
                 try:
-                    await asyncio.wait_for(
-                        consume("GET", f"/v1/runs/{request.run_id}/events", replay=True),
-                        timeout=max(1.0, reconnect_deadline),
-                    )
+                    # HTTP connect/read timeouts detect a stalled replay. Do not
+                    # impose the reconnect deadline on a healthy event stream:
+                    # a large durable backlog may legitimately take longer to
+                    # validate and project than reconnect establishment.
+                    await consume("GET", f"/v1/runs/{request.run_id}/events", replay=True)
+                    if last_sequence > replay_start_sequence:
+                        reconnect_started = None
+                        reconnect_count = 0
                 except httpx.HTTPStatusError as exc:
                     # The initial POST may have been lost before the runtime
                     # committed its durable record. Retry the same idempotent
@@ -361,6 +460,20 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError.from_exception(exc, code="runtime_stream_timeout", retryable=True, safe_message="Agent runtime stream timed out") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError.from_exception(exc, code="runtime_stream_error", retryable=True, safe_message="Agent runtime stream failed") from exc
+        finally:
+            if delta_flush_task is not None and not delta_flush_task.done():
+                delta_flush_task.cancel()
+                await asyncio.gather(delta_flush_task, return_exceptions=True)
+            cleanup_task = asyncio.create_task(
+                flush_output_deltas(), name=f"runtime-delta-final-flush-{request.run_id}"
+            )
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                # Complete the bounded persistence cleanup before propagating
+                # caller cancellation; never orphan a writer using a DB session.
+                await cleanup_task
+                raise
         if terminal is None:
             raise RuntimeError("runtime_protocol_error", "Agent runtime stream ended without a terminal result")
         return terminal

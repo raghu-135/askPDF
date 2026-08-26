@@ -6,15 +6,15 @@ services:
       target: runtime
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set in .env}
+        NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set in .env}
     ports:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       rag-service:
         condition: service_healthy
@@ -51,10 +51,8 @@ services:
       - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
       - MCP_LOOPBACK_URL=${MCP_LOOPBACK_URL:-http://127.0.0.1:8000/internal/mcp/}
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       postgresql:
         condition: service_healthy
@@ -91,10 +89,8 @@ services:
       - MCP_TRANSPORT=loopback_http
       - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
@@ -141,10 +137,8 @@ services:
       - ASKPDF_HERMES_COMPAT_ENABLED=1
       - PYTHONPATH=/opt/askpdf-hermes-compat
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     command: ["gateway"]
     depends_on:
       hermes-config-init:
@@ -177,7 +171,6 @@ services:
       - HERMES_API_TOKEN=${API_SERVER_KEY:-}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}
-      - HERMES_RUNTIME_READ_TIMEOUT_SECONDS=${HERMES_RUNTIME_READ_TIMEOUT_SECONDS:-30}
       - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-}
       - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:-custom}
       - HERMES_PROFILE_ROOT=/opt/data/profiles
@@ -185,10 +178,8 @@ services:
       - HERMES_PROFILE_GID=10000
       - HERMES_RUNTIME_STATE_PATH=/var/lib/hermes/runtime-state.json
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       hermes:
         condition: service_healthy
@@ -255,10 +246,8 @@ services:
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
       - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       postgresql:
         condition: service_healthy

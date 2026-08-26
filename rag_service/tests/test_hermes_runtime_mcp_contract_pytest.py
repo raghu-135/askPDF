@@ -18,7 +18,7 @@ def _payload(allowed_tools):
     return {
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
         "spec": {
-            "schema_version": 1,
+            "schema_version": 2,
             "config": {
                 "mcp_server": "askpdf",
                 "allowed_tool_ids": allowed_tools,
@@ -48,8 +48,8 @@ def test_environment_cannot_override_frozen_profile_tool_allowlist(monkeypatch):
     assert validation["runtime_metadata"]["allowed_tool_ids"] == ["search_documents"]
 
 
-def test_stream_timeout_uses_frozen_task_duration_not_generic_read_timeout(monkeypatch):
-    monkeypatch.setenv("HERMES_RUNTIME_READ_TIMEOUT_SECONDS", "30")
+def test_stream_timeout_uses_frozen_task_duration_not_shared_read_timeout(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")
 
     assert _upstream_timeout().read == 30
     assert _upstream_timeout(300).read == 300

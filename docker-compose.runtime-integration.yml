@@ -75,10 +75,8 @@ services:
       LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       postgresql:
         condition: service_healthy
@@ -145,10 +143,8 @@ services:
       LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       AGENT_RUNTIME_MODE: external
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       rag-service:
         condition: service_healthy
@@ -242,12 +238,14 @@ services:
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
-      HERMES_RUNTIME_READ_TIMEOUT_SECONDS: "30"
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       HERMES_MODEL_PROVIDER: lmstudio
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"
+    env_file:
+      - path: .env
+        required: true
     depends_on:
       hermes:
         condition: service_healthy
@@ -291,10 +289,8 @@ services:
       LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       hermes-runtime:
         condition: service_healthy

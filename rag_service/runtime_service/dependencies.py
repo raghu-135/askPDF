@@ -10,6 +10,8 @@ from typing import Any, Mapping
 
 import httpx
 
+from app.runtime.operational_limits import required_positive_float
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +85,10 @@ async def probe_provider(url: str, timeout: float, *, client: httpx.AsyncClient 
 
 class DependencyMonitor:
     def __init__(self) -> None:
-        self.interval = max(1.0, float(os.getenv("AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS", "30")))
-        self.timeout = max(0.1, float(os.getenv("AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS", "5")))
-        self.stale_after = max(self.interval, float(os.getenv("AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS", "90")))
-        self.jitter = max(0.0, min(0.5, float(os.getenv("AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO", "0.1"))))
+        self.interval = required_positive_float("AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS")
+        self.timeout = required_positive_float("AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS")
+        self.stale_after = max(self.interval, required_positive_float("AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS"))
+        self.jitter = min(0.5, required_positive_float("AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO"))
         self._configured = {
             "mcp": os.getenv("MCP_LOOPBACK_URL", "").strip(),
             "provider": os.getenv("LLM_API_URL", "").strip(),

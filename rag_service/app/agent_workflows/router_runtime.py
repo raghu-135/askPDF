@@ -101,6 +101,7 @@ def _runtime_config(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     max_concurrency: int | None = None,
+    deep_research_services_factory: Any,
 ) -> Dict[str, Any]:
     configurable = {
         "thread_id": checkpoint_thread_id,
@@ -108,6 +109,7 @@ def _runtime_config(
         "app_thread_id": app_thread_id,
         "telemetry_sink": telemetry_sink,
         "trace_recorder": trace_recorder,
+        "deep_research_services_factory": deep_research_services_factory,
     }
     if execution_event_sink is not None:
         configurable["execution_event_sink"] = execution_event_sink
@@ -125,6 +127,14 @@ def _runtime_config(
     if isinstance(max_concurrency, int) and max_concurrency > 0:
         result["max_concurrency"] = max_concurrency
     return result
+
+
+def _deep_research_services_factory(persist_product_records: bool) -> Any:
+    from app.agent_workflows.deep_research_execution import (
+        product_execution_services_factory,
+        runtime_execution_services_factory,
+    )
+    return product_execution_services_factory if persist_product_records else runtime_execution_services_factory
 
 
 def _first_interrupt(result: Dict[str, Any]) -> Any:
@@ -638,6 +648,7 @@ async def _handle_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
+        deep_research_services_factory=_deep_research_services_factory(persist_product_records),
     )
     state = {
         "agent_run_id": agent_run_id,
@@ -1050,6 +1061,7 @@ async def continue_compiled_rag_chat(
         checkpoint_thread_id=checkpoint_thread_id,
         telemetry_sink=telemetry_sink,
         trace_recorder=None,
+        deep_research_services_factory=_deep_research_services_factory(persist_product_records),
     )
     snapshot = await app.aget_state(initial_config)
     snapshot_values = dict(getattr(snapshot, "values", None) or {})
@@ -1066,6 +1078,7 @@ async def continue_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        deep_research_services_factory=_deep_research_services_factory(persist_product_records),
     )
     agent_run_context = {
         "agent_run_id": run.id,
@@ -1180,6 +1193,7 @@ async def resume_compiled_rag_chat(
         checkpoint_thread_id=checkpoint_thread_id,
         telemetry_sink=telemetry_sink,
         trace_recorder=None,
+        deep_research_services_factory=_deep_research_services_factory(persist_product_records),
     )
     snapshot = await app.aget_state(config)
     snapshot_values = dict(getattr(snapshot, "values", None) or {})
@@ -1194,6 +1208,7 @@ async def resume_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        deep_research_services_factory=_deep_research_services_factory(persist_product_records),
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {

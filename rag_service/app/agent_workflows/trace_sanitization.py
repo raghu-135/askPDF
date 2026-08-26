@@ -66,6 +66,10 @@ def _bounded_value(value: Any, *, key: Any = None) -> Any:
     if value in (None, "", [], {}):
         return value
     if isinstance(value, str):
+        # Streaming deltas are content fragments; trimming either edge changes
+        # the reconstructed output when adjacent chunks are coalesced.
+        if _normalized_key(key) == "delta":
+            return value[:TRACE_PREVIEW_LIMIT]
         return compact_preview(value, limit=TRACE_PREVIEW_LIMIT)
     if isinstance(value, list):
         return [_bounded_value(item) for item in value[:50]]

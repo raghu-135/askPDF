@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -152,6 +154,154 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
     assert result.status == "completed"
     assert result.output == "ok"
     assert [item.event_id for item in received] == ["evt-1"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_coalesces_output_deltas_before_product_delivery():
+    request = _request()
+    deltas = [
+        {"event_id": f"delta-{index}", "run_id": request.run_id, "sequence": index, "kind": "output.delta", "payload": {"delta": value}}
+        for index, value in enumerate(("one ", "two ", "three"), start=1)
+    ]
+    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 4, "kind": "run.completed", "payload": {}, "terminal": True}
+
+    def handler(_request):
+        frames = [f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps({'event': event})}\n\n" for event in deltas]
+        frames.append(f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'one two three'}})}\n\n")
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="".join(frames).encode())
+
+    received = []
+
+    class Sink:
+        async def emit_runtime_event(self, event):
+            received.append(event)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    await adapter.start(request, context=RuntimeExecutionContext(), event_sink=Sink())
+    assert len(received) == 1
+    assert received[0].payload == {"delta": "one two three", "chunk_count": 3}
+    assert received[0].source_metadata["first_source_sequence"] == 1
+    assert received[0].source_metadata["last_source_sequence"] == 3
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_flushes_output_delta_on_time_while_stream_is_open(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS", "0.05")
+    request = _request()
+    flushed = asyncio.Event()
+    delta = {"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial"}}
+    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+
+    class DelayedStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield f"id: delta-1\nevent: output.delta\ndata: {json.dumps({'event': delta})}\n\n".encode()
+            await asyncio.wait_for(flushed.wait(), timeout=0.5)
+            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'partial'}})}\n\n".encode()
+
+    def handler(_request):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=DelayedStream())
+
+    class Sink:
+        async def emit_runtime_event(self, event):
+            assert event.kind == "output.delta"
+            flushed.set()
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    result = await adapter.start(request, context=RuntimeExecutionContext(), event_sink=Sink())
+    assert result.status == "completed"
+    assert flushed.is_set()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_recovery_deadline_starts_after_long_initial_stream(monkeypatch):
+    request = _request()
+    progress = {"event_id": "progress", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial "}}
+    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    calls = []
+
+    def handler(http_request):
+        calls.append(http_request.method)
+        if http_request.method == "POST":
+            time.sleep(1.05)
+            body = f"id: progress\nevent: output.delta\ndata: {json.dumps({'event': progress})}\n\n"
+        else:
+            body = f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "1")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    result = await adapter.start(request, context=RuntimeExecutionContext())
+    assert result.output == "recovered"
+    assert calls == ["POST", "GET"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_healthy_replay_may_run_longer_than_recovery_deadline(monkeypatch):
+    request = _request()
+    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    calls: list[str] = []
+
+    class SlowReplay(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.sleep(0.06)
+            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n".encode()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method)
+        if http_request.method == "POST":
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b"")
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=SlowReplay())
+
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "0.05")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    result = await adapter.start(request, context=RuntimeExecutionContext())
+    assert result.output == "recovered"
+    assert calls == ["POST", "GET"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_identical_runtime_binding_is_persisted_once():
+    request = _request()
+    binding = {"binding_type": "session", "payload": {"session_id": "upstream-1"}}
+    events = [
+        {"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "one"}, "continuation": binding},
+        {"event_id": "delta-2", "run_id": request.run_id, "sequence": 2, "kind": "output.delta", "payload": {"delta": " two"}, "continuation": binding},
+        {"event_id": "terminal", "run_id": request.run_id, "sequence": 3, "kind": "run.completed", "payload": {}, "terminal": True, "continuation": binding},
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        body = "".join(
+            f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps({'event': event, **({'result': {'status': 'completed', 'output': 'one two'}} if event.get('terminal') else {})})}\n\n"
+            for event in events
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    class Sink:
+        def __init__(self):
+            self.bindings = []
+
+        async def emit_runtime_event(self, _event):
+            return None
+
+        async def persist_runtime_binding(self, _run_id, continuation):
+            self.bindings.append(continuation)
+
+    sink = Sink()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    await adapter.start(request, context=RuntimeExecutionContext(), event_sink=sink)
+    assert len(sink.bindings) == 1
     await client.aclose()
 
 

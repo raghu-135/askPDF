@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -33,6 +34,8 @@ from app.mcp.registry import (
 )
 from app.mcp.telemetry import extracted_trace_context, tool_span
 from app.mcp.tool_audit import persist_tool_audit
+from app.runtime.cancellation import race_with_cancellation
+from app.services.agent_task_repository import run_cancel_requested
 
 logger = logging.getLogger(__name__)
 _transport_execution_token: ContextVar[str | None] = ContextVar(
@@ -149,7 +152,21 @@ class MCPServer:
                     try:
                         request_model = definition.request_model
                         request = request_model.model_validate(arguments)
-                        result = await definition.handler(request, context)
+                        run_id = str(context.run_id or "").strip()
+                        if run_id:
+                            result = await race_with_cancellation(
+                                definition.handler(request, context),
+                                lambda: run_cancel_requested(run_id),
+                            )
+                        else:
+                            result = await definition.handler(request, context)
+                    except asyncio.CancelledError:
+                        await persist_tool_audit(
+                            run_id=str(context.run_id or ""), request_id=audit_request_id,
+                            phase="cancelled", tool_name=name,
+                            payload={"failure_stage": "handler", "error": {"code": "run_cancelled", "retryable": False}},
+                        )
+                        raise
                     except Exception as exc:
                         missing_fields = []
                         invalid_fields = []

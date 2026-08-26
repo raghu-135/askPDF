@@ -17,6 +17,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from app.runtime.operational_limits import required_positive_int
+
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "no_continuation"})
 
@@ -148,7 +150,7 @@ class ExecutionStore:
         self._lock = asyncio.Lock()
         self._pool = None
         self.owner_id = os.getenv("AGENT_RUNTIME_WORKER_ID") or f"runtime-{uuid.uuid4().hex}"
-        self.lease_seconds = max(5, int(os.getenv("AGENT_RUNTIME_LEASE_SECONDS", "60")))
+        self.lease_seconds = required_positive_int("AGENT_RUNTIME_LEASE_SECONDS")
 
     @property
     def durable(self) -> bool:

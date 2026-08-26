@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -58,7 +59,9 @@ async def test_task_event_stream_queries_incrementally_and_stops_after_scoped_te
     monkeypatch.setattr(tasks_api.asyncio, "sleep", no_sleep)
 
     response = await tasks_api.stream_agent_task_events(
-        "task-1", thread_id="thread-1", after_sequence=0, run_id="run-1", scope="run"
+        "task-1",
+        request=SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
+        thread_id="thread-1", after_sequence=0, run_id="run-1", scope="run"
     )
     chunks = [chunk async for chunk in response.body_iterator]
     payloads = [
