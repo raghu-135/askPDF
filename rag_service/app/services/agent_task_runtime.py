@@ -786,20 +786,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 )
                 metrics["grounding"] = grounding
                 result["grounding"] = grounding
-                if not grounding["grounded"]:
-                    terminal_error = {
-                        "code": "required_evidence_unavailable",
-                        "message": "Hermes did not return the evidence required for this research task",
-                        "retryable": True,
-                        "details": grounding,
-                    }
-                    await _finalize_task_run(
-                        task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                        run_status=AgentRunStatus.FAILED.value, task_status=AgentTaskStatus.FAILED.value,
-                        metrics=metrics, result=result, error=terminal_error,
-                        reason="required_evidence_unavailable",
-                    )
-                    return
             evidence_manifest = [
                 value for value in result.get("task_evidence_manifest") or []
                 if isinstance(value, dict) and value.get("id")

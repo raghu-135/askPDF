@@ -624,10 +624,11 @@ async def stream_agent_run_events(
         heartbeat_interval = required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS")
         idle_seconds = 0.0
         canonical_events: list[AgentRuntimeEvent] = []
+        public_event_ids: dict[str, str] = {}
 
-        def canonical_event(row: Any) -> AgentRuntimeEvent:
+        def canonical_event(row: Any, event_id: str) -> AgentRuntimeEvent:
             return AgentRuntimeEvent(
-                event_id=str(getattr(row, "event_id", "")),
+                event_id=event_id,
                 run_id=str(getattr(row, "agent_run_id", run.id)),
                 sequence=int(getattr(row, "sequence", 0) or 0),
                 attempt=int(getattr(row, "attempt", 1) or 1),
@@ -642,8 +643,25 @@ async def stream_agent_run_events(
             if await request.is_disconnected():
                 return
             all_rows = await repository.list_run_events(run.id)
+            event_id_counts: dict[str, int] = {}
+            for row in all_rows:
+                raw_event_id = str(getattr(row, "event_id", "") or "")
+                event_id_counts[raw_event_id] = event_id_counts.get(raw_event_id, 0) + 1
+            for row in all_rows:
+                raw_event_id = str(getattr(row, "event_id", "") or "")
+                row_id = str(getattr(row, "id", "") or getattr(row, "sequence", ""))
+                public_event_ids.setdefault(
+                    row_id,
+                    raw_event_id
+                    if event_id_counts[raw_event_id] == 1
+                    else f"{raw_event_id}:journal:{row_id}",
+                )
             if not canonical_events and sequence > 0:
-                canonical_events.extend(canonical_event(row) for row in all_rows if int(getattr(row, "sequence", 0) or 0) <= sequence)
+                canonical_events.extend(
+                    canonical_event(row, public_event_ids[str(getattr(row, "id", "") or getattr(row, "sequence", ""))])
+                    for row in all_rows
+                    if int(getattr(row, "sequence", 0) or 0) <= sequence
+                )
             rows = [row for row in all_rows if int(getattr(row, "sequence", 0) or 0) > sequence]
             if rows:
                 idle_seconds = 0.0
@@ -651,14 +669,16 @@ async def stream_agent_run_events(
                     if await request.is_disconnected():
                         return
                     sequence = int(getattr(row, "sequence", sequence) or sequence)
-                    canonical_events.append(canonical_event(row))
+                    row_key = str(getattr(row, "id", "") or getattr(row, "sequence", ""))
+                    event_id = public_event_ids[row_key]
+                    canonical_events.append(canonical_event(row, event_id))
                     payload = dict(getattr(row, "payload_json", None) or {})
                     terminal = bool(payload.get("terminal")) or str(getattr(row, "kind", "")) in {
                         "run.completed", "run.failed", "run.cancelled", "run.clarification",
                     }
                     value = {
                         "id": getattr(row, "id", None),
-                        "event_id": getattr(row, "event_id", None),
+                        "event_id": event_id,
                         "run_id": run.id,
                         "sequence": sequence,
                         "attempt": getattr(row, "attempt", 1),

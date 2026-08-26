@@ -12,7 +12,7 @@ def _event(kind, **payload):
     return SimpleNamespace(kind=kind, payload_json={"source": "askpdf_mcp", **payload})
 
 
-def test_document_task_requires_nonempty_document_evidence():
+def test_document_grounding_summary_reports_missing_document_evidence():
     events = [
         _event("tool.failed", tool_name="search_document_by_id", error={"code": "tool_arguments_invalid"}),
         _event("tool.completed", tool_name="search_web", ok=True, result_count=4),

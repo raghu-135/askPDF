@@ -426,9 +426,10 @@ export default function DeepResearchTaskPanel({
         if (sequence > 0 && sequence <= afterSequence) return;
         afterSequence = Math.max(afterSequence, sequence);
         const kind = String(value.kind || 'runtime.event');
+        const payload = value.payload && typeof value.payload === 'object' ? value.payload : {};
         const data = {
-          ...(value.payload && typeof value.payload === 'object' ? value.payload : {}),
-          event_id: value.event_id,
+          ...payload,
+          event_id: value.event_id ?? (payload as Record<string, any>).event_id,
           sequence: value.sequence,
           attempt: value.attempt,
           occurred_at: value.occurred_at,

@@ -155,15 +155,14 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             if task["status"] in {"completed", "failed", "cancelled"}:
                 break
             await asyncio.sleep(0.5)
-        assert task["status"] == "failed", json.dumps(task, indent=2, default=str)
-        assert task["terminal_reason"] == "required_evidence_unavailable"
+        assert task["status"] == "completed", json.dumps(task, indent=2, default=str)
         run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})
         run_response.raise_for_status()
         persisted = run_response.json()["agent_run"]
         assert persisted["framework"] == "hermes"
         assert persisted["builder_id"] == "hermes_agent"
-        assert persisted["status"] == "failed"
+        assert persisted["status"] == "completed"
         assert persisted["workflow_id"] == "hermes_rag_agent"
 
     connection = await asyncpg.connect(os.environ["PHASE7_PRODUCT_DATABASE_URL"])

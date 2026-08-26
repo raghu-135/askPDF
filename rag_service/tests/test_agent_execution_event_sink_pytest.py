@@ -56,8 +56,11 @@ async def test_live_delivery_includes_backend_projected_parallel_groups():
 
     dispatch_frame = await sink.queue.get()
     worker_frame = await sink.queue.get()
+    assert dispatch_frame["data"]["event_id"] == "dispatch-event"
+    assert worker_frame["data"]["event_id"] == "worker-event"
     assert dispatch_frame["data"]["parallel_groups"][0]["group_id"] == "dispatch-1"
     group = worker_frame["data"]["parallel_groups"][0]
+    assert set(group["event_ids"]) <= {dispatch_frame["data"]["event_id"], worker_frame["data"]["event_id"]}
     assert group["members"][0]["member_id"] == "work-1"
     assert group["members"][0]["operation_id"] == "retrieval-worker"
     await sink.finish("run.completed", {"status": "completed"})
@@ -184,7 +187,10 @@ async def test_writer_failure_is_observed_and_failure_terminal_can_still_be_pers
     await sink.finish("run.failed", {"status": "failed"})
 
     assert [(event.sequence, event.kind) for event in persisted] == [(2, "run.failed")]
-    assert [await sink.queue.get()] == [{"event": "run.failed", "data": {"status": "failed"}}]
+    assert [await sink.queue.get()] == [{
+        "event": "run.failed",
+        "data": {"status": "failed", "event_id": "askpdf-terminal:run-1:run.failed"},
+    }]
 
 
 @pytest.mark.asyncio
@@ -205,7 +211,10 @@ async def test_transactional_terminal_is_delivered_only_after_commit_acknowledge
     assert sink.queue.empty()
     release_commit.set()
     await finish
-    assert await sink.queue.get() == {"event": "run.completed", "data": {"status": "completed"}}
+    assert await sink.queue.get() == {
+        "event": "run.completed",
+        "data": {"status": "completed", "event_id": "askpdf-terminal:run-1:run.completed"},
+    }
 
 
 @pytest.mark.asyncio

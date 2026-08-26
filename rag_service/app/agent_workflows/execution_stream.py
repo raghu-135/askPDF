@@ -303,6 +303,7 @@ class AgentExecutionEventSink:
                 self._trace_recorder.record_runtime_event(event, attributes=envelope.get("data") or {})
         if self._delivery_attached:
             delivery_payload = dict(canonical.payload)
+            delivery_payload.setdefault("event_id", canonical.event_id)
             parallel_groups = build_parallel_groups(self._canonical_events)
             if parallel_groups:
                 delivery_payload["parallel_groups"] = parallel_groups
