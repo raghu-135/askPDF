@@ -23,6 +23,7 @@ from app.runtime.contracts import (
     unsupported,
 )
 from app.runtime.errors import RuntimeError
+from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.registry import RuntimeRegistry
 
 
@@ -86,6 +87,29 @@ class CapabilityAdapter:
     async def inspect_state(self, request):
         self.calls["inspect_state"] += 1
         return {"state": {}}
+
+    async def send_followup(self, request, input):
+        return {"status": "queued"}
+
+
+def test_public_capability_projection_excludes_spi_only_operations():
+    capabilities = RuntimeCapabilities(operations={
+        RuntimeOperationId.RUN_GET: native(),
+        RuntimeOperationId.RUN_CANCEL: native(),
+        RuntimeOperationId.RUN_REPLAY: native(),
+        RuntimeOperationId.SUBAGENT_SEND: native(),
+        RuntimeOperationId.TASK_START: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+    })
+
+    projected = project_public_capabilities(capabilities)
+
+    assert set(projected.operations) == {
+        RuntimeOperationId.RUN_GET,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.TASK_START,
+    }
+    assert RuntimeOperationId.RUN_REPLAY not in projected.operations
+    assert RuntimeOperationId.SUBAGENT_SEND not in projected.operations
 
 
 class HermesCapabilityAdapter(CapabilityAdapter):

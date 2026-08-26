@@ -107,17 +107,13 @@ class LangGraphBuilderProvider:
         return RuntimeValidationResult(
             valid=not issues and bool(report.get("valid", False)),
             issues=issues,
+            diagnostics=dict(report),
             runtime_metadata={
                 "framework": self.framework,
                 "builder_id": self.builder_id,
                 "definition_id": definition.definition_id,
             },
         )
-
-    def report(self, spec: Mapping[str, Any]) -> Mapping[str, Any]:
-        from app.runtime.langgraph.validator import WorkflowValidator
-
-        return WorkflowValidator().report(dict(spec))
 
     async def normalize(
         self,

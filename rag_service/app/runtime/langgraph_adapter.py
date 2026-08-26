@@ -87,7 +87,7 @@ def _event_bridge(run_id: str, sink: Any) -> _LangGraphEventBridge | None:
     return _LangGraphEventBridge(run_id, sink) if sink is not None else None
 from app.runtime.errors import RuntimeError
 from app.runtime.langgraph_capabilities import langgraph_capabilities, langgraph_deployment_capabilities
-from app.runtime.langgraph import checkpointing, router_runtime
+from app.runtime.langgraph import checkpointing
 
 
 class LangGraphRuntimeAdapter(AgentRuntimeAdapter):

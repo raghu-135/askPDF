@@ -16,7 +16,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.errors import RuntimeError
-from app.runtime.product_capabilities import product_operation_descriptors
+from app.runtime.product_capabilities import product_operation_descriptors, project_public_capabilities
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 
 
@@ -330,7 +330,7 @@ def capability_envelope(
         "framework": framework,
         "builder_id": builder_id,
         "available": capabilities is not None,
-        "capabilities": capabilities.to_dict() if capabilities is not None else None,
+        "capabilities": project_public_capabilities(capabilities).to_dict() if capabilities is not None else None,
     }
     if definition_id is not None:
         value["definition_id"] = definition_id

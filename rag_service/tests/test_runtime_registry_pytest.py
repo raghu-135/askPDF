@@ -107,6 +107,7 @@ def test_neutral_runtime_modules_have_no_framework_imports():
 @pytest.mark.asyncio
 async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
     import app.runtime.langgraph_adapter as module
+    import app.runtime.langgraph.router_runtime as router_module
 
     class Checkpointer:
         pass
@@ -131,7 +132,7 @@ async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
             "agent_run_id": "run-1",
         }
 
-    monkeypatch.setattr(module.router_runtime, "execute_compiled_rag_chat", fake_execute)
+    monkeypatch.setattr(router_module, "execute_compiled_rag_chat", fake_execute)
 
     adapter = LangGraphRuntimeAdapter()
     request = AgentRuntimeRequest(

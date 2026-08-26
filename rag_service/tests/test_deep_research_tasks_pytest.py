@@ -14,7 +14,8 @@ from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.agent_workflows.compiler import WorkflowCompiler
-from app.agent_workflows import deep_research_nodes, router_runtime
+from app.agent_workflows import deep_research_nodes
+from app.runtime.langgraph import router_runtime
 from app.agent_workflows.deep_research_execution import (
     product_execution_services_factory,
     runtime_execution_services_factory,

@@ -121,6 +121,7 @@ def validation_from_dict(value: Mapping[str, Any]) -> RuntimeValidationResult:
         ),
         normalized_spec=value.get("normalized_spec"),
         runtime_metadata=dict(value.get("runtime_metadata") or {}),
+        diagnostics=dict(value.get("diagnostics") or {}),
     )
 
 

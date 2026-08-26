@@ -90,8 +90,6 @@ class AgentBuilderProvider(Protocol):
         options: Mapping[str, Any] | None = None,
     ) -> RuntimeValidationResult: ...
 
-    def report(self, spec: Mapping[str, Any]) -> Mapping[str, Any]: ...
-
     async def normalize(
         self,
         definition: AgentDefinition,

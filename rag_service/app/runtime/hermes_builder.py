@@ -90,15 +90,6 @@ class HermesBuilderProvider:
             runtime_metadata={"framework": self.framework, "builder_id": self.builder_id, "definition_id": definition.definition_id},
         )
 
-    def report(self, spec: Mapping[str, Any]) -> Mapping[str, Any]:
-        issues = self._issues(spec)
-        return {
-            "framework": self.framework,
-            "builder_id": self.builder_id,
-            "valid": not issues,
-            "errors": [issue.code for issue in issues],
-        }
-
     async def normalize(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         validation = await self.validate(definition, spec, options=options)
         if not validation.valid:

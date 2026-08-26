@@ -85,7 +85,7 @@ async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
 from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition, RuntimeOperationId
+from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
     capabilities_for_definition,
     capability_envelope,
@@ -253,9 +253,16 @@ def _provider_for_workflow(workflow):
     return builder_for_definition(_definition_for_workflow(workflow))
 
 
-def _provider_validation_report(provider, spec: Dict[str, Any]) -> Dict[str, Any]:
-    report = provider.report(spec) if hasattr(provider, "report") else {}
-    return dict(report) if isinstance(report, dict) else {}
+def _validation_payload(validation: RuntimeValidationResult) -> Dict[str, Any]:
+    payload = dict(validation.diagnostics)
+    payload.update({
+        "valid": validation.valid,
+        "issues": [issue.to_dict() for issue in validation.issues],
+        "errors": [issue.code for issue in validation.issues],
+        "normalized_spec": validation.normalized_spec,
+        "runtime_metadata": dict(validation.runtime_metadata),
+    })
+    return payload
 
 
 def _workflow_spec_payload(workflow) -> Dict[str, Any]:
@@ -869,10 +876,10 @@ async def validate_agent_workflow(req: WorkflowValidationRequest):
     )
     try:
         provider = builder_for_definition(definition)
-        result = await provider.validate(definition, req.spec)
+        validation = await provider.validate(definition, req.spec)
     except BuilderSelectionError as exc:
         raise HTTPException(status_code=400, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
-    report = _provider_validation_report(provider, req.spec)
+    report = _validation_payload(validation)
     report.setdefault("framework", req.framework)
     report.setdefault("builder_id", req.builder_id)
     return report
@@ -1207,9 +1214,9 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
                 if value is not None:
                     candidate_config[key] = value
         candidate["config"] = candidate_config
-        report = _provider_validation_report(provider, candidate)
+        validation = await provider.validate(definition, candidate)
+        report = _validation_payload(validation)
         report["errors"] = report.get("errors") or [str(exc)]
-        report["errors"] = report["errors"] or [str(exc)]
         return {
             "valid": False,
             "workflow_id": workflow.id,
@@ -1223,7 +1230,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         "valid": validation.valid,
         "workflow_id": workflow.id,
         "workflow_version": workflow.version,
-        "validation": _provider_validation_report(provider, resolved_spec),
+        "validation": _validation_payload(validation),
         "resolved_spec_json": resolved_spec,
     }
 

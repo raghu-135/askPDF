@@ -58,7 +58,7 @@ def test_langgraph_package_init_does_not_eagerly_import_framework_modules():
     )
     assert "app.runtime.langgraph.compiler" not in imported
     assert "app.runtime.langgraph.graph" not in imported
-    assert "app.runtime.langgraph.router_runtime" not in imported
+    assert "app.agent_workflows.router_runtime" not in imported
 
 
 def test_external_runtime_maintenance_does_not_import_local_checkpointing():

@@ -17,7 +17,7 @@ from app.agent_workflows.parallel_runtime import normalized_parallel_policy
 from app.agent_workflows.corrective_contracts import normalized_corrective_policy
 from app.agent_workflows.workflow_runtime import workflow_runtime_features
 from app.agent_workflows.enums import WorkflowNodeType
-from app.agent_workflows.router_runtime import (
+from app.runtime.langgraph.router_runtime import (
     _pending_interrupt_from_result,
     _runtime_config,
     _without_runtime_keys,

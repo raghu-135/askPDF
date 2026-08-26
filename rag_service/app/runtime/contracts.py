@@ -462,6 +462,7 @@ class RuntimeValidationResult:
     issues: tuple[RuntimeValidationIssue, ...] = ()
     normalized_spec: Optional[Mapping[str, Any]] = None
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)

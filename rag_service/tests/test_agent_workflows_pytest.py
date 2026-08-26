@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
 from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import ChatRunCancellationRequested
-from app.agent_workflows.router_runtime import handle_router_rag_chat
+from app.runtime.langgraph.router_runtime import handle_router_rag_chat
 from app.agent_workflows.graph import (
     NodeRegistry,
     WorkflowCompiler,
@@ -4231,7 +4231,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4327,7 +4327,7 @@ class TestAgentRunService:
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr(
-                "app.agent_workflows.router_runtime.execute_compiled_rag_chat",
+                "app.runtime.langgraph.router_runtime.execute_compiled_rag_chat",
                 fake_handle_router_rag_chat,
             )
             monkeypatch.setattr(
@@ -4419,7 +4419,7 @@ class TestAgentRunService:
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr("app.agent_workflows.service.chat_run_cancel_requested", fake_cancel_requested)
             monkeypatch.setattr(
-                "app.agent_workflows.router_runtime.execute_compiled_rag_chat",
+                "app.runtime.langgraph.router_runtime.execute_compiled_rag_chat",
                 fake_handle_router_rag_chat,
             )
             monkeypatch.setattr(
@@ -4531,7 +4531,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4607,7 +4607,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4675,7 +4675,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4747,7 +4747,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4813,7 +4813,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4871,7 +4871,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4997,7 +4997,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -5259,7 +5259,7 @@ class TestAgentRunService:
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr(
-                "app.agent_workflows.router_runtime.execute_compiled_rag_chat",
+                "app.runtime.langgraph.router_runtime.execute_compiled_rag_chat",
                 fake_handle_plan_execute_rag_chat,
             )
 
@@ -5336,7 +5336,7 @@ class TestAgentRunService:
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr(
-                "app.agent_workflows.router_runtime.execute_compiled_rag_chat",
+                "app.runtime.langgraph.router_runtime.execute_compiled_rag_chat",
                 fake_handle_evaluator_replanner_rag_chat,
             )
 
@@ -6087,7 +6087,7 @@ class TestAgentRunService:
                     "tool_events": [],
                 }
 
-            monkeypatch.setattr("app.agent_workflows.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
 
             result = await AgentRunService(repository=repo).resume_agent_run(
                 run.id,
@@ -6186,7 +6186,7 @@ class TestAgentRunService:
                     "chat_turn_id": "turn-1",
                 }
 
-            monkeypatch.setattr("app.agent_workflows.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
 
             service = AgentRunService(repository=repo)
             first = await service.resume_agent_run(
@@ -6247,7 +6247,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_workflows.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.runtime.langgraph.router_runtime.execute_compiled_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -6294,11 +6294,11 @@ class TestRouterRagRuntime:
             return False
 
         monkeypatch.setattr(
-            "app.agent_workflows.router_runtime._invoke_graph_with_partial_state",
+            "app.runtime.langgraph.router_runtime._invoke_graph_with_partial_state",
             fake_invoke_graph,
         )
         monkeypatch.setattr(
-            "app.agent_workflows.router_runtime.create_chat_turn",
+            "app.runtime.langgraph.router_runtime.create_chat_turn",
             exploding_create_chat_turn,
         )
 

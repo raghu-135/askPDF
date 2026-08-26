@@ -29,4 +29,3 @@ def required_positive_int(name: str) -> int:
     if value <= 0:
         raise RuntimeError(f"Environment variable {name} must be greater than zero")
     return value
-
