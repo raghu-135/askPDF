@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Any, Mapping
 
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeApprovalResponse, RuntimeCapabilities
+from app.runtime.contracts import (
+    AgentDefinition,
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    RuntimeApprovalResponse,
+    RuntimeCapabilities,
+    RuntimeCapabilityDisabledReason,
+    RuntimeFeatureDescriptor,
+    RuntimeOperationId,
+    RuntimeSupportLevel,
+)
 from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -52,7 +63,57 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
         return await super().start(request, context=context, event_sink=event_sink)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        return await self.deployment_capabilities()
+        capabilities = await self.deployment_capabilities()
+        policy = definition.definition_metadata.get("hermes_policy")
+        if not isinstance(policy, Mapping):
+            return capabilities
+
+        def feature(enabled: bool, semantics: str, details: Mapping[str, Any]) -> RuntimeFeatureDescriptor:
+            return RuntimeFeatureDescriptor(
+                support=RuntimeSupportLevel.NATIVE if enabled else RuntimeSupportLevel.UNSUPPORTED,
+                enabled=enabled,
+                disabled_reason=(
+                    None
+                    if enabled
+                    else RuntimeCapabilityDisabledReason.DEFINITION_POLICY
+                ),
+                semantics=semantics,
+                details=dict(details),
+            )
+
+        features = dict(capabilities.features)
+        allowed_tools = tuple(str(item) for item in policy.get("allowed_tool_ids", ()) if item)
+        features.update({
+            "tools": feature(
+                bool(allowed_tools),
+                "definition_tool_policy",
+                {"allowed_tool_ids": list(allowed_tools)},
+            ),
+            "memory": feature(
+                bool(policy.get("allow_persistent_memory")),
+                "definition_memory_policy",
+                {"persistent": bool(policy.get("allow_persistent_memory"))},
+            ),
+            "delegation": feature(
+                bool(policy.get("allow_subagents")),
+                "definition_delegation_policy",
+                {"enabled": bool(policy.get("allow_subagents"))},
+            ),
+            "skills": feature(
+                bool(policy.get("skills")),
+                "definition_skill_policy",
+                {"skills": list(policy.get("skills", ()))},
+            ),
+        })
+        operations = dict(capabilities.operations)
+        approval = operations.get(RuntimeOperationId.RUN_APPROVAL_RESPOND)
+        if approval is not None and not bool(policy.get("approval_enabled", True)):
+            operations[RuntimeOperationId.RUN_APPROVAL_RESPOND] = replace(
+                approval,
+                enabled=False,
+                disabled_reason=RuntimeCapabilityDisabledReason.DEFINITION_POLICY,
+            )
+        return replace(capabilities, operations=operations, features=features)
 
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         self._ensure_enabled()

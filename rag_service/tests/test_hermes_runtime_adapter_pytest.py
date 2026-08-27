@@ -71,13 +71,29 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     })
 
     deployment = await adapter.deployment_capabilities()
-    agent_definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    agent_definition = AgentDefinition(
+        "hermes_rag_agent",
+        "hermes",
+        "hermes_agent",
+        definition_metadata={
+            "hermes_policy": {
+                "allowed_tool_ids": ["search_documents"],
+                "allow_persistent_memory": False,
+                "allow_subagents": False,
+                "skills": [],
+                "approval_enabled": True,
+            }
+        },
+    )
     registry = RuntimeRegistry(adapters=[adapter])
     definition = await capabilities_for_definition(agent_definition, registry=registry)
 
     assert "task.pause" not in deployment.operations
     assert definition.operations["task.pause"].enabled is False
     assert definition.operations["task.pause"].disabled_reason == "definition_not_task_runtime"
+    assert definition.features["tools"].details["allowed_tool_ids"] == ["search_documents"]
+    assert definition.features["memory"].enabled is False
+    assert definition.features["delegation"].enabled is False
 
 
 @pytest.mark.asyncio
@@ -103,10 +119,8 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
 
     capabilities, error = await discover_adapter_capabilities(adapter)
 
-    assert capabilities is not None
+    assert capabilities is None
     assert error["code"] == "runtime_disabled"
-    assert capabilities.operations[RuntimeOperationId.TASK_START].enabled is False
-    assert capabilities.operations[RuntimeOperationId.TASK_START].disabled_reason == "runtime_unavailable"
     adapter._json.assert_not_awaited()
 
 

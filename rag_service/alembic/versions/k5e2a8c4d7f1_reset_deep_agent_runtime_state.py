@@ -29,7 +29,6 @@ def upgrade() -> None:
                 DELETE FROM agent_runs
                 WHERE definition_category = 'deep'
                    OR workflow_id IN ('deep_research_agent', 'hermes_rag_agent');
-                ALTER TABLE agent_runs DROP COLUMN IF EXISTS runtime_binding_version;
             END IF;
 
             IF to_regclass('public.runtime_executions') IS NOT NULL THEN
@@ -51,11 +50,6 @@ def downgrade() -> None:
         """
         DO $$
         BEGIN
-            IF to_regclass('public.agent_runs') IS NOT NULL THEN
-                ALTER TABLE agent_runs
-                    ADD COLUMN IF NOT EXISTS runtime_binding_version integer NOT NULL DEFAULT 1;
-            END IF;
-
             IF to_regclass('public.runtime_events') IS NOT NULL THEN
                 ALTER TABLE runtime_events
                     ADD COLUMN IF NOT EXISTS runtime_version text,

@@ -35,7 +35,6 @@ def upgrade() -> None:
             server_default=sa.text("'{}'::jsonb"),
         ),
     )
-    op.add_column("agent_runs", sa.Column("runtime_binding_version", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("agent_runs", sa.Column("runtime_binding_status", sa.String(), nullable=False, server_default="active"))
     op.create_index("ix_agent_runs_framework", "agent_runs", ["framework"], unique=False)
     op.create_index("ix_agent_runs_builder_id", "agent_runs", ["builder_id"], unique=False)
@@ -72,7 +71,6 @@ def upgrade() -> None:
                      AND runs.checkpoint_thread_id IS NOT NULL
                 THEN jsonb_build_object(
                     'binding_type', 'langgraph_checkpoint',
-                    'binding_version', 1,
                     'payload', jsonb_build_object('checkpoint_thread_id', runs.checkpoint_thread_id)
                 )
                 ELSE runs.runtime_binding_json
@@ -87,7 +85,6 @@ def upgrade() -> None:
         SET runtime_binding_status = 'legacy_unresolved',
             runtime_binding_json = jsonb_build_object(
                 'binding_type', 'legacy_unresolved',
-                'binding_version', 1,
                 'payload', jsonb_build_object('workflow_id', workflow_id)
             )
         WHERE NOT EXISTS (SELECT 1 FROM agent_workflows WHERE agent_workflows.id = agent_runs.workflow_id)
@@ -99,7 +96,6 @@ def downgrade() -> None:
     op.drop_index("ix_agent_runs_definition_category", table_name="agent_runs")
     op.drop_index("ix_agent_runs_builder_id", table_name="agent_runs")
     op.drop_index("ix_agent_runs_framework", table_name="agent_runs")
-    op.drop_column("agent_runs", "runtime_binding_version")
     op.drop_column("agent_runs", "runtime_binding_status")
     op.drop_column("agent_runs", "runtime_binding_json")
     op.drop_column("agent_runs", "definition_category")

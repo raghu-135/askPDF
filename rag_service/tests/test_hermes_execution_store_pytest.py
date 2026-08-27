@@ -67,7 +67,7 @@ def test_existing_unreadable_hermes_store_fails_closed(tmp_path: Path, monkeypat
         HermesExecutionStore(str(path))
 
 
-def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> None:
+def test_incomplete_record_is_rejected_without_rewriting_the_journal(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
     payload = runtime_payload("legacy-run")
     path.write_text(
@@ -83,11 +83,10 @@ def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> N
         )
     )
 
-    store = HermesExecutionStore(str(path))
-
-    assert store.records["legacy-run"]["request_fingerprint"] == request_fingerprint(payload)
-    persisted = json.loads(path.read_text())
-    assert persisted["legacy-run"]["request_fingerprint"] == request_fingerprint(payload)
+    before = path.read_bytes()
+    with pytest.raises(HermesStoreLoadError):
+        HermesExecutionStore(str(path))
+    assert path.read_bytes() == before
 
 
 def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: Path) -> None:
@@ -95,6 +94,8 @@ def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: P
     original = runtime_payload("fingerprinted-run")
     store = HermesExecutionStore(str(path))
     created = store.create("fingerprinted-run", original)
+    assert "store_schema_version" not in created
+    assert "event_schema_version" not in created
 
     reloaded = HermesExecutionStore(str(path))
     assert (

@@ -20,7 +20,7 @@ def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
     graph_nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
     task_policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
-    return {
+    metadata = {
         "runtime_kind": runtime.get("kind"),
         "graph_node_types": sorted({
             str(node.get("type"))
@@ -30,6 +30,16 @@ def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
         "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
         "task_profiles": sorted({str(item) for item in task_policy.get("profiles", []) if item}),
     }
+    if runtime.get("kind") == "hermes_agent":
+        metadata["hermes_policy"] = {
+            "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
+            "allow_persistent_memory": bool(config.get("allow_persistent_memory", False)),
+            "allow_subagents": bool(config.get("allow_subagents", False)),
+            "skills": sorted({str(item) for item in config.get("skills", []) if item}),
+            "approval_enabled": bool(task_policy.get("approval_enabled", True)),
+            "profile": "external" if bool(config.get("use_web_search", False)) else "offline",
+        }
+    return metadata
 
 
 def definition_from_workflow(workflow: Any) -> AgentDefinition:

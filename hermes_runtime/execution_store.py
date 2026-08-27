@@ -59,8 +59,19 @@ def request_fingerprint(payload: Mapping[str, Any]) -> str:
 
 
 class HermesExecutionStore:
-    STORE_SCHEMA_VERSION = 3
-    EVENT_SCHEMA_VERSION = 2
+    _RECORD_KEYS = frozenset({
+        "run_id",
+        "status",
+        "events",
+        "payload",
+        "request_fingerprint",
+        "next_sequence",
+        "last_event_id",
+        "last_upstream_event_id",
+        "terminal_event_id",
+        "terminal_result",
+        "continuation",
+    })
 
     def __init__(self, path: str | None = None) -> None:
         self.path = Path(path or os.getenv("HERMES_RUNTIME_STATE_PATH", "/tmp/askpdf-hermes-runtime.json"))
@@ -87,55 +98,45 @@ class HermesExecutionStore:
             raise HermesStoreLoadError("Hermes execution journal root must be an object")
 
         loaded: dict[str, dict[str, Any]] = {}
-        migrated = False
         for run_id, raw_record in value.items():
             if not isinstance(run_id, str) or not isinstance(raw_record, Mapping):
                 raise HermesStoreLoadError("Hermes execution journal contains an invalid record")
             record = dict(raw_record)
-            if record.get("run_id") != run_id:
-                raise HermesStoreLoadError(
-                    f"Hermes execution journal record identity does not match key: {run_id}"
-                )
-            events = record.get("events", [])
-            if not isinstance(events, list) or any(not isinstance(item, Mapping) for item in events):
-                raise HermesStoreLoadError(
-                    f"Hermes execution journal has invalid events for run: {run_id}"
-                )
-            payload = record.get("payload")
-            if payload is not None and not isinstance(payload, Mapping):
-                raise HermesStoreLoadError(
-                    f"Hermes execution journal has invalid payload for run: {run_id}"
-                )
-            if record.get("request_fingerprint") is None and isinstance(payload, Mapping):
-                record["request_fingerprint"] = request_fingerprint(payload)
-                migrated = True
-            if record.get("store_schema_version") != self.STORE_SCHEMA_VERSION:
-                record["store_schema_version"] = self.STORE_SCHEMA_VERSION
-                migrated = True
-
-            sequences = []
-            for item in events:
-                event_id = str(item.get("event_id") or "")
-                try:
-                    sequences.append(int(event_id.rsplit(":", 1)[-1]))
-                except ValueError:
-                    pass
-            record.setdefault("event_schema_version", self.EVENT_SCHEMA_VERSION)
-            record.setdefault("next_sequence", max(sequences, default=len(events)) + 1)
-            record.setdefault("last_event_id", events[-1].get("event_id") if events else None)
-            record.setdefault("last_upstream_event_id", None)
-            record.setdefault("terminal_event_id", None)
-            record.setdefault("terminal_result", None)
+            self._validate_record(run_id, record)
             loaded[run_id] = record
 
         self.records = loaded
-        if migrated:
-            try:
-                self._save()
-            except OSError as exc:
-                raise HermesStoreLoadError(
-                    f"existing Hermes execution journal could not be migrated: {self.path}"
-                ) from exc
+
+    @classmethod
+    def _validate_record(cls, run_id: str, record: Mapping[str, Any]) -> None:
+        if set(record) != cls._RECORD_KEYS and set(record) != cls._RECORD_KEYS - {"continuation"}:
+            raise HermesStoreLoadError(f"Hermes execution journal has an invalid record shape: {run_id}")
+        if record.get("run_id") != run_id or not isinstance(record.get("status"), str):
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid record identity: {run_id}")
+        if not isinstance(record.get("events"), list):
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid events for run: {run_id}")
+        for event in record["events"]:
+            if (
+                not isinstance(event, Mapping)
+                or set(event) != {"event_id", "frame"}
+                or not isinstance(event.get("event_id"), str)
+                or not isinstance(event.get("frame"), str)
+            ):
+                raise HermesStoreLoadError(f"Hermes execution journal has malformed event for run: {run_id}")
+        if not isinstance(record.get("payload"), Mapping):
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid payload for run: {run_id}")
+        fingerprint = record.get("request_fingerprint")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid request fingerprint: {run_id}")
+        if not isinstance(record.get("next_sequence"), int) or record["next_sequence"] < 1:
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid sequence cursor: {run_id}")
+        for key in ("last_event_id", "last_upstream_event_id", "terminal_event_id"):
+            if record.get(key) is not None and not isinstance(record.get(key), str):
+                raise HermesStoreLoadError(f"Hermes execution journal has invalid {key}: {run_id}")
+        if record.get("terminal_result") is not None and not isinstance(record.get("terminal_result"), Mapping):
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid terminal result: {run_id}")
+        if "continuation" in record and not isinstance(record["continuation"], Mapping):
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid continuation: {run_id}")
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,25 +169,29 @@ class HermesExecutionStore:
             "events": [],
             "payload": dict(payload),
             "request_fingerprint": fingerprint,
-            "store_schema_version": self.STORE_SCHEMA_VERSION,
+            "next_sequence": 1,
+            "last_event_id": None,
+            "last_upstream_event_id": None,
+            "terminal_event_id": None,
+            "terminal_result": None,
         }
         self.records[run_id] = record
-        record.setdefault("event_schema_version", self.EVENT_SCHEMA_VERSION)
-        record.setdefault("next_sequence", 1)
-        record.setdefault("last_event_id", None)
-        record.setdefault("last_upstream_event_id", None)
-        record.setdefault("terminal_event_id", None)
-        record.setdefault("terminal_result", None)
         self._save()
         return record
 
+    def _record(self, run_id: str) -> dict[str, Any]:
+        record = self.records.get(run_id)
+        if record is None:
+            raise HermesStoreLoadError(f"Hermes execution journal has no record for run: {run_id}")
+        return record
+
     def update(self, run_id: str, **values: Any) -> None:
-        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        record = self._record(run_id)
         record.update(values)
         self._save()
 
     def next_sequence(self, run_id: str) -> int:
-        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        record = self._record(run_id)
         value = record.get("next_sequence")
         if isinstance(value, int) and value > 0:
             return value
@@ -196,7 +201,7 @@ class HermesExecutionStore:
         return value
 
     def _append_frame(self, run_id: str, frame: str) -> bool:
-        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        record = self._record(run_id)
         events = record.setdefault("events", [])
         event_id = next((line[3:].strip() for line in frame.splitlines() if line.startswith("id:")), f"{run_id}:{len(events) + 1}")
         data = next((line[5:].lstrip() for line in frame.splitlines() if line.startswith("data:")), None)
@@ -247,7 +252,7 @@ class HermesExecutionStore:
 
     def finalize(self, run_id: str, frame: str, *, status: str) -> bool:
         """Persist one terminal frame and status with a single durable save."""
-        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        record = self._record(run_id)
         if record.get("status") in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
             return False
         snapshot = copy.deepcopy(record)
@@ -262,7 +267,7 @@ class HermesExecutionStore:
 
     def fail_in_memory(self, run_id: str, frame: str) -> None:
         """Terminate live subscribers when durable storage is unavailable."""
-        record = self.records.setdefault(run_id, {"run_id": run_id, "events": []})
+        record = self._record(run_id)
         if not record.get("terminal_event_id"):
             self._append_frame(run_id, frame)
         record["status"] = "failed"

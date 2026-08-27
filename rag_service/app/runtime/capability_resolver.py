@@ -212,49 +212,19 @@ def _apply_task_start_dependency(
         )
 
 
-def _unavailable_capabilities(exc: RuntimeError) -> RuntimeCapabilities:
-    """Return a usable capability document when deployment discovery fails."""
-
-    return RuntimeCapabilities(
-        deployment={
-            "runtime_available": False,
-            "discovery_error": exc.code,
-        },
-    )
-
-
 async def _reconciled_capabilities(
     adapter: Any,
     definition: AgentDefinition | None = None,
 ) -> RuntimeCapabilities:
     """Apply the common capability pipeline for every resolution level."""
 
-    unavailable = False
-    try:
-        capabilities = await (
-            adapter.capabilities(definition)
-            if definition is not None
-            else adapter.deployment_capabilities()
-        )
-    except RuntimeError as exc:
-        capabilities = _unavailable_capabilities(exc)
-        unavailable = True
+    capabilities = await (
+        adapter.capabilities(definition)
+        if definition is not None
+        else adapter.deployment_capabilities()
+    )
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
-    if unavailable:
-        capabilities = replace(
-            capabilities,
-            operations={
-                operation: descriptor
-                if operation in {
-                    RuntimeOperationId.RUN_GET,
-                    RuntimeOperationId.RUN_LIST,
-                    RuntimeOperationId.RUN_EVENTS,
-                }
-                else _disabled(descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE)
-                for operation, descriptor in capabilities.operations.items()
-            },
-        )
     if definition is not None:
         capabilities = apply_definition_policy(capabilities, definition)
     operations = dict(capabilities.operations)
@@ -519,7 +489,7 @@ async def discover_adapter_capabilities(
                 },
             )
         if capabilities.deployment.get("runtime_available") is False:
-            return capabilities, {
+            return None, {
                 "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
                 "safe_message": "Agent runtime deployment is unavailable",
                 "retryable": True,

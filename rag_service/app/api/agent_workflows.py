@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any, Dict, Literal, Mapping, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -521,7 +521,8 @@ async def list_agent_workflows():
 
 
 @router.get("/agent-runtimes")
-async def list_agent_runtimes():
+async def list_agent_runtimes(response: Response):
+    response.headers["Cache-Control"] = "no-store"
     registry = get_runtime_registry()
     deployments = []
     for adapter in registry.adapters():
@@ -541,7 +542,8 @@ async def list_agent_runtimes():
 
 
 @router.get("/agent-runtimes/{runtime_id}/capabilities")
-async def get_agent_runtime_capabilities(runtime_id: str):
+async def get_agent_runtime_capabilities(runtime_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
     registry = get_runtime_registry()
     adapter = registry.get_deployment(runtime_id)
     if adapter is None:
@@ -558,7 +560,8 @@ async def get_agent_runtime_capabilities(runtime_id: str):
 
 
 @router.get("/agent-workflows/{workflow_id}/capabilities")
-async def get_agent_workflow_capabilities(workflow_id: str):
+async def get_agent_workflow_capabilities(workflow_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
     repo = AgentWorkflowRepository()
     await repo.seed_builtin_workflows()
     include_custom = workflow_id not in builtin_workflow_keys()
@@ -707,8 +710,10 @@ async def stream_agent_run_events(
 @router.get("/agent-runs/{run_id}/capabilities")
 async def get_agent_run_capabilities(
     run_id: str,
+    response: Response,
     thread_id: str = Query(..., min_length=1),
 ):
+    response.headers["Cache-Control"] = "no-store"
     if not await get_thread(thread_id):
         raise HTTPException(status_code=404, detail="Agent run not found")
     repo = AgentWorkflowRepository()
