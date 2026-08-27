@@ -274,7 +274,7 @@ async def test_runtime_unavailable_deployment_disables_task_start():
     assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
     assert capabilities.operations[RuntimeOperationId.RUN_EVENTS].enabled is True
     assert capabilities.operations[RuntimeOperationId.RUN_EVENTS].owner is RuntimeOperationOwner.PRODUCT
-    assert capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is True
+    assert capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is False
     assert capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].owner is RuntimeOperationOwner.PRODUCT
     assert RuntimeOperationId.RUN_CANCEL not in capabilities.operations
 
@@ -283,6 +283,64 @@ async def test_runtime_unavailable_deployment_disables_task_start():
         registry=RuntimeRegistry(adapters=[adapter]),
     )
     assert resolved.operations[RuntimeOperationId.TASK_START].disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_runtime_unavailable_disables_all_product_task_operations():
+    capabilities, _ = await discover_adapter_capabilities(UnavailableCapabilityAdapter())
+
+    for operation in (
+        RuntimeOperationId.TASK_START,
+        RuntimeOperationId.TASK_PAUSE,
+        RuntimeOperationId.TASK_RESUME,
+        RuntimeOperationId.TASK_CANCEL,
+        RuntimeOperationId.TASK_RETRY,
+    ):
+        descriptor = capabilities.operations[operation]
+        assert descriptor.enabled is False
+        assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_task_start_preserves_run_start_dependency_reason():
+    adapter = CapabilityAdapter(unsupported=[RuntimeOperationId.RUN_START])
+    capabilities = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[adapter]),
+    )
+
+    descriptor = capabilities.operations[RuntimeOperationId.TASK_START]
+    assert descriptor.enabled is False
+    assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_artifact_listing_requires_a_task_owned_run():
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    definition = _definition(supports_long_running_tasks=True)
+
+    deployment, _ = await discover_adapter_capabilities(registry.get(definition))
+    assert deployment.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is False
+
+    definition_capabilities = await capabilities_for_definition(definition, registry=registry)
+    assert definition_capabilities.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is False
+
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+    )
+    taskless_run = await resolve_capabilities(definition, registry=registry, run=run)
+    assert taskless_run.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is False
+
+    task_run = await resolve_capabilities(
+        definition,
+        registry=registry,
+        run=run,
+        task=SimpleNamespace(status="running"),
+    )
+    assert task_run.operations[RuntimeOperationId.ARTIFACT_LIST].enabled is True
 
 
 @pytest.mark.asyncio

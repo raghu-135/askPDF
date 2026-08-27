@@ -535,3 +535,25 @@ async def test_http_adapter_replays_after_transport_disconnect_before_terminal()
     assert result.output == "recovered"
     assert calls == ["POST /v1/runs/start", "GET /v1/runs/run-1/events"]
     await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 404])
+async def test_http_adapter_does_not_replay_unstructured_http_status_failures(status_code):
+    request = _request()
+    calls: list[str] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method + " " + http_request.url.path)
+        return httpx.Response(status_code, request=http_request, content=b"not json")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.start(request, context=RuntimeExecutionContext())
+
+    assert caught.value.code == "runtime_transport_error"
+    assert caught.value.retryable is False
+    assert caught.value.details["status_code"] == status_code
+    assert calls == ["POST /v1/runs/start"]
+    await client.aclose()

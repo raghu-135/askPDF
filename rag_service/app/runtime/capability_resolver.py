@@ -191,6 +191,27 @@ def _apply_task_cancel_dependency(
         )
 
 
+def _apply_task_start_dependency(
+    operations: dict[RuntimeOperationId, RuntimeOperationDescriptor],
+) -> None:
+    """A task can start only when its runtime run can start."""
+
+    task_start = operations.get(RuntimeOperationId.TASK_START)
+    if task_start is None or not task_start.enabled:
+        return
+    run_start = operations.get(RuntimeOperationId.RUN_START)
+    if run_start is None or not run_start.enabled or run_start.support is RuntimeSupportLevel.UNSUPPORTED:
+        operations[RuntimeOperationId.TASK_START] = replace(
+            task_start,
+            enabled=False,
+            disabled_reason=(
+                run_start.disabled_reason
+                if run_start is not None and run_start.disabled_reason is not None
+                else RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+            ),
+        )
+
+
 def _unavailable_capabilities(exc: RuntimeError) -> RuntimeCapabilities:
     """Return a usable capability document when deployment discovery fails."""
 
@@ -229,13 +250,16 @@ async def _reconciled_capabilities(
                     RuntimeOperationId.RUN_GET,
                     RuntimeOperationId.RUN_LIST,
                     RuntimeOperationId.RUN_EVENTS,
-                    RuntimeOperationId.ARTIFACT_LIST,
                 }
                 else _disabled(descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE)
                 for operation, descriptor in capabilities.operations.items()
             },
         )
-    return apply_definition_policy(capabilities, definition) if definition is not None else capabilities
+    if definition is not None:
+        capabilities = apply_definition_policy(capabilities, definition)
+    operations = dict(capabilities.operations)
+    _apply_task_start_dependency(operations)
+    return replace(capabilities, operations=operations)
 
 
 async def capabilities_for_definition(
@@ -244,7 +268,14 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    return await _reconciled_capabilities(adapter, definition)
+    capabilities = await _reconciled_capabilities(adapter, definition)
+    operations = dict(capabilities.operations)
+    artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
+    if artifact_list is not None:
+        operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
+            artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+        )
+    return replace(capabilities, operations=operations)
 
 
 def pending_interrupt_response_operation(
@@ -290,7 +321,19 @@ async def resolve_capabilities(
                 operations[operation] = _disabled(
                     operations[operation], RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
                 )
+        artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
+        if artifact_list is not None:
+            operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
+                artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+            )
         return replace(capabilities, operations=operations)
+
+    if task is None:
+        artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
+        if artifact_list is not None:
+            operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
+                artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+            )
 
     if RuntimeOperationId.RUN_START in operations and not getattr(run, "_fresh_runtime_run", False):
         operations[RuntimeOperationId.RUN_START] = _disabled(
@@ -347,6 +390,7 @@ async def resolve_capabilities(
                 operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.TASK_TERMINAL)
 
     _apply_task_cancel_dependency(operations, submitted=submitted)
+    _apply_task_start_dependency(operations)
 
     if not checkpoint_boundary_available(run):
         for operation in CHECKPOINT_OPERATIONS:
@@ -463,6 +507,17 @@ async def discover_adapter_capabilities(
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
     try:
         capabilities = await _reconciled_capabilities(adapter)
+        artifact_list = capabilities.operations.get(RuntimeOperationId.ARTIFACT_LIST)
+        if artifact_list is not None:
+            capabilities = replace(
+                capabilities,
+                operations={
+                    **capabilities.operations,
+                    RuntimeOperationId.ARTIFACT_LIST: _disabled(
+                        artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+                    ),
+                },
+            )
         if capabilities.deployment.get("runtime_available") is False:
             return capabilities, {
                 "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),

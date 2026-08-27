@@ -433,6 +433,11 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         try:
             try:
                 await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
+            except httpx.HTTPStatusError:
+                # Deterministic HTTP admission failures are not ambiguous
+                # stream disconnects and must not trigger replay or a second
+                # start request.
+                raise
             except httpx.HTTPError:
                 # The runtime may have committed the execution even though
                 # the subscriber connection failed. Fall through to durable
@@ -472,6 +477,14 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True) from exc
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed SSE data") from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError.from_exception(
+                exc,
+                code="runtime_transport_error",
+                retryable=False,
+                safe_message="Agent runtime rejected the request",
+                details={"status_code": exc.response.status_code},
+            ) from exc
         except httpx.TimeoutException as exc:
             raise RuntimeError.from_exception(exc, code="runtime_stream_timeout", retryable=True, safe_message="Agent runtime stream timed out") from exc
         except httpx.HTTPError as exc:
