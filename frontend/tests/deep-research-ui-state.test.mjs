@@ -6,7 +6,6 @@ import {
   isTaskOwnedAgentRun,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
-  resolveDeepResearchContextWindow,
   shouldPollAgentTask,
   shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
@@ -34,12 +33,12 @@ test('active tasks continue polling while terminal tasks stop', () => {
   }
 });
 
-test('LangGraph and Hermes stop event subscriptions at the shared terminal boundary', () => {
-  for (const engine of ['langgraph', 'hermes']) {
-    const activeTask = { status: 'running', configuration: { engine } };
-    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'running' }), true, engine);
-    assert.equal(shouldSubscribeToAgentTaskEvents({ ...activeTask, status: 'completed' }, { status: 'running' }), false, engine);
-    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'completed' }), false, engine);
+test('Definitions stop event subscriptions at the shared terminal boundary', () => {
+  for (const definitionId of ['deep_research_agent', 'hermes_rag_agent']) {
+    const activeTask = { status: 'running', configuration: { definition_id: definitionId } };
+    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'running' }), true, definitionId);
+    assert.equal(shouldSubscribeToAgentTaskEvents({ ...activeTask, status: 'completed' }, { status: 'running' }), false, definitionId);
+    assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'completed' }), false, definitionId);
   }
 });
 
@@ -66,10 +65,4 @@ test('task navigation never combines the newly selected task with a stale run', 
   assert.equal(isRunOwnedBySelectedTask('task-b', { id: 'run-a', task_id: 'task-a' }), false);
   assert.equal(isRunOwnedBySelectedTask('task-b', { id: 'run-b', task_id: 'task-b' }), true);
   assert.equal(isRunOwnedBySelectedTask(null, { id: 'run-b', task_id: 'task-b' }), false);
-});
-
-test('Hermes uses its deployment context without changing LangGraph selection', () => {
-  assert.equal(resolveDeepResearchContextWindow('hermes', 20_000, 32_768), 32_768);
-  assert.equal(resolveDeepResearchContextWindow('langgraph', 20_000, 32_768), 20_000);
-  assert.equal(resolveDeepResearchContextWindow('hermes', 20_000, null), 20_000);
 });

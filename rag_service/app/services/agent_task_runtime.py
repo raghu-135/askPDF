@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import socket
 import time
 from contextlib import suppress
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.db import AgentRunStatus, get_recent_messages, get_thread, get_thread_settings
-from app.mcp.execution_context_token import issue_execution_context_token
+from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
@@ -23,7 +20,7 @@ from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId
+from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
 from app.runtime.capability_resolver import require_capability
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.catalog import (
@@ -34,20 +31,12 @@ from app.runtime.catalog import (
 )
 from app.runtime.registry import RuntimeRegistry, adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
-from app.runtime.hermes_config import hermes_model_context_length
-from app.runtime.budgets import deep_agent_budgets
-from app.tools.context import ToolInvocationContext
+from app.runtime.operational_limits import positive_float_value
 
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
-HERMES_DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_documents", "search_document_by_id"})
-HERMES_RESEARCH_EVIDENCE_TOOLS = frozenset({
-    *HERMES_DOCUMENT_EVIDENCE_TOOLS,
-    "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv",
-    "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news",
-})
 
 
 async def _invoke_task_runtime(
@@ -136,67 +125,13 @@ async def _invoke_task_runtime(
     )
 
 
-def _hermes_grounding_summary(events: list[Any], *, documents_present: bool) -> dict[str, Any]:
-    successful: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    for event in events:
-        payload = dict(getattr(event, "payload_json", None) or getattr(event, "payload", None) or {})
-        if payload.get("source") != "askpdf_mcp":
-            continue
-        name = str(payload.get("tool_name") or "")
-        if getattr(event, "kind", "") == "tool.completed" and payload.get("ok") is True and int(payload.get("result_count") or 0) > 0:
-            successful.append(payload)
-        elif getattr(event, "kind", "") == "tool.failed":
-            failures.append(payload)
-    eligible = HERMES_DOCUMENT_EVIDENCE_TOOLS if documents_present else HERMES_RESEARCH_EVIDENCE_TOOLS
-    qualifying = [item for item in successful if item.get("tool_name") in eligible]
-    return {
-        "requirement": "document" if documents_present else "research",
-        "grounded": bool(qualifying),
-        "evidence_result_count": sum(int(item.get("result_count") or 0) for item in qualifying),
-        "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
-        "failed_tool_count": len(failures),
-        "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
-    }
-
-
-def _grounding_summary(
-    result: Mapping[str, Any],
-    events: list[Any],
-    *,
-    framework: str,
-    documents_present: bool,
-) -> dict[str, Any]:
-    """Summarize evidence activity for diagnostics without enforcing tool use."""
-
-    if framework == "hermes":
-        return _hermes_grounding_summary(events, documents_present=documents_present)
-
-    report = result.get("grounding_report")
-    if not isinstance(report, Mapping):
-        report = result.get("grounding") if isinstance(result.get("grounding"), Mapping) else {}
-    verified_claims = report.get("verified_claims") if isinstance(report, Mapping) else None
-    evidence_manifest = result.get("task_evidence_manifest")
-    grounded = bool(
-        (isinstance(verified_claims, list) and verified_claims)
-        or (isinstance(evidence_manifest, list) and evidence_manifest)
-    )
-    return {
-        "requirement": "document" if documents_present else "research",
-        "grounded": grounded,
-        "evidence_result_count": len(verified_claims) if isinstance(verified_claims, list) else len(evidence_manifest) if isinstance(evidence_manifest, list) else 0,
-        "successful_evidence_tools": [],
-        "failed_tool_count": 0,
-        "failure_codes": [],
-    }
-
-
 async def _task_context_snapshot(task: Any, thread: Any, config: dict[str, Any]) -> dict[str, Any]:
     """Create a bounded, deterministic context seed; retrieval remains MCP-backed."""
 
+    from app.db import get_recent_messages
     messages = await get_recent_messages(task.thread_id, limit=20)
     conversation: list[dict[str, str]] = []
-    context_window = int(config.get("context_window") or hermes_model_context_length(required=True))
+    context_window = int(config.get("context_window") or 32_768)
     remaining = min(24_000, max(4_000, context_window))
     for message in reversed(messages):
         content = str(getattr(message, "context_compact", None) or getattr(message, "content", "")).strip()
@@ -330,18 +265,12 @@ async def ensure_task_run(task_id: str):
         metadata = dict(active.run_metadata_json or {})
         binding = dict(active.runtime_binding_json or {})
         binding_payload = dict(binding.get("payload") or {})
-        # Hermes can commit the provider run before the caller receives the
-        # first SSE frame.  If that caller is interrupted, runtime_started is
+        # A runtime can commit its continuation before the caller receives the
+        # first event. If that caller is interrupted, runtime_started is
         # still false even though the product run owns an upstream execution.
-        # Do not replay a fresh start under the same runtime ID: Hermes
-        # deliberately rejects changed start semantics for an existing ID.
-        # Retire the partial product attempt (after stopping its provider run)
-        # and let the normal path allocate a new immutable run identity.
-        if (
-            metadata.get("runtime_started") is False
-            and active.framework == "hermes"
-            and binding_payload.get("upstream_run_id")
-        ):
+        # Retire the partial attempt after admitted cancellation and let the
+        # normal path allocate a new immutable run identity.
+        if metadata.get("runtime_started") is False and binding_payload:
             definition = definition_from_run(active)
             adapter = adapter_for_definition(definition)
             await require_capability(
@@ -371,10 +300,8 @@ async def ensure_task_run(task_id: str):
             )
             active = None
         else:
-            # An existing active run may have a checkpoint to continue after
-            # a worker restart.  Mark it explicitly so a newly-created run is
-            # not mistaken for a continuation merely because LangGraph
-            # reserves its checkpoint thread ID at creation time.
+            # Mark an unsubmitted active run explicitly so it is not mistaken
+            # for a continuation after a worker restart.
             setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
             return active
 
@@ -426,12 +353,10 @@ async def ensure_task_run(task_id: str):
             "runtime_started": False,
         },
     )
-    # create_run intentionally allocates the LangGraph checkpoint identity up
-    # front.  That identity is not evidence that a checkpoint exists yet.
     # attach_run reloads the winning row in its own session, so apply the
-    # process-local marker to that returned instance rather than the detached
-    # create_run instance. This also handles a concurrent creator winning the
-    # task attachment while preserving the persisted runtime_started truth.
+    # process-local fresh-run marker to that returned instance rather than the
+    # detached create_run instance. This also handles a concurrent creator
+    # winning the task attachment while preserving persisted runtime state.
     attached = await tasks.attach_run(
         task.id,
         run,
@@ -511,75 +436,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 artifact_contents[artifact.id] = (await content_store.read(artifact.object_key)).decode("utf-8", errors="replace")
             except (FileNotFoundError, OSError):
                 continue
-    # Some task runs were created before the run snapshot was populated. Do
-    # not create a replacement run: reconstruct the same concrete deep
-    # workflow definition and attach its materialized spec to this run before
-    # continuation is sent to the runtime.
-    if not isinstance(run.resolved_spec_json, dict) or not run.resolved_spec_json.get("config"):
-        workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=False)
-        if workflow is None:
-            await AgentWorkflowRepository().seed_builtin_workflows()
-            workflow = await AgentWorkflowRepository().get_workflow(task.workflow_id, include_custom=False)
-        if workflow is None:
-            raise RuntimeError("deep_research_workflow_unavailable")
-        thread_settings = await get_thread_settings(task.thread_id)
-        definition = definition_from_workflow(workflow)
-        provider = builder_for_definition(definition)
-        resolved = await provider.resolve(
-            definition,
-            workflow.spec_json,
-            thread_settings=thread_settings,
-            request_overrides={
-                "llm_model": config.get("llm_model"),
-                "context_window": config.get("context_window"),
-                "use_web_search": bool(config.get("use_web_search")),
-            },
-        )
-        resolved_config = dict(resolved.get("config") or {})
-        task_policy = dict(resolved_config.get("task_policy") or {})
-        task_policy["limits"] = dict(config.get("limits") or {})
-        task_policy["profiles"] = list(config.get("enabled_profiles") or [])
-        resolved_config["task_policy"] = task_policy
-        resolved_config["use_web_search"] = bool(config.get("use_web_search"))
-        resolved["config"] = resolved_config
-        run.resolved_spec_json = dict(await provider.normalize(definition, resolved))
     todos = await tasks.list_todos(task.id)
     task_web_access = await tasks.get_task_web_access(task.id)
-    request = SimpleNamespace(
-        question=task.objective,
-        llm_model=config.get("llm_model"),
-        context_window=config.get("context_window"),
-        use_web_search=bool(config.get("use_web_search")),
-        web_search_mode=str(config.get("web_search_mode") or "off"),
-        task_web_access=task_web_access,
-        use_reranker=True,
-        bypass_clarification=True,
-        system_role_override="",
-        tool_instructions_override={},
-        custom_instructions_override="",
-        client_timezone=None,
-        client_locale=None,
-        client_now_iso=None,
-        agent_task_id=task.id,
-        agent_task_version=task.version,
-        task_enabled_profiles=list(config.get("enabled_profiles") or []),
-        task_limits=dict(config.get("limits") or {}),
-        task_plan_revision=max((todo.updated_revision for todo in todos), default=0),
-        task_run_plan_count=0,
-        task_todos=[{
-            "id": todo.id, "title": todo.title, "description": todo.description,
-            "completion_criteria": todo.completion_criteria, "status": todo.status,
-            "priority": todo.priority, "required": todo.required,
-            "dependency_ids": list(todo.dependency_ids_json or []), "profile_id": todo.profile_id,
-            "attempt": todo.attempt, "max_attempts": todo.max_attempts,
-            "progress": todo.progress, "result_summary": todo.result_summary,
-            "artifact_ids": list(todo.artifact_ids_json or []), "version": todo.version,
-        } for todo in todos],
-        task_budget_usage=dict(task.budgets_json or {}),
-        runtime_execution_mode=True,
-        runtime_artifact_manifest=artifact_manifest,
-        runtime_artifact_contents=artifact_contents,
-    )
     repository = AgentWorkflowRepository()
     trace = AgentTraceRecorder(run)
     context = {
@@ -593,6 +451,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     runtime_event_sink.detach_delivery()
     runtime_event_sink.bind_trace_recorder(trace)
     runtime_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
+    runtime_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
     existing_run_events = await repository.list_run_events(run.id)
     runtime_event_sink.bind_runtime_event_persister(
         run.id,
@@ -616,53 +475,56 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "The task run has no materialized runtime definition",
                 retryable=False,
             )
-        runtime_input: dict[str, Any] = {"question": task.objective}
-        if definition.framework == "hermes":
-            snapshot = await _task_context_snapshot(task, thread, config)
-            allowed_tools = list(
-                ((resolved_spec.get("managed_profile") or {}).get("mcp") or {}).get("allowed_tool_ids")
-                or (resolved_spec.get("config") or {}).get("allowed_tool_ids")
-                or []
-            )
-            token_ttl_seconds = max(3600, int((config.get("limits") or {}).get("max_active_runtime_ms", 3_600_000)) // 1000)
-            token = issue_execution_context_token(
-                ToolInvocationContext(
-                    thread_id=task.thread_id,
-                    run_id=run.id,
-                    embedding_model=thread.embedding_model,
-                    context_window=int(config.get("context_window") or hermes_model_context_length(required=True)),
-                    use_web_search=bool(config.get("use_web_search")),
-                    use_reranker=True,
-                    extensions={
-                        "task_id": task.id,
-                        "llm_model": config.get("llm_model"),
-                        "web_search_mode": config.get("web_search_mode", "off"),
-                    },
-                ),
-                task_id=task.id,
-                allowed_tools=allowed_tools,
-                ttl_seconds=token_ttl_seconds,
-            )
-            await repository.update_run_metadata_fields(run.id, {
-                "hermes_mcp_context": {
-                    "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
-                    "expires_at_epoch": int(time.time()) + token_ttl_seconds,
-                    "context_window": int(config.get("context_window") or hermes_model_context_length(required=True)),
-                },
-            })
-            runtime_input.update({"task_context": snapshot, "mcp_execution_context_token": token})
+        task_context = RuntimeTaskContext(
+            task_id=task.id,
+            objective=task.objective,
+            todos=tuple({
+                "id": todo.id,
+                "title": todo.title,
+                "description": todo.description,
+                "completion_criteria": todo.completion_criteria,
+                "status": todo.status,
+                "priority": todo.priority,
+                "required": todo.required,
+                "dependency_ids": list(todo.dependency_ids_json or []),
+                "profile_id": todo.profile_id,
+                "attempt": todo.attempt,
+                "max_attempts": todo.max_attempts,
+                "progress": todo.progress,
+                "result_summary": todo.result_summary,
+                "artifact_ids": list(todo.artifact_ids_json or []),
+                "version": todo.version,
+            } for todo in todos),
+            artifact_manifests=tuple(artifact_manifest),
+            artifact_contents=dict(artifact_contents),
+            limits=dict(config.get("limits") or {}),
+            permissions={
+                "use_web_search": bool(config.get("use_web_search")),
+                "web_search_mode": str(config.get("web_search_mode") or "off"),
+                "web_access": task_web_access,
+            },
+            metadata={
+                "llm_model": config.get("llm_model"),
+                "context_window": config.get("context_window"),
+                "use_reranker": True,
+                "task_version": task.version,
+                "enabled_profiles": list(config.get("enabled_profiles") or []),
+                "plan_revision": max((todo.updated_revision for todo in todos), default=0),
+                "budget_usage": dict(task.budgets_json or {}),
+            },
+            context_data=await _task_context_snapshot(task, thread, config),
+        )
         runtime_request = AgentRuntimeRequest(
             run_id=run.id,
             thread_id=run.thread_id,
             definition_id=definition.definition_id,
             framework=definition.framework,
             builder_id=definition.builder_id,
-            input=runtime_input,
+            input={"question": task.objective},
             task_id=task.id,
             continuation=continuation_from_run(run),
         )
         runtime_context = RuntimeExecutionContext(
-            request=request,
             embedding_model=thread.embedding_model,
             resolved_spec=resolved_spec,
             agent_run_context={**context, "run": run},
@@ -670,7 +532,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             cancellation_checker=cancellation_requested,
             task_id=task.id,
             task_worker_id=worker_id,
+            task_context=task_context,
         )
+        runtime_context = await adapter.prepare_execution_context(runtime_context)
+        runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
         runtime_result = await _invoke_task_runtime(
             adapter=adapter,
             definition=definition,
@@ -688,12 +553,16 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 status="failed",
                 error={
                     "code": "runtime_continuation_missing",
-                    "message": "The LangGraph run has no durable checkpoint to continue",
+                    "message": "The runtime did not return a durable continuation for this run",
                     "retryable": False,
                 },
             )
         if runtime_result.continuation is not None:
             await repository.update_runtime_binding(run.id, runtime_result.continuation)
+        if runtime_result.checkpoint_boundary_available is not None:
+            await repository.update_run_metadata_fields(run.id, {
+                "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+            })
         result = result_to_product_payload(runtime_result)
         if str(result.get("status") or "") in {
             AgentRunStatus.COMPLETED.value,
@@ -810,10 +679,9 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 return
             evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
             if evidence_policy == "document_when_available":
-                grounding = _grounding_summary(
+                grounding = adapter.grounding_summary(
                     result,
                     await repository.list_run_events(run.id),
-                    framework=definition.framework,
                     documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
                 )
                 metrics["grounding"] = grounding
@@ -832,7 +700,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     "incomplete": incomplete,
                     "draft_model": result.get("task_draft_metadata") or {},
                     "quality_review": result.get("task_critic_report") or {},
-                    "plan_revision": int(result.get("task_plan_revision") or request.task_plan_revision or 0),
+                    "plan_revision": int(
+                        result.get("task_plan_revision")
+                        or task_context.metadata.get("plan_revision")
+                        or 0
+                    ),
                     "evidence_manifest": evidence_manifest,
                     "evidence_gaps": incomplete_reasons,
                 },
@@ -915,7 +787,10 @@ async def run_task_worker(
                     )
                     await tasks.release_task_lease(task.id, worker_id)
                     continue
-                wake_limit = deep_agent_budgets(framework)["wake_limit_seconds"]
+                wake_limit = positive_float_value(
+                    ((task.config_json or {}).get("limits") or {}).get("wake_limit_seconds"),
+                    name="wake_limit_seconds",
+                )
                 await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)
             except asyncio.TimeoutError:
                 if await tasks.active_runtime_budget_exhausted(task.id):

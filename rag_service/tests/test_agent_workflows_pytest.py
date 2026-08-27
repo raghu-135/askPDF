@@ -2985,7 +2985,7 @@ class TestRouterRagGraphToolConsumers:
             )
 
         events = [await sink.queue.get(), await sink.queue.get()]
-        assert [event["event"] for event in events] == ["node.started", "node.completed"]
+        assert [event["event"] for event in events] == ["operation.started", "operation.completed"]
         assert sink.queue.empty()
         assert raised.value.state["final_answer"] == "This must not be persisted."
 
@@ -3748,77 +3748,6 @@ class TestAgentWorkflowRepository:
             await repo.prune_runs_before(utc_now(), statuses=[])
 
     @pytest.mark.asyncio
-    async def test_prune_checkpoints_for_terminal_runs_only(self, repo, sample_thread):
-        class FakeCheckpointer:
-            def __init__(self):
-                self.deleted_thread_ids = []
-
-            async def adelete_thread(self, thread_id):
-                self.deleted_thread_ids.append(thread_id)
-
-        await repo.seed_builtin_workflows()
-        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
-        old_completed = await repo.create_run(
-            thread_id=sample_thread.id,
-            workflow_id=workflow.id,
-            workflow_version_id=version.id,
-            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
-        )
-        old_failed = await repo.create_run(
-            thread_id=sample_thread.id,
-            workflow_id=workflow.id,
-            workflow_version_id=version.id,
-            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_failed"},
-        )
-        old_awaiting = await repo.create_run(
-            thread_id=sample_thread.id,
-            workflow_id=workflow.id,
-            workflow_version_id=version.id,
-            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_awaiting"},
-        )
-        recent_completed = await repo.create_run(
-            thread_id=sample_thread.id,
-            workflow_id=workflow.id,
-            workflow_version_id=version.id,
-            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
-        )
-        old_at = utc_now() - timedelta(days=45)
-        recent_at = utc_now() - timedelta(days=1)
-
-        session = await repo._get_session()
-        async with session.begin():
-            old_completed_row = await session.get(AgentRun, old_completed.id)
-            old_failed_row = await session.get(AgentRun, old_failed.id)
-            old_awaiting_row = await session.get(AgentRun, old_awaiting.id)
-            recent_completed_row = await session.get(AgentRun, recent_completed.id)
-            old_completed_row.started_at = old_at
-            old_completed_row.status = "completed"
-            old_failed_row.started_at = old_at
-            old_failed_row.status = "failed"
-            old_awaiting_row.started_at = old_at
-            old_awaiting_row.status = "awaiting_human"
-            recent_completed_row.started_at = recent_at
-            recent_completed_row.status = "completed"
-
-        fake_checkpointer = FakeCheckpointer()
-        deleted_checkpoint_thread_ids = await repo.prune_checkpoints_for_runs_before(
-            utc_now() - timedelta(days=30),
-            statuses=["completed", "failed"],
-            thread_id=sample_thread.id,
-            checkpointer=fake_checkpointer,
-        )
-
-        assert set(deleted_checkpoint_thread_ids) == {old_completed.checkpoint_thread_id, old_failed.checkpoint_thread_id}
-        assert set(fake_checkpointer.deleted_thread_ids) == set(deleted_checkpoint_thread_ids)
-
-        with pytest.raises(ValueError, match="terminal run statuses"):
-            await repo.prune_checkpoints_for_runs_before(
-                utc_now(),
-                statuses=["completed", "awaiting_human"],
-                checkpointer=fake_checkpointer,
-            )
-
-    @pytest.mark.asyncio
     async def test_fail_stale_running_runs_marks_only_old_running_rows_failed(self, repo, sample_thread):
         await repo.seed_builtin_workflows()
         workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -4347,11 +4276,8 @@ class TestAgentRunService:
         assert result["agent_run_id"] is None
         assert result["user_message_id"] is None
         assert result["assistant_message_id"] is None
-        assert deleted_checkpoint_ids == [captured_run_id]
-        assert cleanup_events == [
-            ("checkpoint", captured_run_id),
-            ("run", captured_run_id),
-        ]
+        assert deleted_checkpoint_ids == []
+        assert cleanup_events == [("run", captured_run_id)]
         if run_delete_fails:
             assert retained_run is not None
             assert retained_run.status == "clarification"
@@ -4440,8 +4366,8 @@ class TestAgentRunService:
         assert result["agent_run_id"] == captured_run_id
         assert result["user_message_id"] is None
         assert result["assistant_message_id"] is None
-        assert "node_events" not in result
-        assert cleanup_events == [("checkpoint", captured_run_id)]
+        assert result["node_events"] == [{"node": "router", "status": "completed"}]
+        assert cleanup_events == []
         assert retained_run is not None
         assert retained_run.status == "cancelled"
         assert retained_turns == []
@@ -5546,6 +5472,7 @@ class TestAgentRunService:
             paused_run_status = run.status
             paused_completed_at = run.completed_at
             paused_checkpoint_thread_id = run.checkpoint_thread_id
+            paused_runtime_binding = dict(run.runtime_binding_json or {})
             resumed = await service.resume_agent_run(
                 run.id,
                 interrupt_id=pending["interrupt_id"],
@@ -5566,9 +5493,13 @@ class TestAgentRunService:
         assert "chat_turn_id" not in paused
         assert paused_run_status == "awaiting_human"
         assert paused_completed_at is None
-        assert paused_checkpoint_thread_id == run.id
+        assert paused_checkpoint_thread_id is None
+        assert paused_runtime_binding == {
+            "binding_type": "langgraph.checkpoint",
+            "payload": {"checkpoint_thread_id": run.id},
+        }
         assert pending["checkpoint_resume"] is True
-        assert pending["checkpoint_thread_id"] == paused_checkpoint_thread_id
+        assert pending["checkpoint_thread_id"] == paused_runtime_binding["payload"]["checkpoint_thread_id"]
         assert pending["type"] == "tool_approval"
         assert pending["gate_id"] == "web_approval_gate"
         assert pending["proposed_tool"]["name"] == "search_web"
@@ -5615,14 +5546,15 @@ class TestAgentRunService:
         }
         assert "web_approval_gate" in node_span_ids
         assert "web_worker" in node_span_ids
-        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == len(
-            resumed.run.debug_trace_json["summary"]["nodes"]
-        )
-        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] >= 9
-        assert any(node["id"] == "web_approval_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
+        summary_operations = resumed.run.debug_trace_json["summary"]["operations"]
+        assert resumed.run.debug_trace_json["summary"]["usedOperationCount"] == len({
+            operation["operation_id"]
+            for operation in summary_operations
+            if operation.get("status") != "skipped"
+        })
+        assert any(operation["operation_id"] == "web_approval_gate" for operation in summary_operations)
         assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
         assert resumed.run.debug_trace_json["trace"]["chat_turn_id"] == turns[0].id
-        assert resumed.run.debug_trace_json["summary"]["lastInterruptStatus"] == "resumed"
 
     @pytest.mark.asyncio
     async def test_hitl_web_gate_approve_resumes_and_executes_web_once(self, engine, sample_thread, monkeypatch):

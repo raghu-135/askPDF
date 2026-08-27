@@ -125,10 +125,13 @@ def _install() -> None:
         server_names = sorted(str(name) for name in servers)
         if servers:
             await asyncio.to_thread(register_mcp_servers, servers)
-        registered_tools = _registered_tools(server_names)
         response = await original_toolsets(self, request)
         if response.status != 200:
             return response
+        # The pinned gateway discovers/registers MCP tools while serving the
+        # toolsets request. Read registration state after the original handler
+        # has completed so activation metadata reflects the actual toolset.
+        registered_tools = _registered_tools(server_names)
         try:
             payload = json.loads(response.body)
         except (TypeError, ValueError, json.JSONDecodeError):

@@ -31,7 +31,7 @@ from app.agent_workflows.interrupts import (
 )
 from app.agent_workflows.run_cleanup import (
     fail_stale_running_runs as cleanup_fail_stale_running_runs,
-    prune_checkpoints_for_runs_before as cleanup_prune_checkpoints_for_runs_before,
+    prune_runtime_continuations_for_runs_before as cleanup_prune_runtime_continuations_for_runs_before,
     prune_runs_before as cleanup_prune_runs_before,
 )
 from app.agent_workflows.run_store import (
@@ -73,6 +73,7 @@ from app.time_utils import iso_utc_z, utc_now
 RUN_STATUS_RUNNING = AgentRunStatus.RUNNING.value
 RUN_STATUS_AWAITING_HUMAN = AgentRunStatus.AWAITING_HUMAN.value
 RUN_STATUS_COMPLETED = AgentRunStatus.COMPLETED.value
+BUILDER_TEST_RUN_KIND = "builder_test"
 RUN_STATUS_CLARIFICATION = AgentRunStatus.CLARIFICATION.value
 RUN_STATUS_FAILED = AgentRunStatus.FAILED.value
 RUN_STATUS_REJECTED = AgentRunStatus.REJECTED.value
@@ -248,11 +249,44 @@ class AgentWorkflowRepository:
             result = await session.execute(
                 select(AgentRun)
                 .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN]))
-                .where(AgentRun.checkpoint_thread_id.is_not(None))
+                .where(AgentRun.runtime_binding_json.is_not(None))
                 .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
                 .limit(bounded)
             )
             return list(result.scalars().all())
+
+    async def latest_builder_test(
+        self,
+        builder_session_id: str,
+        base_workflow_id: Optional[str] = None,
+    ) -> Optional[AgentRun]:
+        session = await self._get_session()
+        async with session.begin():
+            query = select(AgentRun).where(
+                AgentRun.run_metadata_json["run_kind"].astext == BUILDER_TEST_RUN_KIND,
+                AgentRun.run_metadata_json["builder_session_id"].astext == builder_session_id,
+            )
+            if base_workflow_id:
+                query = query.where(
+                    AgentRun.run_metadata_json["base_workflow_id"].astext == base_workflow_id
+                )
+            result = await session.execute(
+                query.order_by(AgentRun.started_at.desc(), AgentRun.id.desc()).limit(1)
+            )
+            return result.scalars().first()
+
+    async def request_builder_test_cancel(self, run_id: str) -> Optional[AgentRun]:
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None or (run.run_metadata_json or {}).get("run_kind") != BUILDER_TEST_RUN_KIND:
+                return None
+            metadata = dict(run.run_metadata_json or {})
+            metadata["cancel_requested"] = True
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            await session.flush()
+            await session.refresh(run)
+            return run
 
     async def prune_runs_before(
         self,
@@ -273,7 +307,7 @@ class AgentWorkflowRepository:
             limit=limit,
         )
 
-    async def prune_checkpoints_for_runs_before(
+    async def prune_runtime_continuations_for_runs_before(
         self,
         cutoff: datetime,
         *,
@@ -282,10 +316,10 @@ class AgentWorkflowRepository:
         limit: int = 1000,
         checkpointer: Any = None,
     ) -> list[str]:
-        """Delete LangGraph checkpoints for old terminal runs only."""
+        """Delete runtime-owned continuations for old terminal runs only."""
 
         session = await self._get_session()
-        return await cleanup_prune_checkpoints_for_runs_before(
+        return await cleanup_prune_runtime_continuations_for_runs_before(
             session,
             cutoff,
             statuses=statuses,
@@ -327,7 +361,6 @@ class AgentWorkflowRepository:
         builder_id: Optional[str] = None,
         definition_category: Optional[str] = None,
         user_id: Optional[str] = None,
-        checkpoint_thread_id: Optional[str] = None,
         runtime_binding_json: Optional[Dict[str, Any]] = None,
         run_metadata_json: Optional[Dict[str, Any]] = None,
     ) -> AgentRun:
@@ -343,7 +376,6 @@ class AgentWorkflowRepository:
             definition_category=definition_category,
             resolved_spec_json=resolved_spec_json,
             user_id=user_id,
-            checkpoint_thread_id=checkpoint_thread_id,
             runtime_binding_json=runtime_binding_json,
             running_status=RUN_STATUS_RUNNING,
             run_metadata_json=run_metadata_json,
@@ -808,7 +840,12 @@ class AgentWorkflowRepository:
         finally:
             await session.close()
 
-    async def mark_runtime_started(self, run_id: str) -> Optional[AgentRun]:
+    async def mark_runtime_started(
+        self,
+        run_id: str,
+        *,
+        checkpoint_boundary_available: Optional[bool] = None,
+    ) -> Optional[AgentRun]:
         """Persist that the initial runtime start has been submitted."""
 
         session = await self._get_session()
@@ -818,7 +855,8 @@ class AgentWorkflowRepository:
                 return None
             metadata = dict(run.run_metadata_json or {})
             metadata["runtime_started"] = True
-            metadata["checkpoint_boundary_available"] = run.framework == "langgraph"
+            if checkpoint_boundary_available is not None:
+                metadata["checkpoint_boundary_available"] = bool(checkpoint_boundary_available)
             replace_jsonb_field(run, "run_metadata_json", metadata)
             return run
 

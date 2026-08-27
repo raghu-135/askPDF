@@ -63,6 +63,25 @@ def test_neutral_builder_modules_have_no_framework_imports():
         assert not any(token in line for line in import_lines for token in forbidden), name
 
 
+def test_langgraph_provider_owns_task_web_tool_mapping():
+    provider = LangGraphBuilderProvider()
+    with_web = AgentDefinition(
+        definition_id="deep_research_agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        definition_metadata={"allowed_tool_ids": ["live_web_recon"]},
+    )
+    without_web = AgentDefinition(
+        definition_id="deep_research_agent",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        definition_metadata={"allowed_tool_ids": ["document_evidence"]},
+    )
+
+    assert provider.supports_task_web_search(with_web) is True
+    assert provider.supports_task_web_search(without_web) is False
+
+
 @pytest.mark.asyncio
 async def test_langgraph_provider_preserves_concrete_identity():
     provider = LangGraphBuilderProvider()

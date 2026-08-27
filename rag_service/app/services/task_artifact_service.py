@@ -28,29 +28,12 @@ def artifact_ownership_key(*, todo_id: Optional[str], subagent_run_id: Optional[
 
 
 async def delete_task_resources_for_threads(thread_ids: list[str]) -> None:
-    """Delete task content and runtime continuations before rows cascade."""
-    from sqlalchemy.future import select
-
-    from app.db.connection_sqlmodel import async_session_maker
-    from app.db.models_sqlmodel import AgentRun
-    from app.runtime.cleanup import delete_run_continuation
-
+    """Delete task content before owning rows cascade."""
     artifacts = await list_artifacts_for_threads(thread_ids)
     store = get_content_store()
     for artifact in artifacts:
         await store.delete(artifact.object_key)
         await mark_artifact_deleted(artifact.task_id, artifact.id)
-    if thread_ids:
-        async with async_session_maker() as session:
-            result = await session.execute(
-                select(AgentRun).where(
-                    AgentRun.thread_id.in_(thread_ids),
-                    AgentRun.task_id.is_not(None),
-                )
-            )
-            runs = list(result.scalars().all())
-        for run in runs:
-            await delete_run_continuation(run)
 
 
 async def cleanup_deleted_task(task_id: str) -> None:
@@ -64,7 +47,11 @@ async def cleanup_deleted_task(task_id: str) -> None:
         await tasks.mark_artifact_deleted(task_id, artifact.id)
     runs = await tasks.list_task_runs(task_id)
     for run in runs:
-        await delete_run_continuation(run)
+        outcome = await delete_run_continuation(run)
+        if not outcome.owner_deletion_allowed:
+            raise RuntimeError(
+                f"Runtime continuation cleanup did not complete for run {run.id}: {outcome.status}"
+            )
     await tasks.mark_task_deletion_completed(task_id)
 
 

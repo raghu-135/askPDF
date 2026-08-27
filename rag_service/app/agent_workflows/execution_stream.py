@@ -12,7 +12,7 @@ from app.agent_workflows.canonical_trace import build_parallel_groups
 from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
-from app.runtime.contracts import AgentRuntimeEvent
+from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
 from app.runtime.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
 from app.runtime.observability import normalize_runtime_event
 
@@ -48,6 +48,7 @@ class AgentExecutionEventSink:
         self._runtime_event_ids: dict[str, str] = {}
         self._trace_recorder: Any = None
         self._runtime_binding_persister: Any = None
+        self._runtime_fact_persister: Any = None
         self._runtime_event_persister: Any = None
         self._run_id: str | None = None
         self._sequence = 0
@@ -58,6 +59,9 @@ class AgentExecutionEventSink:
 
     def bind_runtime_binding_persister(self, persister: Any) -> None:
         self._runtime_binding_persister = persister
+
+    def bind_runtime_fact_persister(self, persister: Any) -> None:
+        self._runtime_fact_persister = persister
 
     def bind_runtime_event_persister(
         self,
@@ -139,6 +143,10 @@ class AgentExecutionEventSink:
             payload.setdefault("trace_id", event.trace_id)
         if event.source_metadata:
             payload.setdefault("source_metadata", dict(event.source_metadata))
+        if event.continuation is not None:
+            payload["_runtime_continuation"] = event.continuation.to_dict()
+        if event.checkpoint_boundary_available is not None:
+            payload["_checkpoint_boundary_available"] = bool(event.checkpoint_boundary_available)
         await self.emit(event.kind, payload)
 
     def emit_nowait(self, event: str, data: Dict[str, Any] | None = None) -> None:
@@ -237,6 +245,18 @@ class AgentExecutionEventSink:
         event_id = str((envelope.get("data") or {}).get("event_id") or "")
         normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
         source_metadata = dict(normalized_payload.get("source_metadata") or {})
+        continuation_value = normalized_payload.pop("_runtime_continuation", None)
+        continuation = (
+            ContinuationBinding(
+                binding_type=str(continuation_value.get("binding_type") or ""),
+                payload=dict(continuation_value.get("payload") or {}),
+            )
+            if isinstance(continuation_value, dict) and continuation_value.get("binding_type")
+            else None
+        )
+        checkpoint_boundary_available = normalized_payload.pop(
+            "_checkpoint_boundary_available", None
+        )
         source_sequence = normalized_payload.pop("sequence", None)
         if source_sequence is not None:
             source_metadata.setdefault("source_sequence", source_sequence)
@@ -271,6 +291,8 @@ class AgentExecutionEventSink:
                 occurred_at=normalized_payload.get("occurred_at") or normalized_payload.get("timestamp"),
                 trace_id=normalized_payload.get("trace_id"),
                 source_metadata=source_metadata,
+                continuation=continuation,
+                checkpoint_boundary_available=checkpoint_boundary_available,
             )
             validate_runtime_event(canonical, previous=self._canonical_events[-1] if self._canonical_events else None)
         except (TypeError, ValueError) as exc:
@@ -295,6 +317,16 @@ class AgentExecutionEventSink:
                 self._runtime_event_ids[event_id] = candidate_hash
             if self._trace_recorder is not None:
                 self._trace_recorder.record_agent_runtime_event(canonical)
+        if canonical.continuation is not None and self._runtime_binding_persister is not None:
+            await self._runtime_binding_persister(canonical.run_id, canonical.continuation)
+        if (
+            canonical.checkpoint_boundary_available is not None
+            and self._runtime_fact_persister is not None
+        ):
+            await self._runtime_fact_persister(
+                canonical.run_id,
+                {"checkpoint_boundary_available": canonical.checkpoint_boundary_available},
+            )
         if event.startswith(PARALLEL_EVENT_PREFIXES):
             self._parallel_events.append(envelope)
             if len(self._parallel_events) > PARALLEL_EVENT_JOURNAL_LIMIT:

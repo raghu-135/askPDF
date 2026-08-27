@@ -120,6 +120,7 @@ def create_runtime_event(
     trace_id: str | None = None,
     source_metadata: Mapping[str, Any] | None = None,
     continuation: Any = None,
+    checkpoint_boundary_available: bool | None = None,
 ) -> AgentRuntimeEvent:
     if not str(event_id or "").strip():
         raise ValueError("runtime event_id is required")
@@ -145,6 +146,7 @@ def create_runtime_event(
         trace_id=trace_id,
         source_metadata=_bounded_value(normalized_source),
         continuation=continuation,
+        checkpoint_boundary_available=checkpoint_boundary_available,
     )
 
 

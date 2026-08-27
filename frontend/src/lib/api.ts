@@ -839,8 +839,8 @@ export interface SaveInternalAgentWorkflowPayload {
   name: string;
   description?: string;
   spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
-  framework?: string;
-  builder_id?: string;
+  framework: string;
+  builder_id: string;
 }
 
 export interface ThreadAgentConfigValidationResponse {
@@ -2424,21 +2424,41 @@ export interface AgentTaskSubagentRun {
 
 const taskQuery = (threadId: string) => new URLSearchParams({ thread_id: threadId }).toString();
 
-export type DeepResearchEngine = 'langgraph' | 'hermes';
+export interface AgentDefinitionCatalogEntry {
+  definition_id: string;
+  runtime_deployment_id: string;
+  display_name: string;
+  category?: string | null;
+  available: boolean;
+  task_eligible: boolean;
+  configuration: {
+    fields: Array<{
+      id: string;
+      label: string;
+      type: 'model' | 'integer' | 'enum' | 'string' | string;
+      required?: boolean;
+      default?: unknown;
+      minimum?: number;
+      maximum?: number;
+      options?: string[];
+      enabled?: boolean;
+      read_only?: boolean;
+    }>;
+  };
+  operations: Record<string, any>;
+  features?: Record<string, any>;
+  metadata: Record<string, any>;
+  error?: Record<string, any> | null;
+}
 
-export async function getDeepResearchCapabilities(): Promise<{
-  enabled: boolean;
-  web_enabled: boolean;
-  limits: Record<string, number>;
-  engines: Record<DeepResearchEngine, { enabled: boolean; workflow_id: string; max_context_length?: number | null }>;
-}> {
-  const response = await fetch(`${API_BASE}/api/deep-research/capabilities`);
+export async function listAgentDefinitions(): Promise<AgentDefinitionCatalogEntry[]> {
+  const response = await fetch(`${API_BASE}/api/agent-definitions`);
   if (!response.ok) throw new Error(await readApiError(response));
-  return response.json();
+  return (await response.json()).definitions;
 }
 
 export async function createAgentTask(threadId: string, payload: {
-  objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on'; engine?: DeepResearchEngine;
+  definition_id: string; objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',

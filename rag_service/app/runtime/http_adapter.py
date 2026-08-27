@@ -24,6 +24,7 @@ from app.runtime.contracts import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
     RuntimeCapabilities,
+    RuntimeOperationId,
     RuntimeValidationResult,
 )
 from app.runtime.errors import RuntimeError
@@ -71,6 +72,7 @@ def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
         "agent_run_context": _safe_json(context.agent_run_context),
         "task_id": context.task_id,
         "task_worker_id": context.task_worker_id,
+        "task_context": context.task_context.to_dict() if context.task_context is not None else None,
     }
 
 
@@ -292,6 +294,9 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     "source_event_ids": source_ids,
                     "chunk_count": len(pending_deltas),
                 })
+                visualization_id = getattr(self, "visualization_id", None)
+                if visualization_id:
+                    source_metadata.setdefault("visualization_id", visualization_id)
                 coalesced = AgentRuntimeEvent(
                     event_id=f"coalesced:{first.event_id}:{last.event_id}",
                     run_id=last.run_id,
@@ -378,7 +383,15 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event")
                     if _name != str(event_payload.get("kind") or ""):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime event name does not match its kind")
-                    event = event_from_dict(event_payload)
+                    event_data = dict(event_payload)
+                    source_metadata = dict(event_data.get("source_metadata") or {})
+                    source_metadata.setdefault("framework", self.framework)
+                    source_metadata.setdefault("source_event", str(event_data.get("kind") or _name))
+                    visualization_id = getattr(self, "visualization_id", None)
+                    if visualization_id:
+                        source_metadata.setdefault("visualization_id", visualization_id)
+                    event_data["source_metadata"] = source_metadata
+                    event = event_from_dict(event_data)
                     if event.run_id != request.run_id:
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a mismatched run ID")
                     event_hash = hashlib.sha256(json.dumps(event.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
@@ -537,7 +550,18 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
-        return [event_from_dict(event) for event in events]
+        projected = []
+        for event in events:
+            value = dict(event)
+            source_metadata = dict(value.get("source_metadata") or {})
+            source_metadata.setdefault("framework", self.framework)
+            source_metadata.setdefault("source_event", str(value.get("kind") or "runtime.event"))
+            visualization_id = getattr(self, "visualization_id", None)
+            if visualization_id:
+                source_metadata.setdefault("visualization_id", visualization_id)
+            value["source_metadata"] = source_metadata
+            projected.append(event_from_dict(value))
+        return projected
 
 
 class HttpLangGraphRuntimeAdapter(HttpRuntimeAdapter):
@@ -545,6 +569,15 @@ class HttpLangGraphRuntimeAdapter(HttpRuntimeAdapter):
 
     framework = "langgraph"
     builder_id = "langgraph_graph"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.TRACE_PROJECT,
+    })
 
     async def delete_continuation(self, continuation: Any) -> Any:
         binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")

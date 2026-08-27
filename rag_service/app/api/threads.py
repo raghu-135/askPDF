@@ -191,7 +191,14 @@ async def _delete_thread_resources(thread_id: str) -> bool:
         return False
 
     files = await get_thread_files(thread_id)
+    from app.runtime.cleanup import delete_run_continuations
+    from app.services.agent_task_repository import list_task_runtime_runs_for_threads
     from app.services.task_artifact_service import delete_task_resources_for_threads
+    outcomes = await delete_run_continuations(
+        await list_task_runtime_runs_for_threads([thread_id])
+    )
+    if any(not outcome.owner_deletion_allowed for outcome in outcomes):
+        raise RuntimeError("Runtime continuation cleanup was not confirmed")
     await delete_task_resources_for_threads([thread_id])
 
     db = get_vector_db()

@@ -662,9 +662,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
     }
 
 
-def _langgraph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[Mapping[str, Any]], framework: str) -> LangGraphVisualization | None:
-    if framework != "langgraph":
-        return None
+def _graph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[Mapping[str, Any]]) -> LangGraphVisualization | None:
     config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), Mapping) else {}
     graph = config.get("graph") if isinstance(config.get("graph"), Mapping) else {}
     nodes = list(graph.get("nodes") or [])
@@ -695,7 +693,10 @@ def _langgraph_visualization(resolved_spec: Mapping[str, Any], operations: Seque
 
 
 def _hermes_visualization(events: Sequence[AgentRuntimeEvent], failures: Sequence[Mapping[str, Any]]) -> HermesSessionVisualization | None:
-    hermes_events = [event for event in events if (event.source_metadata or {}).get("framework") == "hermes"]
+    hermes_events = [
+        event for event in events
+        if event.source_metadata.get("visualization_id") == TRACE_VISUALIZATION_HERMES
+    ]
     if not hermes_events:
         return None
     session_id = None
@@ -743,7 +744,7 @@ def build_canonical_trace_projection(
             "id": TRACE_VISUALIZATION_PARALLEL,
             "group_ids": [group["group_id"] for group in parallel_groups],
         }
-    langgraph = _langgraph_visualization(resolved_spec, operations, framework)
+    langgraph = _graph_visualization(resolved_spec, operations)
     if langgraph is not None:
         visualizations[TRACE_VISUALIZATION_LANGGRAPH] = langgraph
     hermes = _hermes_visualization(ordered, failures)

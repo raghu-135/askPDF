@@ -9,7 +9,6 @@ from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import utc_now
 from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
-from app.runtime.mode import external_runtime_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -57,16 +56,17 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
                 orphaned_content += 1
 
         deleted_checkpoints = 0
-        if not external_runtime_enabled():
-            checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
-                utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
-                limit=bounded,
-            )
-            from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
+        runtime_runs = await tasks.list_terminal_task_runtime_runs_before(
+            utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
+            limit=bounded,
+        )
+        from app.runtime.cleanup import delete_run_continuations
 
-            deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
-            await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
-            deleted_checkpoints = len(deleted_checkpoint_ids)
+        cleanup_results = await delete_run_continuations(runtime_runs)
+        await tasks.clear_task_runtime_bindings(
+            result.run_id for result in cleanup_results if result.cleaned
+        )
+        deleted_checkpoints = sum(1 for result in cleanup_results if result.cleaned)
         runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,

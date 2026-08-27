@@ -83,6 +83,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
         terminal=value.get("terminal"),
         source_metadata=dict(value.get("source_metadata") or {}),
         continuation=_binding(value.get("continuation")),
+        checkpoint_boundary_available=value.get("checkpoint_boundary_available"),
     )
 
 
@@ -97,6 +98,7 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         runtime_metadata=dict(value.get("runtime_metadata") or {}),
         continuation=_binding(value.get("continuation")),
         error=dict(value["error"]) if isinstance(value.get("error"), Mapping) else None,
+        checkpoint_boundary_available=value.get("checkpoint_boundary_available"),
     )
 
 

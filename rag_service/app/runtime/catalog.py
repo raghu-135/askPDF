@@ -29,16 +29,15 @@ def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
         }),
         "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
         "task_profiles": sorted({str(item) for item in task_policy.get("profiles", []) if item}),
-    }
-    if runtime.get("kind") == "hermes_agent":
-        metadata["hermes_policy"] = {
+        "runtime_policy": {
             "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
             "allow_persistent_memory": bool(config.get("allow_persistent_memory", False)),
             "allow_subagents": bool(config.get("allow_subagents", False)),
             "skills": sorted({str(item) for item in config.get("skills", []) if item}),
             "approval_enabled": bool(task_policy.get("approval_enabled", True)),
-            "profile": "external" if bool(config.get("use_web_search", False)) else "offline",
-        }
+            "external_context_enabled": bool(config.get("use_web_search", False)),
+        },
+    }
     return metadata
 
 
@@ -141,6 +140,7 @@ def event_from_source(
     run_id: str,
     sequence: int,
     event_id: str | None = None,
+    source_metadata: Mapping[str, Any] | None = None,
 ) -> AgentRuntimeEvent:
     data = dict(event.get("data") or {})
     kind = str(event.get("event") or event.get("kind") or "runtime.event")
@@ -152,9 +152,7 @@ def event_from_source(
         payload=data,
         occurred_at=data.get("occurred_at") or data.get("timestamp"),
         trace_id=data.get("trace_id"),
-        source_metadata={"framework": "langgraph", "source_event": kind}
-        if kind not in {"run.completed", "run.failed", "run.cancelled"}
-        else {"framework": "langgraph"},
+        source_metadata=dict(source_metadata or {"source_event": kind}),
     )
 
 

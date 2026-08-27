@@ -18,14 +18,39 @@ from app.runtime.contracts import (
     validated_disabled_operation_ids,
 )
 from app.runtime.errors import RuntimeError
-from app.runtime.hermes_config import hermes_model_provider
+from app.runtime.hermes_config import hermes_model_context_length, hermes_model_provider
 from app.runtime.hermes_profile import resolve_hermes_profile
+from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
 class HermesBuilderProvider:
     framework = "hermes"
     builder_id = "hermes_agent"
+    _task_web_tool_ids = frozenset({"search_web"})
+
+    def supports_task_web_search(self, definition: AgentDefinition) -> bool:
+        allowed_tools = {
+            str(value)
+            for value in definition.definition_metadata.get("allowed_tool_ids", ())
+            if value
+        }
+        return bool(allowed_tools & self._task_web_tool_ids)
+
+    def task_configuration_fields(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], ...]:
+        context_window = hermes_model_context_length(required=False)
+        return (
+            {"id": "llm_model", "label": "Model", "type": "model", "required": True},
+            {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": context_window, "minimum": 2048, "read_only": True},
+            {"id": "web_search_mode", "label": "Web search", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_web_search(definition)},
+        )
+
+    def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:
+        return apply_deep_agent_env_overrides(limits, self.framework)
     _allowed_config_keys = {
         "research_policy_id", "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",
@@ -144,6 +169,10 @@ class HermesBuilderProvider:
             config["model"] = selected_model
             config["provider"] = hermes_model_provider()
         config.update(filtered_overrides)
+        # Hermes owns its context window at deployment scope. A generic task
+        # request may carry a UI default, but it must not become the MCP
+        # execution context for this runtime.
+        config["context_window"] = hermes_model_context_length(required=True)
         policy_id = str(config.get("research_policy_id") or "")
         runtime_instructions = str(config.get("system_prompt") or "").strip()
         config["system_prompt"] = get_deep_research_policy(policy_id) + "\n\n" + runtime_instructions

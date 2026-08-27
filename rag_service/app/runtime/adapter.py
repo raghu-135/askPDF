@@ -16,6 +16,8 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeSteeringInput,
     RuntimeValidationResult,
+    RuntimeTaskContext,
+    RuntimeOperationId,
 )
 from app.runtime.errors import RuntimeError
 
@@ -30,9 +32,9 @@ class RuntimeExecutionContext:
     agent_run_context: Mapping[str, Any] = field(default_factory=dict)
     trace_recorder: Any = None
     cancellation_checker: Any = None
-    result_projector: Any = None
     task_id: Optional[str] = None
     task_worker_id: Optional[str] = None
+    task_context: Optional[RuntimeTaskContext] = None
 
 
 class AgentRuntimeEventSink(Protocol):
@@ -44,6 +46,43 @@ class AgentRuntimeAdapter(ABC):
 
     framework: str
     builder_id: str
+    implemented_operations: frozenset[RuntimeOperationId] = frozenset()
+
+    async def prepare_request(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: RuntimeExecutionContext,
+    ) -> AgentRuntimeRequest:
+        """Let a concrete adapter encode neutral context for its transport."""
+        return request
+
+    async def prepare_execution_context(
+        self,
+        context: RuntimeExecutionContext,
+    ) -> RuntimeExecutionContext:
+        """Materialize runtime-native in-process inputs from neutral context."""
+        return context
+
+    def grounding_summary(
+        self,
+        result: Mapping[str, Any],
+        events: list[Any],
+        *,
+        documents_present: bool,
+    ) -> Mapping[str, Any]:
+        report = result.get("grounding_report") if isinstance(result, Mapping) else None
+        report = report if isinstance(report, Mapping) else {}
+        evidence = result.get("task_evidence_manifest") if isinstance(result, Mapping) else None
+        count = len(report.get("verified_claims") or []) if isinstance(report.get("verified_claims"), list) else len(evidence or []) if isinstance(evidence, list) else 0
+        return {
+            "requirement": "document" if documents_present else "research",
+            "grounded": count > 0,
+            "evidence_result_count": count,
+            "successful_evidence_tools": [],
+            "failed_tool_count": 0,
+            "failure_codes": [],
+        }
 
     def _unsupported(self, operation_id: str, explanation: str) -> NoReturn:
         raise RuntimeError.capability_unsupported(

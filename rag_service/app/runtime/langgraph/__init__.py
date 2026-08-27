@@ -15,7 +15,6 @@ _LAZY_EXPORTS = {
     "WorkflowCompiler": ("app.runtime.langgraph.compiler", "WorkflowCompiler"),
     "continue_compiled_rag_chat": ("app.runtime.langgraph.router_runtime", "continue_compiled_rag_chat"),
     "execute_compiled_rag_chat": ("app.runtime.langgraph.router_runtime", "execute_compiled_rag_chat"),
-    "project_agent_task_result": ("app.runtime.langgraph.router_runtime", "project_agent_task_result"),
     "resume_compiled_rag_chat": ("app.runtime.langgraph.router_runtime", "resume_compiled_rag_chat"),
 }
 
@@ -34,6 +33,5 @@ __all__ = [
     "WorkflowCompiler",
     "continue_compiled_rag_chat",
     "execute_compiled_rag_chat",
-    "project_agent_task_result",
     "resume_compiled_rag_chat",
 ]

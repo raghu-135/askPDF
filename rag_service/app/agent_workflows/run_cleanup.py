@@ -12,7 +12,7 @@ from app.db.models_sqlmodel import AgentRun, AgentRunStatus
 from app.time_utils import utc_now
 
 
-CHECKPOINT_PRUNABLE_RUN_STATUSES = {
+CONTINUATION_PRUNABLE_RUN_STATUSES = {
     AgentRunStatus.COMPLETED.value,
     AgentRunStatus.CLARIFICATION.value,
     AgentRunStatus.FAILED.value,
@@ -50,40 +50,39 @@ async def prune_runs_before(
         return run_ids
 
 
-async def prune_checkpoints_for_runs_before(
+async def prune_runtime_continuations_for_runs_before(
     session: AsyncSession,
     cutoff: datetime,
     *,
     statuses: Optional[list[str]] = None,
     thread_id: Optional[str] = None,
     limit: int = 1000,
-    checkpointer: Any = None,
-) -> list[str]:
-    requested_statuses = statuses or sorted(CHECKPOINT_PRUNABLE_RUN_STATUSES)
+) -> list[Any]:
+    requested_statuses = statuses or sorted(CONTINUATION_PRUNABLE_RUN_STATUSES)
     if not requested_statuses:
         raise ValueError("statuses must contain at least one status")
-    invalid_statuses = sorted(set(requested_statuses) - CHECKPOINT_PRUNABLE_RUN_STATUSES)
+    invalid_statuses = sorted(set(requested_statuses) - CONTINUATION_PRUNABLE_RUN_STATUSES)
     if invalid_statuses:
         raise ValueError(
-            "checkpoint cleanup is only allowed for terminal run statuses; "
+            "runtime continuation cleanup is only allowed for terminal run statuses; "
             f"invalid statuses: {', '.join(invalid_statuses)}"
         )
     bounded_limit = max(1, min(int(limit), 1000))
     async with session.begin():
         query = (
-            select(AgentRun.checkpoint_thread_id)
+            select(AgentRun)
             .where(AgentRun.started_at < cutoff)
             .where(AgentRun.status.in_(requested_statuses))
-            .where(AgentRun.checkpoint_thread_id.isnot(None))
+            .where(AgentRun.runtime_binding_json.isnot(None))
         )
         if thread_id is not None:
             query = query.where(AgentRun.thread_id == thread_id)
         result = await session.execute(
             query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
         )
-        checkpoint_thread_ids = list(result.scalars().all())
-    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
-    return await delete_agent_checkpoints(checkpoint_thread_ids, checkpointer=checkpointer)
+        runs = list(result.scalars().all())
+    from app.runtime.cleanup import delete_run_continuations
+    return await delete_run_continuations(runs)
 
 
 async def fail_stale_running_runs(

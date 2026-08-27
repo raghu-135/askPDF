@@ -31,6 +31,16 @@ from app.runtime.registry import RuntimeRegistry
 class CapabilityAdapter:
     framework = "fake"
     builder_id = "fake_builder"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        RuntimeOperationId.RUN_REPLAY,
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+    })
 
     def __init__(self, *, unsupported=()):
         self.calls = {"cancel": 0, "resume": 0, "update_state": 0, "replay": 0, "inspect_state": 0}

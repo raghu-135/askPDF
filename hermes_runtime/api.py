@@ -689,6 +689,9 @@ def create_app() -> FastAPI:
         )
         terminal_seen = False
         retain_profile = False
+        # Keep cleanup and error reporting safe when profile preflight or run
+        # creation fails before Hermes returns an upstream run identifier.
+        upstream_run_id = ""
         tool_activity = {
             "started": 0,
             "completed": 0,
@@ -1333,6 +1336,24 @@ def create_app() -> FastAPI:
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         try:
+            record = state["store"].records.get(run_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=_error(
+                    "runtime_run_not_found",
+                    "Hermes runtime run was not found",
+                    retryable=False,
+                ))
+            persisted_status = str(record.get("status") or "").lower()
+            if persisted_status in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
+                return _envelope(
+                    status="ok",
+                    request_id=request.headers.get("x-request-id"),
+                    result={
+                        "run_id": run_id,
+                        "status": "already_terminal",
+                        "upstream_status": persisted_status or "unknown",
+                    },
+                )
             payload = payload or {}
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)

@@ -59,7 +59,6 @@ async def create_run(
     definition_category: Optional[str] = None,
     resolved_spec_json: Dict[str, Any],
     user_id: Optional[str] = None,
-    checkpoint_thread_id: Optional[str] = None,
     runtime_binding_json: Optional[Dict[str, Any]] = None,
     running_status: str = "running",
     run_metadata_json: Optional[Dict[str, Any]] = None,
@@ -78,25 +77,13 @@ async def create_run(
             raise ValueError("Run builder identity conflicts with the persisted workflow")
 
         run_metadata: Dict[str, Any] = dict(run_metadata_json or {})
-        run_metadata.setdefault("checkpoint_boundary_available", False)
         if workflow_version_id is not None:
             run_metadata["workflow_version_id"] = workflow_version_id
         if workflow_version is not None:
             run_metadata["workflow_version"] = workflow_version
         run_id = str(uuid.uuid4())
-        is_langgraph = persisted_framework == "langgraph"
-        effective_checkpoint_thread_id = (checkpoint_thread_id or run_id) if is_langgraph else checkpoint_thread_id
-        default_runtime_binding = (
-            {
-                "binding_type": "langgraph_checkpoint",
-                "payload": {"checkpoint_thread_id": effective_checkpoint_thread_id},
-            }
-            if is_langgraph
-            else {
-                "binding_type": f"{persisted_framework}_session",
-                "payload": {},
-            }
-        )
+        # Runtime continuation identities are created by the selected adapter.
+        # The product store must not invent a framework-specific binding.
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
@@ -108,9 +95,9 @@ async def create_run(
             run_metadata_json=run_metadata,
             resolved_spec_json=resolved_spec_json,
             status=running_status,
-            checkpoint_thread_id=effective_checkpoint_thread_id,
-            runtime_binding_json=dict(runtime_binding_json or default_runtime_binding),
-            runtime_binding_status="active",
+            checkpoint_thread_id=None,
+            runtime_binding_json=dict(runtime_binding_json) if runtime_binding_json else None,
+            runtime_binding_status="active" if runtime_binding_json else "unbound",
             started_at=utc_now(),
         )
         session.add(run)

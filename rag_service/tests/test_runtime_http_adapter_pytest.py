@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeTaskContext
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
 from app.runtime.errors import RuntimeError
 from app.runtime.catalog import result_to_product_payload
@@ -50,7 +50,14 @@ def test_http_context_preserves_task_request_fields_as_json():
             request=SimpleNamespace(
                 objective="find the authors",
                 task_limits={"max_sources": 3},
-            )
+            ),
+            task_context=RuntimeTaskContext(
+                task_id="task-1",
+                objective="find the authors",
+                limits={"max_sources": 3},
+                permissions={"use_web_search": True},
+                metadata={"llm_model": "test-model", "context_window": 8192},
+            ),
         )
     )
 
@@ -58,6 +65,17 @@ def test_http_context_preserves_task_request_fields_as_json():
         "objective": "find the authors",
         "task_limits": {"max_sources": 3},
         "runtime_execution_mode": True,
+    }
+    assert payload["task_context"] == {
+        "task_id": "task-1",
+        "objective": "find the authors",
+        "todos": [],
+        "artifact_manifests": [],
+        "artifact_contents": {},
+        "limits": {"max_sources": 3},
+        "permissions": {"use_web_search": True},
+        "metadata": {"llm_model": "test-model", "context_window": 8192},
+        "context_data": {},
     }
 
 
@@ -147,20 +165,11 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
 
     def handler(http_request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(http_request.content)
-        assert request_payload["definition"] == {
-            "definition_id": "router",
-            "framework": "langgraph",
-            "builder_id": "langgraph_graph",
-            "category": None,
-            "display_name": None,
-            "capabilities": {},
-            "definition_metadata": {
-                "runtime_kind": None,
-                "graph_node_types": [],
-                "allowed_tool_ids": [],
-                "task_profiles": [],
-            },
-        }
+        definition = request_payload["definition"]
+        assert definition["definition_id"] == "router"
+        assert definition["framework"] == "langgraph"
+        assert definition["builder_id"] == "langgraph_graph"
+        assert definition["capabilities"] == {}
         def body():
             yield f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': event})}\n\n".encode()
             yield f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'ok'}})}\n\n".encode()

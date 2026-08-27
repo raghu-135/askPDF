@@ -21,11 +21,88 @@ from app.runtime.errors import RuntimeError
 from app.runtime.http_runtime_adapter import HttpRuntimeAdapter
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
 from app.models.llm_server_client import check_model_can_invoke_tools
+from app.mcp.execution_context_token import issue_execution_context_token
+from app.tools.context import ToolInvocationContext
 
 
 class HermesRuntimeAdapter(HttpRuntimeAdapter):
     framework = "hermes"
     builder_id = "hermes_agent"
+    visualization_id = "hermes.session"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.TRACE_PROJECT,
+    })
+
+    async def prepare_request(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: Any,
+    ) -> AgentRuntimeRequest:
+        task_context = getattr(context, "task_context", None)
+        if task_context is None:
+            return request
+        data = dict(getattr(task_context, "context_data", {}) or {})
+        limits = dict(getattr(task_context, "limits", {}) or {})
+        spec = dict(getattr(context, "resolved_spec", {}) or {})
+        config = dict(spec.get("config") or {})
+        profile = dict(spec.get("managed_profile") or {})
+        mcp = dict(profile.get("mcp") or config.get("mcp") or {})
+        allowed_tools = list(mcp.get("allowed_tool_ids") or config.get("allowed_tool_ids") or [])
+        ttl_seconds = max(3600, int(limits.get("max_active_runtime_ms", 3_600_000)) // 1000)
+        context_window = int(
+            profile.get("context_window")
+            or config.get("context_window")
+            or data.get("context_window")
+            or 32_768
+        )
+        token = issue_execution_context_token(
+            ToolInvocationContext(
+                thread_id=request.thread_id,
+                run_id=request.run_id,
+                embedding_model=context.embedding_model,
+                context_window=context_window,
+                use_web_search=bool(config.get("use_web_search")),
+                use_reranker=True,
+                extensions={"task_id": task_context.task_id, "llm_model": config.get("llm_model")},
+            ),
+            task_id=task_context.task_id,
+            allowed_tools=allowed_tools,
+            ttl_seconds=ttl_seconds,
+        )
+        return replace(request, input={
+            **dict(request.input),
+            "task_context": data,
+            "mcp_execution_context_token": token,
+        })
+
+    def grounding_summary(self, result: Mapping[str, Any], events: list[Any], *, documents_present: bool) -> Mapping[str, Any]:
+        successful: list[Mapping[str, Any]] = []
+        failures: list[Mapping[str, Any]] = []
+        for event in events:
+            payload = dict(getattr(event, "payload_json", None) or getattr(event, "payload", None) or {})
+            if payload.get("source") != "askpdf_mcp":
+                continue
+            if getattr(event, "kind", "") == "tool.completed" and payload.get("ok") is True and int(payload.get("result_count") or 0) > 0:
+                successful.append(payload)
+            elif getattr(event, "kind", "") == "tool.failed":
+                failures.append(payload)
+        eligible = {"search_documents", "search_document_by_id"}
+        if not documents_present:
+            eligible.update({"search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv", "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news"})
+        qualifying = [item for item in successful if item.get("tool_name") in eligible]
+        return {
+            "requirement": "document" if documents_present else "research",
+            "grounded": bool(qualifying),
+            "evidence_result_count": sum(int(item.get("result_count") or 0) for item in qualifying),
+            "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
+            "failed_tool_count": len(failures),
+            "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
+        }
 
     def __init__(self, base_url: str | None = None, **kwargs: Any) -> None:
         super().__init__(base_url=base_url or os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200"), **kwargs)
@@ -64,7 +141,7 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
         capabilities = await self.deployment_capabilities()
-        policy = definition.definition_metadata.get("hermes_policy")
+        policy = definition.definition_metadata.get("runtime_policy")
         if not isinstance(policy, Mapping):
             return capabilities
 

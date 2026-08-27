@@ -16,6 +16,8 @@ from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows import deep_research_nodes
 from app.runtime.langgraph import router_runtime
+from app.runtime.catalog import definition_from_workflow
+from app.runtime.builder_registry import builder_for_definition
 from app.agent_workflows.deep_research_execution import (
     product_execution_services_factory,
     runtime_execution_services_factory,
@@ -90,6 +92,11 @@ def _deep_config(*, runtime: bool = False, **configurable) -> dict:
 class TaskInvocationAdapter:
     framework = "hermes"
     builder_id = "hermes_agent"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+    })
 
     def __init__(self, *, resume_enabled: bool = True):
         self.resume_calls = 0
@@ -591,15 +598,19 @@ async def test_deep_research_web_capability_uses_profile_and_tool_grants_not_def
     spec["config"]["allowed_tool_ids"] = [
         value for value in spec["config"]["allowed_tool_ids"] if value != "live_web_recon"
     ]
-    workflow_repository = SimpleNamespace(
-        get_workflow=AsyncMock(return_value=SimpleNamespace(spec_json=spec)),
-        seed_builtin_workflows=AsyncMock(),
+    workflow = SimpleNamespace(
+        id="deep_research_agent",
+        name="Deep Research",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        category="deep",
+        metadata_json={},
+        spec_json=spec,
     )
-    monkeypatch.setattr(agent_tasks_api, "AgentWorkflowRepository", lambda: workflow_repository)
+    definition = definition_from_workflow(workflow)
+    provider = builder_for_definition(definition)
 
-    contract = await agent_tasks_api._deep_research_contract()
-
-    assert contract["web_enabled"] is False
+    assert provider.supports_task_web_search(definition) is False
 
 
 def test_deep_research_plan_rejects_cycles_and_unknown_dependencies():
@@ -641,6 +652,27 @@ def test_subagent_result_normalizes_common_model_schema_drift():
 
     assert result.uncovered_gaps == ["More clinical evidence is needed."]
     assert result.usage == {"total_tokens": 120, "tool_calls": 2}
+
+
+def test_invalid_subagent_model_output_becomes_structured_retryable_failure():
+    result = deep_research_nodes._invalid_subagent_result(
+        response="{}",
+        initial_error=ValueError("invalid result"),
+        repair_error=ValueError("invalid repaired result"),
+    )
+
+    assert result.status == "failed"
+    assert result.retryable is True
+    assert result.error == {
+        "code": "subagent_result_invalid",
+        "retryable": True,
+        "details": {
+            "stage": "schema_repair",
+            "response_shape": "empty_object",
+            "initial_error_type": "ValueError",
+            "repair_error_type": "ValueError",
+        },
+    }
 
 
 def test_timeline_never_projects_active_subagents_as_failures():
@@ -1005,10 +1037,8 @@ async def test_process_restart_continues_checkpoint_without_fresh_graph_input(mo
     )
     app = SimpleNamespace(aget_state=AsyncMock(return_value=snapshot))
     invoke = AsyncMock(return_value={**snapshot.values, "final_answer": "Completed"})
-    persist = AsyncMock(return_value={"status": "completed", "answer": "Completed"})
     monkeypatch.setattr(router_runtime, "WorkflowCompiler", lambda: SimpleNamespace(compile=lambda *_args, **_kwargs: app))
     monkeypatch.setattr(router_runtime, "_invoke_graph_with_partial_state", invoke)
-    monkeypatch.setattr(router_runtime, "_persist_success_turn", persist)
 
     run = SimpleNamespace(
         id="run-1",
@@ -1019,20 +1049,19 @@ async def test_process_restart_continues_checkpoint_without_fresh_graph_input(mo
     )
     result = await router_runtime.continue_compiled_rag_chat(run, checkpointer=object())
 
-    assert result == {"status": "completed", "answer": "Completed"}
+    assert result["status"] == "completed"
+    assert result["answer"] == "Completed"
     assert invoke.await_args.args[1] is None
 
 
 @pytest.mark.asyncio
-async def test_task_result_projector_never_persists_a_chat_turn(monkeypatch):
+async def test_runtime_continuation_returns_neutral_result(monkeypatch):
     snapshot = SimpleNamespace(
         values={"question": "Research", "embedding_model": "embed", "context_window": 8192},
         next=(),
     )
     app = SimpleNamespace(aget_state=AsyncMock(return_value=snapshot))
-    persist = AsyncMock()
     monkeypatch.setattr(router_runtime, "WorkflowCompiler", lambda: SimpleNamespace(compile=lambda *_args, **_kwargs: app))
-    monkeypatch.setattr(router_runtime, "_persist_success_turn", persist)
     run = SimpleNamespace(
         id="task-run", thread_id="thread", workflow_id="deep_research_agent",
         checkpoint_thread_id="task-run", resolved_spec_json=_spec(),
@@ -1041,12 +1070,10 @@ async def test_task_result_projector_never_persists_a_chat_turn(monkeypatch):
     result = await router_runtime.continue_compiled_rag_chat(
         run,
         checkpointer=object(),
-        result_projector=router_runtime.project_agent_task_result,
     )
 
-    assert result["chat_turn_id"] is None
+    assert "chat_turn_id" not in result
     assert result["status"] == "completed"
-    persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1078,7 +1105,12 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
         checkpoint_thread_id="run-trace",
         resolved_spec_json=_spec(),
         pending_interrupt_json={},
-        runtime_binding_json={},
+        runtime_binding_json={
+            "binding_type": "langgraph.checkpoint",
+            "payload": {"checkpoint_thread_id": "run-trace"},
+        },
+        runtime_binding_status="active",
+        run_metadata_json={"checkpoint_boundary_available": True},
         metrics_json={},
         debug_trace_json=None,
         status="running",
@@ -1090,6 +1122,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
         list_run_events=AsyncMock(return_value=[]),
         append_run_event=AsyncMock(return_value=True),
         update_runtime_binding=AsyncMock(),
+        update_run_metadata_fields=AsyncMock(),
     )
 
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
@@ -1098,6 +1131,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime.tasks, "list_todos", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_web_access", AsyncMock(return_value="undecided"))
     monkeypatch.setattr(agent_task_runtime.tasks, "list_artifacts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_task_runtime, "_task_context_snapshot", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", AsyncMock())
     finalize_task_run = AsyncMock(return_value=SimpleNamespace(**{**task.__dict__, "status": "completed"}))
     monkeypatch.setattr(agent_task_runtime.tasks, "finalize_task_run", finalize_task_run)
@@ -1613,14 +1647,20 @@ async def test_todo_identity_is_task_scoped_and_budget_terminal_guards_are_atomi
 
 
 def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client, sample_thread):
-    capabilities = api_client.get("/api/deep-research/capabilities")
-    assert capabilities.status_code == 200
-    assert capabilities.json()["enabled"] is True
-    assert capabilities.json()["web_enabled"] is True
+    catalog = api_client.get("/api/agent-definitions")
+    assert catalog.status_code == 200
+    definition = next(
+        item for item in catalog.json()["definitions"]
+        if item["definition_id"] == "deep_research_agent"
+    )
+    assert definition["available"] is True
+    assert definition["task_eligible"] is True
+    web_field = next(item for item in definition["configuration"]["fields"] if item["id"] == "web_search_mode")
+    assert web_field["enabled"] is True
     builtin_limits = _spec()["config"]["task_policy"]["limits"]
-    assert capabilities.json()["limits"] == builtin_limits
 
     payload = {
+        "definition_id": "deep_research_agent",
         "objective": "Research the uploaded evidence",
         "llm_model": "test-model",
         "context_window": 8192,
@@ -1635,7 +1675,6 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     assert created.status_code == 201
     task = created.json()["task"]
     assert task["workflow_id"] == "deep_research_agent"
-    assert task["configuration"]["engine"] == "langgraph"
     assert task["configuration"]["limits"]["max_concurrency"] == builtin_limits["max_concurrency"]
 
     web_created = api_client.post(
@@ -1672,36 +1711,28 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     assert started.json()["task"]["active_run_id"]
 
 
-def test_task_api_explicitly_selects_hermes_and_uses_deployment_context(api_client, sample_thread, monkeypatch):
+@pytest.mark.asyncio
+async def test_task_configuration_uses_selected_hermes_definition_and_deployment_context(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
-    payload = {
-        "objective": "Research with Hermes",
-        "llm_model": "test-model",
-        "context_window": 8192,
-        "web_search_mode": "off",
-        "engine": "hermes",
-    }
-    created = api_client.post(
-        f"/api/threads/{sample_thread.id}/agent-tasks",
-        json=payload,
-        headers={"Idempotency-Key": "api-create-hermes"},
+    workflow = next(
+        item for item in load_builtin_workflows()
+        if item["builtin_key"] == "hermes_rag_agent"
     )
-    assert created.status_code == 201, created.text
-    task = created.json()["task"]
-    assert task["workflow_id"] == "hermes_rag_agent"
-    assert task["configuration"]["engine"] == "hermes"
-    assert task["configuration"]["context_window"] == 8192
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+    provider = builder_for_definition(definition)
+    resolved = await provider.resolve(
+        definition,
+        workflow["spec_json"],
+        request_overrides={"llm_model": "test-model", "context_window": 4096, "use_web_search": False},
+    )
+    fields = provider.task_configuration_fields(definition, workflow["spec_json"])
 
-    conflicting = api_client.post(
-        f"/api/threads/{sample_thread.id}/agent-tasks",
-        json={**payload, "context_window": 4096},
-        headers={"Idempotency-Key": "api-create-hermes-normalized"},
-    )
-    assert conflicting.status_code == 409, conflicting.text
-    assert conflicting.json()["detail"]["code"] == "hermes_context_length_conflict"
-    assert conflicting.json()["detail"]["configured_context_length"] == 8192
+    assert resolved["config"]["context_window"] == 8192
+    context_field = next(field for field in fields if field["id"] == "context_window")
+    assert context_field["default"] == 8192
+    assert context_field["read_only"] is True
 
 
 @pytest.mark.asyncio
@@ -1881,11 +1912,13 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_expired_artifacts", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_live_artifacts", AsyncMock(return_value=[artifact]))
     monkeypatch.setattr(agent_task_maintenance, "run_runtime_reconciliation", AsyncMock(return_value={}))
-    monkeypatch.setattr(agent_task_maintenance.tasks, "list_terminal_task_checkpoint_ids_before", AsyncMock(return_value=["checkpoint-1"]))
-    monkeypatch.setattr(agent_task_maintenance.tasks, "clear_task_checkpoint_ids", AsyncMock(return_value=1))
+    runtime_run = SimpleNamespace(id="run-1")
+    monkeypatch.setattr(agent_task_maintenance.tasks, "list_terminal_task_runtime_runs_before", AsyncMock(return_value=[runtime_run]))
+    monkeypatch.setattr(agent_task_maintenance.tasks, "clear_task_runtime_bindings", AsyncMock(return_value=1))
+    from app.runtime.cleanup import ContinuationCleanupOutcome
     monkeypatch.setattr(
-        "app.runtime.langgraph.checkpointing.delete_agent_checkpoints",
-        AsyncMock(return_value=["checkpoint-1"]),
+        "app.runtime.cleanup.delete_run_continuations",
+        AsyncMock(return_value=[ContinuationCleanupOutcome(run_id="run-1", status="cleaned")]),
     )
 
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)
@@ -1900,7 +1933,11 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_runs_maintenance_before_processing_a_busy_queue(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claimed = SimpleNamespace(id="task-1", active_run_id="run-1")
+    claimed = SimpleNamespace(
+        id="task-1",
+        active_run_id="run-1",
+        config_json={"limits": {"wake_limit_seconds": 30}},
+    )
     claim = AsyncMock(side_effect=[claimed, None])
     run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
     execute = AsyncMock()
@@ -1933,7 +1970,11 @@ async def test_task_worker_honors_pre_signalled_shutdown(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_stops_after_active_claim_without_claiming_more(monkeypatch):
     maintenance = AsyncMock(return_value={})
-    claim = AsyncMock(return_value=SimpleNamespace(id="task-1", active_run_id="run-1"))
+    claim = AsyncMock(return_value=SimpleNamespace(
+        id="task-1",
+        active_run_id="run-1",
+        config_json={"limits": {"wake_limit_seconds": 30}},
+    ))
     run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
     stop_event = asyncio.Event()
 
@@ -1951,20 +1992,22 @@ async def test_task_worker_stops_after_active_claim_without_claiming_more(monkey
 
 
 @pytest.mark.asyncio
-async def test_task_worker_uses_persisted_framework_for_custom_hermes_definition(monkeypatch):
-    task = SimpleNamespace(id="task-1", workflow_id="custom-hermes", active_run_id="run-1")
+async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_id="custom-definition",
+        active_run_id="run-1",
+        config_json={"limits": {"wake_limit_seconds": 30}},
+    )
     run = SimpleNamespace(id="run-1", task_id="task-1", framework="hermes", builder_id="hermes_agent")
-    selected_frameworks = []
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
-    monkeypatch.setattr(agent_task_runtime, "deep_agent_budgets", lambda framework: selected_frameworks.append(framework) or {"wake_limit_seconds": 30})
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True)
 
-    assert selected_frameworks == ["hermes"]
     execute.assert_awaited_once()
 
 

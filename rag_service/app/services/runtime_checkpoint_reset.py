@@ -11,12 +11,18 @@ from urllib.parse import urlsplit, urlunsplit
 import asyncpg
 
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.runtime.catalog import continuation_from_run
 
 
 async def mark_runs_deferred(*, limit: int = 500, dry_run: bool = True) -> dict[str, int]:
     """Mark active runs deferred before native checkpoint data is discarded."""
     repository = AgentWorkflowRepository()
-    runs = await repository.list_nonterminal_runtime_runs(limit=limit)
+    runs = [
+        run
+        for run in await repository.list_nonterminal_runtime_runs(limit=limit)
+        if (binding := continuation_from_run(run)) is not None
+        and binding.binding_type == "langgraph.checkpoint"
+    ]
     marked = 0
     for run in runs:
         if dry_run:
@@ -27,7 +33,7 @@ async def mark_runs_deferred(*, limit: int = 500, dry_run: bool = True) -> dict[
                 "reconciliation_status": "deferred",
                 "checkpoint_reset": {
                     "status": "native_state_discarded",
-                    "checkpoint_thread_id": run.checkpoint_thread_id,
+                    "checkpoint_thread_id": continuation_from_run(run).payload.get("checkpoint_thread_id"),
                 },
             },
         )

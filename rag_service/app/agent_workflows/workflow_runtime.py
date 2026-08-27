@@ -16,16 +16,6 @@ RUNTIME_TEXT_FIELDS = {
     "success_context",
     "failure_context",
 }
-DEFAULT_COMPILED_RAG_RUNTIME = {
-    "kind": WorkflowRuntimeKind.COMPILED_RAG.value,
-    "label": "Compiled RAG",
-    "failure_code": "compiled_rag_execution_failed",
-    "failure_reason_prefix": "Exception during compiled RAG execution",
-    "success_context": "Context retrieved by compiled RAG workflow.",
-    "failure_context": "Compiled RAG workflow execution failed gracefully.",
-    "features": {"supports_replans": False},
-    "prompt_preview": WorkflowNodeType.ROUTER.value,
-}
 ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "use_web_search",
     "use_reranker",
@@ -53,13 +43,6 @@ def default_agent_workflow_key() -> str:
 def workflow_runtime(spec: Dict[str, Any]) -> Dict[str, Any]:
     runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
     return runtime if isinstance(runtime, dict) else {}
-
-
-def with_default_runtime(spec: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = deepcopy(spec)
-    if not isinstance(normalized.get("runtime"), dict):
-        normalized["runtime"] = deepcopy(DEFAULT_COMPILED_RAG_RUNTIME)
-    return normalized
 
 
 def workflow_runtime_features(spec: Dict[str, Any]) -> Dict[str, Any]:

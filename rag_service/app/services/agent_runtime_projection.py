@@ -32,6 +32,12 @@ class AgentRuntimeProjection:
         continuation = getattr(event, "continuation", None)
         if continuation is not None:
             await AgentWorkflowRepository().update_runtime_binding(run.id, continuation)
+        checkpoint_boundary = getattr(event, "checkpoint_boundary_available", None)
+        if checkpoint_boundary is not None:
+            await AgentWorkflowRepository().update_run_metadata_fields(
+                run.id,
+                {"checkpoint_boundary_available": bool(checkpoint_boundary)},
+            )
         return True
 
     async def project_terminal_result(self, *, run: Any, result: Mapping[str, Any], terminal_event_id: str | None = None) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-import type { AgentRunDetails, AgentTaskRun, AgentTaskSummary, DeepResearchEngine } from './api';
+import type { AgentRunDetails, AgentTaskRun, AgentTaskSummary } from './api';
 
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'expired', 'cancelled']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -47,14 +47,4 @@ export function shouldRefreshAgentTaskTimeline(payload: Record<string, unknown>)
 
 export function isTaskOwnedAgentRun(run: AgentRunDetails | undefined): boolean {
   return Boolean(run?.task_id);
-}
-
-export function resolveDeepResearchContextWindow(
-  engine: DeepResearchEngine,
-  requestedContextWindow: number,
-  hermesContextWindow: number | null,
-): number {
-  return engine === 'hermes' && hermesContextWindow !== null
-    ? hermesContextWindow
-    : requestedContextWindow;
 }

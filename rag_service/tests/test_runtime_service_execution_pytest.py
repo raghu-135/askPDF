@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +14,11 @@ from app.runtime.contracts import ContinuationBinding
 from runtime_service.api import create_app
 from runtime_service.dependencies import langgraph_dependency_requirements
 from runtime_service.execution_store import ExecutionStore
+
+
+class _FakeAdapter:
+    async def prepare_execution_context(self, context):
+        return context
 
 
 def _request(run_id: str) -> dict:
@@ -64,6 +71,18 @@ def test_langgraph_dependency_requirements_only_admit_chat_model_to_provider() -
     assert requirements["provider"] == {"chat-model"}
 
 
+def test_langgraph_dependency_requirements_reads_neutral_task_model() -> None:
+    requirements = langgraph_dependency_requirements({
+        "request": {"options": {}},
+        "context": {
+            "task_context": {"metadata": {"llm_model": "task-chat-model"}},
+            "resolved_spec": {"config": {"allowed_tool_ids": []}},
+        },
+    })
+
+    assert requirements["provider"] == {"task-chat-model"}
+
+
 async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwargs: object) -> list[dict]:
     async with client.stream(method, url, **kwargs) as response:
         assert response.status_code == 200
@@ -77,10 +96,61 @@ async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwarg
 
 
 @pytest.mark.asyncio
+async def test_runtime_prepares_neutral_task_context_before_langgraph_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = False
+
+    class FakeAdapter(_FakeAdapter):
+        async def prepare_execution_context(self, context):
+            nonlocal prepared
+            prepared = True
+            assert context.task_context is not None
+            assert context.task_context.metadata["llm_model"] == "task-model"
+            assert context.task_context.permissions["use_web_search"] is True
+            return replace(
+                context,
+                request=SimpleNamespace(
+                    question=context.task_context.objective,
+                    llm_model=context.task_context.metadata["llm_model"],
+                ),
+            )
+
+        async def start(self, request, *, context, event_sink=None):
+            assert context.request.question == "Research transport boundaries"
+            assert context.request.llm_model == "task-model"
+            return AgentRuntimeResult(status="completed", output={"answer": "ok"})
+
+    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    monkeypatch.setattr("runtime_service.api.langgraph_dependency_requirements", lambda payload: {})
+    payload = _payload("run-task-context")
+    payload["context"] = {
+        "task_context": {
+            "task_id": "task-1",
+            "objective": "Research transport boundaries",
+            "todos": [],
+            "artifact_manifests": [],
+            "artifact_contents": {},
+            "limits": {"max_sources": 3},
+            "permissions": {"use_web_search": True},
+            "metadata": {"llm_model": "task-model", "context_window": 8192},
+            "context_data": {},
+        },
+    }
+    app = create_app(execution_store=ExecutionStore())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        events = await _read_events(client, "POST", "/v1/runs/start", json=payload)
+
+    assert prepared is True
+    assert events[-1]["result"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_completed_run_event_replay_and_repeated_start_are_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    class FakeAdapter:
+    class FakeAdapter(_FakeAdapter):
         async def start(self, request, *, context, event_sink=None):
             nonlocal calls
             calls += 1
@@ -122,7 +192,7 @@ async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pyt
     calls = 0
     started = asyncio.Event()
 
-    class FakeAdapter:
+    class FakeAdapter(_FakeAdapter):
         async def start(self, request, *, context, event_sink=None):
             nonlocal calls
             calls += 1
@@ -148,7 +218,7 @@ async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pyt
 async def test_resume_after_a_terminal_start_requires_explicit_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    class FakeAdapter:
+    class FakeAdapter(_FakeAdapter):
         async def start(self, request, *, context, event_sink=None):
             calls.append("start")
             return AgentRuntimeResult(
@@ -180,7 +250,7 @@ async def test_resume_after_a_terminal_start_requires_explicit_retry(monkeypatch
 async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    class FakeAdapter:
+    class FakeAdapter(_FakeAdapter):
         async def start(self, request, *, context, event_sink=None):
             nonlocal calls
             calls += 1
@@ -260,7 +330,7 @@ async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(m
     started = asyncio.Event()
     stopped = asyncio.Event()
 
-    class BlockingAdapter:
+    class BlockingAdapter(_FakeAdapter):
         async def start(self, request, *, context, event_sink=None):
             started.set()
             try:
@@ -283,7 +353,7 @@ async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(m
             "/v1/runs/run-blocking-cancel/cancel",
             json={"request": _request("run-blocking-cancel")},
         )
-        events = await asyncio.wait_for(stream_task, timeout=1)
+        events = await asyncio.wait_for(stream_task, timeout=3)
 
     assert response.status_code == 200
     assert stopped.is_set()

@@ -3,22 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
-from app.agent.tool_registry import TOOL_LIVE_WEB_RECON
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.service import AgentRunService
-from app.db import get_thread
+from app.db import get_thread, get_thread_settings
 from app.models.deep_research import (
     AgentTaskCommandRequest,
     AgentTaskCreateRequest,
-    DEEP_RESEARCH_ENGINE_WORKFLOWS,
-    DEEP_RESEARCH_WORKFLOW_ID,
 )
 from app.services import agent_task_repository as repository
 from app.services.agent_task_runtime import (
@@ -29,18 +25,12 @@ from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
-from app.runtime.hermes_config import (
-    HermesConfigurationError,
-    hermes_model_context_length,
-    hermes_runtime_enabled,
-    validate_hermes_model_compatibility,
-)
-from app.runtime.budgets import apply_deep_agent_env_overrides
-from app.runtime.capability_resolver import require_capability
+from app.runtime.capability_resolver import capabilities_for_definition, require_capability
 from app.runtime.catalog import definition_from_run, definition_from_workflow
 from app.runtime.contracts import RuntimeOperationId
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.registry import get_runtime_registry
+from app.runtime.builder_registry import builder_for_definition
 from app.runtime.operational_limits import required_positive_float
 
 
@@ -48,71 +38,75 @@ router = APIRouter(tags=["agent-tasks"])
 logger = logging.getLogger(__name__)
 
 
-def _hermes_available() -> bool:
-    if not hermes_runtime_enabled() or len(os.getenv("HERMES_MCP_CONTEXT_SECRET", "")) < 32:
-        return False
-    try:
-        validate_hermes_model_compatibility()
-        return True
-    except HermesConfigurationError:
-        return False
-
-
-async def _deep_research_contract() -> dict[str, Any]:
-    workflow_repository = AgentWorkflowRepository()
-    workflow = await workflow_repository.get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
-    if workflow is None:
-        await workflow_repository.seed_builtin_workflows()
-        workflow = await workflow_repository.get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
-    if workflow is None:
-        raise HTTPException(status_code=503, detail={"code": "deep_research_workflow_unavailable"})
-    spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
-    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
-    task_policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
-    limits = task_policy.get("limits") if isinstance(task_policy.get("limits"), dict) else {}
-    profiles = task_policy.get("profiles") if isinstance(task_policy.get("profiles"), list) else []
-    allowed_tool_ids = config.get("allowed_tool_ids") if isinstance(config.get("allowed_tool_ids"), list) else []
-    return {
-        "limits": dict(limits),
-        "profiles": list(profiles),
-        # use_web_search is the workflow default. Capability comes from the
-        # immutable profile and tool grants in the built-in specification.
-        "web_enabled": "web_researcher" in profiles and TOOL_LIVE_WEB_RECON in allowed_tool_ids,
-    }
-
-
-@router.get("/deep-research/capabilities")
-async def get_deep_research_capabilities():
-    contract = await _deep_research_contract()
-    limits = contract["limits"]
-    hermes_enabled = _hermes_available()
-    return {
-        "enabled": True,
-        "web_enabled": contract["web_enabled"],
-        "limits": limits,
-        "engines": {
-            "langgraph": {"enabled": True, "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["langgraph"]},
-            "hermes": {
-                "enabled": hermes_enabled,
-                "workflow_id": DEEP_RESEARCH_ENGINE_WORKFLOWS["hermes"],
-                "max_context_length": _hermes_context_length(required=False),
+@router.get("/agent-definitions")
+async def list_agent_definitions():
+    workflows = await AgentWorkflowRepository().list_workflows(include_custom=False)
+    registry = get_runtime_registry()
+    entries = []
+    for workflow in workflows:
+        definition = definition_from_workflow(workflow)
+        spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+        config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+        policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
+        error: dict[str, Any] | None = None
+        capabilities = None
+        builder = None
+        web_enabled = False
+        runtime_deployment_id = f"{definition.framework}:{definition.builder_id}"
+        try:
+            builder = builder_for_definition(definition)
+            web_enabled = builder.supports_task_web_search(definition)
+            adapter = registry.get(definition)
+            runtime_deployment_id = f"{adapter.framework}:{adapter.builder_id}"
+            capabilities = await capabilities_for_definition(definition, registry=registry)
+            if capabilities.deployment.get("runtime_available") is False:
+                error = {
+                    "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
+                    "message": "The runtime deployment is unavailable.",
+                    "retryable": True,
+                }
+        except Exception as exc:
+            error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
+                "code": "runtime_selection_failed",
+                "message": str(exc),
+                "retryable": False,
+            }
+        fields: list[Mapping[str, Any]] = []
+        if builder is not None:
+            try:
+                fields = list(builder.task_configuration_fields(definition, spec))
+            except Exception as exc:
+                logger.warning(
+                    "Definition configuration discovery failed | definition_id=%s",
+                    definition.definition_id,
+                    exc_info=True,
+                )
+                if error is None:
+                    error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
+                        "code": "definition_configuration_unavailable",
+                        "message": str(exc),
+                        "retryable": False,
+                    }
+        entries.append({
+            "definition_id": definition.definition_id,
+            "runtime_deployment_id": runtime_deployment_id,
+            "display_name": definition.display_name,
+            "category": definition.category,
+            "available": error is None and capabilities is not None,
+            "task_eligible": bool(policy),
+            "configuration": {"fields": fields},
+            "operations": {
+                operation.value: descriptor.to_dict()
+                for operation, descriptor in (capabilities.operations.items() if capabilities else ())
             },
-        },
-    }
-
-
-def _hermes_context_length(*, required: bool) -> int | None:
-    try:
-        if required:
-            return validate_hermes_model_compatibility()[0]
-        value = hermes_model_context_length(required=False)
-        if value is not None:
-            validate_hermes_model_compatibility()
-        return value
-    except HermesConfigurationError as exc:
-        if not required:
-            return None
-        raise HTTPException(status_code=503, detail={"code": exc.code}) from exc
+            "features": {
+                feature: descriptor.to_dict()
+                for feature, descriptor in (capabilities.features.items() if capabilities else ())
+            },
+            "metadata": definition.definition_metadata,
+            "error": error,
+        })
+    return {"definitions": entries}
 
 
 def _task_payload(task: Any) -> dict[str, Any]:
@@ -259,39 +253,59 @@ async def create_agent_task(
     thread = await get_thread(thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
-    contract = await _deep_research_contract()
-    workflow_id = DEEP_RESEARCH_ENGINE_WORKFLOWS[req.engine]
-    hermes_context_length: int | None = None
-    if req.engine == "hermes":
-        if not _hermes_available():
-            raise HTTPException(status_code=409, detail={"code": "hermes_runtime_unavailable"})
-        hermes_context_length = _hermes_context_length(required=True)
-        if "context_window" in req.model_fields_set and req.context_window != hermes_context_length:
-            raise HTTPException(status_code=409, detail={
-                "code": "hermes_context_length_conflict",
-                "configured_context_length": hermes_context_length,
-            })
-    if req.web_search_mode != "off" and not contract["web_enabled"]:
-        raise HTTPException(status_code=409, detail={"code": "deep_research_web_unavailable"})
-    config = req.model_dump(mode="json")
-    if hermes_context_length is not None:
-        # Hermes uses one deployment-owned context window. Never allow a
-        # client or stale UI capability response to select a per-task value.
-        config["context_window"] = hermes_context_length
-    config["use_web_search"] = req.web_search_mode != "off"
-    config["limits"] = apply_deep_agent_env_overrides(config["limits"], req.engine)
-    contract_limits = contract["limits"]
-    config["limits"]["max_concurrency"] = min(
-        config["limits"]["max_concurrency"], int(contract_limits["max_concurrency"]),
-    )
-    config["limits"]["max_fanout"] = min(
-        config["limits"]["max_fanout"], int(contract_limits["max_fanout"]),
-    )
+    workflow = await AgentWorkflowRepository().get_workflow(req.definition_id, include_custom=False)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail={"code": "agent_definition_not_found"})
+    definition = definition_from_workflow(workflow)
+    spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+    config_spec = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    task_policy = config_spec.get("task_policy") if isinstance(config_spec.get("task_policy"), dict) else {}
+    if not task_policy:
+        raise HTTPException(status_code=409, detail={"code": "agent_definition_not_task_eligible"})
+    try:
+        builder = builder_for_definition(definition)
+        if req.web_search_mode != "off" and not builder.supports_task_web_search(definition):
+            raise AgentRuntimeError(
+                "agent_definition_web_unavailable",
+                "The selected definition does not support web search.",
+            )
+        config = req.model_dump(mode="json")
+        config.pop("definition_id", None)
+        config["use_web_search"] = req.web_search_mode != "off"
+        requested_limits = (
+            req.limits.model_dump(mode="json")
+            if req.limits is not None
+            else dict(task_policy.get("limits") or {})
+        )
+        config["limits"] = dict(builder.normalize_task_limits(requested_limits))
+        resolved = await builder.resolve(
+            definition,
+            spec,
+            thread_settings=await get_thread_settings(thread_id),
+            request_overrides={
+                "llm_model": req.llm_model,
+                "context_window": req.context_window,
+                "use_web_search": req.web_search_mode != "off",
+            },
+        )
+    except (AgentRuntimeError, ValueError) as exc:
+        detail = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
+            "code": "agent_definition_configuration_invalid",
+            "message": str(exc),
+            "retryable": False,
+        }
+        raise HTTPException(status_code=409, detail=detail) from exc
+    resolved_config = resolved.get("config") if isinstance(resolved.get("config"), dict) else {}
+    config["context_window"] = int(resolved_config.get("context_window") or req.context_window)
+    try:
+        await require_capability(definition, RuntimeOperationId.TASK_START, registry=get_runtime_registry())
+    except AgentRuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     task, duplicate = await repository.create_task(
         thread_id=thread_id,
         project_id=thread.project_id,
         user_id=None,
-        workflow_id=workflow_id,
+        workflow_id=definition.definition_id,
         objective=req.objective,
         idempotency_key=idempotency_key,
         config=config,

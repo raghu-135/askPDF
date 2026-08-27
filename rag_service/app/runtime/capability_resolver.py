@@ -19,15 +19,37 @@ from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.errors import RuntimeError
 from app.runtime.product_capabilities import product_operation_descriptors, project_public_capabilities
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
+from app.db.enums import AgentRunStatus
+from app.models.deep_research import AgentTaskStatus
 
 
 TERMINAL_RUN_STATES = frozenset({
-    "completed",
-    "failed",
-    "rejected",
-    "expired",
-    "cancelled",
-    "clarification",
+    status.value for status in (
+        AgentRunStatus.COMPLETED,
+        AgentRunStatus.FAILED,
+        AgentRunStatus.REJECTED,
+        AgentRunStatus.EXPIRED,
+        AgentRunStatus.CANCELLED,
+        AgentRunStatus.CLARIFICATION,
+    )
+})
+TERMINAL_TASK_STATES = frozenset({
+    AgentTaskStatus.COMPLETED.value,
+    AgentTaskStatus.FAILED.value,
+    AgentTaskStatus.EXPIRED.value,
+    AgentTaskStatus.CANCELLED.value,
+})
+PAUSEABLE_TASK_STATES = frozenset({
+    AgentTaskStatus.QUEUED.value,
+    AgentTaskStatus.RUNNING.value,
+})
+RESUMABLE_TASK_STATES = frozenset({
+    AgentTaskStatus.PAUSED.value,
+    AgentTaskStatus.AWAITING_APPROVAL.value,
+})
+RETRYABLE_TASK_STATES = frozenset({
+    AgentTaskStatus.FAILED.value,
+    AgentTaskStatus.EXPIRED.value,
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CANCEL,
@@ -61,6 +83,8 @@ CHECKPOINT_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
 })
 
+# Operation-to-method mapping remains useful for contract tests and adapter
+# documentation; admission is based on explicit registration below.
 OPERATION_METHODS = {
     RuntimeOperationId.RUN_START: "start",
     RuntimeOperationId.RUN_GET: "get_run",
@@ -82,7 +106,6 @@ OPERATION_METHODS = {
     RuntimeOperationId.ARTIFACT_LIST: "list_artifacts",
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP: "delete_continuation",
 }
-
 
 def deployment_id(adapter: Any) -> str:
     return f"{adapter.framework}:{adapter.builder_id}"
@@ -128,22 +151,14 @@ def _reconcile_implementation(
     capabilities: RuntimeCapabilities,
     adapter: Any,
 ) -> RuntimeCapabilities:
-    """Disable declared runtime operations without a concrete adapter method."""
+    """Disable declarations not explicitly registered by the adapter."""
 
     operations = dict(capabilities.operations)
+    registered = frozenset(getattr(adapter, "implemented_operations", frozenset()))
     for operation_id, descriptor in operations.items():
         if not descriptor.enabled or descriptor.owner is RuntimeOperationOwner.PRODUCT:
             continue
-        method_name = OPERATION_METHODS.get(operation_id)
-        if method_name is None:
-            operations[operation_id] = _disabled(
-                descriptor, RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNMAPPED
-            )
-            continue
-        method = getattr(adapter, method_name, None)
-        declared_method = getattr(type(adapter), method_name, None)
-        base_method = getattr(AgentRuntimeAdapter, method_name, None)
-        if method is None or declared_method is None or declared_method is base_method:
+        if operation_id not in registered:
             operations[operation_id] = _disabled(
                 descriptor, RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNIMPLEMENTED
             )
@@ -154,6 +169,25 @@ def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabi
     operations = dict(capabilities.operations)
     operations.update(product_operation_descriptors())
     return replace(capabilities, operations=operations)
+
+
+def _unavailable_product_capabilities(adapter: Any, error: Mapping[str, Any]) -> RuntimeCapabilities:
+    operations = product_operation_descriptors()
+    for operation in TASK_ONLY_OPERATIONS | {RuntimeOperationId.ARTIFACT_LIST}:
+        descriptor = operations.get(operation)
+        if descriptor is not None:
+            operations[operation] = _disabled(
+                descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+            )
+    return RuntimeCapabilities(
+        operations=operations,
+        deployment={
+            "framework": adapter.framework,
+            "builder_id": adapter.builder_id,
+            "runtime_available": False,
+            "discovery_error": error.get("code") or "runtime_unavailable",
+        },
+    )
 
 
 def checkpoint_boundary_available(run: Any) -> bool:
@@ -237,7 +271,12 @@ async def capabilities_for_definition(
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await _reconciled_capabilities(adapter, definition)
+    try:
+        capabilities = await _reconciled_capabilities(adapter, definition)
+    except Exception as exc:
+        capabilities = _unavailable_product_capabilities(
+            adapter, capability_discovery_error(exc, adapter)
+        )
     operations = dict(capabilities.operations)
     artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
     if artifact_list is not None:
@@ -282,7 +321,12 @@ async def resolve_capabilities(
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
     adapter = registry.get(definition)
-    capabilities = await _reconciled_capabilities(adapter, definition)
+    try:
+        capabilities = await _reconciled_capabilities(adapter, definition)
+    except Exception as exc:
+        capabilities = _unavailable_product_capabilities(
+            adapter, capability_discovery_error(exc, adapter)
+        )
     operations = dict(capabilities.operations)
     if run is None:
         for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
@@ -335,7 +379,7 @@ async def resolve_capabilities(
     cancellation_pending = (
         status not in TERMINAL_RUN_STATES
         and (
-            task_status == "cancelling"
+            task_status == AgentTaskStatus.CANCELLING.value
             or isinstance(run_metadata, Mapping)
             and run_metadata.get("cancel_requested") is True
         )
@@ -347,24 +391,24 @@ async def resolve_capabilities(
                 operations[operation] = _disabled(
                     descriptor, RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
                 )
-    if task_status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE in operations and task_status not in {"queued", "running"}:
+    if task_status not in TERMINAL_TASK_STATES and RuntimeOperationId.TASK_PAUSE in operations and task_status not in PAUSEABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_PAUSE] = _disabled(
             operations[RuntimeOperationId.TASK_PAUSE], RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE
         )
     pending = getattr(run, "pending_interrupt_json", None)
     pending_type = str(pending.get("type") or "") if isinstance(pending, Mapping) else ""
-    if RuntimeOperationId.TASK_RESUME in operations and task_status not in {"paused", "awaiting_human"}:
+    if RuntimeOperationId.TASK_RESUME in operations and task_status not in RESUMABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
-    elif RuntimeOperationId.TASK_RESUME in operations and task_status == "awaiting_human" and pending_type != "task_pause":
+    elif RuntimeOperationId.TASK_RESUME in operations and task_status == AgentTaskStatus.AWAITING_APPROVAL.value and pending_type != "task_pause":
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
-    if RuntimeOperationId.TASK_RETRY in operations and task_status not in {"failed", "expired"}:
+    if RuntimeOperationId.TASK_RETRY in operations and task_status not in RETRYABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RETRY] = _disabled(operations[RuntimeOperationId.TASK_RETRY], RuntimeCapabilityDisabledReason.TASK_NOT_RETRYABLE)
 
     if task is None and status in TERMINAL_RUN_STATES:
         for operation in TASK_ONLY_OPERATIONS:
             if operation in operations:
                 operations[operation] = _disabled(operations[operation], RuntimeCapabilityDisabledReason.TASK_TERMINAL)
-    elif task_status in TERMINAL_RUN_STATES:
+    elif task_status in TERMINAL_TASK_STATES:
         for operation in (
             RuntimeOperationId.TASK_START,
             RuntimeOperationId.TASK_PAUSE,
@@ -504,7 +548,7 @@ async def discover_adapter_capabilities(
                 },
             )
         if capabilities.deployment.get("runtime_available") is False:
-            return None, {
+            return capabilities, {
                 "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
                 "safe_message": "Agent runtime deployment is unavailable",
                 "retryable": True,
@@ -512,6 +556,8 @@ async def discover_adapter_capabilities(
             }
         return capabilities, None
     except RuntimeError as exc:
-        return None, capability_discovery_error(exc, adapter)
+        error = capability_discovery_error(exc, adapter)
+        return _unavailable_product_capabilities(adapter, error), error
     except Exception as exc:
-        return None, capability_discovery_error(exc, adapter)
+        error = capability_discovery_error(exc, adapter)
+        return _unavailable_product_capabilities(adapter, error), error

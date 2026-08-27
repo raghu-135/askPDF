@@ -212,7 +212,14 @@ async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_checkpoint_reset_preflight_marks_active_runs_deferred(monkeypatch):
-    run = SimpleNamespace(id="run-1", checkpoint_thread_id="checkpoint-1")
+    run = SimpleNamespace(
+        id="run-1",
+        runtime_binding_json={
+            "binding_type": "langgraph.checkpoint",
+            "payload": {"checkpoint_thread_id": "checkpoint-1"},
+        },
+        runtime_binding_status="active",
+    )
     updates = []
 
     class Repository:

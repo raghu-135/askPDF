@@ -778,13 +778,18 @@ export default function AgentWorkflowBuilderPage() {
         setPersistenceError('Validation failed. Fix the reported issues before saving.');
         return;
       }
+      const framework = persistedWorkflow?.workflow.framework || selectedStarterWorkflow?.framework;
+      const builderId = persistedWorkflow?.workflow.builder_id || selectedStarterWorkflow?.builder_id;
+      if (!framework || !builderId) {
+        throw new Error('The selected definition does not declare a runtime builder identity.');
+      }
       const response = await saveInternalAgentWorkflow({
         ...(workflowId ? { workflow_id: workflowId } : {}),
         name: persistenceForm.name.trim(),
         description: persistenceForm.description,
         spec_json: saveSpec,
-        framework: persistedWorkflow?.workflow.framework || undefined,
-        builder_id: persistedWorkflow?.workflow.builder_id || undefined,
+        framework,
+        builder_id: builderId,
       });
       setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setPersistenceForm((previous) => ({

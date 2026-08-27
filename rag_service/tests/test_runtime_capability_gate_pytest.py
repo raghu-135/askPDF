@@ -32,6 +32,15 @@ from app.services.runtime_operation_repository import RuntimeOperationConflict
 class RecordingAdapter:
     framework = "fake"
     builder_id = "fake_builder"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_APPROVAL_RESPOND,
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        RuntimeOperationId.RUN_STEER_LIVE,
+        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+    })
 
     def __init__(self, *, unsupported=()):
         self.unsupported = {operation.value if isinstance(operation, RuntimeOperationId) else str(operation) for operation in unsupported}
@@ -357,9 +366,13 @@ async def test_hermes_thread_deletion_continues_with_existing_session_binding(mo
 
     async def delete_task_resources(thread_ids):
         assert thread_ids == ["thread-1"]
-        await runtime_cleanup.delete_run_continuation(run)
 
     monkeypatch.setattr(task_artifact_service, "delete_task_resources_for_threads", delete_task_resources)
+    monkeypatch.setattr(
+        task_repository,
+        "list_task_runtime_runs_for_threads",
+        AsyncMock(return_value=[run]),
+    )
     monkeypatch.setattr(threads_api, "get_thread", AsyncMock(return_value=SimpleNamespace(id="thread-1", embedding_model="embed")))
     monkeypatch.setattr(threads_api, "get_thread_files", AsyncMock(return_value=[]))
     monkeypatch.setattr(threads_api, "get_vector_db", lambda: SimpleNamespace(delete_thread_data=AsyncMock(return_value=True)))
@@ -504,7 +517,8 @@ async def test_runtime_operation_idempotency_replays_completed_result_without_ad
         result_json={"status": "queued", "sequence": 1},
         error_json=None,
     )
-    monkeypatch.setattr(service_module, "claim_runtime_operation", AsyncMock(return_value=record))
+    claim = AsyncMock(return_value=record)
+    monkeypatch.setattr(service_module, "claim_runtime_operation", claim)
 
     result = await service.operate_agent_run(
         run,
@@ -605,7 +619,8 @@ async def test_retryable_capability_failure_can_retry_same_idempotency_key(monke
     run = _run()
     service = _patch_runtime(monkeypatch, adapter, FakeRepository(run))
     record = SimpleNamespace(id="operation-1", status="in_progress", result_json={}, error_json=None)
-    monkeypatch.setattr(service_module, "claim_runtime_operation", AsyncMock(return_value=record))
+    claim = AsyncMock(return_value=record)
+    monkeypatch.setattr(service_module, "claim_runtime_operation", claim)
     fail = service_module.fail_runtime_operation
 
     with pytest.raises(RuntimeError) as first:
@@ -616,7 +631,8 @@ async def test_retryable_capability_failure_can_retry_same_idempotency_key(monke
             idempotency_key="retryable-capability",
         )
     assert first.value.retryable is True
-    fail.assert_awaited_once()
+    claim.assert_not_awaited()
+    fail.assert_not_awaited()
 
     adapter.fail_capability_discovery = False
     result = await service.operate_agent_run(
@@ -628,3 +644,4 @@ async def test_retryable_capability_failure_can_retry_same_idempotency_key(monke
 
     assert result == {"status": "queued"}
     assert adapter.calls["send_followup"] == 1
+    claim.assert_awaited_once()

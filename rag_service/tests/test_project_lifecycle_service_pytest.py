@@ -271,10 +271,12 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         delete_document_vectors_by_file_hash_and_model=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(project_lifecycle_service, "get_vector_db", lambda: vector_db)
-    checkpoint_cleanup = AsyncMock(return_value=["checkpoint-source"])
+    from app.runtime.cleanup import ContinuationCleanupOutcome
+    checkpoint_cleanup = AsyncMock(return_value=[
+        ContinuationCleanupOutcome(run_id="terminal-run", status="cleaned")
+    ])
     monkeypatch.setattr(
-        project_lifecycle_service,
-        "delete_agent_checkpoints",
+        "app.runtime.cleanup.delete_run_continuations",
         checkpoint_cleanup,
     )
     delete_artifacts = AsyncMock(return_value=None)
@@ -315,6 +317,11 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
                 workflow_id="workflow-1",
                 status="completed",
                 checkpoint_thread_id="checkpoint-source",
+                runtime_binding_json={
+                    "binding_type": "langgraph.checkpoint",
+                    "payload": {"checkpoint_thread_id": "checkpoint-source"},
+                },
+                runtime_binding_status="active",
                 completed_at=now,
             ))
             session.add_all([
@@ -337,7 +344,8 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         assert await session.get(Memory, "global-memory") is not None
 
     vector_db.delete_thread_data.assert_awaited_once_with("source-thread")
-    checkpoint_cleanup.assert_awaited_once_with(["checkpoint-source"])
+    cleanup_runs = checkpoint_cleanup.await_args.args[0]
+    assert [run.id for run in cleanup_runs] == ["terminal-run"]
     delete_artifacts.assert_awaited_once_with("orphan-file")
 
 

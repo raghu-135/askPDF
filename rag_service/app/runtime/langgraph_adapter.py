@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
@@ -15,6 +18,7 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeValidationIssue,
     RuntimeValidationResult,
+    RuntimeOperationId,
 )
 from app.runtime.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
@@ -41,6 +45,11 @@ def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
         runtime_metadata={key: result[key] for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id") if key in result},
         continuation=continuation,
         error=result.get("agent_error") if isinstance(result.get("agent_error"), Mapping) else None,
+        checkpoint_boundary_available=(
+            bool(result["checkpoint_boundary_available"])
+            if "checkpoint_boundary_available" in result
+            else True if continuation is not None else None
+        ),
     )
 
 
@@ -48,6 +57,15 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
     data = dict(event.get("data") or {})
     source_kind = str(event.get("event") or event.get("kind") or "runtime.event")
     kind, data = normalize_runtime_event(source_kind, data)
+    checkpoint_thread_id = data.get("checkpoint_thread_id")
+    continuation = (
+        ContinuationBinding(
+            binding_type="langgraph.checkpoint",
+            payload={"checkpoint_thread_id": str(checkpoint_thread_id)},
+        )
+        if checkpoint_thread_id and kind == "interrupt.requested"
+        else None
+    )
     return create_runtime_event(
         event_id=str(data.get("event_id") or f"{run_id}:{sequence}"),
         run_id=run_id,
@@ -56,7 +74,17 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
         payload=data,
         occurred_at=data.get("occurred_at") or data.get("timestamp"),
         trace_id=data.get("trace_id"),
-        source_metadata={"framework": "langgraph", "source_event": source_kind},
+        source_metadata={
+            "framework": "langgraph",
+            "source_event": source_kind,
+            "visualization_id": "langgraph.graph",
+        },
+        continuation=continuation,
+        checkpoint_boundary_available=(
+            bool(data["checkpoint_boundary_available"])
+            if "checkpoint_boundary_available" in data
+            else True if continuation is not None else None
+        ),
     )
 
 
@@ -104,6 +132,53 @@ from app.runtime.langgraph import checkpointing
 class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     framework = "langgraph"
     builder_id = "langgraph_graph"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.TRACE_PROJECT,
+    })
+
+    async def prepare_execution_context(
+        self,
+        context: RuntimeExecutionContext,
+    ) -> RuntimeExecutionContext:
+        task = context.task_context
+        if task is None:
+            return context
+        metadata = dict(task.metadata or {})
+        permissions = dict(task.permissions or {})
+        request = SimpleNamespace(
+            question=task.objective,
+            llm_model=metadata.get("llm_model"),
+            context_window=metadata.get("context_window"),
+            use_web_search=bool(permissions.get("use_web_search")),
+            web_search_mode=str(permissions.get("web_search_mode") or "off"),
+            task_web_access=permissions.get("web_access"),
+            use_reranker=bool(metadata.get("use_reranker", True)),
+            bypass_clarification=True,
+            system_role_override="",
+            tool_instructions_override={},
+            custom_instructions_override="",
+            client_timezone=None,
+            client_locale=None,
+            client_now_iso=None,
+            agent_task_id=task.task_id,
+            agent_task_version=metadata.get("task_version"),
+            task_enabled_profiles=list(metadata.get("enabled_profiles") or []),
+            task_limits=dict(task.limits or {}),
+            task_plan_revision=int(metadata.get("plan_revision") or 0),
+            task_run_plan_count=0,
+            task_todos=[dict(todo) for todo in task.todos],
+            task_budget_usage=dict(metadata.get("budget_usage") or {}),
+            runtime_execution_mode=True,
+            runtime_artifact_manifest=[dict(value) for value in task.artifact_manifests],
+            runtime_artifact_contents=dict(task.artifact_contents),
+        )
+        return replace(context, request=request)
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
         return langgraph_capabilities(definition)
@@ -153,7 +228,22 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             **dict(context.agent_run_context or {}),
             "agent_run_id": request.run_id,
             "agent_workflow_id": request.definition_id,
+            "checkpoint_thread_id": request.run_id,
         }
+
+    @staticmethod
+    def _run_with_continuation(request: AgentRuntimeRequest, run: Any) -> Any:
+        binding = request.continuation
+        checkpoint_thread_id = (
+            binding.payload.get("checkpoint_thread_id")
+            if binding is not None and binding.binding_type == "langgraph.checkpoint"
+            else None
+        )
+        if not checkpoint_thread_id:
+            raise RuntimeError("runtime_binding_missing", "LangGraph continuation requires a checkpoint binding")
+        runtime_run = copy.copy(run)
+        runtime_run.checkpoint_thread_id = str(checkpoint_thread_id)
+        return runtime_run
 
     async def start(
         self,
@@ -177,7 +267,6 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     checkpointer=checkpointer,
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
-                    persist_product_records=False,
                 )
             finally:
                 if bridge is not None:
@@ -197,12 +286,12 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         run = context.agent_run_context.get("run")
         if run is None:
             raise ValueError("LangGraph resume requires the persisted AgentRun in execution context")
+        run = self._run_with_continuation(request, run)
         if context.resolved_spec:
             run.resolved_spec_json = dict(context.resolved_spec)
         kwargs = {
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
-            "persist_product_records": False,
         }
         bridge = _event_bridge(request.run_id, event_sink)
         if bridge is not None:
@@ -229,6 +318,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         run = context.agent_run_context.get("run")
         if run is None:
             raise ValueError("LangGraph continuation requires the persisted AgentRun in execution context")
+        run = self._run_with_continuation(request, run)
         # The HTTP transport carries the authoritative execution snapshot in
         # context.resolved_spec. Keep the runtime execution snapshot complete
         # before invoking the graph continuation.
@@ -243,7 +333,6 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     trace_recorder=context.trace_recorder,
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
-                    persist_product_records=False,
                 )
             finally:
                 if bridge is not None:

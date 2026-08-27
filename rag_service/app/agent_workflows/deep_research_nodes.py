@@ -115,6 +115,25 @@ def _runtime_artifacts(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [value for value in state.get("runtime_artifacts") or [] if isinstance(value, dict)]
 
 
+def _invalid_subagent_result(*, response: Any, initial_error: Exception, repair_error: Exception) -> DeepResearchSubagentResult:
+    """Materialize malformed model output as a valid terminal subagent result."""
+    response_shape = "empty_object" if not safe_json_object(response) else "invalid_object"
+    return DeepResearchSubagentResult(
+        status="failed",
+        retryable=True,
+        error={
+            "code": "subagent_result_invalid",
+            "retryable": True,
+            "details": {
+                "stage": "schema_repair",
+                "response_shape": response_shape,
+                "initial_error_type": type(initial_error).__name__,
+                "repair_error_type": type(repair_error).__name__,
+            },
+        },
+    )
+
+
 DEEP_NODE_PLANNER = "deep_task_planner"
 DEEP_NODE_SCHEDULER = "deep_task_scheduler"
 DEEP_NODE_SUBAGENT = "deep_research_subagent"
@@ -713,7 +732,14 @@ Invalid output: {text[:12000]}"""
                 ],
             )
             metadata = {**metadata, "repair": repair_metadata}
-            result = DeepResearchSubagentResult.model_validate(safe_json_object(repaired))
+            try:
+                result = DeepResearchSubagentResult.model_validate(safe_json_object(repaired))
+            except Exception as repair_error:
+                result = _invalid_subagent_result(
+                    response=text,
+                    initial_error=first_error,
+                    repair_error=repair_error,
+                )
         source_refs = {
             "tools": [{"name": value.get("trace", {}).get("tool_name"), "sources": value.get("sources", []), "artifacts": value.get("artifacts", {})} for value in outputs]
         }

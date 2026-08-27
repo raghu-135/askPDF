@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from app.runtime.builder import (
     BuilderCapabilities,
     BuilderCatalog,
+    BuilderTestContext,
     UnsupportedRequestOverrideError,
 )
 from app.runtime.contracts import (
@@ -19,11 +20,36 @@ from app.runtime.contracts import (
     validated_disabled_operation_ids,
 )
 from app.runtime.mode import external_runtime_enabled
+from app.runtime.budgets import apply_deep_agent_env_overrides
 
 
 class LangGraphBuilderProvider:
     framework = "langgraph"
     builder_id = "langgraph_graph"
+    _task_web_tool_ids = frozenset({"live_web_recon"})
+
+    def supports_task_web_search(self, definition: AgentDefinition) -> bool:
+        allowed_tools = {
+            str(value)
+            for value in definition.definition_metadata.get("allowed_tool_ids", ())
+            if value
+        }
+        return bool(allowed_tools & self._task_web_tool_ids)
+
+    def task_configuration_fields(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], ...]:
+        config = spec.get("config") if isinstance(spec.get("config"), Mapping) else {}
+        return (
+            {"id": "llm_model", "label": "Model", "type": "model", "required": True, "default": config.get("llm_model")},
+            {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": config.get("context_window"), "minimum": 1024, "read_only": False},
+            {"id": "web_search_mode", "label": "Web search", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_web_search(definition)},
+        )
+
+    def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:
+        return apply_deep_agent_env_overrides(limits, self.framework)
 
     def filter_request_overrides(
         self,
@@ -302,23 +328,40 @@ class LangGraphBuilderProvider:
         context: Any = None,
         event_sink: Any = None,
     ) -> AgentRuntimeResult:
-        from app.runtime.langgraph.studio_runtime import stream_builder_test
+        from app.runtime.langgraph.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
+        from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests, stream_builder_test
 
+        if not isinstance(context, BuilderTestContext):
+            raise TypeError("LangGraph builder tests require BuilderTestContext")
         result: AgentRuntimeResult | None = None
-        async for event in stream_builder_test(
-            run=context.run,
-            request=context.request,
-            embedding_model=context.embedding_model,
-            checkpointer=context.checkpointer,
-        ):
-            if event_sink is not None:
-                await event_sink.emit(event)
-            if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
-                from app.runtime.langgraph_adapter import _result_from_graph
+        async with open_agent_checkpointer() as checkpointer:
+            previous = await delete_previous_builder_tests(
+                context.builder_session_id,
+                keep_run_id=context.run.id,
+            )
+            if previous:
+                await delete_agent_checkpoints(previous, checkpointer=checkpointer)
+            async for event in stream_builder_test(
+                run=context.run,
+                request=context.test_request,
+                embedding_model=context.embedding_model,
+                checkpointer=checkpointer,
+            ):
+                if event_sink is not None:
+                    await event_sink.emit(event)
+                if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
+                    from app.runtime.langgraph_adapter import _result_from_graph
 
-                result = _result_from_graph(event.get("data") or {})
+                    result = _result_from_graph(event.get("data") or {})
         if result is None:
             raise RuntimeError("LangGraph builder test ended without a terminal result")
+        if result.status != "awaiting_human":
+            checkpoint_id = (
+                result.continuation.payload.get("checkpoint_thread_id")
+                if result.continuation is not None
+                else context.run.id
+            )
+            await delete_agent_checkpoints([str(checkpoint_id)])
         return result
 
     async def resume_transient_test(
@@ -328,24 +371,37 @@ class LangGraphBuilderProvider:
         context: Any = None,
         event_sink: Any = None,
     ) -> AgentRuntimeResult:
+        from app.runtime.langgraph.checkpointing import open_agent_checkpointer
         from app.runtime.langgraph.studio_runtime import stream_builder_test
 
+        if not isinstance(context, BuilderTestContext):
+            raise TypeError("LangGraph builder resumes require BuilderTestContext")
         result: AgentRuntimeResult | None = None
-        async for event in stream_builder_test(
-            run=context.run,
-            request=context.request,
-            embedding_model=context.embedding_model,
-            checkpointer=context.checkpointer,
-            resume_decision=context.resume_decision,
-        ):
-            if event_sink is not None:
-                await event_sink.emit(event)
-            if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
-                from app.runtime.langgraph_adapter import _result_from_graph
+        async with open_agent_checkpointer() as checkpointer:
+            async for event in stream_builder_test(
+                run=context.run,
+                request=context.test_request,
+                embedding_model=context.embedding_model,
+                checkpointer=checkpointer,
+                resume_decision=context.resume_decision,
+            ):
+                if event_sink is not None:
+                    await event_sink.emit(event)
+                if event.get("event") in {"run.completed", "run.failed", "run.interrupted"}:
+                    from app.runtime.langgraph_adapter import _result_from_graph
 
-                result = _result_from_graph(event.get("data") or {})
+                    result = _result_from_graph(event.get("data") or {})
         if result is None:
             raise RuntimeError("LangGraph builder resume ended without a terminal result")
+        if result.status != "awaiting_human":
+            checkpoint_id = (
+                result.continuation.payload.get("checkpoint_thread_id")
+                if result.continuation is not None
+                else context.run.id
+            )
+            from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
+
+            await delete_agent_checkpoints([str(checkpoint_id)])
         return result
 
     async def cleanup_transient_test(self, request: AgentRuntimeRequest) -> Any:

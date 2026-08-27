@@ -45,6 +45,17 @@ TERMINAL_TASK_STATUSES = {
     AgentTaskStatus.FAILED.value,
     AgentTaskStatus.EXPIRED.value,
 }
+ACTIVE_TASK_RUN_STATUSES = {
+    AgentRunStatus.RUNNING.value,
+    AgentRunStatus.AWAITING_HUMAN.value,
+}
+TERMINAL_TASK_RUN_STATUSES = {
+    AgentRunStatus.COMPLETED.value,
+    AgentRunStatus.FAILED.value,
+    AgentRunStatus.EXPIRED.value,
+    AgentRunStatus.CANCELLED.value,
+    AgentRunStatus.REJECTED.value,
+}
 WEB_ACCESS_EVENT_PREFIX = "web_access."
 WEB_ACCESS_ALLOWED = "allowed_for_task"
 WEB_ACCESS_DENIED = "denied_for_task"
@@ -329,38 +340,41 @@ async def list_artifacts_for_threads(thread_ids: Iterable[str]) -> list[AgentTas
         return list(result.scalars().all())
 
 
-async def list_task_checkpoint_ids_for_threads(thread_ids: Iterable[str]) -> list[str]:
+async def list_task_runtime_runs_for_threads(thread_ids: Iterable[str]) -> list[AgentRun]:
     ids = {str(value) for value in thread_ids if value}
     if not ids:
         return []
     async with async_session_maker() as session:
         result = await session.execute(
-            select(AgentRun.checkpoint_thread_id)
-            .where(AgentRun.thread_id.in_(ids), AgentRun.task_id.is_not(None), AgentRun.framework == "langgraph", AgentRun.checkpoint_thread_id.is_not(None))
+            select(AgentRun)
+            .where(
+                AgentRun.thread_id.in_(ids),
+                AgentRun.task_id.is_not(None),
+                AgentRun.runtime_binding_json.is_not(None),
+            )
         )
-        return [str(value) for value in result.scalars().all() if value]
+        return list(result.scalars().all())
 
 
-async def list_terminal_task_checkpoint_ids_before(cutoff: Any, *, limit: int = 100) -> list[str]:
+async def list_terminal_task_runtime_runs_before(cutoff: Any, *, limit: int = 100) -> list[AgentRun]:
     async with async_session_maker() as session:
         result = await session.execute(
-            select(AgentRun.checkpoint_thread_id)
+            select(AgentRun)
             .where(
                 AgentRun.task_id.is_not(None),
-                AgentRun.framework == "langgraph",
                 AgentRun.completed_at.is_not(None),
                 AgentRun.completed_at <= cutoff,
-                AgentRun.status.in_(["completed", "failed", "expired", "cancelled", "rejected"]),
-                AgentRun.checkpoint_thread_id.is_not(None),
+                AgentRun.status.in_(TERMINAL_TASK_RUN_STATUSES),
+                AgentRun.runtime_binding_json.is_not(None),
             )
             .order_by(AgentRun.completed_at, AgentRun.id)
             .limit(max(1, min(limit, 500)))
         )
-        return [str(value) for value in result.scalars().all() if value]
+        return [run for run in result.scalars().all() if run.runtime_binding_json]
 
 
-async def clear_task_checkpoint_ids(checkpoint_thread_ids: Iterable[str]) -> int:
-    ids = {str(value) for value in checkpoint_thread_ids if value}
+async def clear_task_runtime_bindings(run_ids: Iterable[str]) -> int:
+    ids = {str(value) for value in run_ids if value}
     if not ids:
         return 0
     async with async_session_maker() as session:
@@ -368,11 +382,12 @@ async def clear_task_checkpoint_ids(checkpoint_thread_ids: Iterable[str]) -> int
             rows = list((await session.execute(
                 select(AgentRun).where(
                     AgentRun.task_id.is_not(None),
-                    AgentRun.checkpoint_thread_id.in_(ids),
+                    AgentRun.id.in_(ids),
                 ).with_for_update()
             )).scalars().all())
             for run in rows:
-                run.checkpoint_thread_id = None
+                run.runtime_binding_json = None
+                run.runtime_binding_status = "cleaned"
             return len(rows)
 
 
@@ -1373,11 +1388,7 @@ async def finalize_task_run(
                 raise AgentTaskConflict("task_terminal_conflict", "A different terminal run event already exists")
             if task.status in TERMINAL_TASK_STATUSES and task.status != task_status:
                 raise AgentTaskConflict("task_terminal_conflict", "The task already has a different terminal status")
-            if run.status in {
-                AgentRunStatus.COMPLETED.value,
-                AgentRunStatus.FAILED.value,
-                AgentRunStatus.CANCELLED.value,
-            } and run.status != run_status:
+            if run.status in TERMINAL_TASK_RUN_STATUSES and run.status != run_status:
                 raise AgentTaskConflict("task_terminal_conflict", "The run already has a different terminal status")
             if (
                 existing_terminal is not None
@@ -1517,8 +1528,8 @@ async def expire_stale_tasks(*, limit: int = 100) -> int:
                 task.version += 1
                 if task.active_run_id:
                     run = await session.get(AgentRun, task.active_run_id)
-                    if run is not None and run.status in {"running", "awaiting_human"}:
-                        run.status = "expired"
+                    if run is not None and run.status in ACTIVE_TASK_RUN_STATUSES:
+                        run.status = AgentRunStatus.EXPIRED.value
                         run.completed_at = now
                         pending = dict(run.pending_interrupt_json or {})
                         if pending:

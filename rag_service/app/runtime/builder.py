@@ -64,6 +64,15 @@ class BuilderCatalog:
         }
 
 
+@dataclass(frozen=True)
+class BuilderTestContext:
+    run: Any
+    test_request: Any
+    embedding_model: str
+    builder_session_id: str
+    resume_decision: Mapping[str, Any] | None = None
+
+
 class UnsupportedRequestOverrideError(ValueError):
     """Raised when an explicit request uses overrides a provider does not own."""
 
@@ -112,6 +121,19 @@ class AgentBuilderProvider(Protocol):
     ) -> Mapping[str, Any]: ...
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog: ...
+
+    def supports_task_web_search(self, definition: AgentDefinition) -> bool: ...
+
+    def task_configuration_fields(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    def normalize_task_limits(
+        self,
+        limits: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
 
     async def source(self, definition_id: str) -> Mapping[str, Any]: ...
 

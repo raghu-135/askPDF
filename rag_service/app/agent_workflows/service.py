@@ -30,6 +30,7 @@ from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeA
 from app.runtime.capability_resolver import pending_interrupt_response_operation, require_capability
 from app.runtime.errors import RuntimeError as RuntimeContractError
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
+from app.runtime.operational_limits import validate_bounded_json
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.services.runtime_operation_repository import (
@@ -39,7 +40,6 @@ from app.services.runtime_operation_repository import (
     fail_runtime_operation,
 )
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
-from app.models.llm_server_client import check_model_can_invoke_tools
 
 
 logger = logging.getLogger(__name__)
@@ -195,9 +195,26 @@ class AgentRunService:
             "input": dict(input or {}),
             "update": dict(update or {}),
         }
+        try:
+            validate_bounded_json(request_payload["input"], field_name="input")
+            validate_bounded_json(request_payload["update"], field_name="update")
+        except ValueError as exc:
+            raise RuntimeContractError(
+                "runtime_payload_invalid",
+                str(exc),
+                retryable=False,
+            ) from exc
         request_fingerprint = hashlib.sha256(
-            json.dumps(request_payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
+        # Capability admission is side-effect free. Do it before claiming an
+        # idempotency record so unsupported operations never mutate storage.
+        await require_capability(
+            definition,
+            operation,
+            registry=get_runtime_registry(),
+            run=run,
+        )
         try:
             operation_record = await claim_runtime_operation(
                 run_id=run.id,
@@ -220,11 +237,6 @@ class AgentRunService:
                 retryable=bool(stored_error.get("retryable")),
                 details=dict(stored_error.get("details") or {}),
             )
-        try:
-            await require_capability(definition, operation, registry=get_runtime_registry(), run=run)
-        except RuntimeContractError as exc:
-            await fail_runtime_operation(operation_record.id, error=exc.to_dict())
-            raise
         request = AgentRuntimeRequest(
             run_id=run.id, thread_id=run.thread_id, definition_id=definition.definition_id,
             framework=definition.framework, builder_id=definition.builder_id,
@@ -346,17 +358,6 @@ class AgentRunService:
             raise RuntimeError(
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
-        if definition.framework == "hermes":
-            selected_model = str(
-                (((stored_resolved_spec.get("managed_profile") or {}).get("model_policy") or {}).get("model"))
-                or ""
-            ).strip()
-            if not selected_model or not await check_model_can_invoke_tools(selected_model):
-                raise RuntimeContractError(
-                    "runtime_model_tool_calling_unsupported",
-                    "The selected model cannot invoke the tools required by Hermes",
-                    details={"framework": definition.framework, "model": selected_model or None},
-                )
         workflow_version = _workflow_version_info(workflow)
 
         try:
@@ -402,6 +403,8 @@ class AgentRunService:
             execution_event_sink.bind_trace_recorder(trace_recorder)
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
             execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
+            execution_event_sink.bind_runtime_fact_persister(self.repository.update_run_metadata_fields)
         if (
             execution_event_sink is not None
             and hasattr(execution_event_sink, "bind_runtime_event_persister")
@@ -464,6 +467,10 @@ class AgentRunService:
                 await execution_event_sink.flush()
             if runtime_result.continuation is not None:
                 await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
+            if runtime_result.checkpoint_boundary_available is not None:
+                await self.repository.update_run_metadata_fields(run.id, {
+                    "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+                })
             result = result_to_product_payload(runtime_result)
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             _attach_parallel_projection(result, execution_event_sink)
@@ -686,7 +693,15 @@ class AgentRunService:
         approval_feedback: Optional[str] = None,
         approval_modifications: Optional[Dict[str, Any]] = None,
     ) -> Optional[InterruptResolutionResult]:
-        current_run = await self.repository.get_run(run_id)
+        # A service invocation owns its transaction lifecycle. Repositories
+        # injected with a caller-managed session remain useful to tests and
+        # batch callers, but must not be reused across runtime I/O boundaries.
+        repository = (
+            AgentWorkflowRepository()
+            if getattr(self.repository, "_session", None) is not None
+            else self.repository
+        )
+        current_run = await repository.get_run(run_id)
         if current_run is None or (
             expected_thread_id is not None
             and str(getattr(current_run, "thread_id", "")) != str(expected_thread_id)
@@ -715,7 +730,7 @@ class AgentRunService:
                 registry=get_runtime_registry(),
                 run=current_run,
             )
-        resolution = await self.repository.resolve_pending_interrupt(
+        resolution = await repository.resolve_pending_interrupt(
             run_id,
             interrupt_id=interrupt_id,
             action=action,
@@ -757,7 +772,7 @@ class AgentRunService:
                     continuation=continuation_from_run(resolution.run),
                 )
                 await _submit_runtime_approval(
-                    repository=self.repository,
+                    repository=repository,
                     adapter=adapter_for_definition(definition),
                     request=request,
                     run_id=resolution.run.id,
@@ -794,18 +809,22 @@ class AgentRunService:
             )
             return resolution
 
-        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
+        if execution_event_sink is None and hasattr(repository, "append_run_event"):
             execution_event_sink = AgentExecutionEventSink(include_details=False)
             execution_event_sink.detach_delivery()
         if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_event_persister"):
-            existing_events = await self.repository.list_run_events(resolution.run.id)
+            # Event-journal reads use independent session ownership. An
+            # injected request repository may already own the transaction
+            # that resolved the interrupt.
+            event_repository = AgentWorkflowRepository()
+            existing_events = await event_repository.list_run_events(resolution.run.id)
             initial_sequence = max(
                 (int(getattr(event, "sequence", 0) or 0) for event in existing_events),
                 default=0,
             )
             execution_event_sink.bind_runtime_event_persister(
                 resolution.run.id,
-                self.repository.append_run_event,
+                repository.append_run_event,
                 initial_sequence=initial_sequence,
             )
         if execution_event_sink is not None:
@@ -821,6 +840,7 @@ class AgentRunService:
 
         definition = definition_from_run(resolution.run)
         adapter = adapter_for_definition(definition)
+        lifecycle_repository = AgentWorkflowRepository()
         runtime_request = AgentRuntimeRequest(
             run_id=resolution.run.id,
             thread_id=resolution.run.thread_id,
@@ -832,7 +852,7 @@ class AgentRunService:
         response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
         if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
             await _submit_runtime_approval(
-                repository=self.repository,
+                repository=repository,
                 adapter=adapter,
                 request=runtime_request,
                 run_id=resolution.run.id,
@@ -848,7 +868,9 @@ class AgentRunService:
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
-                execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+                execution_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
+                execution_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
             runtime_context = RuntimeExecutionContext(
                 agent_run_context={"run": resolution.run},
                 trace_recorder=resume_trace_recorder,
@@ -869,6 +891,20 @@ class AgentRunService:
                 )
             if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
                 await execution_event_sink.flush()
+            if runtime_result.continuation is not None:
+                await repository.update_runtime_binding(
+                    resolution.run.id,
+                    runtime_result.continuation,
+                )
+            if runtime_result.checkpoint_boundary_available is not None:
+                await repository.update_run_metadata_fields(
+                    resolution.run.id,
+                    {
+                        "checkpoint_boundary_available": (
+                            runtime_result.checkpoint_boundary_available
+                        ),
+                    },
+                )
             result = result_to_product_payload(runtime_result)
             _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
@@ -933,7 +969,7 @@ class AgentRunService:
                         chat_turn_id=None,
                         metrics=metrics,
                     )
-                paused_run = await self.repository.mark_run_awaiting_human(
+                paused_run = await lifecycle_repository.mark_run_awaiting_human(
                     resolution.run.id,
                     pending_interrupt,
                     metrics_json=metrics,
@@ -952,7 +988,7 @@ class AgentRunService:
                     await execution_event_sink.finish_boundary()
                 return resolution
 
-            completed_run = await self.repository.complete_run(
+            completed_run = await lifecycle_repository.complete_run(
                 resolution.run.id,
                 status=status,
                 metrics_json=metrics,
@@ -979,9 +1015,9 @@ class AgentRunService:
                     chat_turn_id=result.get("chat_turn_id"),
                     metrics=metrics,
                 )
-                completed_run = await self.repository.set_run_debug_trace(completed_run.id, debug_payload) or completed_run
+                completed_run = await lifecycle_repository.set_run_debug_trace(completed_run.id, debug_payload) or completed_run
             else:
-                completed_run = await self.repository.set_run_debug_trace(completed_run.id, resume_debug_payload) or completed_run
+                completed_run = await lifecycle_repository.set_run_debug_trace(completed_run.id, resume_debug_payload) or completed_run
             if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
                 terminal_kind = "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
                 await execution_event_sink.finish(
@@ -1002,7 +1038,7 @@ class AgentRunService:
         except Exception as exc:
             prior_metrics = dict(resolution.run.metrics_json or {})
             prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
-            await self.repository.complete_run(
+            await lifecycle_repository.complete_run(
                 resolution.run.id,
                 status=AgentRunStatus.FAILED.value,
                 metrics_json=prior_metrics,

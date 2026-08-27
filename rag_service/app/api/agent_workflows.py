@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -8,11 +9,15 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
 from app.agent_workflows.node_catalog import get_node_catalog
-from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
+from app.agent_workflows.repository import (
+    AgentWorkflowRepository,
+    AgentRunInterruptError,
+    BUILDER_TEST_RUN_KIND,
+)
 from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
@@ -27,7 +32,6 @@ from app.agent_workflows.workflow_runtime import (
     ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
     workflow_is_chat_eligible,
-    with_default_runtime,
     workflow_supports_replans,
 )
 from app.agent_workflows.chat_cancellation import (
@@ -38,50 +42,22 @@ from app.agent_workflows.chat_cancellation import (
 from app.agent_workflows.trace_details import detail_manifest
 from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.canonical_trace import build_parallel_groups
-from app.runtime.contracts import AgentRuntimeEvent
-BUILDER_TEST_RUN_KIND = "builder_test"
+from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeRequest
 logger = logging.getLogger(__name__)
 
 
-async def delete_agent_checkpoints(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints as implementation
-    return await implementation(*args, **kwargs)
-
-
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def open_agent_checkpointer():
-    from app.runtime.langgraph.checkpointing import open_agent_checkpointer as implementation
-    async with implementation() as checkpointer:
-        yield checkpointer
-
-
 async def latest_builder_test(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import latest_builder_test as implementation
-    return await implementation(*args, **kwargs)
+    return await AgentWorkflowRepository().latest_builder_test(*args, **kwargs)
 
 
 async def request_builder_test_cancel(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import request_builder_test_cancel as implementation
-    return await implementation(*args, **kwargs)
+    return await AgentWorkflowRepository().request_builder_test_cancel(*args, **kwargs)
 
 
 def spec_fingerprint(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import spec_fingerprint as implementation
-    return implementation(*args, **kwargs)
-
-
-async def stream_builder_test(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import stream_builder_test as implementation
-    async for event in implementation(*args, **kwargs):
-        yield event
-
-
-async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
-    return await implementation(*args, **kwargs)
+    spec = args[0] if args else kwargs["spec"]
+    encoded = json.dumps(spec, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
 
 
 def _normalized_visit_index(value: Any) -> Optional[int]:
@@ -100,7 +76,7 @@ def _normalized_visit_index(value: Any) -> Optional[int]:
     return normalized if normalized >= 1 else None
 from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
-from app.runtime.builder import UnsupportedRequestOverrideError
+from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
     capabilities_for_definition,
@@ -113,6 +89,7 @@ from app.runtime.capability_resolver import (
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
 from app.runtime.operational_limits import required_positive_float
+from app.runtime.operational_limits import validate_bounded_json
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -168,8 +145,8 @@ class InternalAgentWorkflowSaveRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
-    framework: Optional[str] = None
-    builder_id: Optional[str] = None
+    framework: str = Field(..., min_length=1)
+    builder_id: str = Field(..., min_length=1)
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -194,10 +171,20 @@ class AgentRunInputOperationRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
     input: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("input")
+    @classmethod
+    def bounded_input(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return validate_bounded_json(value, field_name="input")
+
 
 class AgentRunStateUpdateRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
     update: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("update")
+    @classmethod
+    def bounded_update(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return validate_bounded_json(value, field_name="update")
 
 
 class BuilderTransientMessage(BaseModel):
@@ -231,17 +218,9 @@ class BuilderTestRunResumeRequest(AgentRunResumeRequest):
 
 def _workflow_payload(workflow) -> Dict[str, Any]:
     spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
-    metadata = workflow.metadata_json if isinstance(workflow.metadata_json, dict) else {}
     known_builtin_keys = set(builtin_workflow_keys())
-    builtin_key = None
-    if workflow.is_builtin:
-        metadata_key = str(metadata.get("builtin_key") or "").strip()
-        spec_key = str(spec.get("workflow_id") or "").strip()
-        row_key = str(workflow.id or "").strip()
-        builtin_key = next(
-            (key for key in (metadata_key, spec_key, row_key) if key in known_builtin_keys),
-            None,
-        )
+    row_key = str(workflow.id or "").strip()
+    builtin_key = row_key if workflow.is_builtin and row_key in known_builtin_keys else None
     return {
         "id": workflow.id,
         "workflow_id": workflow.id,
@@ -336,7 +315,15 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
         return None
     compact_debug = {key: value for key, value in debug.items() if key != "graph"}
     visualizations = compact_debug.get("visualizations") if isinstance(compact_debug.get("visualizations"), dict) else {}
-    topology_available = "langgraph.graph" in visualizations
+    topology_kind = next(
+        (
+            str(key)
+            for key, value in visualizations.items()
+            if isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+        ),
+        None,
+    )
+    topology_available = topology_kind is not None
     return {
         **compact_debug,
         "trace": trace,
@@ -344,7 +331,7 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
         "detail_manifest": detail_manifest(debug.get("details")),
         "topology": {
             "available": topology_available,
-            "kind": "langgraph.graph" if topology_available else None,
+            "kind": topology_kind,
             "operation_refs": topology_available,
         },
     }
@@ -401,7 +388,10 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
             "topology_available": bool(
                 isinstance(run.debug_trace_json, dict)
                 and isinstance(run.debug_trace_json.get("visualizations"), dict)
-                and "langgraph.graph" in run.debug_trace_json["visualizations"]
+                and any(
+                    isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+                    for value in run.debug_trace_json["visualizations"].values()
+                )
             ),
         },
     }
@@ -412,6 +402,38 @@ def _sse(event: Dict[str, Any], sequence: int) -> str:
     name = str(event.get("event") or "message")
     payload = {"id": sequence, "event": name, "data": event.get("data") or {}}
     return f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+class _BuilderProviderEventSink:
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[Dict[str, Any] | None] = asyncio.Queue()
+
+    async def emit(self, event: Mapping[str, Any]) -> None:
+        await self.queue.put(dict(event))
+
+
+async def _stream_builder_provider_call(call: Any):
+    sink = _BuilderProviderEventSink()
+
+    async def execute() -> None:
+        try:
+            await call(sink)
+        finally:
+            await sink.queue.put(None)
+
+    task = asyncio.create_task(execute())
+    sequence = 0
+    try:
+        while True:
+            event = await sink.queue.get()
+            if event is None:
+                break
+            sequence += 1
+            yield _sse(event, sequence)
+        await task
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 def _run_summary_payload(run) -> Dict[str, Any]:
@@ -881,20 +903,10 @@ async def update_agent_run_state(
 @router.get("/agent-workflows/builtins/{builtin_key}/source")
 async def get_builtin_agent_workflow_source(builtin_key: str):
     """Return the immutable-on-disk definition used to seed a built-in workflow."""
-    requested_key = builtin_key
     workflow = next(
         (item for item in load_builtin_workflows() if item.get("builtin_key") == builtin_key),
         None,
     )
-    if workflow is None:
-        stored_workflow = await AgentWorkflowRepository().get_workflow(requested_key)
-        if stored_workflow is not None:
-            canonical_key = _workflow_payload(stored_workflow).get("builtin_key")
-            workflow = next(
-                (item for item in load_builtin_workflows() if item.get("builtin_key") == canonical_key),
-                None,
-            )
-            builtin_key = canonical_key or requested_key
     if workflow is None:
         raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
     definition = AgentDefinition(
@@ -933,8 +945,6 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Base agent workflow not found")
-    if getattr(workflow, "framework", None) != "langgraph":
-        raise HTTPException(status_code=409, detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this runtime"})
     if req.use_web_search and not req.allow_external_tools:
         raise HTTPException(
             status_code=409,
@@ -944,6 +954,12 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
         candidate = dict(req.spec)
         provider = _provider_for_workflow(workflow)
         definition = _definition_for_workflow(workflow)
+        builder_capabilities = await provider.capabilities(definition)
+        if not builder_capabilities.transient_tests:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this definition"},
+            )
         resolved = dict(await provider.resolve(
             definition,
             candidate,
@@ -967,38 +983,26 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     )
 
     async def events():
-        sequence = 0
-        async with open_agent_checkpointer() as checkpointer:
-            previous_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=run.id)
-            if previous_checkpoint_ids:
-                try:
-                    await delete_agent_checkpoints(previous_checkpoint_ids, checkpointer=checkpointer)
-                except Exception:
-                    pass
-            try:
-                async for event in stream_builder_test(
-                    run=run,
-                    request=req,
-                    embedding_model=embedding_context.embedding_model,
-                    checkpointer=checkpointer,
-                ):
-                    sequence += 1
-                    yield _sse(event, sequence)
-            finally:
-                stored_run = await AgentWorkflowRepository().get_run(run.id)
-                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
-                    try:
-                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
-                    except Exception:
-                        pass
-                latest = await latest_builder_test(req.builder_session_id)
-                if latest is not None and latest.id != run.id:
-                    stale_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=latest.id)
-                    if stale_checkpoint_ids:
-                        try:
-                            await delete_agent_checkpoints(stale_checkpoint_ids, checkpointer=checkpointer)
-                        except Exception:
-                            pass
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"question": req.question},
+        )
+        context = BuilderTestContext(
+            run=run,
+            test_request=req,
+            embedding_model=embedding_context.embedding_model,
+            builder_session_id=req.builder_session_id,
+        )
+
+        async def call(sink: Any) -> None:
+            await provider.transient_test(runtime_request, context=context, event_sink=sink)
+
+        async for event in _stream_builder_provider_call(call):
+            yield event
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1037,6 +1041,17 @@ async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunRe
     run = await repo.get_run(run_id)
     if run is None or run.thread_id != req.thread_id or (run.run_metadata_json or {}).get("run_kind") != BUILDER_TEST_RUN_KIND:
         raise HTTPException(status_code=404, detail="Builder test run not found")
+    definition = definition_from_run(run)
+    try:
+        provider = builder_for_definition(definition)
+        builder_capabilities = await provider.capabilities(definition)
+    except BuilderSelectionError as exc:
+        raise HTTPException(status_code=400, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
+    if not builder_capabilities.transient_tests:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this definition"},
+        )
     try:
         resolution = await repo.resolve_pending_interrupt(
             run_id,
@@ -1058,25 +1073,27 @@ async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunRe
         raise HTTPException(status_code=409, detail="Builder test interrupt cannot be resumed")
 
     async def events():
-        sequence = 0
-        async with open_agent_checkpointer() as checkpointer:
-            try:
-                async for event in stream_builder_test(
-                    run=resolution.run,
-                    request=req,
-                    embedding_model=embedding_context.embedding_model,
-                    checkpointer=checkpointer,
-                    resume_decision=decision,
-                ):
-                    sequence += 1
-                    yield _sse(event, sequence)
-            finally:
-                stored_run = await AgentWorkflowRepository().get_run(run_id)
-                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
-                    try:
-                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
-                    except Exception:
-                        pass
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"decision": decision},
+        )
+        context = BuilderTestContext(
+            run=resolution.run,
+            test_request=req,
+            embedding_model=embedding_context.embedding_model,
+            builder_session_id=str((run.run_metadata_json or {}).get("builder_session_id") or ""),
+            resume_decision=decision,
+        )
+
+        async def call(sink: Any) -> None:
+            await provider.resume_transient_test(runtime_request, context=context, event_sink=sink)
+
+        async for event in _stream_builder_provider_call(call):
+            yield event
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1109,7 +1126,7 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
         workflow_id = (req.workflow_id or "").strip() or None
         if workflow_id is None:
             workflow_id = f"custom_workflow_{uuid.uuid4().hex[:12]}"
-        spec_json = with_default_runtime(dict(req.spec_json))
+        spec_json = dict(req.spec_json)
         spec_json["workflow_id"] = workflow_id
         workflow, version = await repo.save_internal_workflow_version(
             workflow_id=workflow_id,

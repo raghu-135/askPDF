@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId
+from app.runtime.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
 from app.runtime.events import create_runtime_event
 from app.runtime.errors import RuntimeError
 from app.runtime.transport import (
@@ -50,6 +50,44 @@ def _namespace(value: Any) -> Any:
     return value
 
 
+def _task_context(value: Any) -> RuntimeTaskContext | None:
+    if not isinstance(value, Mapping):
+        return None
+    task_id = value.get("task_id")
+    objective = value.get("objective", "")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise RuntimeError("runtime_context_invalid", "Runtime task context is missing task identity")
+    if not isinstance(objective, str):
+        raise RuntimeError("runtime_context_invalid", "Runtime task objective must be a string")
+
+    def mapping(name: str) -> dict[str, Any]:
+        item = value.get(name) or {}
+        if not isinstance(item, Mapping):
+            raise RuntimeError("runtime_context_invalid", f"Runtime task {name} must be an object")
+        return dict(item)
+
+    def mapping_sequence(name: str) -> tuple[dict[str, Any], ...]:
+        items = value.get(name) or ()
+        if not isinstance(items, (list, tuple)) or any(not isinstance(item, Mapping) for item in items):
+            raise RuntimeError("runtime_context_invalid", f"Runtime task {name} must be an array of objects")
+        return tuple(dict(item) for item in items)
+
+    artifact_contents = mapping("artifact_contents")
+    if any(not isinstance(key, str) or not isinstance(item, str) for key, item in artifact_contents.items()):
+        raise RuntimeError("runtime_context_invalid", "Runtime task artifact contents must contain strings")
+    return RuntimeTaskContext(
+        task_id=task_id.strip(),
+        objective=objective,
+        todos=mapping_sequence("todos"),
+        artifact_manifests=mapping_sequence("artifact_manifests"),
+        artifact_contents=artifact_contents,
+        limits=mapping("limits"),
+        permissions=mapping("permissions"),
+        metadata=mapping("metadata"),
+        context_data=mapping("context_data"),
+    )
+
+
 def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: Any = None) -> RuntimeExecutionContext:
     value = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
     run_context = dict(value.get("agent_run_context") or {})
@@ -76,6 +114,7 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         agent_run_context=run_context,
         task_id=value.get("task_id") or request.task_id,
         task_worker_id=value.get("task_worker_id"),
+        task_context=_task_context(value.get("task_context")),
         cancellation_checker=cancellation_checker,
     )
 
@@ -392,14 +431,17 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                         return
 
         heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
-        context = _context(payload, request, cancellation_checker=cancellation_probe)
+        runtime_adapter = get_adapter()
         try:
+            context = await runtime_adapter.prepare_execution_context(
+                _context(payload, request, cancellation_checker=cancellation_probe)
+            )
             framework = str(getattr(request, "framework", None) or "").strip()
             if not framework:
                 raise RuntimeError("invalid_runtime_identity", "Runtime request is missing framework identity")
             execution_timeout = float(deep_agent_budgets(framework)["max_duration_seconds"])
             result = await asyncio.wait_for(
-                getattr(get_adapter(), operation)(
+                getattr(runtime_adapter, operation)(
                     request,
                     **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
                     context=context,

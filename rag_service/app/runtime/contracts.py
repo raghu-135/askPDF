@@ -235,6 +235,7 @@ class AgentRuntimeEvent:
     trace_id: Optional[str] = None
     source_metadata: Mapping[str, Any] = field(default_factory=dict)
     continuation: Optional[ContinuationBinding] = None
+    checkpoint_boundary_available: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -503,6 +504,7 @@ class AgentRuntimeResult:
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     continuation: Optional[ContinuationBinding] = None
     error: Optional[Mapping[str, Any]] = None
+    checkpoint_boundary_available: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -541,6 +543,8 @@ class RuntimeTaskContext:
     artifact_contents: Mapping[str, str] = field(default_factory=dict)
     limits: Mapping[str, Any] = field(default_factory=dict)
     permissions: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    context_data: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -551,6 +555,8 @@ class RuntimeTaskContext:
             "artifact_contents": dict(self.artifact_contents),
             "limits": dict(self.limits),
             "permissions": dict(self.permissions),
+            "metadata": dict(self.metadata),
+            "context_data": dict(self.context_data),
         }
 
 

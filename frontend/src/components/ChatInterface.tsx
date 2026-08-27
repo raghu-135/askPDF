@@ -2644,11 +2644,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     loading={loading}
                     llmModel={llmModel}
                     isLlmModelValid={isLlmModelValid}
-                    isLlmToolsSupported={
-                        agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.framework === 'hermes'
-                            ? canLlmInvokeTools
-                            : isLlmToolsSupported
-                    }
+                    isLlmToolsSupported={isLlmToolsSupported && canLlmInvokeTools}
                     isEmbeddingModelValid={isEmbeddingModelValid}
                     indexingStatus={indexingStatus}
                     liveExecution={liveExecution}

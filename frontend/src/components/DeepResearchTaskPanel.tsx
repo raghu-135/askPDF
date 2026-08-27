@@ -17,7 +17,7 @@ import {
   createAgentTask,
   deleteAgentTask,
   downloadAgentTaskArtifact,
-  getDeepResearchCapabilities,
+  listAgentDefinitions,
   getAgentRun,
   getAgentRunCapabilities,
   getAgentTask,
@@ -37,14 +37,13 @@ import {
   type AgentRunResumeAction,
   type AgentRunDetails,
   type AgentRuntimeCapabilityResponse,
-  type DeepResearchEngine,
+  type AgentDefinitionCatalogEntry,
   type BuilderTestStreamEnvelope,
 } from '../lib/api';
 import {
   isRunOwnedBySelectedTask,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
-  resolveDeepResearchContextWindow,
   shouldPollAgentTask,
   shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
@@ -273,10 +272,8 @@ export default function DeepResearchTaskPanel({
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
-  const [webCapability, setWebCapability] = useState<boolean | null>(null);
-  const [engine, setEngine] = useState<DeepResearchEngine>('langgraph');
-  const [hermesEnabled, setHermesEnabled] = useState(false);
-  const [hermesMaxContext, setHermesMaxContext] = useState<number | null>(null);
+  const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
+  const [definitionId, setDefinitionId] = useState('');
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
   const [runtimeControlError, setRuntimeControlError] = useState('');
   const [liveTraceEvents, setLiveTraceEvents] = useState<BuilderTestStreamEnvelope[]>([]);
@@ -328,16 +325,16 @@ export default function DeepResearchTaskPanel({
   useEffect(() => {
     let active = true;
     setDeepResearchDiscoveryError('');
-    void getDeepResearchCapabilities()
-      .then((capabilities) => {
+    void listAgentDefinitions()
+      .then((catalog) => {
         if (!active) return;
-        setWebCapability(capabilities.web_enabled);
-        setHermesEnabled(Boolean(capabilities.engines?.hermes?.enabled));
-        setHermesMaxContext(capabilities.engines?.hermes?.max_context_length ?? null);
+        const eligible = catalog.filter((entry) => entry.available && entry.task_eligible);
+        setDefinitions(eligible);
+        setDefinitionId((current) => current || eligible[0]?.definition_id || '');
       })
       .catch(() => {
         if (!active) return;
-        setWebCapability(false);
+        setDefinitions([]);
         setDeepResearchDiscoveryError('Deep Research capabilities could not be loaded. Internet research is unavailable until the service recovers.');
       });
     return () => { active = false; };
@@ -593,14 +590,10 @@ export default function DeepResearchTaskPanel({
   }, [refresh, refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status, threadId]);
 
   const launch = async (objective: string) => {
-    if (webSearchMode !== 'off' && webCapability !== true) {
-      setError('Internet research is not available for Deep Research. Switch Internet Search off and try again.');
-      return;
-    }
+    if (!definitionId) { setError('Select an available agent definition first.'); return; }
     setBusy(true); setError('');
     try {
-      const effectiveContextWindow = resolveDeepResearchContextWindow(engine, contextWindow, hermesMaxContext);
-      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: effectiveContextWindow, web_search_mode: webSearchMode, engine });
+      const created = await createAgentTask(threadId, { definition_id: definitionId, objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);
     } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
@@ -664,17 +657,21 @@ export default function DeepResearchTaskPanel({
     availability: runtimeOperationAvailability(activeTaskCapabilities, control.operation),
   })).filter((control) => control.availability.visible), [activeTaskCapabilities]);
   const frozen = Boolean(selectedRun);
-  const frozenEngine: DeepResearchEngine = task?.workflow_id === 'hermes_rag_agent' ? 'hermes' : 'langgraph';
   const displayedContextWindow = frozen
     ? Number(task?.configuration?.context_window || contextWindow)
-    : resolveDeepResearchContextWindow(engine, contextWindow, hermesMaxContext);
+    : contextWindow;
   const configuredWebMode = String(task?.configuration?.web_search_mode || 'off') as 'off' | 'ask' | 'on';
   const frozenWebMode = task?.web_access === 'allowed_for_task'
     ? 'on'
     : task?.web_access === 'denied_for_task'
       ? 'off'
       : configuredWebMode;
-  const requestedWebUnavailable = !frozen && webSearchMode !== 'off' && webCapability !== true;
+  const selectedDefinition = definitions.find((entry) => entry.definition_id === definitionId);
+  const definitionFields = selectedDefinition?.configuration.fields || [];
+  const modelField = definitionFields.find((field) => field.id === 'llm_model');
+  const contextWindowField = definitionFields.find((field) => field.id === 'context_window');
+  const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
+  const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
   const isApprovalInterrupt = pendingInterrupt?.kind === 'approval';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
@@ -711,29 +708,29 @@ export default function DeepResearchTaskPanel({
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
       contextWindow={displayedContextWindow}
-      disabled={frozen}
-      contextWindowDisabled={!frozen && engine === 'hermes'}
+      disabled={frozen || modelField?.read_only === true}
+      contextWindowDisabled={frozen || contextWindowField?.read_only === true}
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
       beforeModelControls={<Stack direction="row" spacing={1} alignItems="center">
-        <Chip
-          size="small"
-          label={(frozen ? frozenEngine : engine) === 'hermes' ? 'Hermes' : 'LangGraph'}
-          color={(frozen ? frozenEngine : engine) === 'hermes' ? 'secondary' : 'default'}
-          onClick={frozen ? undefined : () => setEngine((value) => value === 'langgraph' && hermesEnabled ? 'hermes' : 'langgraph')}
-          title={!hermesEnabled && !frozen ? 'Hermes is not configured' : 'Deep Research engine'}
-        />
-        {engine === 'hermes' && !frozen && hermesMaxContext !== null
-          ? <Typography variant="caption" color="text.secondary">Hermes env: {hermesMaxContext.toLocaleString()}</Typography>
-          : null}
-        {renderWebControl(frozen ? frozenWebMode : webSearchMode, frozen || webCapability === false)}
+        <Chip size="small" label={frozen ? String(task?.workflow_id || definitionId) : (selectedDefinition?.display_name || 'Select definition')} />
+        {!frozen && definitions.length > 1 ? (
+          <select value={definitionId} onChange={(event) => setDefinitionId(event.target.value)} aria-label="Agent definition">
+            {definitions.map((entry) => <option key={entry.definition_id} value={entry.definition_id}>{entry.display_name}</option>)}
+          </select>
+        ) : null}
+        {webSearchField ? renderWebControl(
+          frozen ? frozenWebMode : webSearchMode,
+          frozen || webSearchField.enabled === false,
+        ) : null}
       </Stack>}
       trailingActions={<DeepResearchTaskPicker threadId={threadId} selectedTaskId={selectedTaskId} onSelect={onTaskSelect} />}
     />}
     status={<>
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
+      {requestedWebUnavailable && <Alert severity="warning" sx={{ mb: 1 }}>The selected definition does not allow web search.</Alert>}
       {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
       {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
