@@ -112,11 +112,11 @@ docker compose up --build
 `/healthz` is liveness-only. Compose and deployment readiness use `/readyz`,
 which requires both the Hermes upstream and the configured MCP dependency.
 
-`./run_tests.sh --phase7` builds the same pinned Hermes revision and runs it
+`./run_tests.sh --hermes-runtime` builds the same pinned Hermes revision and runs it
 against an isolated deterministic OpenAI-compatible provider. Rare event and
 protocol failures use checked-in data fixtures and mocked transports; there is
 no executable fake Hermes runtime or fallback path.
 
 ```bash
-./run_tests.sh --phase7
+./run_tests.sh --hermes-runtime
 ```

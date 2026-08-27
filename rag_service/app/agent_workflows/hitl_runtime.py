@@ -40,7 +40,7 @@ WEB_APPROVAL_GATE_ID = "web_approval_gate"
 
 
 def _interrupt(payload: Dict[str, Any]) -> Any:
-    graph_module = sys.modules.get("app.agent_workflows.graph")
+    graph_module = sys.modules.get("app.runtime.langgraph.graph")
     interrupt_fn = getattr(graph_module, "interrupt", _langgraph_interrupt)
     return interrupt_fn(payload)
 

@@ -14,8 +14,8 @@ async def models():
     return {
         "object": "list",
         "data": [
-            {"id": "phase5-deterministic", "object": "model"},
-            {"id": "phase5-deterministic-embedding", "object": "model"},
+            {"id": "external_runtime-deterministic", "object": "model"},
+            {"id": "external_runtime-deterministic-embedding", "object": "model"},
         ],
     }
 
@@ -34,7 +34,7 @@ async def embeddings(payload: dict):
         data.append({"object": "embedding", "index": index, "embedding": vector})
     return {
         "object": "list",
-        "model": payload.get("model") or "phase5-deterministic-embedding",
+        "model": payload.get("model") or "external_runtime-deterministic-embedding",
         "data": data,
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
@@ -53,9 +53,9 @@ async def completions(payload: dict):
     elif "clarif" in question.lower():
         content = "Deterministic clarification response."
     response = {
-        "id": "phase5-deterministic-response",
+        "id": "external_runtime-deterministic-response",
         "object": "chat.completion",
-        "model": payload.get("model") or "phase5-deterministic",
+        "model": payload.get("model") or "external_runtime-deterministic",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }

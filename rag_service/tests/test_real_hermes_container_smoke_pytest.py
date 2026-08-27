@@ -14,8 +14,8 @@ from app.runtime.hermes_adapter import HermesRuntimeAdapter
 
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("PHASE7_REAL_HERMES_SMOKE", "").lower() not in {"1", "true", "yes", "on"},
-    reason="requires PHASE7_REAL_HERMES_SMOKE=true and the pinned real-Hermes Compose profile",
+    os.getenv("HERMES_RUNTIME_REAL_SMOKE", "").lower() not in {"1", "true", "yes", "on"},
+    reason="requires HERMES_RUNTIME_REAL_SMOKE=true and the pinned real-Hermes Compose profile",
 )
 
 _LEGACY_PROFILE_MODEL = "askpdf-runtime-selected"

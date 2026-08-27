@@ -48,7 +48,7 @@ services:
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"
-      HERMES_MODEL: phase5-deterministic
+      HERMES_MODEL: hermes-runtime-deterministic
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       ASKPDF_MCP_REQUIRED: "false"
     depends_on:
@@ -67,7 +67,7 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app
-      PHASE7_REAL_HERMES_SMOKE: "true"
+      HERMES_RUNTIME_REAL_SMOKE: "true"
       COMPOSE_PROFILES: "hermes"
       HERMES_RUNTIME_URL: http://hermes-runtime-real:8200
     command: ["pytest", "--noconftest", "-q", "tests/test_real_hermes_container_smoke_pytest.py"]

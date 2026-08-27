@@ -36,6 +36,7 @@ RUN mkdir -p /models/hf /static
 COPY alembic alembic
 COPY scripts scripts
 COPY app app
+COPY runtime_protocol runtime_protocol
 COPY alembic.ini main.py ./
 
 EXPOSE 8000

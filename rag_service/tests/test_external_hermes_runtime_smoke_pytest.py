@@ -21,20 +21,20 @@ from app.mcp.execution_context_token import issue_execution_context_token
 from app.tools.context import ToolInvocationContext
 
 
-_enabled = os.getenv("PHASE7_HERMES_SMOKE", "").lower() in {"1", "true", "yes", "on"}
+_enabled = os.getenv("HERMES_RUNTIME_SMOKE", "").lower() in {"1", "true", "yes", "on"}
 _required = (
     "HERMES_RUNTIME_URL",
-    "PHASE7_PRODUCT_DATABASE_URL",
+    "HERMES_RUNTIME_PRODUCT_DATABASE_URL",
 )
-_TEST_MODEL = "phase5-deterministic"
+_TEST_MODEL = "hermes-runtime-deterministic"
 if _enabled:
     missing = [name for name in _required if not os.getenv(name)]
     if "hermes" not in {value.strip().lower() for value in os.getenv("COMPOSE_PROFILES", "").split(",")}:
         missing.append("COMPOSE_PROFILES=hermes")
     if missing:
-        raise RuntimeError("PHASE7_HERMES_SMOKE=true requires: " + ", ".join(missing))
+        raise RuntimeError("HERMES_RUNTIME_SMOKE=true requires: " + ", ".join(missing))
 
-pytestmark = pytest.mark.skipif(not _enabled, reason="requires PHASE7_HERMES_SMOKE=true")
+pytestmark = pytest.mark.skipif(not _enabled, reason="requires HERMES_RUNTIME_SMOKE=true")
 
 
 def _definition_and_spec() -> tuple[AgentDefinition, dict]:
@@ -51,14 +51,14 @@ def _definition_and_spec() -> tuple[AgentDefinition, dict]:
 async def test_external_hermes_runtime_contract_and_execution():
     definition, spec = _definition_and_spec()
     unique = uuid.uuid4().hex
-    run_id = f"phase7-smoke-hermes-{unique}"
-    thread_id = f"phase7-smoke-thread-{unique}"
+    run_id = f"hermes-runtime-smoke-hermes-{unique}"
+    thread_id = f"hermes-runtime-smoke-thread-{unique}"
     configured_context = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
     token = issue_execution_context_token(
         ToolInvocationContext(
             thread_id=thread_id,
             run_id=run_id,
-            embedding_model="phase5-deterministic-embedding",
+            embedding_model="hermes-runtime-deterministic-embedding",
             context_window=configured_context,
             extensions={"task_id": run_id, "llm_model": _TEST_MODEL},
         ),
@@ -114,11 +114,11 @@ async def test_external_hermes_runtime_contract_and_execution():
 @pytest.mark.asyncio
 async def test_product_api_executes_and_persists_hermes_deep_research_task():
     unique = uuid.uuid4().hex
-    base_url = os.getenv("PHASE7_CONTROL_PLANE_URL", "http://rag-service:8000")
+    base_url = os.getenv("HERMES_RUNTIME_CONTROL_PLANE_URL", "http://rag-service:8000")
     async with httpx.AsyncClient(base_url=base_url, timeout=120) as client:
         project = await client.post(
             "/api/projects",
-            json={"name": f"Phase 7 Hermes smoke {unique}", "embedding_model": "phase5-deterministic-embedding"},
+            json={"name": f"Hermes runtime smoke {unique}", "embedding_model": "hermes-runtime-deterministic-embedding"},
         )
         project.raise_for_status()
         thread = await client.post(
@@ -129,7 +129,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
         thread_id = thread.json()["id"]
         created = await client.post(
             f"/api/threads/{thread_id}/agent-tasks",
-            headers={"Idempotency-Key": f"phase7-hermes-{unique}"},
+            headers={"Idempotency-Key": f"hermes-runtime-hermes-{unique}"},
             json={
                 "objective": "Use document evidence and provide the deterministic answer.",
                 "llm_model": _TEST_MODEL,
@@ -143,7 +143,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
         started = await client.post(
             f"/api/agent-tasks/{task['id']}/start",
             params={"thread_id": thread_id},
-            headers={"Idempotency-Key": f"phase7-hermes-start-{unique}"},
+            headers={"Idempotency-Key": f"hermes-runtime-hermes-start-{unique}"},
             json={"expected_version": task["version"]},
         )
         started.raise_for_status()
@@ -165,7 +165,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
         assert persisted["status"] == "completed"
         assert persisted["workflow_id"] == "hermes_rag_agent"
 
-    connection = await asyncpg.connect(os.environ["PHASE7_PRODUCT_DATABASE_URL"])
+    connection = await asyncpg.connect(os.environ["HERMES_RUNTIME_PRODUCT_DATABASE_URL"])
     try:
         binding = await connection.fetchval("SELECT runtime_binding_json FROM agent_runs WHERE id = $1", run_id)
     finally:

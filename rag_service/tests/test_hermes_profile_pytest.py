@@ -73,7 +73,7 @@ def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
     assert "tool_search searches only the deferred tool catalog" in prompt
     assert "tool_search results" in prompt and "do not count as document evidence" in prompt
     assert "only a successful underlying document-retrieval tool_call result does" in prompt
-    assert "If the underlying retrieval call fails or returns no evidence after valid attempts" in prompt
+    assert "If a relevant retrieval call fails or returns no evidence after valid attempts" in prompt
     assert {"get_thread_shape", "search_documents", "search_document_by_id"}.issubset(
         definition["spec_json"]["config"]["allowed_tool_ids"]
     )

@@ -12,9 +12,9 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import NodeError
 
-from app.agent_workflows.compiler import WorkflowCompiler
+from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.agent_workflows.graph import NodeRegistry
+from app.runtime.langgraph.graph import NodeRegistry
 from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,

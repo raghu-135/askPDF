@@ -229,8 +229,8 @@ def _patch_app_session_makers(monkeypatch, session_maker):
     from app.agent_workflows import (
         chat_cancellation,
         repository as agent_workflow_repository,
-        studio_runtime,
     )
+    from app.runtime.langgraph import studio_runtime
 
     for module in (
         connection_sqlmodel,

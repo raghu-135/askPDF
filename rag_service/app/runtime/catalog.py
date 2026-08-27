@@ -113,15 +113,16 @@ def result_to_product_payload(result: AgentRuntimeResult) -> dict[str, Any]:
 
     clarification_options = list((result.clarification or {}).get("options") or [])
     interruption = dict(result.interruption or {})
-    return {
+    payload = dict(result.output) if isinstance(result.output, Mapping) else {"answer": result.output}
+    payload.update({
         "status": result.status,
-        "answer": result.output,
         "clarification_options": clarification_options or None,
         "pending_interrupt": interruption or None,
         "agent_error": dict(result.error or {}),
         "runtime_metadata": dict(result.runtime_metadata or {}),
         "runtime_binding": result.continuation.to_dict() if result.continuation else None,
-    }
+    })
+    return payload
 
 
 def event_from_source(

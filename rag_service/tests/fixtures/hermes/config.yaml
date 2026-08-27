@@ -1,7 +1,7 @@
 _config_version: 37
 
 model:
-  default: phase5-deterministic
+  default: hermes-runtime-deterministic
   provider: custom
   base_url: http://fake-llm:9000/v1
 

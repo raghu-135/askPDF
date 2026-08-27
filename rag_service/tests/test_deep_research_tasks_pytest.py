@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.compiler import WorkflowCompiler
+from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows import deep_research_nodes
 from app.runtime.langgraph import router_runtime
 from app.agent_workflows.deep_research_execution import (
@@ -22,7 +22,7 @@ from app.agent_workflows.deep_research_execution import (
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder
 from app.agent_workflows.enums import WorkflowNodeType
-from app.agent_workflows.graph import NodeRegistry
+from app.runtime.langgraph.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api

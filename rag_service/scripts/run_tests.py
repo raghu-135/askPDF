@@ -41,6 +41,11 @@ UNIT_TEST_FILES = [
     "test_external_research_tools.py",
     "test_runtime_execution_store_pytest.py",
     "test_runtime_http_adapter_pytest.py",
+    "test_runtime_contracts_pytest.py",
+    "test_runtime_events_pytest.py",
+    "test_runtime_capability_gate_pytest.py",
+    "test_runtime_capability_resolver_pytest.py",
+    "test_langgraph_capabilities_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
@@ -188,7 +193,7 @@ def _run(command: list[str], env: dict[str, str] | None = None) -> None:
 def _run_standalone(pdf_path: str | None = None) -> None:
     env = os.environ.copy()
     # Keep the backend import root and include the repository root for the
-    # root-level Hermes gateway used by the Phase 7 integration proof.
+    # root-level Hermes gateway used by the Hermes runtime integration proof.
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
 
     if pdf_path:

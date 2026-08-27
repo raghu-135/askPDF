@@ -34,7 +34,7 @@ from app.models.llm_server_client import get_llm as _default_get_llm
 
 
 def _get_llm(model_name: str) -> Any:
-    graph_module = sys.modules.get("app.agent_workflows.graph")
+    graph_module = sys.modules.get("app.runtime.langgraph.graph")
     get_llm_fn = getattr(graph_module, "get_llm", _default_get_llm)
     return get_llm_fn(model_name)
 

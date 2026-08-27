@@ -18,10 +18,10 @@ from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from app.runtime.adapter import RuntimeExecutionContext
 
 
-_phase5_enabled = os.getenv("PHASE5_EXTERNAL_SMOKE", "").lower() in {"1", "true", "yes", "on"}
-if _phase5_enabled and not os.getenv("PHASE5_EXTERNAL_LLM_MODEL"):
-    raise RuntimeError("PHASE5_EXTERNAL_SMOKE=true requires PHASE5_EXTERNAL_LLM_MODEL")
-pytestmark = pytest.mark.skipif(not _phase5_enabled, reason="requires PHASE5_EXTERNAL_SMOKE=true")
+_external_runtime_enabled = os.getenv("EXTERNAL_RUNTIME_SMOKE", "").lower() in {"1", "true", "yes", "on"}
+if _external_runtime_enabled and not os.getenv("EXTERNAL_RUNTIME_LLM_MODEL"):
+    raise RuntimeError("EXTERNAL_RUNTIME_SMOKE=true requires EXTERNAL_RUNTIME_LLM_MODEL")
+pytestmark = pytest.mark.skipif(not _external_runtime_enabled, reason="requires EXTERNAL_RUNTIME_SMOKE=true")
 
 
 def _workflow(workflow_id: str) -> dict:
@@ -54,7 +54,7 @@ async def _timeout_diagnostics(adapter: HttpLangGraphRuntimeAdapter, request: Ag
 @pytest.mark.asyncio
 @pytest.mark.parametrize("workflow_id", ["router_rag_agent", "evaluator_replanner_rag_agent"])
 async def test_external_runtime_executes_builtin_workflows(workflow_id):
-    run_id = f"phase5-smoke-{workflow_id}-{uuid.uuid4().hex}"
+    run_id = f"external_runtime-smoke-{workflow_id}-{uuid.uuid4().hex}"
     spec = _workflow(workflow_id)
     definition = AgentDefinition(
         definition_id=workflow_id,
@@ -69,8 +69,8 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
         builder_id="langgraph_graph",
         input={"question": "Summarize the available evidence."},
         options={
-            "embedding_model": os.getenv("PHASE5_EXTERNAL_EMBEDDING_MODEL", "phase5-deterministic-embedding"),
-            "llm_model": os.environ["PHASE5_EXTERNAL_LLM_MODEL"],
+            "embedding_model": os.getenv("EXTERNAL_RUNTIME_EMBEDDING_MODEL", "external_runtime-deterministic-embedding"),
+            "llm_model": os.environ["EXTERNAL_RUNTIME_LLM_MODEL"],
             "use_web_search": False,
             "use_reranker": False,
         },
@@ -78,7 +78,7 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
     context = RuntimeExecutionContext(
         request=SimpleNamespace(
             question="Summarize the available evidence.",
-            llm_model=os.environ["PHASE5_EXTERNAL_LLM_MODEL"],
+            llm_model=os.environ["EXTERNAL_RUNTIME_LLM_MODEL"],
             use_web_search=False,
             use_reranker=False,
             context_window=8192,
@@ -90,10 +90,10 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
     )
     adapter = HttpLangGraphRuntimeAdapter()
     recent_events = _RecentEvents()
-    smoke_timeout = float(os.getenv("PHASE5_SMOKE_TIMEOUT_SECONDS", "120"))
+    smoke_timeout = float(os.getenv("EXTERNAL_RUNTIME_SMOKE_TIMEOUT_SECONDS", "120"))
     try:
         capabilities = await adapter.capabilities(definition)
-        assert capabilities.operations["run.events"].enabled is True
+        assert capabilities.operations["run.start"].enabled is True
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True
         try:
@@ -102,7 +102,7 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
         except TimeoutError:
             diagnostics = await _timeout_diagnostics(adapter, request)
             pytest.fail(
-                "Phase 5 external workflow timed out "
+                "External runtime external workflow timed out "
                 f"after {smoke_timeout:.0f}s; run_id={run_id}; workflow_id={workflow_id}; "
                 f"recent_events={list(recent_events.events)!r}; diagnostics={diagnostics!r}"
             )
@@ -113,17 +113,17 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
 
 @pytest.mark.asyncio
 async def test_production_control_plane_executes_external_runtime_via_product_api():
-    base_url = os.getenv("PHASE5_CONTROL_PLANE_URL", "http://rag-service:8000")
+    base_url = os.getenv("EXTERNAL_RUNTIME_CONTROL_PLANE_URL", "http://rag-service:8000")
     unique = uuid.uuid4().hex
-    timeout = httpx.Timeout(float(os.getenv("PHASE5_SMOKE_TIMEOUT_SECONDS", "120")))
+    timeout = httpx.Timeout(float(os.getenv("EXTERNAL_RUNTIME_SMOKE_TIMEOUT_SECONDS", "120")))
     async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
         project_response = await client.post(
             "/api/projects",
             json={
-                "name": f"Phase 5 production smoke {unique}",
+                "name": f"External runtime production smoke {unique}",
                 "embedding_model": os.getenv(
-                    "PHASE5_EXTERNAL_EMBEDDING_MODEL",
-                    "phase5-deterministic-embedding",
+                    "EXTERNAL_RUNTIME_EMBEDDING_MODEL",
+                    "external_runtime-deterministic-embedding",
                 ),
             },
         )
@@ -132,7 +132,7 @@ async def test_production_control_plane_executes_external_runtime_via_product_ap
 
         thread_response = await client.post(
             f"/api/projects/{project_id}/threads",
-            json={"name": "Production artifact external-runtime smoke"},
+            json={"name": "Production artifact external_runtime smoke"},
         )
         thread_response.raise_for_status()
         thread_id = thread_response.json()["id"]
@@ -142,7 +142,7 @@ async def test_production_control_plane_executes_external_runtime_via_product_ap
             json={
                 "thread_id": thread_id,
                 "question": "Summarize the available evidence.",
-                "llm_model": os.environ["PHASE5_EXTERNAL_LLM_MODEL"],
+                "llm_model": os.environ["EXTERNAL_RUNTIME_LLM_MODEL"],
                 "bypass_clarification": True,
             },
         )

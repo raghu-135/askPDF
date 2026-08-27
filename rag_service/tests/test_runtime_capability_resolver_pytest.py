@@ -683,17 +683,18 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "boundary", "binding_status", "expected_reason"),
+    ("status", "boundary", "binding", "binding_status", "expected_reason"),
     [
-        ("running", False, "active", "run_not_checkpoint_boundary"),
-        ("paused", True, "active", None),
-        ("awaiting_human", True, "active", None),
-        ("completed", True, "active", "run_terminal"),
-        ("running", True, "stale", "runtime_binding_unavailable"),
+        ("running", False, True, "active", "run_not_checkpoint_boundary"),
+        ("paused", True, True, "active", None),
+        ("awaiting_human", True, True, "active", None),
+        ("completed", True, True, "active", "run_terminal"),
+        ("running", True, True, "stale", "runtime_binding_unavailable"),
+        ("running", False, False, "active", "runtime_binding_unavailable"),
     ],
 )
 async def test_checkpoint_operations_use_explicit_run_boundary_fact(
-    status, boundary, binding_status, expected_reason,
+    status, boundary, binding, binding_status, expected_reason,
 ):
     class CheckpointCapabilityAdapter(CapabilityAdapter):
         async def capabilities(self, definition):
@@ -705,7 +706,7 @@ async def test_checkpoint_operations_use_explicit_run_boundary_fact(
     run = SimpleNamespace(
         status=status,
         pending_interrupt_json=None,
-        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_json={"binding_type": "fake"} if binding else None,
         runtime_binding_status=binding_status,
         run_metadata_json={"checkpoint_boundary_available": boundary},
     )

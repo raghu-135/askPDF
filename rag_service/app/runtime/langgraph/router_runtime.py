@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_workflows.compiler import WorkflowCompiler
+from app.runtime.langgraph.compiler import WorkflowCompiler
 from app.agent_workflows.chat_cancellation import (
     ChatRunCancellationRequested,
     raise_if_chat_run_cancelled,

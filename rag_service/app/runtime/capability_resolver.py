@@ -392,19 +392,19 @@ async def resolve_capabilities(
     _apply_task_cancel_dependency(operations, submitted=submitted)
     _apply_task_start_dependency(operations)
 
+    if not binding_available and status not in TERMINAL_RUN_STATES:
+        for operation, descriptor in operations.items():
+            if operation in CHECKPOINT_OPERATIONS or descriptor.requires_runtime_binding:
+                operations[operation] = _disabled(
+                    descriptor, RuntimeCapabilityDisabledReason.RUNTIME_BINDING_UNAVAILABLE
+                )
+
     if not checkpoint_boundary_available(run):
         for operation in CHECKPOINT_OPERATIONS:
             descriptor = operations.get(operation)
             if descriptor is not None and descriptor.enabled:
                 operations[operation] = _disabled(
                     descriptor, RuntimeCapabilityDisabledReason.RUN_NOT_CHECKPOINT_BOUNDARY
-                )
-
-    if not binding_available and status not in TERMINAL_RUN_STATES:
-        for operation, descriptor in operations.items():
-            if descriptor.requires_runtime_binding:
-                operations[operation] = _disabled(
-                    descriptor, RuntimeCapabilityDisabledReason.RUNTIME_BINDING_UNAVAILABLE
                 )
 
     return replace(capabilities, operations=operations)

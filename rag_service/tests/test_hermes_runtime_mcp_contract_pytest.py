@@ -91,13 +91,13 @@ def test_empty_delta_flood_still_consumes_lifecycle_budget():
         budget.observe("output.delta", "")
 
 
-def test_phase7_runner_enables_and_guards_every_integration_proof_command():
+def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_command():
     repository = Path(os.getenv("ASKPDF_REPO_DIR", "/workspace"))
     script = (repository / "run_tests.sh").read_text()
-    phase7 = script.split('if [ "${RUN_PHASE7:-0}" = "1" ]; then', 1)[1].split("\nfi", 1)[0]
+    hermes_runtime = script.split('if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then', 1)[1].split("\nfi", 1)[0]
 
-    assert phase7.count("-e PHASE7_HERMES_INTEGRATION=true") == 2
-    assert phase7.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 2
-    assert "hermes-fake" not in phase7
-    assert "test_real_hermes_container_smoke_pytest.py" in phase7
-    assert " hermes hermes-runtime" in phase7
+    assert hermes_runtime.count("-e HERMES_RUNTIME_INTEGRATION=true") == 2
+    assert hermes_runtime.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 2
+    assert "hermes-fake" not in hermes_runtime
+    assert "test_real_hermes_container_smoke_pytest.py" in hermes_runtime
+    assert " hermes hermes-runtime" in hermes_runtime

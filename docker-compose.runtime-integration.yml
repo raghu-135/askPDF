@@ -64,15 +64,15 @@ services:
       POSTGRES_MAX_OVERFLOW: "5"
       ASKPDF_AGENT_CHECKPOINTER: postgres
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
-      COMPOSE_PROFILES: ${PHASE7_HERMES_COMPOSE_PROFILES:-}
+      COMPOSE_PROFILES: ${HERMES_RUNTIME_COMPOSE_PROFILES:-}
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       HERMES_MODEL_PROVIDER: lmstudio
-      HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
+      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: "120"
-      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
       - path: .env
@@ -140,7 +140,7 @@ services:
       MCP_TRANSPORT: loopback_http
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: "120"
-      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       AGENT_RUNTIME_MODE: external
     env_file:
       - path: .env
@@ -272,11 +272,11 @@ services:
       POSTGRES_POOL_SIZE: "5"
       POSTGRES_MAX_OVERFLOW: "5"
       AGENT_RUNTIME_MODE: external
-      PHASE5_SMOKE_TIMEOUT_SECONDS: "120"
-      PHASE5_EXTERNAL_EMBEDDING_MODEL: phase5-deterministic-embedding
+      EXTERNAL_RUNTIME_SMOKE_TIMEOUT_SECONDS: "120"
+      EXTERNAL_RUNTIME_EMBEDDING_MODEL: external_runtime-deterministic-embedding
       LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
       COMPOSE_PROFILES: "hermes"
-      HERMES_MCP_CONTEXT_SECRET: phase7-hermes-context-secret-32-bytes-minimum
+      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
@@ -286,7 +286,7 @@ services:
       AGENT_RUNTIME_SCHEMA_AUTO_CREATE: "true"
       PYTHONPATH: /workspace:/app
       WEAVIATE_URL: http://weaviate:8080
-      LLM_API_URL: ${PHASE5_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
+      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
       ASKPDF_REPO_DIR: /workspace
     env_file:
       - path: .env

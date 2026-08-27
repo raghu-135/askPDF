@@ -12,12 +12,12 @@ from hermes_test_helpers import LEGACY_PROFILE_MODEL, RUNTIME_URL, read_sse, run
 
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("PHASE7_HERMES_INTEGRATION", "").lower() not in {"1", "true", "yes", "on"},
-    reason="requires the Phase 7 Hermes integration Compose profile",
+    os.getenv("HERMES_RUNTIME_INTEGRATION", "").lower() not in {"1", "true", "yes", "on"},
+    reason="requires the Hermes runtime Hermes integration Compose profile",
 )
 
 
-RECOVERY_RUN_ID = os.getenv("PHASE7_RECOVERY_RUN_ID") or f"phase7-recovery-{uuid.uuid4().hex}"
+RECOVERY_RUN_ID = os.getenv("HERMES_RUNTIME_RECOVERY_RUN_ID") or f"hermes-runtime-recovery-{uuid.uuid4().hex}"
 
 
 @pytest.mark.asyncio

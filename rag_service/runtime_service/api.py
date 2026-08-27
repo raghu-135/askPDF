@@ -98,7 +98,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         runtime_state["draining"] = False
         await execution_store.initialize()
-        from app.agent_workflows.checkpointing import open_agent_checkpointer
+        from app.runtime.langgraph.checkpointing import open_agent_checkpointer
 
         async with open_agent_checkpointer():
             pass
@@ -260,7 +260,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         except Exception as exc:
             checks["execution_store"] = {"status": "failed", "error": type(exc).__name__}
         try:
-            from app.agent_workflows.checkpointing import open_agent_checkpointer
+            from app.runtime.langgraph.checkpointing import open_agent_checkpointer
 
             async with open_agent_checkpointer(setup=False) as checkpointer:
                 await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})

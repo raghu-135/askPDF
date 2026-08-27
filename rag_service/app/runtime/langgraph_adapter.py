@@ -22,13 +22,24 @@ from app.runtime.observability import normalize_runtime_event
 
 def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
     status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
+    interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None
+    checkpoint_thread_id = interruption.get("checkpoint_thread_id") if interruption else result.get("checkpoint_thread_id")
+    continuation = (
+        ContinuationBinding(
+            binding_type="langgraph.checkpoint",
+            payload={"checkpoint_thread_id": str(checkpoint_thread_id)},
+        )
+        if checkpoint_thread_id and status == "awaiting_human"
+        else None
+    )
     return AgentRuntimeResult(
         status=status,
-        output=result.get("answer") if "answer" in result else result.get("final_output"),
+        output=dict(result),
         clarification={"options": list(result["clarification_options"])} if result.get("clarification_options") else None,
-        interruption=result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None,
+        interruption=interruption,
         usage=dict(result.get("usage") or result.get("metrics") or {}),
         runtime_metadata={key: result[key] for key in ("agent_run_id", "checkpoint_thread_id", "agent_workflow_id") if key in result},
+        continuation=continuation,
         error=result.get("agent_error") if isinstance(result.get("agent_error"), Mapping) else None,
     )
 

@@ -34,7 +34,7 @@ def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
     assert "Every tool_search call must include a nonempty capability-oriented query" in prompt
     assert "tool_describe" in prompt and "tool_call" in prompt
     assert "exact namespaced name" in prompt
-    assert "do not invent a namespaced name" in prompt
+    assert "or invent a namespaced name" in prompt
     assert "no matches means only that the catalog query did not match" in prompt
     assert "call search_document_by_id" not in prompt
 
