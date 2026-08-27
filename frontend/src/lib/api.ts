@@ -1406,6 +1406,7 @@ export type RuntimeCapabilityDisabledReason =
   | 'task_not_retryable'
   | 'task_terminal'
   | 'runtime_binding_unavailable'
+  | 'cancellation_pending'
   | 'run_not_checkpoint_boundary';
 
 export interface RuntimeOperationDescriptor {

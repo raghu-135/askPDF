@@ -752,7 +752,7 @@ export default function DeepResearchTaskPanel({
               onClick={() => void command(action)}
             >{label}</Button>;
           })}
-          <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace || !effectiveSelectedRunCapabilities} onClick={() => void openTrace()}>Debug Trace</Button>
+          <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
         </Stack>
         <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
       </Box>}

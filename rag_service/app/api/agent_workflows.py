@@ -82,6 +82,22 @@ async def stream_builder_test(*args: Any, **kwargs: Any):
 async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
     from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
     return await implementation(*args, **kwargs)
+
+
+def _normalized_visit_index(value: Any) -> Optional[int]:
+    """Return a safe positive visit index from retained runtime data."""
+
+    if value is None:
+        return 1
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 1 else None
 from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import UnsupportedRequestOverrideError
@@ -1000,7 +1016,8 @@ async def get_latest_internal_agent_workflow_test(
     try:
         payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+        if exc.code not in {"runtime_capability_unsupported", "runtime_capability_unavailable"}:
+            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     return {"agent_run": payload}
 
 
@@ -1312,11 +1329,17 @@ async def get_agent_run_operation_details(
     for detail in debug.get("details") if isinstance(debug.get("details"), list) else []:
         if not isinstance(detail, dict):
             continue
-        if str(detail.get("operation_id") or "") == operation_id and max(1, int(detail.get("visit_index") or 1)) == visit_index:
+        detail_visit_index = _normalized_visit_index(detail.get("visit_index"))
+        if detail_visit_index is None:
+            continue
+        if str(detail.get("operation_id") or "") == operation_id and detail_visit_index == visit_index:
             return {"run_id": run.id, "detail": detail}
     for event in reversed(await repo.list_run_events(run_id)):
         payload = event.payload_json if isinstance(event.payload_json, dict) else {}
-        if str(payload.get("operation_id") or "") == operation_id and max(1, int(payload.get("visit_index") or 1)) == visit_index:
+        event_visit_index = _normalized_visit_index(payload.get("visit_index"))
+        if event_visit_index is None:
+            continue
+        if str(payload.get("operation_id") or "") == operation_id and event_visit_index == visit_index:
             return {
                 "run_id": run.id,
                 "detail": {

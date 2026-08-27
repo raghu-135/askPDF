@@ -7533,6 +7533,131 @@ async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
     assert response["detail"]["checkpoint_after"]["replan_count"] == 1
 
 
+def _builder_test_run_for_api(run_id="builder-test-run"):
+    return SimpleNamespace(
+        id=run_id,
+        thread_id="builder-test-thread",
+        user_id=None,
+        workflow_id=ROUTER_RAG_AGENT_ID,
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        definition_category=None,
+        task_id=None,
+        parent_run_id=None,
+        task_attempt=1,
+        resolved_spec_json={},
+        status="completed",
+        checkpoint_thread_id=None,
+        runtime_binding_status="retired",
+        pending_interrupt_json=None,
+        started_at=None,
+        completed_at=None,
+        error_json=None,
+        metrics_json={},
+        debug_trace_json=None,
+        run_metadata_json={
+            "run_kind": "builder_test",
+            "builder_session_id": "builder-session",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_latest_builder_test_omits_optional_inspection_when_unsupported(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+    from app.runtime.errors import RuntimeError as AgentRuntimeError
+
+    run = _builder_test_run_for_api()
+
+    async def fake_latest_builder_test(*_args):
+        return run
+
+    async def fake_list_chat_turns(_self, _run_id):
+        return []
+
+    async def fake_inspect(_self, _run):
+        raise AgentRuntimeError("runtime_capability_unsupported", "inspection is unavailable")
+
+    monkeypatch.setattr(agent_workflows_api, "latest_builder_test", fake_latest_builder_test)
+    monkeypatch.setattr(AgentWorkflowRepository, "list_chat_turns_for_run", fake_list_chat_turns)
+    monkeypatch.setattr(AgentRunService, "inspect_agent_run", fake_inspect)
+
+    response = await agent_workflows_api.get_latest_internal_agent_workflow_test(
+        builder_session_id="builder-session",
+    )
+
+    assert response["agent_run"]["id"] == run.id
+    assert "runtime_inspection" not in response["agent_run"]
+
+
+@pytest.mark.asyncio
+async def test_latest_builder_test_propagates_non_capability_inspection_failure(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+    from app.runtime.errors import RuntimeError as AgentRuntimeError
+
+    run = _builder_test_run_for_api()
+
+    async def fake_latest_builder_test(*_args):
+        return run
+
+    async def fake_list_chat_turns(_self, _run_id):
+        return []
+
+    async def fake_inspect(_self, _run):
+        raise AgentRuntimeError("runtime_transport_error", "inspection failed")
+
+    monkeypatch.setattr(agent_workflows_api, "latest_builder_test", fake_latest_builder_test)
+    monkeypatch.setattr(AgentWorkflowRepository, "list_chat_turns_for_run", fake_list_chat_turns)
+    monkeypatch.setattr(AgentRunService, "inspect_agent_run", fake_inspect)
+
+    with pytest.raises(agent_workflows_api.HTTPException) as caught:
+        await agent_workflows_api.get_latest_internal_agent_workflow_test(
+            builder_session_id="builder-session",
+        )
+
+    assert caught.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_agent_run_operation_details_skips_malformed_visit_indices(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+
+    run = _builder_test_run_for_api("run-malformed-details")
+    run.thread_id = "thread-malformed-details"
+    run.debug_trace_json = {
+        "details": [
+            {"operation_id": "planner", "visit_index": "not-an-index"},
+            {"operation_id": "planner", "visit_index": 2, "output": "valid"},
+        ]
+    }
+
+    class FakeEvent:
+        kind = "operation.completed"
+        payload_json = {"operation_id": "planner", "visit_index": False}
+
+    class FakeRepository:
+        async def get_run(self, _run_id):
+            return run
+
+        async def list_run_events(self, _run_id):
+            return [FakeEvent()]
+
+    async def fake_get_thread(thread_id):
+        return SimpleNamespace(id=thread_id)
+
+    monkeypatch.setattr(agent_workflows_api, "AgentWorkflowRepository", FakeRepository)
+    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+
+    response = await agent_workflows_api.get_agent_run_operation_details(
+        run.id,
+        operation_id="planner",
+        visit_index=2,
+        thread_id=run.thread_id,
+    )
+
+    assert response["detail"]["output"] == "valid"
+
+
 def test_workflow_payload_exposes_canonical_key_for_legacy_builtin_row():
     import app.api.agent_workflows as agent_workflows_api
 

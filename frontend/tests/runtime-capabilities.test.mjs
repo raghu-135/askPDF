@@ -47,6 +47,18 @@ test('conditional operations remain visible with their backend reason', () => {
   assert.equal(result.disabledReason, 'run_terminal');
 });
 
+test('cancellation pending is preserved as a backend disabled reason', () => {
+  const result = runtimeOperationAvailability(response({
+    'run.cancel': {
+      support: 'conditional',
+      enabled: false,
+      disabled_reason: 'cancellation_pending',
+    },
+  }), 'run.cancel');
+
+  assert.equal(result.disabledReason, 'cancellation_pending');
+});
+
 test('capability discovery failure fails closed', () => {
   assert.equal(isRuntimeOperationEnabled(null, 'run.cancel'), false);
   assert.equal(runtimeOperationAvailability({ available: false, capabilities: null }, 'run.cancel').visible, false);
