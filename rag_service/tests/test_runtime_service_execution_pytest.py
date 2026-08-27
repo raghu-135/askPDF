@@ -10,6 +10,7 @@ from httpx import ASGITransport
 from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
 from app.runtime.contracts import ContinuationBinding
 from runtime_service.api import create_app
+from runtime_service.dependencies import langgraph_dependency_requirements
 from runtime_service.execution_store import ExecutionStore
 
 
@@ -37,6 +38,30 @@ def _payload(run_id: str) -> dict:
             "definition_metadata": {},
         },
     }
+
+
+def test_langgraph_dependency_requirements_only_admit_chat_model_to_provider() -> None:
+    requirements = langgraph_dependency_requirements({
+        "request": {
+            "options": {
+                "llm_model": "chat-model",
+                "embedding_model": "BAAI/bge-m3",
+            },
+        },
+        "context": {
+            "embedding_model": "BAAI/bge-m3",
+            "request_payload": {
+                "embedding_model": "BAAI/bge-m3",
+            },
+            "resolved_spec": {
+                "config": {
+                    "allowed_tool_ids": [],
+                },
+            },
+        },
+    })
+
+    assert requirements["provider"] == {"chat-model"}
 
 
 async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwargs: object) -> list[dict]:

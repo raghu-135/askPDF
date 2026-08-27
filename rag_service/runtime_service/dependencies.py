@@ -193,11 +193,14 @@ def langgraph_dependency_requirements(payload: Mapping[str, Any]) -> dict[str, s
     }
     options = request.get("options") if isinstance(request.get("options"), Mapping) else {}
     request_payload = context.get("request_payload") if isinstance(context.get("request_payload"), Mapping) else {}
+    # Embeddings are resolved by the control-plane MCP tools.  They are
+    # carried in the execution context so those tools can use the thread's
+    # configured embedding model, but they are not models required from the
+    # LangGraph runtime's chat provider.
     models = {
         str(value)
         for value in (
             options.get("llm_model") or request_payload.get("llm_model"),
-            options.get("embedding_model") or context.get("embedding_model") or request_payload.get("embedding_model"),
         )
         if value
     }
