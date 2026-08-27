@@ -37,7 +37,7 @@ from app.runtime.hermes_config import (
 )
 from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.runtime.capability_resolver import require_capability
-from app.runtime.catalog import definition_from_workflow
+from app.runtime.catalog import definition_from_run, definition_from_workflow
 from app.runtime.contracts import RuntimeOperationId
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.registry import get_runtime_registry
@@ -224,9 +224,10 @@ async def _require_task_capability(task: Any, action: str) -> None:
     if operation is None:
         raise HTTPException(status_code=404, detail={"code": "task_command_unknown"})
     run = await repository.get_task_run(task.id)
+    definition = definition_from_run(run) if run is not None else definition_from_workflow(workflow)
     try:
         await require_capability(
-            definition_from_workflow(workflow),
+            definition,
             operation,
             registry=get_runtime_registry(),
             run=run,

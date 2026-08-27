@@ -15,6 +15,7 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     RuntimeValidationIssue,
     RuntimeValidationResult,
+    validated_disabled_operation_ids,
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_provider
@@ -35,6 +36,16 @@ class HermesBuilderProvider:
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []
+        runtime = spec.get("runtime")
+        features = runtime.get("features") if isinstance(runtime, Mapping) and isinstance(runtime.get("features"), Mapping) else {}
+        try:
+            validated_disabled_operation_ids(features.get("disabled_operations"))
+        except ValueError as exc:
+            issues.append(RuntimeValidationIssue(
+                "invalid_disabled_operation",
+                str(exc),
+                "runtime.features.disabled_operations",
+            ))
         if spec.get("schema_version") != 1:
             issues.append(RuntimeValidationIssue("unsupported_schema_version", "Hermes definitions must use schema_version 1", "schema_version"))
         runtime = spec.get("runtime")

@@ -449,10 +449,15 @@ async def test_task_command_admission_uses_the_same_task_state_as_run_capabiliti
     task = SimpleNamespace(id="task-1", status="failed", workflow_id="definition-1")
     run = SimpleNamespace(
         id="run-1",
+        workflow_id="definition-1",
+        framework="fake",
+        builder_id="fake_builder",
+        definition_category="deep",
         status="running",
         pending_interrupt_json=None,
         runtime_binding_json={"binding_type": "fake"},
         runtime_binding_status="active",
+        resolved_spec_json={"runtime": {"features": {"supports_long_running_tasks": True}}},
     )
     workflow = SimpleNamespace(
         id="definition-1",
@@ -461,7 +466,7 @@ async def test_task_command_admission_uses_the_same_task_state_as_run_capabiliti
         category="deep",
         name="Definition",
         metadata_json={},
-        spec_json={"runtime": {"features": {"supports_long_running_tasks": True}}},
+        spec_json={"runtime": {"features": {"supports_long_running_tasks": False}}},
     )
     adapter = CapabilityAdapter()
     registry = RuntimeRegistry(adapters=[adapter])
@@ -506,6 +511,82 @@ async def test_require_capability_rejects_unsupported_operation_before_adapter_c
 
     assert caught.value.code == "runtime_capability_unsupported"
     assert caught.value.details["operation_id"] == "run.steer_live"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_pending_disables_run_and_task_cancel():
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+        run_metadata_json={"runtime_started": True},
+    )
+    capabilities = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=run,
+        task=SimpleNamespace(status="cancelling"),
+    )
+
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL].disabled_reason == RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL].disabled_reason == RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
+
+
+@pytest.mark.asyncio
+async def test_run_cancellation_marker_disables_repeated_cancellation():
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+        run_metadata_json={"runtime_started": True, "cancel_requested": True},
+    )
+    capabilities = await resolve_capabilities(
+        _definition(supports_long_running_tasks=True),
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+        run=run,
+        task=SimpleNamespace(status="running"),
+    )
+
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL].disabled_reason == RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL].disabled_reason == RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_available_after_pending_marker_clears_and_terminal_runs_remain_closed():
+    definition = _definition(supports_long_running_tasks=True)
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    recovered = await resolve_capabilities(
+        definition,
+        registry=registry,
+        run=SimpleNamespace(
+            status="running",
+            pending_interrupt_json=None,
+            runtime_binding_json={"binding_type": "fake"},
+            runtime_binding_status="active",
+            run_metadata_json={"runtime_started": True, "cancel_requested": False},
+        ),
+        task=SimpleNamespace(status="running"),
+    )
+    assert recovered.operations[RuntimeOperationId.RUN_CANCEL].enabled is True
+    assert recovered.operations[RuntimeOperationId.TASK_CANCEL].enabled is True
+
+    confirmed = await resolve_capabilities(
+        definition,
+        registry=registry,
+        run=SimpleNamespace(
+            status="cancelled",
+            pending_interrupt_json=None,
+            runtime_binding_json={},
+            runtime_binding_status="active",
+            run_metadata_json={"runtime_started": True},
+        ),
+        task=SimpleNamespace(status="cancelling"),
+    )
+    assert confirmed.operations[RuntimeOperationId.RUN_CANCEL].disabled_reason == RuntimeCapabilityDisabledReason.RUN_TERMINAL
 
 
 @pytest.mark.asyncio

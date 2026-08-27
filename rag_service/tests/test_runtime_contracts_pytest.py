@@ -29,6 +29,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
     RuntimeArtifact,
     RuntimeTaskContext,
+    validated_disabled_operation_ids,
 )
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
@@ -221,6 +222,11 @@ def test_catalog_identity_is_concrete_and_category_is_metadata_only():
     assert definition.builder_id == "langgraph_graph"
     assert definition.category == "router"
     assert definition.capabilities == {"supports_replans": False}
+
+
+def test_definition_rejects_unknown_disabled_operations():
+    with pytest.raises(ValueError, match="unknown operations: run.not_real"):
+        validated_disabled_operation_ids(["run.not_real"])
 
 
 def test_run_identity_and_typed_projection_round_trip():

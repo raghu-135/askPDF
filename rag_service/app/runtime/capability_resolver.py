@@ -13,6 +13,7 @@ from app.runtime.contracts import (
     RuntimeOperationDescriptor,
     RuntimeOperationOwner,
     RuntimeSupportLevel,
+    validated_disabled_operation_ids,
 )
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.errors import RuntimeError
@@ -100,11 +101,9 @@ def apply_definition_policy(
     capabilities: RuntimeCapabilities,
     definition: AgentDefinition,
 ) -> RuntimeCapabilities:
-    disabled = definition.capabilities.get("disabled_operations", ())
-    disabled_ids = {
-        RuntimeOperationId(str(operation))
-        for operation in disabled
-    } if isinstance(disabled, (list, tuple, set, frozenset)) else set()
+    disabled_ids = validated_disabled_operation_ids(
+        definition.capabilities.get("disabled_operations")
+    )
     operations = {
         operation: _disabled(descriptor, RuntimeCapabilityDisabledReason.DEFINITION_POLICY)
         if operation in disabled_ids
@@ -332,6 +331,22 @@ async def resolve_capabilities(
                 )
 
     task_status = str(getattr(task, "status", "") or status)
+    run_metadata = getattr(run, "run_metadata_json", None)
+    cancellation_pending = (
+        status not in TERMINAL_RUN_STATES
+        and (
+            task_status == "cancelling"
+            or isinstance(run_metadata, Mapping)
+            and run_metadata.get("cancel_requested") is True
+        )
+    )
+    if cancellation_pending:
+        for operation in (RuntimeOperationId.RUN_CANCEL, RuntimeOperationId.TASK_CANCEL):
+            descriptor = operations.get(operation)
+            if descriptor is not None:
+                operations[operation] = _disabled(
+                    descriptor, RuntimeCapabilityDisabledReason.CANCELLATION_PENDING
+                )
     if task_status not in TERMINAL_RUN_STATES and RuntimeOperationId.TASK_PAUSE in operations and task_status not in {"queued", "running"}:
         operations[RuntimeOperationId.TASK_PAUSE] = _disabled(
             operations[RuntimeOperationId.TASK_PAUSE], RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE

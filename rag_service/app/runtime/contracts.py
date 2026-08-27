@@ -146,10 +146,32 @@ class RuntimeCapabilityDisabledReason(str, Enum):
     TASK_TERMINAL = "task_terminal"
     RUNTIME_BINDING_UNAVAILABLE = "runtime_binding_unavailable"
     RUN_NOT_CHECKPOINT_BOUNDARY = "run_not_checkpoint_boundary"
+    CANCELLATION_PENDING = "cancellation_pending"
 
 
 def _dict(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return dict(value or {})
+
+
+def validated_disabled_operation_ids(value: Any) -> frozenset[RuntimeOperationId]:
+    """Validate definition-owned disabled operations at the contract boundary."""
+
+    if value is None:
+        return frozenset()
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        raise ValueError("runtime.features.disabled_operations must be a collection")
+    raw_values = {
+        item.value if isinstance(item, RuntimeOperationId) else str(item)
+        for item in value
+    }
+    known_values = {operation.value for operation in RuntimeOperationId}
+    unknown = sorted(raw_values - known_values)
+    if unknown:
+        raise ValueError(
+            "runtime.features.disabled_operations contains unknown operations: "
+            + ", ".join(unknown)
+        )
+    return frozenset(RuntimeOperationId(item) for item in raw_values)
 
 
 @dataclass(frozen=True)

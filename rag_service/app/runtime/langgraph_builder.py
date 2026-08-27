@@ -16,6 +16,7 @@ from app.runtime.contracts import (
     AgentRuntimeResult,
     RuntimeValidationIssue,
     RuntimeValidationResult,
+    validated_disabled_operation_ids,
 )
 from app.runtime.mode import external_runtime_enabled
 
@@ -85,6 +86,17 @@ class LangGraphBuilderProvider:
         from app.runtime.langgraph.validator import WorkflowValidator
 
         report = WorkflowValidator().report(dict(spec))
+        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), Mapping) else {}
+        features = runtime.get("features") if isinstance(runtime.get("features"), Mapping) else {}
+        capability_issues: list[RuntimeValidationIssue] = []
+        try:
+            validated_disabled_operation_ids(features.get("disabled_operations"))
+        except ValueError as exc:
+            capability_issues.append(RuntimeValidationIssue(
+                code="invalid_disabled_operation",
+                message=str(exc),
+                path="runtime.features.disabled_operations",
+            ))
         issues = tuple(
             RuntimeValidationIssue(
                 code=str(issue.get("code") or "invalid_workflow"),
@@ -96,6 +108,7 @@ class LangGraphBuilderProvider:
             for issue in report.get("issues") or []
             if isinstance(issue, Mapping)
         )
+        issues = tuple(capability_issues) + issues
         # Older validators expose only an errors list. Preserve those errors
         # in the neutral result rather than silently returning valid=True.
         if not issues:

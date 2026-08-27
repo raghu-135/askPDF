@@ -58,6 +58,25 @@ async def test_hermes_provider_rejects_graph_fields():
 
 
 @pytest.mark.asyncio
+async def test_hermes_provider_rejects_unknown_disabled_operations():
+    provider = HermesBuilderProvider()
+    spec = {
+        "schema_version": 1,
+        "definition_version": 1,
+        "runtime": {"kind": "hermes_agent", "features": {"disabled_operations": ["run.not_real"]}},
+        "config": {
+            "research_policy_id": "deep_research_v1",
+            "system_prompt": "x",
+            "mcp_server": "askpdf",
+            "allowed_tool_ids": ["x"],
+        },
+    }
+    result = await provider.validate(_definition(), spec)
+    assert result.valid is False
+    assert any(issue.code == "invalid_disabled_operation" for issue in result.issues)
+
+
+@pytest.mark.asyncio
 async def test_hermes_provider_catalog_is_framework_specific():
     catalog = await HermesBuilderProvider().catalog(_definition())
     assert catalog.framework == "hermes"
