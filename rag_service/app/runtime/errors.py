@@ -54,12 +54,16 @@ class RuntimeError(Exception):
         support_level: str,
         disabled_reason: str,
         retryable: bool = False,
+        code: str = "runtime_capability_unavailable",
+        safe_message: str = "The requested runtime operation is unavailable for this run",
+        details: Optional[Mapping[str, Any]] = None,
     ) -> "RuntimeError":
         return cls(
-            code="runtime_capability_unavailable",
-            safe_message="The requested runtime operation is unavailable for this run",
+            code=code,
+            safe_message=safe_message,
             retryable=retryable,
             details={
+                **dict(details or {}),
                 "operation_id": operation_id,
                 "framework": framework,
                 "builder_id": builder_id,

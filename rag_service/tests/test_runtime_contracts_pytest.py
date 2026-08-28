@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
-from app.runtime.capability_resolver import OPERATION_METHODS
 from app.runtime.errors import RuntimeError
 from app.runtime.catalog import (
     continuation_from_run,
@@ -103,12 +102,6 @@ def test_pending_interrupt_requires_an_implemented_response_operation(response_o
         normalize_pending_interrupt_payload(payload)
 
     assert caught.value.code == "interrupt_response_operation_invalid"
-
-
-def test_advertised_operations_have_concrete_adapter_methods():
-    assert OPERATION_METHODS["run.start"] == "start"
-    for method_name in OPERATION_METHODS.values():
-        assert callable(getattr(AgentRuntimeAdapter, method_name, None)), method_name
 
 
 def test_public_capability_projection_preserves_approval_response():

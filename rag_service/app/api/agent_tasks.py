@@ -25,7 +25,7 @@ from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
-from app.runtime.capability_resolver import resolve_capability_resolution, require_capability
+from app.runtime.capability_resolver import resolve_definition_capability_resolution, require_capability
 from app.runtime.catalog import definition_from_run, definition_from_workflow
 from app.runtime.contracts import RuntimeOperationId
 from app.runtime.errors import RuntimeError as AgentRuntimeError
@@ -58,9 +58,7 @@ async def list_agent_definitions():
             web_enabled = builder.supports_task_web_search(definition)
             adapter = registry.get(definition)
             runtime_deployment_id = f"{adapter.framework}:{adapter.builder_id}"
-            resolution = await resolve_capability_resolution(
-                definition, registry=registry, apply_run_state=False
-            )
+            resolution = await resolve_definition_capability_resolution(definition, registry=registry)
             capabilities = resolution.capabilities
             error = resolution.error
         except Exception as exc:

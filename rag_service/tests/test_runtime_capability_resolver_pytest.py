@@ -5,12 +5,11 @@ import pytest
 
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.capability_resolver import (
-    OPERATION_METHODS,
     capabilities_for_definition,
+    resolve_definition_capability_resolution,
     capability_envelope,
     discover_adapter_capabilities,
     require_capability,
-    resolve_capability_resolution,
     resolve_capabilities,
 )
 from app.runtime.contracts import (
@@ -143,6 +142,11 @@ class BrokenCapabilityAdapter(CapabilityAdapter):
         raise AssertionError("adapter defect")
 
 
+class ConfigurationInvalidCapabilityAdapter(CapabilityAdapter):
+    async def capabilities(self, definition):
+        raise RuntimeError("runtime_configuration_invalid", "invalid runtime configuration", retryable=False)
+
+
 def _definition(**capabilities):
     return AgentDefinition(
         definition_id="definition-1",
@@ -173,11 +177,6 @@ async def test_definition_policy_and_run_state_gate_operations():
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].support is RuntimeSupportLevel.UNSUPPORTED
     assert capabilities.operations[RuntimeOperationId.RUN_STEER_LIVE.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_EVENTS.value].owner is RuntimeOperationOwner.PRODUCT
-
-
-def test_operation_method_mapping_uses_runtime_operation_values():
-    assert OPERATION_METHODS[RuntimeOperationId.RUN_START.value] == "start"
-    assert OPERATION_METHODS[RuntimeOperationId.RUN_APPROVAL_RESPOND.value] == "respond_to_approval"
 
 
 @pytest.mark.asyncio
@@ -320,7 +319,7 @@ async def test_runtime_unavailable_disables_all_product_task_operations():
 
 @pytest.mark.asyncio
 async def test_capability_resolution_preserves_unavailable_runtime_error():
-    resolution = await resolve_capability_resolution(
+    resolution = await resolve_definition_capability_resolution(
         _definition(),
         registry=RuntimeRegistry(adapters=[UnavailableCapabilityAdapter()]),
     )
@@ -339,6 +338,33 @@ async def test_capability_resolution_preserves_unavailable_runtime_error():
     assert envelope["runtime_available"] is False
     assert envelope["error"]["code"] == "runtime_unavailable"
     assert "available" not in envelope
+
+
+@pytest.mark.asyncio
+async def test_configuration_failure_is_not_retryable_runtime_outage():
+    adapter = ConfigurationInvalidCapabilityAdapter()
+    resolution = await resolve_definition_capability_resolution(
+        _definition(supports_long_running_tasks=True), registry=RuntimeRegistry(adapters=[adapter])
+    )
+
+    assert resolution.error["code"] == "runtime_configuration_invalid"
+    assert resolution.error["safe_message"] == "invalid runtime configuration"
+    assert resolution.error["retryable"] is False
+    assert resolution.capabilities.operations[RuntimeOperationId.TASK_START].disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID
+
+
+@pytest.mark.asyncio
+async def test_require_capability_preserves_discovery_failure_classification():
+    with pytest.raises(RuntimeError) as caught:
+        await require_capability(
+            _definition(supports_long_running_tasks=True),
+            RuntimeOperationId.TASK_START,
+            registry=RuntimeRegistry(adapters=[ConfigurationInvalidCapabilityAdapter()]),
+            run=SimpleNamespace(status="running"),
+        )
+
+    assert caught.value.code == "runtime_configuration_invalid"
+    assert caught.value.retryable is False
 
 
 @pytest.mark.asyncio
@@ -364,6 +390,18 @@ async def test_task_start_preserves_run_start_dependency_reason():
     descriptor = capabilities.operations[RuntimeOperationId.TASK_START]
     assert descriptor.enabled is False
     assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_task_start_is_admitted_before_a_runtime_run_exists():
+    definition = _definition(supports_long_running_tasks=True)
+    descriptor = await require_capability(
+        definition,
+        RuntimeOperationId.TASK_START,
+        registry=RuntimeRegistry(adapters=[CapabilityAdapter()]),
+    )
+
+    assert descriptor.enabled is True
 
 
 @pytest.mark.asyncio

@@ -80,9 +80,11 @@ from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideEr
 from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
     capability_envelope,
+    capability_discovery_error,
     deployment_id,
     resolve_deployment_capability_resolution,
-    resolve_capability_resolution,
+    resolve_definition_capability_resolution,
+    resolve_run_capability_resolution,
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
@@ -560,20 +562,28 @@ async def list_agent_workflows():
 async def list_agent_runtimes(response: Response):
     response.headers["Cache-Control"] = "no-store"
     registry = get_runtime_registry()
-    deployments = []
-    for adapter in registry.adapters():
+    adapters = registry.adapters()
+
+    async def resolve(adapter: Any) -> dict[str, Any]:
         runtime_id = deployment_id(adapter)
-        resolution = await resolve_deployment_capability_resolution(adapter)
-        deployments.append(
-            capability_envelope(
-                capabilities=resolution.capabilities,
-                resource="deployment",
-                runtime_id=runtime_id,
-                framework=adapter.framework,
-                builder_id=adapter.builder_id,
-                error=resolution.error,
-            )
+        try:
+            resolution = await resolve_deployment_capability_resolution(adapter)
+            error = resolution.error
+            capabilities = resolution.capabilities
+        except Exception as exc:
+            logger.exception("Runtime deployment discovery failed | runtime_id=%s", runtime_id)
+            error = capability_discovery_error(exc, adapter)
+            capabilities = None
+        return capability_envelope(
+            capabilities=capabilities,
+            resource="deployment",
+            runtime_id=runtime_id,
+            framework=adapter.framework,
+            builder_id=adapter.builder_id,
+            error=error,
         )
+
+    deployments = await asyncio.gather(*(resolve(adapter) for adapter in adapters))
     return {"agent_runtimes": deployments}
 
 
@@ -627,9 +637,7 @@ async def get_agent_workflow_capabilities(workflow_id: str, response: Response):
                 details={"framework": definition.framework, "builder_id": definition.builder_id},
             ).to_dict(),
         )
-    resolution = await resolve_capability_resolution(
-        definition, registry=registry, apply_run_state=False
-    )
+    resolution = await resolve_definition_capability_resolution(definition, registry=registry)
     return capability_envelope(
         capabilities=resolution.capabilities,
         resource="definition",
@@ -765,7 +773,7 @@ async def get_agent_run_capabilities(
         ).to_dict()
         resolution = None
     else:
-        resolution = await resolve_capability_resolution(
+        resolution = await resolve_run_capability_resolution(
             definition, registry=registry, run=run, task=task
         )
     return capability_envelope(

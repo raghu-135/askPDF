@@ -19,7 +19,6 @@ import {
   downloadAgentTaskArtifact,
   listAgentDefinitions,
   getAgentRun,
-  getAgentRunCapabilities,
   getAgentTask,
   getAgentTaskRuns,
   getAgentTaskTodos,
@@ -36,7 +35,6 @@ import {
   type AgentTaskTodo,
   type AgentRunResumeAction,
   type AgentRunDetails,
-  type AgentRuntimeCapabilityResponse,
   type AgentDefinitionCatalogEntry,
   type BuilderTestStreamEnvelope,
 } from '../lib/api';
@@ -48,8 +46,8 @@ import {
   shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
 } from '../lib/deep-research-ui-state';
-import { isCurrentRuntimeCapabilityRequest, isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
-import { withRetry } from '../lib/retry-utils';
+import { isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
+import { useAgentRunCapabilities } from '../lib/use-agent-run-capabilities';
 import {
   deriveConversationSentences,
   type ConversationSentence,
@@ -275,24 +273,24 @@ export default function DeepResearchTaskPanel({
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
   const [definitionId, setDefinitionId] = useState('');
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
-  const [runtimeControlError, setRuntimeControlError] = useState('');
   const [liveTraceEvents, setLiveTraceEvents] = useState<BuilderTestStreamEnvelope[]>([]);
   const [traceLiveRequested, setTraceLiveRequested] = useState(false);
-  const [selectedRunCapabilities, setSelectedRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
-  const [activeTaskCapabilities, setActiveTaskCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
   const liveTraceEventsRef = useRef<BuilderTestStreamEnvelope[]>([]);
   const liveTraceRunDetailsRef = useRef<AgentRunDetails | undefined>(undefined);
-  const capabilityRequestId = useRef(0);
-  const activeCapabilityRequestId = useRef(0);
   const taskContextRef = useRef(selectedTaskId);
   taskContextRef.current = selectedTaskId;
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRun = runs[runIndex] || null;
+  const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
+  const activeCapabilitiesState = useAgentRunCapabilities(task?.active_run_id, threadId, `${task?.status}:${task?.version}`);
+  const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
+  const activeTaskCapabilities = activeCapabilitiesState.capabilities;
+  const runtimeControlError = selectedCapabilitiesState.error || activeCapabilitiesState.error || '';
 
   useEffect(() => {
     setChatPlaybackSourceKey(`deep-research:${selectedTaskId || 'new'}:${selectedRun?.id || 'none'}`);
@@ -477,72 +475,6 @@ export default function DeepResearchTaskPanel({
       source = null;
     };
   }, [onOpenTrace, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task?.status, threadId, traceLiveRequested]);
-
-  useEffect(() => {
-    let active = true;
-    const requestId = capabilityRequestId.current + 1;
-    capabilityRequestId.current = requestId;
-    setSelectedRunCapabilities(null);
-    setRuntimeControlError('');
-    if (!selectedRun) {
-      return () => { active = false; };
-    }
-    void withRetry(() => getAgentRunCapabilities(selectedRun.id, threadId), { maxRetries: 3, baseDelay: 500 })
-      .then((result) => {
-        if (!active || !isCurrentRuntimeCapabilityRequest(requestId, capabilityRequestId.current)) return;
-        if (result.success) {
-          if (!runtimeCapabilityResponseMatchesRun(result.data, selectedRun.id)) {
-            setSelectedRunCapabilities(null);
-            setRuntimeControlError('Run controls are temporarily unavailable. Refresh the run to retry.');
-            return;
-          }
-          setSelectedRunCapabilities(result.data || null);
-          setRuntimeControlError(
-            result.data?.runtime_available
-              ? ''
-              : 'The runtime deployment is unavailable. Run controls will remain disabled until it recovers.',
-          );
-        } else {
-          setSelectedRunCapabilities(null);
-          setRuntimeControlError('Run controls are temporarily unavailable. Refresh the run to retry.');
-        }
-      });
-    return () => { active = false; };
-  }, [
-    selectedRun?.id,
-    selectedRun?.status,
-    selectedRun?.runtime_binding_status,
-    selectedRun?.pending_interrupt?.interrupt_id,
-    selectedRun?.pending_interrupt?.status,
-    selectedRun?.pending_interrupt?.resume_version,
-    selectedRun?.pending_interrupt?.response_operation,
-    task?.version,
-    threadId,
-  ]);
-
-  useEffect(() => {
-    let active = true;
-    const requestId = activeCapabilityRequestId.current + 1;
-    activeCapabilityRequestId.current = requestId;
-    setActiveTaskCapabilities(null);
-    const activeRunId = task?.active_run_id;
-    if (!activeRunId) {
-      return () => { active = false; };
-    }
-    void withRetry(() => getAgentRunCapabilities(activeRunId, threadId), { maxRetries: 3, baseDelay: 500 })
-      .then((result) => {
-        if (!active || !isCurrentRuntimeCapabilityRequest(requestId, activeCapabilityRequestId.current)) return;
-        if (result.success && runtimeCapabilityResponseMatchesRun(result.data, activeRunId)) {
-          setActiveTaskCapabilities(result.data || null);
-          if (!result.data?.runtime_available) {
-            setRuntimeControlError('The runtime deployment is unavailable. Run controls will remain disabled until it recovers.');
-          }
-        } else {
-          setActiveTaskCapabilities(null);
-        }
-      });
-    return () => { active = false; };
-  }, [task?.active_run_id, task?.status, task?.version, threadId]);
 
   useEffect(() => {
     if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;

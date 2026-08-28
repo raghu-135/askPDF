@@ -128,6 +128,7 @@ class RuntimeCapabilityDisabledReason(str, Enum):
     RUNTIME_CAPABILITY_UNSUPPORTED = "runtime_capability_unsupported"
     RUNTIME_CAPABILITY_UNAVAILABLE = "runtime_capability_unavailable"
     RUNTIME_CONFIGURATION_INVALID = "runtime_configuration_invalid"
+    RUNTIME_DISABLED = "runtime_disabled"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     DEFINITION_CAPABILITY_UNAVAILABLE = "definition_capability_unavailable"
     DEFINITION_POLICY = "definition_policy"

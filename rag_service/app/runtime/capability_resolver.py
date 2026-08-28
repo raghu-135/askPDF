@@ -97,30 +97,6 @@ CHECKPOINT_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
 })
 
-# Operation-to-method mapping remains useful for contract tests and adapter
-# documentation; admission is based on explicit registration below.
-OPERATION_METHODS = {
-    RuntimeOperationId.RUN_START: "start",
-    RuntimeOperationId.RUN_GET: "get_run",
-    RuntimeOperationId.RUN_LIST: "list_runs",
-    RuntimeOperationId.RUN_WAIT: "wait",
-    RuntimeOperationId.RUN_RESUME: "resume",
-    RuntimeOperationId.RUN_CANCEL: "cancel",
-    RuntimeOperationId.RUN_SEND_FOLLOWUP: "send_followup",
-    RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT: "interrupt_with_input",
-    RuntimeOperationId.RUN_STEER_LIVE: "steer_live",
-    RuntimeOperationId.RUN_INSPECT_STATE: "inspect_state",
-    RuntimeOperationId.RUN_UPDATE_STATE: "update_state",
-    RuntimeOperationId.RUN_REPLAY: "replay",
-    RuntimeOperationId.RUN_FORK: "fork",
-    RuntimeOperationId.RUN_APPROVAL_RESPOND: "respond_to_approval",
-    RuntimeOperationId.SUBAGENT_LIST: "list_subagents",
-    RuntimeOperationId.SUBAGENT_SEND: "send_to_subagent",
-    RuntimeOperationId.SUBAGENT_CANCEL: "cancel_subagent",
-    RuntimeOperationId.ARTIFACT_LIST: "list_artifacts",
-    RuntimeOperationId.RUN_CONTINUATION_CLEANUP: "delete_continuation",
-}
-
 def deployment_id(adapter: Any) -> str:
     return f"{adapter.framework}:{adapter.builder_id}"
 
@@ -185,13 +161,23 @@ def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabi
     return replace(capabilities, operations=operations)
 
 
+def _failure_disabled_reason(error: Mapping[str, Any]) -> RuntimeCapabilityDisabledReason:
+    code = str(error.get("code") or "")
+    if code == RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID.value:
+        return RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID
+    if code == RuntimeCapabilityDisabledReason.RUNTIME_DISABLED.value:
+        return RuntimeCapabilityDisabledReason.RUNTIME_DISABLED
+    return RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
 def _unavailable_product_capabilities(adapter: Any, error: Mapping[str, Any]) -> RuntimeCapabilities:
+    disabled_reason = _failure_disabled_reason(error)
     operations = product_operation_descriptors()
     for operation in TASK_ONLY_OPERATIONS | {RuntimeOperationId.ARTIFACT_LIST}:
         descriptor = operations.get(operation)
         if descriptor is not None:
             operations[operation] = _disabled(
-                descriptor, RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+                descriptor, disabled_reason
             )
     return RuntimeCapabilities(
         operations=operations,
@@ -200,6 +186,9 @@ def _unavailable_product_capabilities(adapter: Any, error: Mapping[str, Any]) ->
             "builder_id": adapter.builder_id,
             "runtime_available": False,
             "discovery_error": error.get("code") or "runtime_unavailable",
+            "discovery_safe_message": error.get("safe_message") or error.get("message"),
+            "discovery_retryable": bool(error.get("retryable")),
+            "discovery_details": dict(error.get("details") or {}),
         },
     )
 
@@ -279,23 +268,41 @@ async def _reconciled_capabilities(
     return replace(capabilities, operations=operations)
 
 
+async def resolve_definition_capability_resolution(
+    definition: AgentDefinition,
+    *,
+    registry: RuntimeRegistry,
+) -> CapabilityResolution:
+    adapter = registry.get(definition)
+    try:
+        capabilities = await _reconciled_capabilities(adapter, definition)
+    except RuntimeError as exc:
+        error = capability_discovery_error(exc, adapter)
+        return CapabilityResolution(_unavailable_product_capabilities(adapter, error), error, False)
+    artifact_list = capabilities.operations.get(RuntimeOperationId.ARTIFACT_LIST)
+    if artifact_list is not None:
+        capabilities = replace(
+            capabilities,
+            operations={
+                **capabilities.operations,
+                RuntimeOperationId.ARTIFACT_LIST: _disabled(
+                    artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+                ),
+            },
+        )
+    return CapabilityResolution(
+        capabilities,
+        _deployment_error(capabilities),
+        capabilities.deployment.get("runtime_available", True) is not False,
+    )
+
+
 async def capabilities_for_definition(
     definition: AgentDefinition,
     *,
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
-    capabilities = (await resolve_capability_resolution(
-        definition,
-        registry=registry,
-        apply_run_state=False,
-    )).capabilities
-    operations = dict(capabilities.operations)
-    artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
-    if artifact_list is not None:
-        operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
-            artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
-        )
-    return replace(capabilities, operations=operations)
+    return (await resolve_definition_capability_resolution(definition, registry=registry)).capabilities
 
 
 async def resolve_deployment_capability_resolution(
@@ -373,23 +380,22 @@ async def resolve_capabilities(
     task: Any | None = None,
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
-    return (await resolve_capability_resolution(
-        definition,
-        registry=registry,
-        run=run,
-        task=task,
-        include_resolved_response=include_resolved_response,
-    )).capabilities
+    resolution = await (
+        resolve_run_capability_resolution(definition, registry=registry, run=run, task=task,
+                                          include_resolved_response=include_resolved_response)
+        if run is not None
+        else resolve_definition_capability_resolution(definition, registry=registry)
+    )
+    return resolution.capabilities
 
 
-async def resolve_capability_resolution(
+async def resolve_run_capability_resolution(
     definition: AgentDefinition,
     *,
     registry: RuntimeRegistry,
-    run: Any | None = None,
+    run: Any,
     task: Any | None = None,
     include_resolved_response: bool = False,
-    apply_run_state: bool = True,
 ) -> CapabilityResolution:
     adapter = registry.get(definition)
     try:
@@ -408,30 +414,6 @@ async def resolve_capability_resolution(
         )
         raise
     operations = dict(capabilities.operations)
-    if run is None and apply_run_state:
-        for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
-            if operation in operations:
-                operations[operation] = _disabled(
-                    operations[operation], RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
-                )
-        artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
-        if artifact_list is not None:
-            operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
-                artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
-            )
-        capabilities = replace(capabilities, operations=operations)
-        return CapabilityResolution(
-            capabilities,
-            _deployment_error(capabilities),
-            runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
-        )
-
-    if run is None:
-        return CapabilityResolution(
-            capabilities,
-            _deployment_error(capabilities),
-            runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
-        )
 
     if task is None:
         artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
@@ -539,11 +521,17 @@ async def resolve_capability_resolution(
 def _deployment_error(capabilities: RuntimeCapabilities) -> dict[str, Any] | None:
     if capabilities.deployment.get("runtime_available") is not False:
         return None
+    deployment = capabilities.deployment
+    configuration_error = deployment.get("configuration_error")
+    code = str(
+        deployment.get("discovery_error")
+        or (RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID.value if configuration_error else "runtime_unavailable")
+    )
     return {
-        "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
-        "safe_message": "Agent runtime deployment is unavailable",
-        "retryable": True,
-        "details": dict(capabilities.deployment),
+        "code": code,
+        "safe_message": str(deployment.get("discovery_safe_message") or configuration_error or "Agent runtime deployment is unavailable"),
+        "retryable": bool(deployment.get("discovery_retryable", False if configuration_error else True)),
+        "details": dict(deployment.get("discovery_details") or deployment),
     }
 
 
@@ -559,23 +547,37 @@ async def require_capability(
     """Resolve one operation and fail before an adapter call when unavailable."""
 
     operation_id = operation if isinstance(operation, RuntimeOperationId) else RuntimeOperationId(operation)
-    resolution = await resolve_capability_resolution(
-        definition,
-        registry=registry,
-        run=run,
-        task=task,
-        include_resolved_response=include_resolved_response,
-    )
+    if run is None:
+        resolution = await resolve_definition_capability_resolution(
+            definition,
+            registry=registry,
+        )
+    else:
+        resolution = await resolve_run_capability_resolution(
+            definition,
+            registry=registry,
+            run=run,
+            task=task,
+            include_resolved_response=include_resolved_response,
+        )
     capabilities = resolution.capabilities
     descriptor = capabilities.operations.get(operation_id)
     if not resolution.runtime_available:
+        error = dict(resolution.error or {})
+        disabled_reason = str(
+            error.get("code")
+            or RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE.value
+        )
         raise RuntimeError.capability_unavailable(
             operation_id=operation_id.value,
             framework=definition.framework,
             builder_id=definition.builder_id,
             support_level=(descriptor.support.value if descriptor is not None else RuntimeSupportLevel.CONDITIONAL.value),
-            disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE.value,
-            retryable=True,
+            disabled_reason=disabled_reason,
+            retryable=bool(error.get("retryable", False)),
+            code=str(error.get("code") or "runtime_capability_unavailable"),
+            safe_message=str(error.get("safe_message") or "The runtime deployment is unavailable"),
+            details=dict(error.get("details") or {}),
         )
     if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         raise RuntimeError.capability_unsupported(
@@ -583,6 +585,15 @@ async def require_capability(
             framework=definition.framework,
             builder_id=definition.builder_id,
             explanation="The runtime does not provide this operation",
+        )
+    if run is None and operation_id in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
+        raise RuntimeError.capability_unavailable(
+            operation_id=operation_id.value,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            support_level=descriptor.support.value,
+            disabled_reason=RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED.value,
+            retryable=False,
         )
     if not descriptor.enabled:
         raise RuntimeError.capability_unavailable(
@@ -593,7 +604,9 @@ async def require_capability(
             disabled_reason=(
                 descriptor.disabled_reason or RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNAVAILABLE
             ).value,
-            retryable=descriptor.disabled_reason is RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE,
+            retryable=descriptor.disabled_reason in {
+                RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE,
+            },
         )
     return descriptor
 

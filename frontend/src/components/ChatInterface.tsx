@@ -46,7 +46,6 @@ import {
     getPromptPreview,
     listAgentWorkflows,
     getAgentRun,
-    getAgentRunCapabilities,
     listThreadAgentRuns,
     AgentRunDetails,
     AgentTraceRefs,
@@ -61,11 +60,12 @@ import {
     streamAgentWorkflowBuilderTest,
     type Project,
     type ThreadChatResponse,
-    type AgentRuntimeCapabilityResponse,
 } from '../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
+import { useAgentRunCapabilities } from '../lib/use-agent-run-capabilities';
+import type { AgentRuntimeCapabilityResponse } from '../lib/api';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
 import {
@@ -742,14 +742,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const workspaceTraceMessageIdRef = useRef<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
-    const [liveRunCapabilities, setLiveRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
+    const liveRunCapabilities = useAgentRunCapabilities(
+        liveExecution?.runId,
+        activeThread?.id,
+        `${liveExecution?.canceling}:${liveExecution?.running}:${testRuntime}`,
+    ).capabilities;
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
-    const [humanReviewCapabilities, setHumanReviewCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
+    const humanReviewCapabilities = useAgentRunCapabilities(
+        pendingHumanReview?.runId,
+        activeThread?.id,
+        `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}`,
+    ).capabilities;
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -761,40 +769,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
 
-    useEffect(() => {
-        let active = true;
-        const runId = pendingHumanReview?.runId;
-        setHumanReviewCapabilities(null);
-        if (!runId || !activeThread) {
-            return () => { active = false; };
-        }
-        void withRetry(() => getAgentRunCapabilities(runId, activeThread.id), { maxRetries: 3, baseDelay: 500 })
-            .then((result) => {
-                if (active) setHumanReviewCapabilities(result.success ? result.data || null : null);
-            });
-        return () => { active = false; };
-    }, [
-        activeThread?.id,
-        pendingHumanReview?.interrupt.interrupt_id,
-        pendingHumanReview?.interrupt.status,
-        pendingHumanReview?.interrupt.resume_version,
-        pendingHumanReview?.interrupt.response_operation,
-        pendingHumanReview?.runId,
-    ]);
-
-    useEffect(() => {
-        let active = true;
-        const runId = liveExecution?.runId;
-        setLiveRunCapabilities(null);
-        if (!runId || !activeThread) {
-            return () => { active = false; };
-        }
-        void withRetry(() => getAgentRunCapabilities(runId, activeThread.id), { maxRetries: 3, baseDelay: 500 })
-            .then((result) => {
-                if (active) setLiveRunCapabilities(result.success ? result.data || null : null);
-            });
-        return () => { active = false; };
-    }, [activeThread?.id, liveExecution?.canceling, liveExecution?.runId, liveExecution?.running, testRuntime]);
     const messageVirtualizer = useVirtualizer({
         count: messages.length,
         getScrollElement: () => messageListRef.current,

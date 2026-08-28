@@ -92,7 +92,7 @@ async def test_continuation_cleanup_does_not_treat_unavailable_as_cleaned(monkey
     monkeypatch.setattr(cleanup, "adapter_for_definition", lambda definition: adapter)
     monkeypatch.setattr(
         cleanup,
-        "resolve_capability_resolution",
+        "resolve_run_capability_resolution",
         AsyncMock(return_value=SimpleNamespace(
             capabilities=RuntimeCapabilities(),
             error={"code": "runtime_unavailable"},
@@ -129,7 +129,7 @@ async def test_continuation_cleanup_accepts_opaque_binding_types(monkeypatch) ->
     monkeypatch.setattr(cleanup, "adapter_for_definition", lambda definition: adapter)
     monkeypatch.setattr(
         cleanup,
-        "resolve_capability_resolution",
+        "resolve_run_capability_resolution",
         AsyncMock(return_value=SimpleNamespace(
             capabilities=capabilities,
             error=None,

@@ -5,14 +5,14 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
-import { getAgentRun, getAgentRunCapabilities, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentRuntimeCapabilityResponse, type AgentTraceRefs } from '../../lib/api';
+import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
-import { withRetry } from '../../lib/retry-utils';
+import { useAgentRunCapabilities } from '../../lib/use-agent-run-capabilities';
 
 function AgentRunDebugPanel({
   runId,
@@ -50,8 +50,12 @@ function AgentRunDebugPanel({
   const traceRefreshAttemptedRef = useRef(new Map<string, number>());
   const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
   const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
-  const [runCapabilities, setRunCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
   const runDetails = refreshedRunDetails?.id === runId ? refreshedRunDetails : providedRunDetails;
+  const runCapabilities = useAgentRunCapabilities(
+    runId,
+    runDetails?.thread_id || threadId,
+    `${runDetails?.status}:${runDetails?.runtime_binding_status}:${runDetails?.pending_interrupt?.interrupt_id}:${runDetails?.pending_interrupt?.status}:${runDetails?.pending_interrupt?.resume_version}`,
+  ).capabilities;
   const debug = runDetails?.debug;
   const retainedErrorMessage = runDetails ? getRetainedRunErrorMessage(runDetails) : null;
   const pendingInterrupt = runDetails?.pending_interrupt;
@@ -121,19 +125,6 @@ function AgentRunDebugPanel({
       active = false;
     };
   }, [onRunDetailsChange, runDetails, runId, threadId]);
-
-  useEffect(() => {
-    let active = true;
-    const threadId = runDetails?.thread_id;
-    setRunCapabilities(null);
-    if (!threadId) return () => { active = false; };
-    void withRetry(() => getAgentRunCapabilities(runId, threadId), { maxRetries: 3, baseDelay: 500 })
-      .then((result) => {
-        if (!active) return;
-        setRunCapabilities(result.success ? result.data || null : null);
-      });
-    return () => { active = false; };
-  }, [pendingInterrupt?.interrupt_id, pendingInterrupt?.status, pendingInterrupt?.resume_version, pendingInterrupt?.response_operation, runDetails?.status, runDetails?.runtime_binding_status, runDetails?.thread_id, runId]);
 
   useEffect(() => {
     if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;

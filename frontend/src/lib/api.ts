@@ -1389,6 +1389,7 @@ export type RuntimeCapabilityDisabledReason =
   | 'runtime_capability_unsupported'
   | 'runtime_capability_unavailable'
   | 'runtime_configuration_invalid'
+  | 'runtime_disabled'
   | 'runtime_unavailable'
   | 'definition_capability_unavailable'
   | 'definition_policy'
