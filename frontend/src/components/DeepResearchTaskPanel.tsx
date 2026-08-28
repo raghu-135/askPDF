@@ -408,6 +408,13 @@ export default function DeepResearchTaskPanel({
   }, [selectedRun?.id, selectedTaskId, threadId]);
 
   useEffect(() => {
+    if (!selectedTaskId || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) return;
+    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired'];
+    if (!terminalStatuses.includes(String(task?.status)) && !terminalStatuses.includes(String(selectedRun.status))) return;
+    void refreshTimeline(selectedTaskId, selectedRun.id).catch((value) => setError(String(value)));
+  }, [refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status]);
+
+  useEffect(() => {
     if (!traceLiveRequested || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) {
       liveTraceEventsRef.current = [];
       setLiveTraceEvents([]);
@@ -446,13 +453,15 @@ export default function DeepResearchTaskPanel({
             threadId,
             messageId: `agent-task:${selectedTaskId}:${runId}`,
             label: `Deep Research · attempt ${selectedRun.attempt}`,
-            status: ['run.completed', 'run.failed', 'run.cancelled'].includes(kind) ? kind.slice(4) : 'running',
+            status: ['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind) ? kind.slice(4) : 'running',
             liveTraceView,
             runDetails: liveTraceRunDetailsRef.current,
-            running: !['run.completed', 'run.failed', 'run.cancelled'].includes(kind),
+            running: !['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind),
           });
         }
-        if (['run.completed', 'run.failed', 'run.cancelled'].includes(kind)) {
+        if (['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind)) {
+          void refreshTimeline(selectedTaskId, runId).catch((value) => setError(String(value)));
+          void refresh().catch((value) => setError(String(value)));
           active = false;
           // The terminal event is the end of the live projection. Stop the
           // subscription immediately; task polling will provide the retained
@@ -474,7 +483,7 @@ export default function DeepResearchTaskPanel({
       source?.close();
       source = null;
     };
-  }, [onOpenTrace, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task?.status, threadId, traceLiveRequested]);
+  }, [onOpenTrace, refresh, refreshTimeline, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task?.status, threadId, traceLiveRequested]);
 
   useEffect(() => {
     if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;

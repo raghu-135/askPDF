@@ -126,3 +126,25 @@ async def test_definition_and_run_routes_return_their_authoritative_envelopes(mo
     assert run_payload["resource"] == "run"
     assert run_payload["run_id"] == "run-1"
     assert run_payload["runtime_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_state_route_is_owned_and_capability_gated(monkeypatch) -> None:
+    run = SimpleNamespace(id="run-1", thread_id="thread-1")
+
+    class FakeRepository:
+        async def get_run(self, run_id):
+            return run if run_id == run.id else None
+
+    class FakeService:
+        async def inspect_agent_run(self, value):
+            assert value is run
+            return {"checkpoint": "state-1"}
+
+    monkeypatch.setattr(agent_workflows_api, "AgentWorkflowRepository", FakeRepository)
+    monkeypatch.setattr(agent_workflows_api, "AgentRunService", FakeService)
+    monkeypatch.setattr(agent_workflows_api, "get_thread", lambda thread_id: asyncio.sleep(0, result=True))
+
+    payload = await agent_workflows_api.get_agent_run_state("run-1", "thread-1")
+
+    assert payload == {"run_id": "run-1", "state": {"checkpoint": "state-1"}}

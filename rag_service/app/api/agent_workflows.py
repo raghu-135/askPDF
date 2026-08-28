@@ -789,6 +789,19 @@ async def get_agent_run_capabilities(
     )
 
 
+@router.get("/agent-runs/{run_id}/state")
+async def get_agent_run_state(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+):
+    run = await _owned_run_for_operation(run_id, thread_id)
+    try:
+        state = await AgentRunService().inspect_agent_run(run)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    return {"run_id": run.id, "state": state}
+
+
 async def _owned_run_for_operation(run_id: str, thread_id: str):
     if not await get_thread(thread_id):
         raise HTTPException(status_code=404, detail="Agent run not found")

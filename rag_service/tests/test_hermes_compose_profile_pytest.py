@@ -52,6 +52,20 @@ def test_pinned_contract_copies_match_authoritative_module():
     assert f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}" in (root / "hermes_runtime/config.yaml").read_text()
 
 
+def test_control_plane_and_gateway_pinned_contracts_are_identical():
+    from app.runtime import hermes_pinned_contract as control_plane
+    from hermes_runtime import pinned_contract as gateway
+
+    def exported(module):
+        return {
+            name: value
+            for name, value in vars(module).items()
+            if name.startswith("HERMES_")
+        }
+
+    assert exported(control_plane) == exported(gateway)
+
+
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     compose = _compose("docker-compose.runtime-integration.yml")
     assert "hermes-fake" not in compose["services"]

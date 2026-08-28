@@ -15,12 +15,17 @@ from app.runtime.contracts import (
     CANONICAL_RUNTIME_EVENT_KINDS,
     ContinuationBinding,
     RuntimeCapabilityDisabledReason,
+    RuntimeCapabilitySemantics,
+    RuntimeCancellationMode,
     RuntimeCapabilities,
+    RuntimeConfirmationMode,
+    RuntimeFeatureId,
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeSupportLevel,
+    RuntimeTerminalState,
     RuntimeApprovalResponse,
     RuntimeSteeringInput,
     RuntimeValidationIssue,
@@ -145,8 +150,8 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
             raw_terminal_states = raw_descriptor.get("terminal_states", ())
             if not isinstance(raw_modes, (list, tuple)) or not isinstance(raw_terminal_states, (list, tuple)):
                 raise ValueError("modes and terminal_states must be arrays")
-            modes = tuple(raw_modes)
-            terminal_states = tuple(raw_terminal_states)
+            modes = tuple(RuntimeCancellationMode(item) for item in raw_modes)
+            terminal_states = tuple(RuntimeTerminalState(item) for item in raw_terminal_states)
             if not isinstance(enabled, bool):
                 raise ValueError("enabled must be a bool")
             if not all(isinstance(item, str) and item for item in modes + terminal_states):
@@ -156,10 +161,8 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 if disabled_reason is not None
                 else None
             )
-            for field_name in ("semantics", "confirmation"):
-                field_value = raw_descriptor.get(field_name)
-                if field_value is not None and not isinstance(field_value, str):
-                    raise ValueError(f"{field_name} must be a string or null")
+            semantics = RuntimeCapabilitySemantics(raw_descriptor["semantics"]) if raw_descriptor.get("semantics") is not None else None
+            confirmation = RuntimeConfirmationMode(raw_descriptor["confirmation"]) if raw_descriptor.get("confirmation") is not None else None
             for field_name in ("preserves_run_id", "preserves_session_id"):
                 field_value = raw_descriptor.get(field_name)
                 if field_value is not None and not isinstance(field_value, bool):
@@ -173,8 +176,8 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 enabled=enabled,
                 disabled_reason=disabled_reason,
                 modes=modes,
-                semantics=raw_descriptor.get("semantics"),
-                confirmation=raw_descriptor.get("confirmation"),
+                semantics=semantics,
+                confirmation=confirmation,
                 terminal_states=terminal_states,
                 preserves_run_id=raw_descriptor.get("preserves_run_id"),
                 preserves_session_id=raw_descriptor.get("preserves_session_id"),
@@ -186,7 +189,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
     raw_features = value.get("features") or {}
     if not isinstance(raw_features, Mapping):
         raise ValueError("runtime capabilities features must be an object")
-    features: dict[str, RuntimeFeatureDescriptor] = {}
+    features: dict[RuntimeFeatureId, RuntimeFeatureDescriptor] = {}
     for feature, raw_descriptor in raw_features.items():
         if not isinstance(feature, str) or not feature.strip() or not isinstance(raw_descriptor, Mapping):
             raise ValueError(f"invalid runtime feature descriptor for {feature!r}")
@@ -201,13 +204,12 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 if disabled_reason is not None
                 else None
             )
-            semantics = raw_descriptor.get("semantics")
-            if semantics is not None and not isinstance(semantics, str):
-                raise ValueError("semantics must be a string or null")
+            feature_id = RuntimeFeatureId(feature)
+            semantics = RuntimeCapabilitySemantics(raw_descriptor["semantics"]) if raw_descriptor.get("semantics") is not None else None
             details = raw_descriptor.get("details") or {}
             if not isinstance(details, Mapping):
                 raise ValueError("details must be an object")
-            features[feature] = RuntimeFeatureDescriptor(
+            features[feature_id] = RuntimeFeatureDescriptor(
                 support=support,
                 enabled=enabled,
                 disabled_reason=disabled_reason,

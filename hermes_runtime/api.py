@@ -562,7 +562,7 @@ def create_app() -> FastAPI:
                         "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
                         "modes": ["cooperative"],
-                        "confirmation": "asynchronous",
+                        "confirmation": "bounded",
                         "terminal_states": ["cancelled"],
                     },
                     "run.continuation.cleanup": {

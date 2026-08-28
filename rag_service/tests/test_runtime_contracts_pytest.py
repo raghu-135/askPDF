@@ -20,6 +20,10 @@ from app.runtime.contracts import (
     RuntimeApprovalResponse,
     RuntimeSteeringInput,
     RuntimeCapabilities,
+    RuntimeCapabilitySemantics,
+    RuntimeFeatureDescriptor,
+    RuntimeFeatureId,
+    RuntimeSupportLevel,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
@@ -66,7 +70,7 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
             support=RuntimeSupportLevel.CONDITIONAL,
             owner=RuntimeOperationOwner.RUNTIME,
             enabled=True,
-            semantics="resume_from_interrupt",
+        semantics=RuntimeCapabilitySemantics.RESUME_FROM_INTERRUPT,
         ),
     })
 
@@ -337,3 +341,12 @@ def test_runtime_operations_remain_topology_optional():
     assert kind == "operation.started"
     assert payload["operation_id"] == "hermes_session"
     assert "topology_ref" not in payload
+
+
+def test_feature_identifiers_and_operation_metadata_are_closed_vocabularies():
+    descriptor = RuntimeFeatureDescriptor(RuntimeSupportLevel.NATIVE, True)
+    assert RuntimeCapabilities(features={RuntimeFeatureId.TOOLS: descriptor}).to_dict()["features"] == {
+        "tools": {"support": "native", "enabled": True, "disabled_reason": None}
+    }
+    with pytest.raises(ValueError, match="RuntimeFeatureId"):
+        RuntimeCapabilities(features={"tools": descriptor})

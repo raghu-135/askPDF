@@ -26,6 +26,7 @@ class RuntimeEventKind(str, Enum):
     RUN_PAUSED = "run.paused"
     RUN_RESUMED = "run.resumed"
     RUN_COMPLETED = "run.completed"
+    RUN_CLARIFICATION = "run.clarification"
     RUN_FAILED = "run.failed"
     RUN_CANCEL_REQUESTED = "run.cancel_requested"
     RUN_CANCELLED = "run.cancelled"
@@ -72,6 +73,7 @@ class RuntimeEventKind(str, Enum):
 CANONICAL_RUNTIME_EVENT_KINDS = frozenset(item.value for item in RuntimeEventKind) | RUNTIME_OPERATION_EVENT_KINDS
 TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
     RuntimeEventKind.RUN_COMPLETED.value,
+    RuntimeEventKind.RUN_CLARIFICATION.value,
     RuntimeEventKind.RUN_FAILED.value,
     RuntimeEventKind.RUN_CANCELLED.value,
 })
@@ -117,6 +119,55 @@ class RuntimeSupportLevel(str, Enum):
     EMULATED = "emulated"
     CONDITIONAL = "conditional"
     UNSUPPORTED = "unsupported"
+
+
+class RuntimeFeatureId(str, Enum):
+    PLANNING = "planning"
+    PARALLEL_DISPATCH = "parallel_dispatch"
+    ARTIFACTS = "artifacts"
+    SUBAGENT_ORCHESTRATION = "subagent_orchestration"
+    MEMORY = "memory"
+    TOOLS = "tools"
+    DELEGATION = "delegation"
+    SKILLS = "skills"
+
+
+class RuntimeCapabilitySemantics(str, Enum):
+    PERSISTED_PRODUCT_EVENT_JOURNAL = "persisted_product_event_journal"
+    PRODUCT_RUN_INSPECTION = "product_run_inspection"
+    PRODUCT_RUN_LISTING = "product_run_listing"
+    PRODUCT_TASK_ARTIFACT_LISTING = "product_task_artifact_listing"
+    PRODUCT_TASK_START = "product_task_start"
+    PRODUCT_TASK_PAUSE = "product_task_pause"
+    PRODUCT_TASK_RESUME = "product_task_resume"
+    PRODUCT_TASK_CANCEL = "product_task_cancel"
+    PRODUCT_TASK_RETRY = "product_task_retry"
+    RESUME_FROM_INTERRUPT = "resume_from_interrupt"
+    CHECKPOINT_STATE_INSPECTION = "checkpoint_state_inspection"
+    CHECKPOINT_BOUNDARY_UPDATE = "checkpoint_boundary_update"
+    CHECKPOINT_THREAD_CLEANUP = "checkpoint_thread_cleanup"
+    DEFINITION_PLANNER_NODES = "definition_planner_nodes"
+    DEFINITION_PARALLEL_DISPATCH = "definition_parallel_dispatch"
+    DEFINITION_ARTIFACT_POLICY = "definition_artifact_policy"
+    PRODUCT_MANAGED_SUBAGENTS = "product_managed_subagents"
+    DEFINITION_TOOL_POLICY = "definition_tool_policy"
+
+
+class RuntimeCancellationMode(str, Enum):
+    INTERRUPT = "interrupt"
+    COOPERATIVE = "cooperative"
+
+
+class RuntimeConfirmationMode(str, Enum):
+    ASYNCHRONOUS = "asynchronous"
+    BOUNDED = "bounded"
+
+
+class RuntimeTerminalState(str, Enum):
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class RuntimeOperationOwner(str, Enum):
@@ -251,10 +302,10 @@ class RuntimeOperationDescriptor:
     owner: RuntimeOperationOwner
     enabled: bool
     disabled_reason: Optional[RuntimeCapabilityDisabledReason] = None
-    modes: tuple[str, ...] = ()
-    semantics: Optional[str] = None
-    confirmation: Optional[str] = None
-    terminal_states: tuple[str, ...] = ()
+    modes: tuple[RuntimeCancellationMode, ...] = ()
+    semantics: Optional[RuntimeCapabilitySemantics] = None
+    confirmation: Optional[RuntimeConfirmationMode] = None
+    terminal_states: tuple[RuntimeTerminalState, ...] = ()
     preserves_run_id: Optional[bool] = None
     preserves_session_id: Optional[bool] = None
     requires_runtime_binding: bool = False
@@ -276,12 +327,18 @@ class RuntimeOperationDescriptor:
             raise ValueError("disabled_reason must be a RuntimeCapabilityDisabledReason")
         if self.support is RuntimeSupportLevel.UNSUPPORTED and self.enabled:
             raise ValueError("unsupported operation descriptors cannot be enabled")
-        for values, field_name in ((self.modes, "modes"), (self.terminal_states, "terminal_states")):
-            if not isinstance(values, tuple) or not all(isinstance(item, str) and item for item in values):
-                raise ValueError(f"{field_name} must contain non-empty strings")
-        for value, field_name in ((self.semantics, "semantics"), (self.confirmation, "confirmation")):
-            if value is not None and not isinstance(value, str):
-                raise ValueError(f"{field_name} must be a string or null")
+        for values, expected, field_name in (
+            (self.modes, RuntimeCancellationMode, "modes"),
+            (self.terminal_states, RuntimeTerminalState, "terminal_states"),
+        ):
+            if not isinstance(values, tuple) or not all(isinstance(item, expected) for item in values):
+                raise ValueError(f"{field_name} must contain typed enum values")
+        for value, expected, field_name in (
+            (self.semantics, RuntimeCapabilitySemantics, "semantics"),
+            (self.confirmation, RuntimeConfirmationMode, "confirmation"),
+        ):
+            if value is not None and not isinstance(value, expected):
+                raise ValueError(f"{field_name} must be a typed enum value or null")
         for value, field_name in ((self.preserves_run_id, "preserves_run_id"), (self.preserves_session_id, "preserves_session_id")):
             if value is not None and not isinstance(value, bool):
                 raise ValueError(f"{field_name} must be a bool or null")
@@ -296,13 +353,13 @@ class RuntimeOperationDescriptor:
             "disabled_reason": self.disabled_reason.value if self.disabled_reason else None,
         }
         if self.modes:
-            value["modes"] = list(self.modes)
+            value["modes"] = [item.value for item in self.modes]
         if self.semantics is not None:
-            value["semantics"] = self.semantics
+            value["semantics"] = self.semantics.value
         if self.confirmation is not None:
-            value["confirmation"] = self.confirmation
+            value["confirmation"] = self.confirmation.value
         if self.terminal_states:
-            value["terminal_states"] = list(self.terminal_states)
+            value["terminal_states"] = [item.value for item in self.terminal_states]
         if self.preserves_run_id is not None:
             value["preserves_run_id"] = self.preserves_run_id
         if self.preserves_session_id is not None:
@@ -319,7 +376,7 @@ class RuntimeFeatureDescriptor:
     support: RuntimeSupportLevel
     enabled: bool
     disabled_reason: Optional[RuntimeCapabilityDisabledReason] = None
-    semantics: Optional[str] = None
+    semantics: Optional[RuntimeCapabilitySemantics] = None
     details: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -337,8 +394,8 @@ class RuntimeFeatureDescriptor:
             raise ValueError("disabled_reason must be a RuntimeCapabilityDisabledReason")
         if self.support is RuntimeSupportLevel.UNSUPPORTED and self.enabled:
             raise ValueError("unsupported feature descriptors cannot be enabled")
-        if self.semantics is not None and not isinstance(self.semantics, str):
-            raise ValueError("semantics must be a string or null")
+        if self.semantics is not None and not isinstance(self.semantics, RuntimeCapabilitySemantics):
+            raise ValueError("semantics must be a RuntimeCapabilitySemantics value or null")
 
     def to_dict(self) -> Dict[str, Any]:
         value: Dict[str, Any] = {
@@ -347,7 +404,7 @@ class RuntimeFeatureDescriptor:
             "disabled_reason": self.disabled_reason.value if self.disabled_reason else None,
         }
         if self.semantics is not None:
-            value["semantics"] = self.semantics
+            value["semantics"] = self.semantics.value
         if self.details:
             value["details"] = dict(self.details)
         return value
@@ -356,7 +413,7 @@ class RuntimeFeatureDescriptor:
 @dataclass(frozen=True)
 class RuntimeCapabilities:
     operations: Mapping[RuntimeOperationId, RuntimeOperationDescriptor] = field(default_factory=dict)
-    features: Mapping[str, RuntimeFeatureDescriptor] = field(default_factory=dict)
+    features: Mapping[RuntimeFeatureId, RuntimeFeatureDescriptor] = field(default_factory=dict)
     deployment: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -366,8 +423,8 @@ class RuntimeCapabilities:
             if not isinstance(descriptor, RuntimeOperationDescriptor):
                 raise TypeError("capability operations must contain RuntimeOperationDescriptor values")
         for feature, descriptor in self.features.items():
-            if not isinstance(feature, str) or not feature.strip():
-                raise ValueError("capability feature identifiers must be non-empty strings")
+            if not isinstance(feature, RuntimeFeatureId):
+                raise ValueError("capability feature identifiers must be RuntimeFeatureId values")
             if not isinstance(descriptor, RuntimeFeatureDescriptor):
                 raise TypeError("capability features must contain RuntimeFeatureDescriptor values")
 
@@ -379,7 +436,7 @@ class RuntimeCapabilities:
                 for operation, descriptor in ordered_operations
             },
             "features": {
-                str(feature): descriptor.to_dict()
+                feature.value: descriptor.to_dict()
                 for feature, descriptor in sorted(self.features.items(), key=lambda item: item[0])
             },
             "deployment": dict(self.deployment),

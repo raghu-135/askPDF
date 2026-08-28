@@ -38,6 +38,8 @@ def _event_kind(kind: str, *, source_metadata: Mapping[str, Any] | None = None) 
         "interrupt.created": "interrupt.requested",
         "run.interrupted": "interrupt.requested",
     }
+    if value == "run.clarification":
+        return value, source
     if value in {"model.started", "model.completed", "model.failed", "llm.start", "llm.complete"}:
         source.setdefault("source_event", value)
         value = {

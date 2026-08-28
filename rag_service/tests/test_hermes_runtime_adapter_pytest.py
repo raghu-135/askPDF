@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
@@ -62,7 +62,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
-    adapter._json = AsyncMock(return_value={
+    adapter.transport._json = AsyncMock(return_value={
         "capabilities": {
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
@@ -91,9 +91,9 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     assert "task.pause" not in deployment.operations
     assert definition.operations["task.pause"].enabled is False
     assert definition.operations["task.pause"].disabled_reason == "definition_not_task_runtime"
-    assert definition.features["tools"].details["allowed_tool_ids"] == ["search_documents"]
-    assert definition.features["memory"].enabled is False
-    assert definition.features["delegation"].enabled is False
+    assert definition.features[RuntimeFeatureId.TOOLS].details["allowed_tool_ids"] == ["search_documents"]
+    assert definition.features[RuntimeFeatureId.MEMORY].enabled is False
+    assert definition.features[RuntimeFeatureId.DELEGATION].enabled is False
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_hermes_malformed_capabilities_are_structured(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
-    adapter._json = AsyncMock(return_value={"capabilities": {"operations": {"run.start": {"enabled": True}}}})
+    adapter.transport._json = AsyncMock(return_value={"capabilities": {"operations": {"run.start": {"enabled": True}}}})
 
     with pytest.raises(RuntimeError) as caught:
         await adapter.deployment_capabilities()
@@ -114,7 +114,7 @@ async def test_hermes_malformed_capabilities_are_structured(monkeypatch):
 async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypatch):
     monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
-    adapter._json = AsyncMock()
+    adapter.transport._json = AsyncMock()
     definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
 
     capabilities, error = await discover_adapter_capabilities(adapter)
@@ -123,7 +123,7 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
     assert capabilities.deployment["runtime_available"] is False
     assert capabilities.operations[RuntimeOperationId.TASK_START].enabled is False
     assert error["code"] == "runtime_disabled"
-    adapter._json.assert_not_awaited()
+    adapter.transport._json.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -496,7 +496,7 @@ async def test_hermes_controls_use_neutral_contracts(monkeypatch):
         calls.append((method, path, kwargs["json"]))
         return {"accepted": True}
 
-    monkeypatch.setattr(adapter, "_json", fake_json)
+    monkeypatch.setattr(adapter.transport, "_json", fake_json)
     binding = ContinuationBinding("hermes_session", {"session_id": "session-1", "upstream_run_id": "upstream-1"})
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent", continuation=binding)
     await adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="session"))

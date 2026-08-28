@@ -103,9 +103,12 @@ def _raise_structured_runtime_error(payload: Any) -> None:
     )
 
 
-class HttpRuntimeAdapter(AgentRuntimeAdapter):
-    framework = "langgraph"
-    builder_id = "langgraph_graph"
+class RuntimeTransportConnector:
+    """HTTP/SSE transport connector shared by concrete runtime adapters.
+
+    This class owns only transport mechanics. Framework adapters select
+    endpoints and translate the neutral product contracts around it.
+    """
 
     def __init__(
         self,
@@ -114,7 +117,17 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         client: httpx.AsyncClient | None = None,
         connect_timeout: float | None = None,
         read_timeout: float | None = None,
+        framework: str = "langgraph",
+        authorization_env: str = "LANGGRAPH_RUNTIME_TOKEN",
+        authorization_envs: tuple[str, ...] | None = None,
+        visualization_id: str | None = None,
+        replay_by_event_id: bool = False,
     ) -> None:
+        self.framework = framework
+        self.authorization_env = authorization_env
+        self.authorization_envs = authorization_envs or (authorization_env,)
+        self.visualization_id = visualization_id
+        self.replay_by_event_id = replay_by_event_id
         self.base_url = (base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime:8100")).rstrip("/")
         self._client = client
         self._owns_client = client is None
@@ -145,7 +158,7 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
 
     def _replay_params(self, *, last_sequence: int, last_event_id: str | None) -> dict[str, Any]:
         """Encode the runtime transport's durable replay cursor."""
-        return {"after_sequence": last_sequence}
+        return {"after_event_id": last_event_id} if self.replay_by_event_id and last_event_id else {"after_sequence": last_sequence}
 
     def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -163,9 +176,11 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                 headers["authorization"] = str(request.authentication["token"])
             if request.permissions:
                 headers["x-agent-permissions"] = json.dumps(dict(request.permissions), separators=(",", ":"))
-        token = os.getenv("LANGGRAPH_RUNTIME_TOKEN")
-        if token:
-            headers["authorization"] = f"Bearer {token}"
+        for env_name in self.authorization_envs:
+            token = os.getenv(env_name)
+            if token:
+                headers["authorization"] = f"Bearer {token}"
+                break
         return headers
 
     async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:
@@ -200,40 +215,6 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
         if "result" not in payload or not isinstance(payload["result"], Mapping):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response envelope")
         return payload["result"]
-
-    async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        value = await self._json(
-            "POST",
-            "/v1/capabilities",
-            json={"definition": definition.to_dict()},
-        )
-        try:
-            capabilities = value["capabilities"]
-            if not isinstance(capabilities, Mapping):
-                raise ValueError("capabilities must be an object")
-            return capabilities_from_dict(capabilities)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
-
-    async def deployment_capabilities(self) -> RuntimeCapabilities:
-        value = await self._json("GET", "/v1/capabilities")
-        try:
-            capabilities = value["capabilities"]
-            if not isinstance(capabilities, Mapping):
-                raise ValueError("capabilities must be an object")
-            return capabilities_from_dict(capabilities)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
-
-    async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
-        value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
-        try:
-            validation = value["validation"]
-            if not isinstance(validation, Mapping):
-                raise ValueError("validation must be an object")
-            return validation_from_dict(validation)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed validation") from exc
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
         resolved_spec = context.resolved_spec if isinstance(context.resolved_spec, Mapping) else {}
@@ -294,9 +275,8 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     "source_event_ids": source_ids,
                     "chunk_count": len(pending_deltas),
                 })
-                visualization_id = getattr(self, "visualization_id", None)
-                if visualization_id:
-                    source_metadata.setdefault("visualization_id", visualization_id)
+                if self.visualization_id:
+                    source_metadata.setdefault("visualization_id", self.visualization_id)
                 coalesced = AgentRuntimeEvent(
                     event_id=f"coalesced:{first.event_id}:{last.event_id}",
                     run_id=last.run_id,
@@ -387,9 +367,8 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
                     source_metadata = dict(event_data.get("source_metadata") or {})
                     source_metadata.setdefault("framework", self.framework)
                     source_metadata.setdefault("source_event", str(event_data.get("kind") or _name))
-                    visualization_id = getattr(self, "visualization_id", None)
-                    if visualization_id:
-                        source_metadata.setdefault("visualization_id", visualization_id)
+                    if self.visualization_id:
+                        source_metadata.setdefault("visualization_id", self.visualization_id)
                     event_data["source_metadata"] = source_metadata
                     event = event_from_dict(event_data)
                     if event.run_id != request.run_id:
@@ -520,52 +499,8 @@ class HttpRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError("runtime_protocol_error", "Agent runtime stream ended without a terminal result")
         return terminal
 
-    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
-        return await self._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
-
-    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
-        return await self._stream("/v1/runs/%s/resume" % request.run_id, request, context=context, payload={"interrupt": _safe_json(interrupt)}, event_sink=event_sink)
-
-    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
-        result = await self._stream("/v1/runs/%s/continue" % request.run_id, request, context=context, payload=None, event_sink=event_sink)
-        if result.status == "no_continuation":
-            return None
-        return result
-
-    async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/cancel" % request.run_id, request=request, json={"request": request.to_dict()})
-        return dict(value) if isinstance(value, Mapping) else {"result": value}
-
-    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/inspect" % request.run_id, request=request, json={"request": request.to_dict()})
-        return dict(value or {}) if isinstance(value, Mapping) else {}
-
-    async def update_state(self, request: AgentRuntimeRequest, update: Mapping[str, Any]) -> Mapping[str, Any]:
-        value = await self._json(
-            "POST",
-            "/v1/runs/%s/state" % request.run_id,
-            request=request,
-            json={"request": request.to_dict(), "update": dict(update)},
-        )
-        return dict(value or {}) if isinstance(value, Mapping) else {}
-
-    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
-        projected = []
-        for event in events:
-            value = dict(event)
-            source_metadata = dict(value.get("source_metadata") or {})
-            source_metadata.setdefault("framework", self.framework)
-            source_metadata.setdefault("source_event", str(value.get("kind") or "runtime.event"))
-            visualization_id = getattr(self, "visualization_id", None)
-            if visualization_id:
-                source_metadata.setdefault("visualization_id", visualization_id)
-            value["source_metadata"] = source_metadata
-            projected.append(event_from_dict(value))
-        return projected
-
-
-class HttpLangGraphRuntimeAdapter(HttpRuntimeAdapter):
-    """LangGraph-specific HTTP operations layered on the neutral transport."""
+class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
+    """LangGraph adapter composed with the neutral HTTP transport."""
 
     framework = "langgraph"
     builder_id = "langgraph_graph"
@@ -579,6 +514,70 @@ class HttpLangGraphRuntimeAdapter(HttpRuntimeAdapter):
         RuntimeOperationId.TRACE_PROJECT,
     })
 
+    def __init__(self, base_url: str | None = None, **kwargs: Any) -> None:
+        self.transport = RuntimeTransportConnector(
+            base_url=base_url,
+            framework=self.framework,
+            authorization_env="LANGGRAPH_RUNTIME_TOKEN",
+            visualization_id="langgraph.session",
+            **kwargs,
+        )
+
+    async def aclose(self) -> None:
+        await self.transport.aclose()
+
+    async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
+        value = await self.transport._json("POST", "/v1/capabilities", json={"definition": definition.to_dict()})
+        return capabilities_from_dict(value["capabilities"])
+
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
+        value = await self.transport._json("GET", "/v1/capabilities")
+        return capabilities_from_dict(value["capabilities"])
+
+    async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
+        value = await self.transport._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
+        return validation_from_dict(value["validation"])
+
+    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self.transport._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
+
+    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self.transport._stream(f"/v1/runs/{request.run_id}/resume", request, context=context, payload={"interrupt": _safe_json(interrupt)}, event_sink=event_sink)
+
+    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
+        result = await self.transport._stream(
+            f"/v1/runs/{request.run_id}/continue",
+            request,
+            context=context,
+            payload=None,
+            event_sink=event_sink,
+        )
+        return None if result.status == "no_continuation" else result
+
+    async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json={"request": request.to_dict()})
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json={"request": request.to_dict()})
+        return dict(value or {}) if isinstance(value, Mapping) else {}
+
+    async def update_state(self, request: AgentRuntimeRequest, update: Mapping[str, Any]) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/state", request=request, json={"request": request.to_dict(), "update": dict(update)})
+        return dict(value or {}) if isinstance(value, Mapping) else {}
+
+    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
+        projected = []
+        for event in events:
+            value = dict(event)
+            source_metadata = dict(value.get("source_metadata") or {})
+            source_metadata.setdefault("framework", self.framework)
+            source_metadata.setdefault("source_event", str(value.get("kind") or "runtime.event"))
+            source_metadata.setdefault("visualization_id", "langgraph.session")
+            value["source_metadata"] = source_metadata
+            projected.append(event_from_dict(value))
+        return projected
+
     async def delete_continuation(self, continuation: Any) -> Any:
         binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
-        return await self._json("DELETE", "/v1/continuations/%s" % binding_id, json={"continuation": continuation.to_dict()})
+        return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json={"continuation": continuation.to_dict()})

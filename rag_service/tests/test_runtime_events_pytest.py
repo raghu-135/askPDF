@@ -72,6 +72,17 @@ def test_unknown_source_event_is_observational_runtime_event():
     assert event.source_metadata["source_event"] == "hermes.future.event"
 
 
+def test_clarification_is_a_canonical_terminal_event():
+    event = create_runtime_event(
+        event_id="run:clarification",
+        run_id="run",
+        sequence=1,
+        kind=RuntimeEventKind.RUN_CLARIFICATION.value,
+    )
+    assert event.kind == "run.clarification"
+    assert event.terminal is True
+
+
 @pytest.mark.parametrize("kind", ["dispatch.started", "worker.retrying", "worker.timed_out", "aggregation.partial"])
 def test_parallel_lifecycle_events_remain_canonical(kind):
     event = create_runtime_event(event_id=f"run:{kind}", run_id="run", sequence=1, kind=kind)

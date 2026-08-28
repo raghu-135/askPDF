@@ -40,6 +40,14 @@ an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,
 `AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS`, and
 `AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS` bound this recovery.
 
+HTTP/SSE request handling is provided by the composable `RuntimeTransportConnector`;
+framework adapters own endpoint mapping and framework-specific translation. The
+product-facing capability projection exposes `run.inspect_state` because both
+current adapters implement it. Replay, historical fork, runtime subagent control,
+and continuation cleanup remain internal SPI operations until dedicated product
+routes and stable product semantics are defined; they are intentionally omitted
+from public capability responses.
+
 The runtime contract is intentionally unversioned. Runtime identity is taken
 from the persisted deployment and definition binding; missing identity is an
 error, not a default. Capability responses are layered: deployment discovery
@@ -76,6 +84,11 @@ Supported upstream events are `message.delta`, `tool.started`,
 `approval.responded`, `run.completed`, `run.failed`,
 `run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown events are
 retained as bounded `runtime.event` records for forward compatibility.
+
+`run.clarification` is a canonical terminal event and is preserved as such in
+the product event stream. Hermes cancellation uses bounded confirmation: the
+gateway acknowledges `/stop`, waits for a terminal upstream status, and reports
+an explicit still-stopping error when that bound expires.
 
 Hermes definitions resolve into a deterministic managed profile containing MCP
 and tool policy, model/provider policy, skills, memory, delegation, and limits.

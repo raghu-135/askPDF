@@ -9,6 +9,7 @@ from app.runtime.contracts import (
     RuntimeOperationId,
     RuntimeOperationOwner,
     RuntimeCapabilities,
+    RuntimeCapabilitySemantics,
     conditional,
     native,
 )
@@ -18,6 +19,7 @@ PUBLIC_OPERATION_IDS = frozenset({
     RuntimeOperationId.RUN_GET,
     RuntimeOperationId.RUN_LIST,
     RuntimeOperationId.RUN_EVENTS,
+    RuntimeOperationId.RUN_INSPECT_STATE,
     RuntimeOperationId.RUN_CANCEL,
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
@@ -40,44 +42,44 @@ def product_operation_descriptors() -> dict[RuntimeOperationId, RuntimeOperation
     return {
         RuntimeOperationId.RUN_EVENTS: native(
             owner=RuntimeOperationOwner.PRODUCT,
-            semantics="persisted_product_event_journal",
+            semantics=RuntimeCapabilitySemantics.PERSISTED_PRODUCT_EVENT_JOURNAL,
         ),
         RuntimeOperationId.RUN_GET: native(
             owner=RuntimeOperationOwner.PRODUCT,
-            semantics="product_run_inspection",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_RUN_INSPECTION,
         ),
         RuntimeOperationId.RUN_LIST: native(
             owner=RuntimeOperationOwner.PRODUCT,
-            semantics="product_run_listing",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_RUN_LISTING,
         ),
         RuntimeOperationId.ARTIFACT_LIST: native(
             owner=RuntimeOperationOwner.PRODUCT,
-            semantics="product_task_artifact_listing",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_ARTIFACT_LISTING,
         ),
         RuntimeOperationId.TASK_START: conditional(
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
-            semantics="product_task_start",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_START,
         ),
         RuntimeOperationId.TASK_PAUSE: conditional(
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
-            semantics="product_task_pause",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_PAUSE,
         ),
         RuntimeOperationId.TASK_RESUME: conditional(
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
-            semantics="product_task_resume",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_RESUME,
         ),
         RuntimeOperationId.TASK_CANCEL: conditional(
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
-            semantics="product_task_cancel",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_CANCEL,
         ),
         RuntimeOperationId.TASK_RETRY: conditional(
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
-            semantics="product_task_retry",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_RETRY,
         ),
     }
 

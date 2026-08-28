@@ -6,6 +6,7 @@ from app.runtime.contracts import (
     AgentRuntimeRequest,
     ContinuationBinding,
     RuntimeOperationId,
+    RuntimeFeatureId,
     RuntimeSupportLevel,
 )
 from app.runtime.langgraph_capabilities import (
@@ -155,8 +156,8 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
         registry=RuntimeRegistry(adapters=[LangGraphRuntimeAdapter()]),
     )
 
-    assert capabilities.features["planning"].enabled is True
-    assert capabilities.features["subagent_orchestration"].enabled is True
+    assert capabilities.features[RuntimeFeatureId.PLANNING].enabled is True
+    assert capabilities.features[RuntimeFeatureId.SUBAGENT_ORCHESTRATION].enabled is True
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
     assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].owner.value == "product"

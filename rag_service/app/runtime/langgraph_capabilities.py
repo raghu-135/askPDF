@@ -9,12 +9,17 @@ from typing import Any, Mapping
 
 from app.runtime.contracts import (
     AgentDefinition,
+    RuntimeCapabilitySemantics,
+    RuntimeCancellationMode,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
+    RuntimeConfirmationMode,
+    RuntimeFeatureId,
     RuntimeFeatureDescriptor,
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeSupportLevel,
+    RuntimeTerminalState,
     conditional,
     native,
     unsupported,
@@ -110,7 +115,7 @@ class LangGraphDeploymentProfile:
 def _feature(
     enabled: bool,
     *,
-    semantics: str,
+    semantics: RuntimeCapabilitySemantics,
     details: Mapping[str, Any] | None = None,
 ) -> RuntimeFeatureDescriptor:
     return RuntimeFeatureDescriptor(
@@ -122,7 +127,7 @@ def _feature(
     )
 
 
-def _deep_agents_features(definition: AgentDefinition) -> dict[str, RuntimeFeatureDescriptor]:
+def _deep_agents_features(definition: AgentDefinition) -> dict[RuntimeFeatureId, RuntimeFeatureDescriptor]:
     metadata = definition.definition_metadata
     node_types = {str(value) for value in metadata.get("graph_node_types", [])}
     tools = {str(value) for value in metadata.get("allowed_tool_ids", [])}
@@ -141,20 +146,20 @@ def _deep_agents_features(definition: AgentDefinition) -> dict[str, RuntimeFeatu
     subagents = "deep_research_subagent" in node_types and bool(profiles)
     memory = "durable_memory" in tools
     return {
-        "planning": _feature(planning, semantics="definition_planner_nodes"),
-        "parallel_dispatch": _feature(parallel, semantics="definition_parallel_dispatch"),
-        "artifacts": _feature(artifacts, semantics="definition_artifact_policy"),
-        "subagent_orchestration": _feature(
+        RuntimeFeatureId.PLANNING: _feature(planning, semantics=RuntimeCapabilitySemantics.DEFINITION_PLANNER_NODES),
+        RuntimeFeatureId.PARALLEL_DISPATCH: _feature(parallel, semantics=RuntimeCapabilitySemantics.DEFINITION_PARALLEL_DISPATCH),
+        RuntimeFeatureId.ARTIFACTS: _feature(artifacts, semantics=RuntimeCapabilitySemantics.DEFINITION_ARTIFACT_POLICY),
+        RuntimeFeatureId.SUBAGENT_ORCHESTRATION: _feature(
             subagents,
-            semantics="product_managed_subagents",
+            semantics=RuntimeCapabilitySemantics.PRODUCT_MANAGED_SUBAGENTS,
             details={"profiles": sorted(profiles)},
         ),
-        "memory": _feature(memory, semantics="definition_tool_policy", details={"tool_id": "durable_memory"}),
-        "tools": _feature(bool(tools), semantics="definition_tool_policy", details={"count": len(tools)}),
+        RuntimeFeatureId.MEMORY: _feature(memory, semantics=RuntimeCapabilitySemantics.DEFINITION_TOOL_POLICY, details={"tool_id": "durable_memory"}),
+        RuntimeFeatureId.TOOLS: _feature(bool(tools), semantics=RuntimeCapabilitySemantics.DEFINITION_TOOL_POLICY, details={"count": len(tools)}),
     }
 
 
-def langgraph_definition_features(definition: AgentDefinition) -> dict[str, RuntimeFeatureDescriptor]:
+def langgraph_definition_features(definition: AgentDefinition) -> dict[RuntimeFeatureId, RuntimeFeatureDescriptor]:
     """Return definition-owned Deep Agent features for central reconciliation."""
 
     return _deep_agents_features(definition)
@@ -200,31 +205,31 @@ def langgraph_capabilities(
     operations: dict[RuntimeOperationId, RuntimeOperationDescriptor] = {
         RuntimeOperationId.RUN_START: enabled_descriptor(native()),
         RuntimeOperationId.RUN_CANCEL: enabled_descriptor(native(
-            modes=("interrupt",),
-            confirmation="asynchronous",
-            terminal_states=("cancelled", "interrupted"),
+            modes=(RuntimeCancellationMode.INTERRUPT,),
+            confirmation=RuntimeConfirmationMode.ASYNCHRONOUS,
+            terminal_states=(RuntimeTerminalState.CANCELLED, RuntimeTerminalState.INTERRUPTED),
         )),
         RuntimeOperationId.RUN_RESUME: conditional(
             enabled=checkpoint,
-            semantics="resume_from_interrupt",
+            semantics=RuntimeCapabilitySemantics.RESUME_FROM_INTERRUPT,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_INSPECT_STATE: conditional(
             enabled=checkpoint,
-            semantics="checkpoint_state_inspection",
+            semantics=RuntimeCapabilitySemantics.CHECKPOINT_STATE_INSPECTION,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_UPDATE_STATE: conditional(
             enabled=checkpoint,
-            semantics="checkpoint_boundary_update",
+            semantics=RuntimeCapabilitySemantics.CHECKPOINT_BOUNDARY_UPDATE,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
         RuntimeOperationId.RUN_CONTINUATION_CLEANUP: conditional(
             enabled=checkpoint,
-            semantics="checkpoint_thread_cleanup",
+            semantics=RuntimeCapabilitySemantics.CHECKPOINT_THREAD_CLEANUP,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),

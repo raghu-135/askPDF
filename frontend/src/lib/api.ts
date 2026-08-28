@@ -1410,15 +1410,49 @@ export type RuntimeCapabilityDisabledReason =
   | 'cancellation_pending'
   | 'run_not_checkpoint_boundary';
 
+export type RuntimeFeatureId =
+  | 'planning'
+  | 'parallel_dispatch'
+  | 'artifacts'
+  | 'subagent_orchestration'
+  | 'memory'
+  | 'tools'
+  | 'delegation'
+  | 'skills';
+
+export type RuntimeCapabilitySemantics =
+  | 'persisted_product_event_journal'
+  | 'product_run_inspection'
+  | 'product_run_listing'
+  | 'product_task_artifact_listing'
+  | 'product_task_start'
+  | 'product_task_pause'
+  | 'product_task_resume'
+  | 'product_task_cancel'
+  | 'product_task_retry'
+  | 'resume_from_interrupt'
+  | 'checkpoint_state_inspection'
+  | 'checkpoint_boundary_update'
+  | 'checkpoint_thread_cleanup'
+  | 'definition_planner_nodes'
+  | 'definition_parallel_dispatch'
+  | 'definition_artifact_policy'
+  | 'product_managed_subagents'
+  | 'definition_tool_policy';
+
+export type RuntimeCancellationMode = 'interrupt' | 'cooperative';
+export type RuntimeConfirmationMode = 'asynchronous' | 'bounded';
+export type RuntimeTerminalState = 'cancelled' | 'interrupted' | 'completed' | 'failed';
+
 export interface RuntimeOperationDescriptor {
   support: RuntimeSupportLevel;
   owner: 'product' | 'runtime';
   enabled: boolean;
   disabled_reason?: RuntimeCapabilityDisabledReason | null;
-  modes?: string[];
-  semantics?: string | null;
-  confirmation?: string | null;
-  terminal_states?: string[];
+  modes?: RuntimeCancellationMode[];
+  semantics?: RuntimeCapabilitySemantics | null;
+  confirmation?: RuntimeConfirmationMode | null;
+  terminal_states?: RuntimeTerminalState[];
   preserves_run_id?: boolean | null;
   preserves_session_id?: boolean | null;
   requires_runtime_binding?: boolean;
@@ -1428,13 +1462,13 @@ export interface RuntimeFeatureDescriptor {
   support: RuntimeSupportLevel;
   enabled: boolean;
   disabled_reason?: RuntimeCapabilityDisabledReason | null;
-  semantics?: string | null;
+  semantics?: RuntimeCapabilitySemantics | null;
   details?: Record<string, any>;
 }
 
 export interface RuntimeCapabilities {
   operations: Record<string, RuntimeOperationDescriptor>;
-  features?: Record<string, RuntimeFeatureDescriptor>;
+  features?: Partial<Record<RuntimeFeatureId, RuntimeFeatureDescriptor>>;
   deployment?: {
     runtime_mode?: string;
     checkpointer_backend?: string;
@@ -2220,6 +2254,16 @@ export async function getAgentRunCapabilities(
 ): Promise<AgentRuntimeCapabilityResponse> {
   const params = new URLSearchParams({ thread_id: threadId });
   const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/capabilities?${params.toString()}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentRunState(
+  runId: string,
+  threadId: string,
+): Promise<{ run_id: string; state: Record<string, any> }> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/state?${params.toString()}`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }

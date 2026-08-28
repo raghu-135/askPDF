@@ -641,7 +641,11 @@ class AgentRunService:
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
             result.update(context)
             if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
-                terminal_kind = "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                terminal_kind = (
+                    "run.failed" if status == AgentRunStatus.FAILED.value
+                    else "run.clarification" if status == AgentRunStatus.CLARIFICATION.value
+                    else "run.completed"
+                )
                 await execution_event_sink.finish(
                     terminal_kind,
                     {"run_id": run.id, "status": status, "response": result},
@@ -1022,7 +1026,11 @@ class AgentRunService:
             else:
                 completed_run = await lifecycle_repository.set_run_debug_trace(completed_run.id, resume_debug_payload) or completed_run
             if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
-                terminal_kind = "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                terminal_kind = (
+                    "run.failed" if status == AgentRunStatus.FAILED.value
+                    else "run.clarification" if status == AgentRunStatus.CLARIFICATION.value
+                    else "run.completed"
+                )
                 await execution_event_sink.finish(
                     terminal_kind,
                     {
