@@ -497,7 +497,11 @@ export default function DeepResearchTaskPanel({
             return;
           }
           setSelectedRunCapabilities(result.data || null);
-          setRuntimeControlError('');
+          setRuntimeControlError(
+            result.data?.runtime_available
+              ? ''
+              : 'The runtime deployment is unavailable. Run controls will remain disabled until it recovers.',
+          );
         } else {
           setSelectedRunCapabilities(null);
           setRuntimeControlError('Run controls are temporarily unavailable. Refresh the run to retry.');
@@ -530,6 +534,9 @@ export default function DeepResearchTaskPanel({
         if (!active || !isCurrentRuntimeCapabilityRequest(requestId, activeCapabilityRequestId.current)) return;
         if (result.success && runtimeCapabilityResponseMatchesRun(result.data, activeRunId)) {
           setActiveTaskCapabilities(result.data || null);
+          if (!result.data?.runtime_available) {
+            setRuntimeControlError('The runtime deployment is unavailable. Run controls will remain disabled until it recovers.');
+          }
         } else {
           setActiveTaskCapabilities(null);
         }

@@ -80,30 +80,6 @@ class HermesRuntimeAdapter(HttpRuntimeAdapter):
             "mcp_execution_context_token": token,
         })
 
-    def grounding_summary(self, result: Mapping[str, Any], events: list[Any], *, documents_present: bool) -> Mapping[str, Any]:
-        successful: list[Mapping[str, Any]] = []
-        failures: list[Mapping[str, Any]] = []
-        for event in events:
-            payload = dict(getattr(event, "payload_json", None) or getattr(event, "payload", None) or {})
-            if payload.get("source") != "askpdf_mcp":
-                continue
-            if getattr(event, "kind", "") == "tool.completed" and payload.get("ok") is True and int(payload.get("result_count") or 0) > 0:
-                successful.append(payload)
-            elif getattr(event, "kind", "") == "tool.failed":
-                failures.append(payload)
-        eligible = {"search_documents", "search_document_by_id"}
-        if not documents_present:
-            eligible.update({"search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv", "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news"})
-        qualifying = [item for item in successful if item.get("tool_name") in eligible]
-        return {
-            "requirement": "document" if documents_present else "research",
-            "grounded": bool(qualifying),
-            "evidence_result_count": sum(int(item.get("result_count") or 0) for item in qualifying),
-            "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
-            "failed_tool_count": len(failures),
-            "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
-        }
-
     def __init__(self, base_url: str | None = None, **kwargs: Any) -> None:
         super().__init__(base_url=base_url or os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200"), **kwargs)
 

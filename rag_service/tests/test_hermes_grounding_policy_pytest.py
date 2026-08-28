@@ -4,8 +4,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.agent_tasks import _run_payload
+from app.runtime.adapter import AgentRuntimeAdapter
+from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.services import agent_task_runtime
-from app.services.agent_task_runtime import _grounding_summary, _hermes_grounding_summary
+from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
+
+
+evaluator = AgentGroundingEvaluator()
 
 
 def _event(kind, **payload):
@@ -17,7 +22,7 @@ def test_document_grounding_summary_reports_missing_document_evidence():
         _event("tool.failed", tool_name="search_document_by_id", error={"code": "tool_arguments_invalid"}),
         _event("tool.completed", tool_name="search_web", ok=True, result_count=4),
     ]
-    summary = _hermes_grounding_summary(events, documents_present=True)
+    summary = evaluator.evaluate({}, events, documents_present=True)
     assert summary["grounded"] is False
     assert summary["failure_codes"] == ["tool_arguments_invalid"]
 
@@ -27,16 +32,16 @@ def test_later_successful_document_retrieval_satisfies_grounding():
         _event("tool.failed", tool_name="search_documents", error={"code": "tool_execution_failed"}),
         _event("tool.completed", tool_name="search_document_by_id", ok=True, result_count=3),
     ]
-    summary = _hermes_grounding_summary(events, documents_present=True)
+    summary = evaluator.evaluate({}, events, documents_present=True)
     assert summary["grounded"] is True
     assert summary["evidence_result_count"] == 3
 
 
 def test_no_document_task_accepts_research_evidence_but_not_context_discovery():
-    assert _hermes_grounding_summary([
+    assert evaluator.evaluate({}, [
         _event("tool.completed", tool_name="search_thread_conversation_history", ok=True, result_count=2),
     ], documents_present=False)["grounded"] is False
-    assert _hermes_grounding_summary([
+    assert evaluator.evaluate({}, [
         _event("tool.completed", tool_name="wikipedia", ok=True, result_count=2),
     ], documents_present=False)["grounded"] is True
 
@@ -50,10 +55,9 @@ def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
     }
     events = [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})]
 
-    summary = _grounding_summary(
+    summary = evaluator.evaluate(
         result,
         events,
-        framework=framework,
         documents_present=True,
     )
 
@@ -62,15 +66,29 @@ def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
 
 
 def test_missing_retrieval_does_not_define_a_terminal_error():
-    summary = _grounding_summary(
+    summary = evaluator.evaluate(
         {"final_answer": "answer", "task_evidence_manifest": [], "grounding_report": {"verified_claims": []}},
         [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})],
-        framework="hermes",
         documents_present=True,
     )
 
     assert summary["grounded"] is False
     assert summary["failure_codes"] == ["missing"]
+
+
+def test_grounding_evaluator_validates_result_evidence_against_artifacts():
+    artifact = SimpleNamespace(id="artifact-1", validity="valid", deleted_at=None)
+    result = {"task_evidence_manifest": [{"id": "artifact-1"}, {"id": "missing"}]}
+
+    summary = evaluator.evaluate(result, [], documents_present=True, artifacts=[artifact])
+
+    assert summary["grounded"] is True
+    assert summary["evidence_result_count"] == 1
+
+
+def test_grounding_policy_is_not_part_of_the_runtime_adapter_spi():
+    assert not hasattr(AgentRuntimeAdapter, "grounding_summary")
+    assert not hasattr(HermesRuntimeAdapter, "grounding_summary")
 
 
 def test_agent_task_run_payload_preserves_required_trace_details():

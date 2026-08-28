@@ -18,6 +18,7 @@ from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.task_artifact_service import persist_task_artifact
+from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
@@ -35,6 +36,7 @@ from app.runtime.operational_limits import positive_float_value
 
 
 logger = logging.getLogger(__name__)
+grounding_evaluator = AgentGroundingEvaluator()
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
 
@@ -679,10 +681,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 return
             evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
             if evidence_policy == "document_when_available":
-                grounding = adapter.grounding_summary(
+                grounding = grounding_evaluator.evaluate(
                     result,
                     await repository.list_run_events(run.id),
                     documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
+                    artifacts=await tasks.list_artifacts(task.id, agent_run_id=run.id),
                 )
                 metrics["grounding"] = grounding
                 result["grounding"] = grounding

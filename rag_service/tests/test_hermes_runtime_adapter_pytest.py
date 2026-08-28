@@ -119,7 +119,9 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
 
     capabilities, error = await discover_adapter_capabilities(adapter)
 
-    assert capabilities is None
+    assert capabilities is not None
+    assert capabilities.deployment["runtime_available"] is False
+    assert capabilities.operations[RuntimeOperationId.TASK_START].enabled is False
     assert error["code"] == "runtime_disabled"
     adapter._json.assert_not_awaited()
 

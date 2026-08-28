@@ -7,8 +7,10 @@ from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.capability_resolver import (
     OPERATION_METHODS,
     capabilities_for_definition,
+    capability_envelope,
     discover_adapter_capabilities,
     require_capability,
+    resolve_capability_resolution,
     resolve_capabilities,
 )
 from app.runtime.contracts import (
@@ -314,6 +316,29 @@ async def test_runtime_unavailable_disables_all_product_task_operations():
         descriptor = capabilities.operations[operation]
         assert descriptor.enabled is False
         assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_capability_resolution_preserves_unavailable_runtime_error():
+    resolution = await resolve_capability_resolution(
+        _definition(),
+        registry=RuntimeRegistry(adapters=[UnavailableCapabilityAdapter()]),
+    )
+
+    assert resolution.runtime_available is False
+    assert resolution.error is not None
+    assert resolution.error["code"] == "runtime_unavailable"
+    envelope = capability_envelope(
+        capabilities=resolution.capabilities,
+        resource="definition",
+        runtime_id="fake:fake_builder",
+        framework="fake",
+        builder_id="fake_builder",
+        error=resolution.error,
+    )
+    assert envelope["runtime_available"] is False
+    assert envelope["error"]["code"] == "runtime_unavailable"
+    assert "available" not in envelope
 
 
 @pytest.mark.asyncio

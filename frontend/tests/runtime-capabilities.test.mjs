@@ -11,7 +11,7 @@ import {
 } from '../src/lib/runtime-capabilities.ts';
 
 const response = (operations) => ({
-  available: true,
+  runtime_available: true,
   capabilities: { operations },
 });
 
@@ -61,7 +61,7 @@ test('cancellation pending is preserved as a backend disabled reason', () => {
 
 test('capability discovery failure fails closed', () => {
   assert.equal(isRuntimeOperationEnabled(null, 'run.cancel'), false);
-  assert.equal(runtimeOperationAvailability({ available: false, capabilities: null }, 'run.cancel').visible, false);
+  assert.equal(runtimeOperationAvailability({ runtime_available: false, capabilities: null }, 'run.cancel').visible, false);
 });
 
 test('distinct runtime interactions are evaluated independently', () => {

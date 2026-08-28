@@ -1449,7 +1449,7 @@ export interface AgentRuntimeCapabilityResponse {
   runtime_id: string;
   framework: string;
   builder_id: string;
-  available: boolean;
+  runtime_available: boolean;
   capabilities: RuntimeCapabilities | null;
   definition_id?: string;
   run_id?: string;

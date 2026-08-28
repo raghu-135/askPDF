@@ -79,12 +79,10 @@ from app.runtime.builder_registry import BuilderSelectionError, builder_for_defi
 from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideError
 from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
-    capabilities_for_definition,
     capability_envelope,
-    capability_discovery_error,
     deployment_id,
-    discover_adapter_capabilities,
-    resolve_capabilities,
+    resolve_deployment_capability_resolution,
+    resolve_capability_resolution,
 )
 from app.runtime.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
@@ -565,15 +563,15 @@ async def list_agent_runtimes(response: Response):
     deployments = []
     for adapter in registry.adapters():
         runtime_id = deployment_id(adapter)
-        capabilities, error = await discover_adapter_capabilities(adapter)
+        resolution = await resolve_deployment_capability_resolution(adapter)
         deployments.append(
             capability_envelope(
-                capabilities=capabilities,
+                capabilities=resolution.capabilities,
                 resource="deployment",
                 runtime_id=runtime_id,
                 framework=adapter.framework,
                 builder_id=adapter.builder_id,
-                error=error,
+                error=resolution.error,
             )
         )
     return {"agent_runtimes": deployments}
@@ -586,14 +584,14 @@ async def get_agent_runtime_capabilities(runtime_id: str, response: Response):
     adapter = registry.get_deployment(runtime_id)
     if adapter is None:
         raise HTTPException(status_code=404, detail="Agent runtime deployment not found")
-    capabilities, error = await discover_adapter_capabilities(adapter)
+    resolution = await resolve_deployment_capability_resolution(adapter)
     return capability_envelope(
-        capabilities=capabilities,
+        capabilities=resolution.capabilities,
         resource="deployment",
         runtime_id=runtime_id,
         framework=adapter.framework,
         builder_id=adapter.builder_id,
-        error=error,
+        error=resolution.error,
     )
 
 
@@ -629,23 +627,17 @@ async def get_agent_workflow_capabilities(workflow_id: str, response: Response):
                 details={"framework": definition.framework, "builder_id": definition.builder_id},
             ).to_dict(),
         )
-    try:
-        capabilities = await capabilities_for_definition(definition, registry=registry)
-        error = None
-    except (RuntimeError, RuntimeSelectionError) as exc:
-        capabilities = None
-        error = capability_discovery_error(exc, adapter)
-    except Exception as exc:
-        capabilities = None
-        error = capability_discovery_error(exc, adapter)
+    resolution = await resolve_capability_resolution(
+        definition, registry=registry, apply_run_state=False
+    )
     return capability_envelope(
-        capabilities=capabilities,
+        capabilities=resolution.capabilities,
         resource="definition",
         runtime_id=deployment_id(adapter),
         framework=definition.framework,
         builder_id=definition.builder_id,
         definition_id=definition.definition_id,
-        error=error,
+        error=resolution.error,
     )
 
 
@@ -764,24 +756,20 @@ async def get_agent_run_capabilities(
     task = await get_task(run.task_id, thread_id=thread_id) if getattr(run, "task_id", None) else None
     try:
         adapter = registry.get(definition)
-        capabilities = await resolve_capabilities(definition, registry=registry, run=run, task=task)
-        error = None
     except RuntimeSelectionError as exc:
         adapter = None
-        capabilities = None
         error = RuntimeError(
             "runtime_selection_failed",
             "No compatible runtime deployment is available",
             details={"framework": definition.framework, "builder_id": definition.builder_id},
         ).to_dict()
-    except RuntimeError as exc:
-        capabilities = None
-        error = capability_discovery_error(exc, adapter)
-    except Exception as exc:
-        capabilities = None
-        error = capability_discovery_error(exc, adapter)
+        resolution = None
+    else:
+        resolution = await resolve_capability_resolution(
+            definition, registry=registry, run=run, task=task
+        )
     return capability_envelope(
-        capabilities=capabilities,
+        capabilities=resolution.capabilities if resolution is not None else None,
         resource="run",
         runtime_id=deployment_id(adapter) if adapter is not None else f"{definition.framework}:{definition.builder_id}",
         framework=definition.framework,
@@ -789,7 +777,7 @@ async def get_agent_run_capabilities(
         definition_id=definition.definition_id,
         run_id=run.id,
         run_status=run.status,
-        error=error,
+        error=resolution.error if resolution is not None else error,
     )
 
 

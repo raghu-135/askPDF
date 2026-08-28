@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from app.runtime.contracts import (
@@ -64,6 +64,16 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
 })
+
+
+@dataclass(frozen=True)
+class CapabilityResolution:
+    """One authoritative capability result for all product API layers."""
+
+    capabilities: RuntimeCapabilities
+    error: Mapping[str, Any] | None = None
+    runtime_available: bool = True
+
 
 RESPONSE_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RESUME,
@@ -274,21 +284,11 @@ async def capabilities_for_definition(
     *,
     registry: RuntimeRegistry,
 ) -> RuntimeCapabilities:
-    adapter = registry.get(definition)
-    try:
-        capabilities = await _reconciled_capabilities(adapter, definition)
-    except RuntimeError as exc:
-        capabilities = _unavailable_product_capabilities(
-            adapter, capability_discovery_error(exc, adapter)
-        )
-    except Exception:
-        logger.exception(
-            "Unexpected capability resolution failure | framework=%s builder_id=%s definition_id=%s",
-            definition.framework,
-            definition.builder_id,
-            definition.definition_id,
-        )
-        raise
+    capabilities = (await resolve_capability_resolution(
+        definition,
+        registry=registry,
+        apply_run_state=False,
+    )).capabilities
     operations = dict(capabilities.operations)
     artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
     if artifact_list is not None:
@@ -296,6 +296,47 @@ async def capabilities_for_definition(
             artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
         )
     return replace(capabilities, operations=operations)
+
+
+async def resolve_deployment_capability_resolution(
+    adapter: Any,
+) -> CapabilityResolution:
+    """Resolve one runtime deployment without applying definition/run policy."""
+
+    try:
+        capabilities = await _reconciled_capabilities(adapter)
+    except RuntimeError as exc:
+        error = capability_discovery_error(exc, adapter)
+        return CapabilityResolution(
+            _unavailable_product_capabilities(adapter, error),
+            error,
+            runtime_available=False,
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected capability resolution failure | framework=%s builder_id=%s",
+            adapter.framework,
+            adapter.builder_id,
+        )
+        raise
+
+    artifact_list = capabilities.operations.get(RuntimeOperationId.ARTIFACT_LIST)
+    if artifact_list is not None:
+        capabilities = replace(
+            capabilities,
+            operations={
+                **capabilities.operations,
+                RuntimeOperationId.ARTIFACT_LIST: _disabled(
+                    artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
+                ),
+            },
+        )
+    error = _deployment_error(capabilities)
+    return CapabilityResolution(
+        capabilities,
+        error,
+        runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
+    )
 
 
 def pending_interrupt_response_operation(
@@ -332,13 +373,31 @@ async def resolve_capabilities(
     task: Any | None = None,
     include_resolved_response: bool = False,
 ) -> RuntimeCapabilities:
+    return (await resolve_capability_resolution(
+        definition,
+        registry=registry,
+        run=run,
+        task=task,
+        include_resolved_response=include_resolved_response,
+    )).capabilities
+
+
+async def resolve_capability_resolution(
+    definition: AgentDefinition,
+    *,
+    registry: RuntimeRegistry,
+    run: Any | None = None,
+    task: Any | None = None,
+    include_resolved_response: bool = False,
+    apply_run_state: bool = True,
+) -> CapabilityResolution:
     adapter = registry.get(definition)
     try:
         capabilities = await _reconciled_capabilities(adapter, definition)
     except RuntimeError as exc:
-        capabilities = _unavailable_product_capabilities(
-            adapter, capability_discovery_error(exc, adapter)
-        )
+        error = capability_discovery_error(exc, adapter)
+        capabilities = _unavailable_product_capabilities(adapter, error)
+        return CapabilityResolution(capabilities, error, runtime_available=False)
     except Exception:
         logger.exception(
             "Unexpected capability resolution failure | framework=%s builder_id=%s definition_id=%s run_id=%s",
@@ -349,7 +408,7 @@ async def resolve_capabilities(
         )
         raise
     operations = dict(capabilities.operations)
-    if run is None:
+    if run is None and apply_run_state:
         for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
             if operation in operations:
                 operations[operation] = _disabled(
@@ -360,7 +419,19 @@ async def resolve_capabilities(
             operations[RuntimeOperationId.ARTIFACT_LIST] = _disabled(
                 artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
             )
-        return replace(capabilities, operations=operations)
+        capabilities = replace(capabilities, operations=operations)
+        return CapabilityResolution(
+            capabilities,
+            _deployment_error(capabilities),
+            runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
+        )
+
+    if run is None:
+        return CapabilityResolution(
+            capabilities,
+            _deployment_error(capabilities),
+            runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
+        )
 
     if task is None:
         artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
@@ -457,7 +528,23 @@ async def resolve_capabilities(
                     descriptor, RuntimeCapabilityDisabledReason.RUN_NOT_CHECKPOINT_BOUNDARY
                 )
 
-    return replace(capabilities, operations=operations)
+    capabilities = replace(capabilities, operations=operations)
+    return CapabilityResolution(
+        capabilities,
+        _deployment_error(capabilities),
+        runtime_available=capabilities.deployment.get("runtime_available", True) is not False,
+    )
+
+
+def _deployment_error(capabilities: RuntimeCapabilities) -> dict[str, Any] | None:
+    if capabilities.deployment.get("runtime_available") is not False:
+        return None
+    return {
+        "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
+        "safe_message": "Agent runtime deployment is unavailable",
+        "retryable": True,
+        "details": dict(capabilities.deployment),
+    }
 
 
 async def require_capability(
@@ -472,15 +559,16 @@ async def require_capability(
     """Resolve one operation and fail before an adapter call when unavailable."""
 
     operation_id = operation if isinstance(operation, RuntimeOperationId) else RuntimeOperationId(operation)
-    capabilities = await resolve_capabilities(
+    resolution = await resolve_capability_resolution(
         definition,
         registry=registry,
         run=run,
         task=task,
         include_resolved_response=include_resolved_response,
     )
+    capabilities = resolution.capabilities
     descriptor = capabilities.operations.get(operation_id)
-    if capabilities.deployment.get("runtime_available") is False:
+    if not resolution.runtime_available:
         raise RuntimeError.capability_unavailable(
             operation_id=operation_id.value,
             framework=definition.framework,
@@ -522,12 +610,16 @@ def capability_envelope(
     run_status: str | None = None,
     error: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    effective_error = error or (_deployment_error(capabilities) if capabilities is not None else None)
     value: dict[str, Any] = {
         "resource": resource,
         "runtime_id": runtime_id,
         "framework": framework,
         "builder_id": builder_id,
-        "available": capabilities is not None,
+        "runtime_available": (
+            capabilities is not None
+            and capabilities.deployment.get("runtime_available", True) is not False
+        ),
         "capabilities": project_public_capabilities(capabilities).to_dict() if capabilities is not None else None,
     }
     if definition_id is not None:
@@ -536,8 +628,8 @@ def capability_envelope(
         value["run_id"] = run_id
     if run_status is not None:
         value["run_status"] = run_status
-    if error is not None:
-        value["error"] = dict(error)
+    if effective_error is not None:
+        value["error"] = dict(effective_error)
     return value
 
 
@@ -555,34 +647,5 @@ def capability_discovery_error(exc: BaseException, adapter: Any) -> dict[str, An
 async def discover_adapter_capabilities(
     adapter: Any,
 ) -> tuple[RuntimeCapabilities | None, dict[str, Any] | None]:
-    try:
-        capabilities = await _reconciled_capabilities(adapter)
-        artifact_list = capabilities.operations.get(RuntimeOperationId.ARTIFACT_LIST)
-        if artifact_list is not None:
-            capabilities = replace(
-                capabilities,
-                operations={
-                    **capabilities.operations,
-                    RuntimeOperationId.ARTIFACT_LIST: _disabled(
-                        artifact_list, RuntimeCapabilityDisabledReason.TASK_RUN_NOT_CREATED
-                    ),
-                },
-            )
-        if capabilities.deployment.get("runtime_available") is False:
-            return capabilities, {
-                "code": str(capabilities.deployment.get("discovery_error") or "runtime_unavailable"),
-                "safe_message": "Agent runtime deployment is unavailable",
-                "retryable": True,
-                "details": dict(capabilities.deployment),
-            }
-        return capabilities, None
-    except RuntimeError as exc:
-        error = capability_discovery_error(exc, adapter)
-        return _unavailable_product_capabilities(adapter, error), error
-    except Exception:
-        logger.exception(
-            "Unexpected adapter capability discovery failure | framework=%s builder_id=%s",
-            adapter.framework,
-            adapter.builder_id,
-        )
-        raise
+    resolution = await resolve_deployment_capability_resolution(adapter)
+    return resolution.capabilities, resolution.error

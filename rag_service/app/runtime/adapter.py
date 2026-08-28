@@ -64,26 +64,6 @@ class AgentRuntimeAdapter(ABC):
         """Materialize runtime-native in-process inputs from neutral context."""
         return context
 
-    def grounding_summary(
-        self,
-        result: Mapping[str, Any],
-        events: list[Any],
-        *,
-        documents_present: bool,
-    ) -> Mapping[str, Any]:
-        report = result.get("grounding_report") if isinstance(result, Mapping) else None
-        report = report if isinstance(report, Mapping) else {}
-        evidence = result.get("task_evidence_manifest") if isinstance(result, Mapping) else None
-        count = len(report.get("verified_claims") or []) if isinstance(report.get("verified_claims"), list) else len(evidence or []) if isinstance(evidence, list) else 0
-        return {
-            "requirement": "document" if documents_present else "research",
-            "grounded": count > 0,
-            "evidence_result_count": count,
-            "successful_evidence_tools": [],
-            "failed_tool_count": 0,
-            "failure_codes": [],
-        }
-
     def _unsupported(self, operation_id: str, explanation: str) -> NoReturn:
         raise RuntimeError.capability_unsupported(
             operation_id=operation_id,

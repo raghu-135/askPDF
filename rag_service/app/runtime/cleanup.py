@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.runtime.capability_resolver import discover_adapter_capabilities
+from app.runtime.capability_resolver import resolve_capability_resolution
 from app.runtime.catalog import continuation_from_run, definition_from_run
 from app.runtime.contracts import RuntimeOperationId, RuntimeSupportLevel
-from app.runtime.registry import adapter_for_definition
+from app.runtime.registry import adapter_for_definition, get_runtime_registry
 
 
 @dataclass(frozen=True)
@@ -40,13 +40,17 @@ async def delete_run_continuation(run: Any) -> ContinuationCleanupOutcome:
             error="The persisted runtime binding is invalid.",
         )
     adapter = adapter_for_definition(definition)
-    capabilities, discovery_error = await discover_adapter_capabilities(adapter)
-    if capabilities is None:
+    resolution = await resolve_capability_resolution(
+        definition,
+        registry=get_runtime_registry(),
+    )
+    if not resolution.runtime_available:
         return ContinuationCleanupOutcome(
             run_id=run_id,
             status="unavailable",
-            error=discovery_error,
+            error=resolution.error,
         )
+    capabilities = resolution.capabilities
     descriptor = capabilities.operations.get(RuntimeOperationId.RUN_CONTINUATION_CLEANUP)
     if descriptor is None or not descriptor.enabled or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
         return ContinuationCleanupOutcome(run_id=run_id, status="unsupported")

@@ -54,7 +54,7 @@ export function runtimeOperationAvailability(
   response: AgentRuntimeCapabilityResponse | null | undefined,
   operation: RuntimeControlOperation,
 ): RuntimeOperationAvailability {
-  const descriptor = response?.available ? response.capabilities?.operations[operation] : undefined;
+  const descriptor = response?.runtime_available ? response.capabilities?.operations[operation] : undefined;
   if (!descriptor || descriptor.support === 'unsupported') {
     return { visible: false, enabled: false };
   }
