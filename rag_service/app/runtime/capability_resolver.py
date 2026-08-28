@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -21,6 +22,9 @@ from app.runtime.product_capabilities import product_operation_descriptors, proj
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 from app.db.enums import AgentRunStatus
 from app.models.deep_research import AgentTaskStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 TERMINAL_RUN_STATES = frozenset({
@@ -273,10 +277,18 @@ async def capabilities_for_definition(
     adapter = registry.get(definition)
     try:
         capabilities = await _reconciled_capabilities(adapter, definition)
-    except Exception as exc:
+    except RuntimeError as exc:
         capabilities = _unavailable_product_capabilities(
             adapter, capability_discovery_error(exc, adapter)
         )
+    except Exception:
+        logger.exception(
+            "Unexpected capability resolution failure | framework=%s builder_id=%s definition_id=%s",
+            definition.framework,
+            definition.builder_id,
+            definition.definition_id,
+        )
+        raise
     operations = dict(capabilities.operations)
     artifact_list = operations.get(RuntimeOperationId.ARTIFACT_LIST)
     if artifact_list is not None:
@@ -323,10 +335,19 @@ async def resolve_capabilities(
     adapter = registry.get(definition)
     try:
         capabilities = await _reconciled_capabilities(adapter, definition)
-    except Exception as exc:
+    except RuntimeError as exc:
         capabilities = _unavailable_product_capabilities(
             adapter, capability_discovery_error(exc, adapter)
         )
+    except Exception:
+        logger.exception(
+            "Unexpected capability resolution failure | framework=%s builder_id=%s definition_id=%s run_id=%s",
+            definition.framework,
+            definition.builder_id,
+            definition.definition_id,
+            getattr(run, "id", None),
+        )
+        raise
     operations = dict(capabilities.operations)
     if run is None:
         for operation in TASK_ONLY_OPERATIONS - {RuntimeOperationId.TASK_START}:
@@ -558,6 +579,10 @@ async def discover_adapter_capabilities(
     except RuntimeError as exc:
         error = capability_discovery_error(exc, adapter)
         return _unavailable_product_capabilities(adapter, error), error
-    except Exception as exc:
-        error = capability_discovery_error(exc, adapter)
-        return _unavailable_product_capabilities(adapter, error), error
+    except Exception:
+        logger.exception(
+            "Unexpected adapter capability discovery failure | framework=%s builder_id=%s",
+            adapter.framework,
+            adapter.builder_id,
+        )
+        raise

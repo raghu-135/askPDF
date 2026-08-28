@@ -756,6 +756,8 @@ class AgentRuntimeOperation(SQLModel, table=True):
     result_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
     error_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claimed_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claim_expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     __table_args__ = (

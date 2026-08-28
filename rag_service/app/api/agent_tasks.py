@@ -94,6 +94,12 @@ async def list_agent_definitions():
             "category": definition.category,
             "available": error is None and capabilities is not None,
             "task_eligible": bool(policy),
+            "task_start_available": bool(
+                capabilities
+                and (task_start := capabilities.operations.get(RuntimeOperationId.TASK_START))
+                and task_start.enabled
+                and task_start.support.value != "unsupported"
+            ),
             "configuration": {"fields": fields},
             "operations": {
                 operation.value: descriptor.to_dict()

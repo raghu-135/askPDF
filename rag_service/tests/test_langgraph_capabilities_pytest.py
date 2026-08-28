@@ -1,7 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeSupportLevel
+from app.runtime.contracts import (
+    AgentDefinition,
+    AgentRuntimeRequest,
+    ContinuationBinding,
+    RuntimeOperationId,
+    RuntimeSupportLevel,
+)
 from app.runtime.langgraph_capabilities import (
     LangGraphDeploymentProfile,
     langgraph_capabilities,
@@ -209,3 +215,48 @@ async def test_state_update_requires_a_checkpoint_binding_at_run_level():
         })(),
     )
     assert bound.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].enabled is True
+
+
+@pytest.mark.asyncio
+async def test_langgraph_inspect_state_reads_checkpoint_snapshot(monkeypatch):
+    import app.runtime.langgraph_adapter as module
+
+    class Snapshot:
+        values = {"messages": ["hello"]}
+        next = ("answer",)
+        metadata = {"source": "loop"}
+
+    class Graph:
+        async def aget_state(self, config):
+            assert config == {"configurable": {"thread_id": "checkpoint-1"}}
+            return Snapshot()
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Compiler:
+        def compile(self, spec, *, checkpointer):
+            assert spec == {"workflow_id": "router_rag_agent"}
+            assert checkpointer is not None
+            return Graph()
+
+    monkeypatch.setattr(module, "checkpointing", type("Checkpointing", (), {
+        "open_agent_checkpointer": lambda: CheckpointerContext(),
+    }))
+    monkeypatch.setattr("app.runtime.langgraph.compiler.WorkflowCompiler", Compiler)
+
+    request = AgentRuntimeRequest(
+        run_id="run-1", thread_id="thread-1", definition_id="router_rag_agent",
+        framework="langgraph", builder_id="langgraph_graph",
+        options={"resolved_spec": {"workflow_id": "router_rag_agent"}},
+        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "checkpoint-1"}),
+    )
+    state = await LangGraphRuntimeAdapter().inspect_state(request)
+
+    assert state["state"] == {"messages": ["hello"]}
+    assert state["next"] == ["answer"]
+    assert state["metadata"] == {"source": "loop"}

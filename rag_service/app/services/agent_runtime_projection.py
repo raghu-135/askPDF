@@ -12,33 +12,19 @@ class AgentRuntimeProjection:
     """Persist canonical product records after runtime execution completes."""
 
     async def apply_event(self, *, run: Any, event: Any) -> bool:
-        """Record the bounded last event marker; duplicate IDs are ignored."""
+        """Apply only events newer than the persisted projection sequence."""
 
         from app.agent_workflows.repository import AgentWorkflowRepository
 
-        metadata = dict(getattr(run, "run_metadata_json", None) or {})
-        projection = dict(metadata.get("projection") or {})
         event_id = str(getattr(event, "event_id", None) or "")
-        if event_id and event_id == projection.get("last_event_id"):
-            return False
-        projection.update(
-            {
-                "status": projection.get("status") or "pending",
-                "last_event_id": event_id,
-                "last_event_sequence": int(getattr(event, "sequence", 0) or 0),
-            }
+        sequence = int(getattr(event, "sequence", 0) or 0)
+        return await AgentWorkflowRepository().apply_runtime_projection_event(
+            run.id,
+            event_id=event_id,
+            sequence=sequence,
+            continuation=getattr(event, "continuation", None),
+            checkpoint_boundary_available=getattr(event, "checkpoint_boundary_available", None),
         )
-        await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
-        continuation = getattr(event, "continuation", None)
-        if continuation is not None:
-            await AgentWorkflowRepository().update_runtime_binding(run.id, continuation)
-        checkpoint_boundary = getattr(event, "checkpoint_boundary_available", None)
-        if checkpoint_boundary is not None:
-            await AgentWorkflowRepository().update_run_metadata_fields(
-                run.id,
-                {"checkpoint_boundary_available": bool(checkpoint_boundary)},
-            )
-        return True
 
     async def project_terminal_result(self, *, run: Any, result: Mapping[str, Any], terminal_event_id: str | None = None) -> dict[str, Any]:
         from app.services.agent_runtime_reconciliation import record_terminal_result

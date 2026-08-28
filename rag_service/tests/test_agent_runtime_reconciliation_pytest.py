@@ -17,6 +17,44 @@ def test_runtime_result_hash_is_stable():
 
 
 @pytest.mark.asyncio
+async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monkeypatch):
+    from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
+
+    state = {"last_sequence": 0, "binding": None, "checkpoint": None}
+
+    class Repository:
+        async def apply_runtime_projection_event(self, _run_id, **kwargs):
+            if kwargs["sequence"] <= state["last_sequence"]:
+                return False
+            state["last_sequence"] = kwargs["sequence"]
+            state["binding"] = kwargs["continuation"] or state["binding"]
+            if kwargs["checkpoint_boundary_available"] is not None:
+                state["checkpoint"] = kwargs["checkpoint_boundary_available"]
+            return True
+
+    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    projector = AgentRuntimeProjection()
+    run = SimpleNamespace(id="run-1")
+    newest = AgentRuntimeEvent(
+        event_id="event-10", run_id="run-1", sequence=10,
+        kind="interrupt.requested",
+        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "new"}),
+        checkpoint_boundary_available=True,
+    )
+    older = AgentRuntimeEvent(
+        event_id="event-9", run_id="run-1", sequence=9,
+        kind="runtime.event",
+        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "old"}),
+        checkpoint_boundary_available=False,
+    )
+
+    assert await projector.apply_event(run=run, event=newest) is True
+    assert await projector.apply_event(run=run, event=older) is False
+    assert state["binding"].payload["checkpoint_thread_id"] == "new"
+    assert state["checkpoint"] is True
+
+
+@pytest.mark.asyncio
 async def test_terminal_projection_replay_does_not_repeat_product_side_effects(monkeypatch):
     run = SimpleNamespace(
         id="run-1",

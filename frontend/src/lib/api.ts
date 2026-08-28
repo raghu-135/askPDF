@@ -2431,6 +2431,7 @@ export interface AgentDefinitionCatalogEntry {
   category?: string | null;
   available: boolean;
   task_eligible: boolean;
+  task_start_available: boolean;
   configuration: {
     fields: Array<{
       id: string;

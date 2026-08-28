@@ -1655,6 +1655,7 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     )
     assert definition["available"] is True
     assert definition["task_eligible"] is True
+    assert definition["task_start_available"] is True
     web_field = next(item for item in definition["configuration"]["fields"] if item["id"] == "web_search_mode")
     assert web_field["enabled"] is True
     builtin_limits = _spec()["config"]["task_policy"]["limits"]

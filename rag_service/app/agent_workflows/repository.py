@@ -802,6 +802,43 @@ class AgentWorkflowRepository:
             replace_jsonb_field(run, "run_metadata_json", metadata)
             return run
 
+    async def apply_runtime_projection_event(
+        self,
+        run_id: str,
+        *,
+        event_id: str,
+        sequence: int,
+        continuation: Any = None,
+        checkpoint_boundary_available: Optional[bool] = None,
+    ) -> bool:
+        """Apply one newer runtime event and its state facts atomically."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id, with_for_update=True)
+            if run is None:
+                return False
+            metadata = dict(run.run_metadata_json or {})
+            projection = dict(metadata.get("projection") or {})
+            last_sequence = int(projection.get("last_event_sequence", 0) or 0)
+            if sequence <= last_sequence:
+                return False
+            projection.update({
+                "status": projection.get("status") or "pending",
+                "last_event_id": event_id,
+                "last_event_sequence": sequence,
+            })
+            metadata["projection"] = projection
+            if checkpoint_boundary_available is not None:
+                metadata["checkpoint_boundary_available"] = bool(checkpoint_boundary_available)
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            if continuation is not None:
+                value = continuation.to_dict() if hasattr(continuation, "to_dict") else dict(continuation)
+                replace_jsonb_field(run, "runtime_binding_json", value)
+                run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
+                run.runtime_binding_status = "active"
+            return True
+
     async def update_run_metadata_fields(self, run_id: str, fields: Dict[str, Any]) -> Optional[AgentRun]:
         """Merge bounded control-plane metadata without replacing other owners."""
 

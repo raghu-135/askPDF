@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from datetime import timedelta
 from typing import Any, Mapping
 
 from sqlalchemy import select
@@ -18,6 +20,17 @@ class RuntimeOperationConflict(Exception):
         super().__init__(message)
 
 
+def runtime_operation_lease_seconds() -> int:
+    raw = os.getenv("RUNTIME_OPERATION_LEASE_SECONDS", "300")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("RUNTIME_OPERATION_LEASE_SECONDS must be an integer") from exc
+    if value <= 0:
+        raise RuntimeError("RUNTIME_OPERATION_LEASE_SECONDS must be greater than zero")
+    return value
+
+
 async def claim_runtime_operation(
     *,
     run_id: str,
@@ -29,6 +42,8 @@ async def claim_runtime_operation(
 
     async with async_session_maker() as session:
         async with session.begin():
+            claimed_at = utc_now()
+            claim_expires_at = claimed_at + timedelta(seconds=runtime_operation_lease_seconds())
             insert_result = await session.execute(
                 insert(AgentRuntimeOperation)
                 .values(
@@ -36,6 +51,8 @@ async def claim_runtime_operation(
                     operation=operation,
                     idempotency_key=idempotency_key,
                     request_fingerprint=request_fingerprint,
+                    claimed_at=claimed_at,
+                    claim_expires_at=claim_expires_at,
                 )
                 .on_conflict_do_nothing(
                     index_elements=["run_id", "operation", "idempotency_key"],
@@ -60,17 +77,28 @@ async def claim_runtime_operation(
                         "The idempotency key was already used with a different request",
                         operation=existing,
                     )
-                if existing.status == "in_progress":
+                existing_expiry = getattr(existing, "claim_expires_at", None)
+                if existing.status == "in_progress" and (
+                    existing_expiry is None or existing_expiry > claimed_at
+                ):
                     raise RuntimeOperationConflict(
                         "runtime_operation_in_progress",
                         "The runtime operation is already in progress",
                         operation=existing,
                     )
-                if existing.status == "failed" and bool((existing.error_json or {}).get("retryable")):
+                if (
+                    existing.status == "failed" and bool((existing.error_json or {}).get("retryable"))
+                ) or (
+                    existing.status == "in_progress"
+                    and existing_expiry is not None
+                    and existing_expiry <= claimed_at
+                ):
                     existing.status = "in_progress"
                     existing.error_json = None
                     existing.result_json = {}
                     existing.completed_at = None
+                    existing.claimed_at = claimed_at
+                    existing.claim_expires_at = claim_expires_at
                 return existing
 
             raise RuntimeOperationConflict(

@@ -170,6 +170,9 @@ class AgentRunService:
             definition_id=definition.definition_id,
             framework=definition.framework,
             builder_id=definition.builder_id,
+            options={
+                "resolved_spec": dict(getattr(run, "resolved_spec_json", None) or {}),
+            },
             continuation=continuation_from_run(run),
         )
         return dict(await adapter.inspect_state(request))

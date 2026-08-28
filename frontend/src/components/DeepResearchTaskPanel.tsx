@@ -328,9 +328,13 @@ export default function DeepResearchTaskPanel({
     void listAgentDefinitions()
       .then((catalog) => {
         if (!active) return;
-        const eligible = catalog.filter((entry) => entry.available && entry.task_eligible);
+        const eligible = catalog.filter((entry) => entry.available && entry.task_eligible && entry.task_start_available);
         setDefinitions(eligible);
-        setDefinitionId((current) => current || eligible[0]?.definition_id || '');
+        setDefinitionId((current) => (
+          eligible.some((entry) => entry.definition_id === current)
+            ? current
+            : eligible[0]?.definition_id || ''
+        ));
       })
       .catch(() => {
         if (!active) return;

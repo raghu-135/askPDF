@@ -376,15 +376,33 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             }
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        continuation = request.continuation
-        checkpoint_id = None
-        if continuation is not None:
-            checkpoint_id = continuation.payload.get("checkpoint_thread_id")
+        from app.runtime.langgraph.compiler import WorkflowCompiler
+
+        checkpoint_thread_id = str(
+            (request.continuation.payload.get("checkpoint_thread_id") if request.continuation else None)
+            or ""
+        ).strip()
+        if not checkpoint_thread_id:
+            raise RuntimeError("runtime_binding_missing", "LangGraph state inspection requires a checkpoint binding")
+        resolved_spec = request.options.get("resolved_spec")
+        if not isinstance(resolved_spec, Mapping) or not resolved_spec:
+            raise RuntimeError("runtime_state_unavailable", "LangGraph state inspection requires the resolved workflow state")
+
+        async with checkpointing.open_agent_checkpointer() as checkpointer:
+            app = WorkflowCompiler().compile(dict(resolved_spec), checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": checkpoint_thread_id}}
+            snapshot = await app.aget_state(config)
+        values = getattr(snapshot, "values", None)
+        if values is None:
+            raise RuntimeError("runtime_state_unavailable", "LangGraph checkpoint state is unavailable")
         return {
             "framework": self.framework,
             "builder_id": self.builder_id,
-            "checkpoint_thread_id": checkpoint_id,
-            "continuation_available": bool(checkpoint_id),
+            "checkpoint_thread_id": checkpoint_thread_id,
+            "continuation_available": True,
+            "state": dict(values),
+            "next": list(getattr(snapshot, "next", ()) or ()),
+            "metadata": dict(getattr(snapshot, "metadata", {}) or {}),
         }
 
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any:

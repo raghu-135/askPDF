@@ -136,6 +136,11 @@ class UnavailableCapabilityAdapter(CapabilityAdapter):
         return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
 
 
+class BrokenCapabilityAdapter(CapabilityAdapter):
+    async def capabilities(self, definition):
+        raise AssertionError("adapter defect")
+
+
 def _definition(**capabilities):
     return AgentDefinition(
         definition_id="definition-1",
@@ -309,6 +314,18 @@ async def test_runtime_unavailable_disables_all_product_task_operations():
         descriptor = capabilities.operations[operation]
         assert descriptor.enabled is False
         assert descriptor.disabled_reason == RuntimeCapabilityDisabledReason.RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_unexpected_capability_errors_are_not_classified_as_runtime_outages():
+    definition = _definition()
+    registry = RuntimeRegistry(adapters=[BrokenCapabilityAdapter()])
+
+    with pytest.raises(AssertionError, match="adapter defect"):
+        await capabilities_for_definition(definition, registry=registry)
+
+    with pytest.raises(AssertionError, match="adapter defect"):
+        await resolve_capabilities(definition, registry=registry)
 
 
 @pytest.mark.asyncio
