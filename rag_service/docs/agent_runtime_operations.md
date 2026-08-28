@@ -19,14 +19,10 @@ The runtime execution store uses PostgreSQL and assigns one owner, lease, and
 fencing token to every active execution. A worker that loses its lease must
 stop and may not append events or finalize a run.
 
-Runtime schema auto-creation is disabled by default. Production deployments
-must provision `runtime_executions` and `runtime_events` through a migration or
-bootstrap job before starting the runtime. The Compose proof explicitly sets
-`AGENT_RUNTIME_SCHEMA_AUTO_CREATE=true`.
-
-The runtime lease migration is `0d7e4a9b2c1f`. Apply the normal application
-migrations with `DATABASE_URL`, then apply the runtime migrations with the
-dedicated bootstrap command:
+Runtime schema is migration-owned. The runtime refuses to start when its
+required tables are missing; it never creates or alters them. Apply the normal
+application migrations with `DATABASE_URL`, then apply the independent runtime
+migration with the dedicated bootstrap command:
 
 ```bash
 cd rag_service
@@ -34,12 +30,10 @@ AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@post
 python -m app.db.migrate_runtime
 ```
 
-The bootstrap stamps legacy runtime databases at the pre-runtime baseline and
-then runs the runtime revision using the standard `DATABASE_URL` convention.
-The migration is guarded so it is safe for the
-application database, where runtime-owned tables are not present. Existing
-runtime tables receive the lease/fencing columns without losing checkpoints or
-execution records.
+The runtime database has its own Alembic configuration and one complete schema
+revision. It is independent of the application migration graph. Runtime
+checkpoint state is intentionally initialized as a clean schema for this
+feature branch.
 
 The control-plane HTTP adapter reconnects to the durable events endpoint after
 an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,

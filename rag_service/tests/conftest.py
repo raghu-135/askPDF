@@ -281,11 +281,9 @@ def api_client(test_database_url, monkeypatch) -> Generator:
         await stop_event.wait()
 
     monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
-    # Replace only the DB initializer so startup creates the isolated schema
-    # on TestClient's portal loop before the normal seed operations run.
-    async def init_test_db():
-        await _create_test_schema(engine)
-    monkeypatch.setattr(main_module, "init_db", init_test_db)
+    # The isolated fixture owns test schema creation. Production startup must
+    # not call SQLModel.metadata.create_all; migrations are the schema authority.
+    asyncio.run(_create_test_schema(engine))
     app = main_module.app
 
     try:

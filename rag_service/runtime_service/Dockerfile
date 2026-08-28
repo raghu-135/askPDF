@@ -10,6 +10,8 @@ COPY requirements-runtime.txt requirements-runtime.txt
 RUN pip install -r requirements-runtime.txt
 
 COPY app app
+COPY runtime_alembic runtime_alembic
+COPY runtime_alembic.ini runtime_alembic.ini
 COPY runtime_service runtime_service
 COPY runtime_protocol runtime_protocol
 EXPOSE 8100

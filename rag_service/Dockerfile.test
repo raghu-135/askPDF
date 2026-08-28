@@ -15,10 +15,11 @@ RUN pip install -r requirements-dev.txt
 RUN python -m spacy download en_core_web_sm
 
 COPY alembic alembic
+COPY runtime_alembic runtime_alembic
 COPY scripts scripts
 COPY app app
 COPY runtime_service runtime_service
 COPY tests tests
-COPY alembic.ini main.py ./
+COPY alembic.ini runtime_alembic.ini main.py ./
 
 CMD ["python", "scripts/run_tests.py"]

@@ -193,7 +193,6 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
-    os.environ["AGENT_RUNTIME_SCHEMA_AUTO_CREATE"] = "true"
     await store.initialize()
     run_id = f"runtime-store-{uuid.uuid4().hex}"
     try:
@@ -246,7 +245,6 @@ async def test_postgres_request_cancel_matches_in_memory_outcomes() -> None:
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
-    os.environ["AGENT_RUNTIME_SCHEMA_AUTO_CREATE"] = "true"
     await store.initialize()
     run_id = f"runtime-cancel-{uuid.uuid4().hex}"
     try:

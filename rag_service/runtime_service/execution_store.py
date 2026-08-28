@@ -163,77 +163,14 @@ class ExecutionStore:
 
         self._pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=5)
         async with self._pool.acquire() as connection:
-            auto_create = os.getenv("AGENT_RUNTIME_SCHEMA_AUTO_CREATE", "false").strip().lower() in {"1", "true", "yes", "on"}
-            if not auto_create:
+            try:
                 await connection.execute("select 1 from runtime_executions limit 0")
-                return
-            await connection.execute(
-                """
-                create table if not exists runtime_executions (
-                    run_id text primary key,
-                    operation text not null,
-                    request jsonb not null,
-                    payload jsonb not null,
-                    status text not null,
-                    cancel_requested boolean not null default false,
-                    next_sequence integer not null default 1,
-                    attempt integer not null default 1,
-                    continuation jsonb,
-                    result jsonb,
-                    error jsonb,
-                    created_at timestamptz not null default now(),
-                    updated_at timestamptz not null default now()
-                    ,owner_id text
-                    ,lease_expires_at timestamptz
-                    ,heartbeat_at timestamptz
-                    ,fencing_token bigint not null default 0
-                    ,request_fingerprint text
-                    ,last_operation_id text
-                    ,retry_source_attempt integer
-                );
-                create table if not exists runtime_operations (
-                    run_id text not null references runtime_executions(run_id) on delete cascade,
-                    operation_id text not null,
-                    operation text not null,
-                    request_fingerprint text not null,
-                    attempt integer not null,
-                    status text not null default 'queued',
-                    result jsonb,
-                    created_at timestamptz not null default now(),
-                    primary key (run_id, operation_id)
-                );
-                create table if not exists runtime_events (
-                    run_id text not null references runtime_executions(run_id) on delete cascade,
-                    sequence integer not null,
-                    attempt integer not null default 1,
-                    event_id text not null,
-                    kind text not null,
-                    payload jsonb not null,
-                    occurred_at text,
-                    trace_id text,
-                    continuation jsonb,
-                    terminal boolean not null default false,
-                    result jsonb,
-                    created_at timestamptz not null default now(),
-                    primary key (run_id, sequence),
-                    unique (run_id, event_id)
-                );
-                alter table runtime_events add column if not exists occurred_at text;
-                alter table runtime_events add column if not exists trace_id text;
-                alter table runtime_events add column if not exists continuation jsonb;
-                alter table runtime_operations add column if not exists status text not null default 'queued';
-                alter table runtime_operations add column if not exists result jsonb;
-                alter table runtime_executions add column if not exists attempt integer not null default 1;
-                alter table runtime_events add column if not exists attempt integer not null default 1;
-                alter table runtime_executions add column if not exists owner_id text;
-                alter table runtime_executions add column if not exists lease_expires_at timestamptz;
-                alter table runtime_executions add column if not exists heartbeat_at timestamptz;
-                alter table runtime_executions add column if not exists fencing_token bigint not null default 0;
-                alter table runtime_executions add column if not exists request_fingerprint text;
-                alter table runtime_executions add column if not exists last_operation_id text;
-                alter table runtime_executions add column if not exists retry_source_attempt integer;
-                """
-            )
+                await connection.execute("select 1 from runtime_operations limit 0")
+                await connection.execute("select 1 from runtime_events limit 0")
+            except asyncpg.UndefinedTableError as exc:
+                raise RuntimeError(
+                    "Runtime schema is missing; run app.db.migrate_runtime before starting the runtime"
+                ) from exc
 
     async def close(self) -> None:
         if self._pool is not None:

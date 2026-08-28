@@ -34,10 +34,11 @@ RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
 RUN mkdir -p /models/hf /static
 
 COPY alembic alembic
+COPY runtime_alembic runtime_alembic
 COPY scripts scripts
 COPY app app
 COPY runtime_protocol runtime_protocol
-COPY alembic.ini main.py ./
+COPY alembic.ini runtime_alembic.ini main.py ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

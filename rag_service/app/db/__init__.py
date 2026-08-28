@@ -51,7 +51,6 @@ from app.db.enums import (
 
 # Connection management (SQLModel/PostgreSQL)
 from app.db.connection_sqlmodel import (
-    init_db,
     close_db,
     get_session,
     async_session_maker,
@@ -618,8 +617,6 @@ __all__ = [
     "Memory",
     "MemoryEvent",
     "MemoryOverride",
-    # Config
-    "init_db",
     # Status
     "get_scoped_indexing_status",
     # Constants

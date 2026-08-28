@@ -134,7 +134,6 @@ services:
       ASKPDF_AGENT_CHECKPOINTER: postgres
       AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
       AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      AGENT_RUNTIME_SCHEMA_AUTO_CREATE: "true"
       ASKPDF_AGENT_CHECKPOINTER_SETUP: "true"
       ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK: "false"
       MCP_TRANSPORT: loopback_http
@@ -283,7 +282,6 @@ services:
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"
-      AGENT_RUNTIME_SCHEMA_AUTO_CREATE: "true"
       PYTHONPATH: /workspace:/app
       WEAVIATE_URL: http://weaviate:8080
       LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}

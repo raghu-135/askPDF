@@ -18,10 +18,7 @@ from sqlalchemy.pool import NullPool
 INITIAL_REVISION = "8c8d6eac150a"
 THREAD_METADATA_REVISION = "2f6c9d1e8a4b"
 SIMPLIFIED_SCHEMA_REVISION = "a1f4c8d9e2b3"
-# The repository contains a separate runtime-database branch. Target the
-# application head explicitly so normal startup does not attempt runtime-only
-# migrations against the application database.
-HEAD_REVISION = "j4d9e6f1b3c5"
+HEAD_REVISION = "head"
 BASELINE_TABLES = {
     "files",
     "thread_files",

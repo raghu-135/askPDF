@@ -349,6 +349,13 @@ def main(argv: list[str] | None = None) -> int:
         env.pop("ASKPDF_AGENT_CHECKPOINTER_SETUP", None)
         env.pop("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST", None)
 
+    # Runtime state has its own schema authority. Prepare it for every test
+    # group because the runtime store is exercised by both unit and integration
+    # tests, while remaining isolated from application Alembic revisions.
+    env["AGENT_RUNTIME_EXECUTION_DATABASE_URL"] = test_db_url
+    env["RUN_RUNTIME_DB_MIGRATIONS"] = "true"
+    _run(["python", "-m", "app.db.migrate_runtime"], env=env)
+
     try:
         if targets:
             command = ["pytest", *targets]

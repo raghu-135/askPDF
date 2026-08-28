@@ -49,7 +49,7 @@ from app.api.tools import router as tools_router
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.execution_stream import drain_retained_executions
 from app.db import ensure_default_project
-from app.db.connection_sqlmodel import init_db, close_db
+from app.db.connection_sqlmodel import close_db
 from app.db.vector import close_vector_db, get_vector_db
 from app.services.memory_service import (
     retry_pending_memory_indexes,
@@ -131,11 +131,9 @@ async def lifespan(app: FastAPI):
         # particular, database or MCP startup failures must not strand the
         # application-scoped HTTP clients initialized above them.
         await init_http_clients()
-        logger.info("Initializing PostgreSQL database with SQLModel...")
-        await init_db()
         await ensure_default_project()
         await AgentWorkflowRepository().seed_builtin_workflows()
-        logger.info("Database initialization complete.")
+        logger.info("Database migrations already applied; application data initialization complete.")
 
         try:
             logger.info("Initializing Weaviate collections...")

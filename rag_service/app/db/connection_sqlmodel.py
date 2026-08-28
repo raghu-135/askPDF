@@ -11,8 +11,6 @@ from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel
-
 logger = logging.getLogger(__name__)
 
 # Database URLs from environment - must be explicitly set
@@ -81,18 +79,6 @@ test_session_maker = async_sessionmaker(
     autocommit=False,
     autoflush=False
 )
-
-
-async def init_db(database_url: str = None):
-    """Create all tables. Use for development/testing only."""
-    url = database_url or DATABASE_URL
-    engine = create_engine(url)
-    
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    
-    await engine.dispose()
-    logger.info("Database tables created")
 
 
 async def close_db():

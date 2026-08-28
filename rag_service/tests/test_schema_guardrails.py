@@ -53,17 +53,13 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     config.set_main_option("script_location", str(service_root / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    cleanup = scripts.get_revision("c9e6a1b4d3f8")
-
-    assert set(scripts.get_heads()) == {"k5e2a8c4d7f1"}
-    assert scripts.get_revision("k5e2a8c4d7f1").down_revision == "j4d9e6f1b3c5"
-    assert scripts.get_revision("9b4d6e2f1a7c").down_revision == "a8d3f1c6e4b2"
+    assert set(scripts.get_heads()) == {"a9c7e1f3b5d2"}
+    assert scripts.get_revision("a9c7e1f3b5d2").down_revision == "a8d3f1c6e4b2"
     assert scripts.get_revision("a8d3f1c6e4b2").down_revision == "e7c4a1b9d2f6"
     assert scripts.get_revision("e7c4a1b9d2f6").down_revision == "d5f1a2b3c4e6"
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
-    assert cleanup is not None
-    assert cleanup.down_revision == "b8d5f0a3c2e7"
+    assert scripts.get_revision("c9e6a1b4d3f8").down_revision == "b8d5f0a3c2e7"
     assert scripts.get_revision("e2c7a9f4b1d6").down_revision == "c9e6a1b4d3f8"
     assert scripts.get_revision("f4b8c2d7e1a9").down_revision == "e2c7a9f4b1d6"
     assert scripts.get_revision("d9a4e7c2b1f6").down_revision == "f4b8c2d7e1a9"
@@ -74,6 +70,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("d1e8f4a9b2c7").down_revision == "6d2f8a9b3c1e"
     assert scripts.get_revision("7f3c1a9d5e2b").down_revision == "d1e8f4a9b2c7"
     assert scripts.get_revision("c4e8a1b6d2f0").down_revision == "7f3c1a9d5e2b"
+    assert scripts.get_revision("a9c7e1f3b5d2") is not None
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():
