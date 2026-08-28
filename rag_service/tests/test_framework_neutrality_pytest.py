@@ -89,21 +89,25 @@ async def test_continuation_cleanup_does_not_treat_unavailable_as_cleaned(monkey
         runtime_binding_json={"binding_type": "fake.binding", "payload": {"id": "binding-1"}},
     )
     adapter = SimpleNamespace(framework="fake", builder_id="fake-builder")
-    monkeypatch.setattr(cleanup, "adapter_for_definition", lambda definition: adapter)
+    from app.runtime.registry import RuntimeRegistry
+
+    monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: RuntimeRegistry([adapter]))
+    resolver = AsyncMock(return_value=SimpleNamespace(
+        capabilities=RuntimeCapabilities(),
+        error={"code": "runtime_unavailable"},
+        runtime_available=False,
+    ))
     monkeypatch.setattr(
         cleanup,
         "resolve_run_capability_resolution",
-        AsyncMock(return_value=SimpleNamespace(
-            capabilities=RuntimeCapabilities(),
-            error={"code": "runtime_unavailable"},
-            runtime_available=False,
-        )),
+        resolver,
     )
 
     outcome = await cleanup.delete_run_continuation(run)
 
     assert outcome.status == "unavailable"
     assert outcome.cleaned is False
+    assert resolver.await_args.kwargs["adapter"] is adapter
 
 
 @pytest.mark.asyncio
@@ -126,15 +130,18 @@ async def test_continuation_cleanup_accepts_opaque_binding_types(monkeypatch) ->
         resolved_spec_json={},
         runtime_binding_json={"binding_type": "vendor.opaque", "payload": {"token": "value"}},
     )
-    monkeypatch.setattr(cleanup, "adapter_for_definition", lambda definition: adapter)
+    from app.runtime.registry import RuntimeRegistry
+
+    monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: RuntimeRegistry([adapter]))
+    resolver = AsyncMock(return_value=SimpleNamespace(
+        capabilities=capabilities,
+        error=None,
+        runtime_available=True,
+    ))
     monkeypatch.setattr(
         cleanup,
         "resolve_run_capability_resolution",
-        AsyncMock(return_value=SimpleNamespace(
-            capabilities=capabilities,
-            error=None,
-            runtime_available=True,
-        )),
+        resolver,
     )
 
     outcome = await cleanup.delete_run_continuation(run)
@@ -143,6 +150,7 @@ async def test_continuation_cleanup_accepts_opaque_binding_types(monkeypatch) ->
     deleted.assert_awaited_once_with(
         ContinuationBinding(binding_type="vendor.opaque", payload={"token": "value"})
     )
+    assert resolver.await_args.kwargs["adapter"] is adapter
 
 
 def test_runtime_json_validation_rejects_coercion_depth_and_aggregate_size() -> None:

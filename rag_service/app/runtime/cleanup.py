@@ -8,7 +8,7 @@ from typing import Any, Iterable
 from app.runtime.capability_resolver import resolve_run_capability_resolution
 from app.runtime.catalog import continuation_from_run, definition_from_run
 from app.runtime.contracts import RuntimeOperationId, RuntimeSupportLevel
-from app.runtime.registry import adapter_for_definition, get_runtime_registry
+from app.runtime.registry import RuntimeRegistry, get_runtime_registry
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,11 @@ class ContinuationCleanupOutcome:
         return self.status in {"cleaned", "not_bound", "unsupported"}
 
 
-async def delete_run_continuation(run: Any) -> ContinuationCleanupOutcome:
+async def delete_run_continuation(
+    run: Any,
+    *,
+    registry: RuntimeRegistry | None = None,
+) -> ContinuationCleanupOutcome:
     run_id = str(getattr(run, "id", ""))
     definition = definition_from_run(run)
     if not getattr(run, "runtime_binding_json", None):
@@ -39,11 +43,13 @@ async def delete_run_continuation(run: Any) -> ContinuationCleanupOutcome:
             status="invalid_binding",
             error="The persisted runtime binding is invalid.",
         )
-    adapter = adapter_for_definition(definition)
+    registry = registry or get_runtime_registry()
+    adapter = registry.get(definition)
     resolution = await resolve_run_capability_resolution(
         definition,
-        registry=get_runtime_registry(),
+        registry=registry,
         run=run,
+        adapter=adapter,
     )
     if not resolution.runtime_available:
         return ContinuationCleanupOutcome(
@@ -66,8 +72,12 @@ async def delete_run_continuation(run: Any) -> ContinuationCleanupOutcome:
     )
 
 
-async def delete_run_continuations(runs: Iterable[Any]) -> list[ContinuationCleanupOutcome]:
+async def delete_run_continuations(
+    runs: Iterable[Any],
+    *,
+    registry: RuntimeRegistry | None = None,
+) -> list[ContinuationCleanupOutcome]:
     results: list[ContinuationCleanupOutcome] = []
     for run in runs:
-        results.append(await delete_run_continuation(run))
+        results.append(await delete_run_continuation(run, registry=registry))
     return results

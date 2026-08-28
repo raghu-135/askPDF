@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -169,7 +169,7 @@ def _patch_runtime(monkeypatch, adapter, repository):
     )
     monkeypatch.setattr(service_module, "complete_runtime_operation", AsyncMock())
     monkeypatch.setattr(service_module, "fail_runtime_operation", AsyncMock())
-    return AgentRunService(repository=repository)
+    return AgentRunService(repository=repository, repository_factory=lambda: repository)
 
 
 @pytest.mark.asyncio
@@ -326,6 +326,38 @@ async def test_non_task_runtime_approval_responds_then_continues_without_resume(
     assert adapter.calls["resume"] == 0
 
 
+@pytest.mark.asyncio
+async def test_resume_uses_injected_repository_factory_for_independent_transactions(monkeypatch):
+    pending = {
+        "interrupt_id": "approval-factory",
+        "status": "pending",
+        "response_operation": RuntimeOperationId.RUN_APPROVAL_RESPOND.value,
+        "checkpoint_resume": True,
+    }
+    current = _run(status="awaiting_human", pending=pending)
+    resolved_interrupt = {**pending, "status": "resumed", "decision": {"action": "approve"}}
+    resolved_run = _run(status="running", pending=resolved_interrupt)
+    resolution = InterruptResolutionResult(run=resolved_run, outcome="resumed", interrupt=resolved_interrupt)
+    repository = FakeRepository(current, resolution)
+    repository._session = object()
+    factory = Mock(return_value=repository)
+    adapter = RecordingAdapter()
+    service = _patch_runtime(monkeypatch, adapter, repository)
+    service.repository_factory = factory
+    service.projection.project_chat_result = AsyncMock(return_value={"status": "completed", "answer": "done"})
+
+    result = await service.resume_agent_run(
+        current.id,
+        interrupt_id="approval-factory",
+        action="approve",
+        expected_thread_id=current.thread_id,
+        execution_event_sink=Sink(),
+    )
+
+    assert result.run.status == "completed"
+    assert factory.call_count >= 2
+
+
 def _hermes_bound_run():
     run = _run(status="completed")
     run.framework = "hermes"
@@ -343,7 +375,8 @@ async def test_hermes_task_deletion_skips_unsupported_session_cleanup(monkeypatc
     adapter.framework = "hermes"
     adapter.builder_id = "hermes_agent"
     run = _hermes_bound_run()
-    monkeypatch.setattr(runtime_cleanup, "adapter_for_definition", lambda definition: adapter)
+    registry = RuntimeRegistry(adapters=[adapter])
+    monkeypatch.setattr(runtime_cleanup, "get_runtime_registry", lambda: registry)
     monkeypatch.setattr(task_artifact_service, "get_content_store", lambda: SimpleNamespace(delete=AsyncMock()))
     monkeypatch.setattr(task_repository, "list_artifacts", AsyncMock(return_value=[]))
     monkeypatch.setattr(task_repository, "list_task_runs", AsyncMock(return_value=[run]))
@@ -362,7 +395,8 @@ async def test_hermes_thread_deletion_continues_with_existing_session_binding(mo
     adapter.framework = "hermes"
     adapter.builder_id = "hermes_agent"
     run = _hermes_bound_run()
-    monkeypatch.setattr(runtime_cleanup, "adapter_for_definition", lambda definition: adapter)
+    registry = RuntimeRegistry(adapters=[adapter])
+    monkeypatch.setattr(runtime_cleanup, "get_runtime_registry", lambda: registry)
 
     async def delete_task_resources(thread_ids):
         assert thread_ids == ["thread-1"]
@@ -490,7 +524,7 @@ async def test_resume_http_boundary_returns_structured_capability_rejection(monk
                 explanation="resume requires durable state",
             )
 
-    monkeypatch.setattr(agent_workflows_api, "_require_ready_thread", ready_thread)
+    monkeypatch.setattr(agent_workflows_api, "get_thread", ready_thread)
     monkeypatch.setattr(agent_workflows_api, "AgentRunService", RejectedService)
     request = agent_workflows_api.AgentRunResumeRequest(
         thread_id="thread-1",

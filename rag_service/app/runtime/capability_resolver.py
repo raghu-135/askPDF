@@ -272,8 +272,9 @@ async def resolve_definition_capability_resolution(
     definition: AgentDefinition,
     *,
     registry: RuntimeRegistry,
+    adapter: AgentRuntimeAdapter | None = None,
 ) -> CapabilityResolution:
-    adapter = registry.get(definition)
+    adapter = adapter or registry.get(definition)
     try:
         capabilities = await _reconciled_capabilities(adapter, definition)
     except RuntimeError as exc:
@@ -396,8 +397,9 @@ async def resolve_run_capability_resolution(
     run: Any,
     task: Any | None = None,
     include_resolved_response: bool = False,
+    adapter: AgentRuntimeAdapter | None = None,
 ) -> CapabilityResolution:
-    adapter = registry.get(definition)
+    adapter = adapter or registry.get(definition)
     try:
         capabilities = await _reconciled_capabilities(adapter, definition)
     except RuntimeError as exc:

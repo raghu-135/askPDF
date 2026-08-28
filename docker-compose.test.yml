@@ -1,16 +1,11 @@
 services:
   frontend-test-runner:
     image: node:22-bookworm-slim
-    working_dir: /app
-    entrypoint:
-      - node
-      - --experimental-strip-types
-      - --disable-warning=ExperimentalWarning
-      - --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
-      - --test
-      - tests/chat-composer-state.test.mjs
+    working_dir: /workspace/frontend
+    entrypoint: ["npm", "test"]
     volumes:
-      - ./frontend:/app:ro
+      - ./frontend:/workspace/frontend:ro
+      - .:/workspace:ro
 
   test-runner:
     build:

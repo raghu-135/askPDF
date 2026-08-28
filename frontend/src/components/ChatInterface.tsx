@@ -742,22 +742,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const workspaceTraceMessageIdRef = useRef<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
-    const liveRunCapabilities = useAgentRunCapabilities(
+    const [liveCapabilityRevision, setLiveCapabilityRevision] = useState(0);
+    const { capabilities: liveRunCapabilities, refresh: refreshLiveRunCapabilities } = useAgentRunCapabilities(
         liveExecution?.runId,
         activeThread?.id,
-        `${liveExecution?.canceling}:${liveExecution?.running}:${testRuntime}`,
-    ).capabilities;
+        `${liveExecution?.canceling}:${liveExecution?.running}:${testRuntime}:${liveCapabilityRevision}`,
+    );
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
-    const humanReviewCapabilities = useAgentRunCapabilities(
+    const [humanReviewCapabilityRevision, setHumanReviewCapabilityRevision] = useState(0);
+    const { capabilities: humanReviewCapabilities, refresh: refreshHumanReviewCapabilities } = useAgentRunCapabilities(
         pendingHumanReview?.runId,
         activeThread?.id,
-        `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}`,
-    ).capabilities;
+        `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}:${humanReviewCapabilityRevision}`,
+    );
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -1461,6 +1463,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (event.event !== 'heartbeat') {
                     appendLiveExecutionEvent(event as AgentExecutionStreamEnvelope);
                 }
+                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                    setLiveCapabilityRevision((revision) => revision + 1);
+                    void refreshLiveRunCapabilities();
+                }
                 if (event.event === 'run.completed') {
                     finalAnswer = String(event.data?.answer || event.data?.final_output?.answer || '');
                 }
@@ -1643,6 +1649,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 client_metadata: { source: 'chat_pending_review_panel' },
             }, (event) => {
                 if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                    setHumanReviewCapabilityRevision((revision) => revision + 1);
+                    void refreshHumanReviewCapabilities();
+                }
                 if (['run.completed', 'run.failed', 'interrupt.requested'].includes(event.event)) {
                     response = event.data?.response;
                     const rawError = event.data?.error;
@@ -1768,6 +1778,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 (event: AgentExecutionStreamEnvelope) => {
                     if (event.event !== 'heartbeat') {
                         appendLiveExecutionEvent(event);
+                    }
+                    if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                        setLiveCapabilityRevision((revision) => revision + 1);
+                        void refreshLiveRunCapabilities();
                     }
                     const snapshot = traceStream.append(event, terminalStreamError, response?.status);
                     if (event.event === 'run.started' && event.data?.run_id) {
@@ -2099,6 +2113,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return;
             }
             const result = await cancelChatAgentRun(execution.runId, activeThread.id);
+            await refreshLiveRunCapabilities();
             if (result.status === 'already_terminal') {
                 setLiveExecution((current) => current?.runId === execution.runId
                     ? { ...current, canceling: false }

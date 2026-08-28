@@ -1412,7 +1412,8 @@ async def resume_agent_run(
     req: AgentRunResumeRequest,
     accept: Optional[str] = Header(default=None),
 ):
-    await _require_ready_thread(req.thread_id)
+    if await get_thread(req.thread_id) is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     service = AgentRunService()
 

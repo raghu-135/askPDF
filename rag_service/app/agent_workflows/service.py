@@ -5,7 +5,7 @@ import json
 import time
 import logging
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
@@ -33,6 +33,11 @@ from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.operational_limits import validate_bounded_json
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
 from app.services.runtime_operation_repository import (
     RuntimeOperationConflict,
     claim_runtime_operation,
@@ -131,8 +136,10 @@ class AgentRunService:
     def __init__(
         self,
         repository: Optional[AgentWorkflowRepository] = None,
+        repository_factory: Optional[Callable[[], AgentWorkflowRepository]] = None,
     ):
         self.repository = repository or AgentWorkflowRepository()
+        self.repository_factory = repository_factory or AgentWorkflowRepository
         self.projection = AgentRuntimeProjection()
 
     async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
@@ -704,7 +711,7 @@ class AgentRunService:
         # injected with a caller-managed session remain useful to tests and
         # batch callers, but must not be reused across runtime I/O boundaries.
         repository = (
-            AgentWorkflowRepository()
+            self.repository_factory()
             if getattr(self.repository, "_session", None) is not None
             else self.repository
         )
@@ -823,7 +830,7 @@ class AgentRunService:
             # Event-journal reads use independent session ownership. An
             # injected request repository may already own the transaction
             # that resolved the interrupt.
-            event_repository = AgentWorkflowRepository()
+            event_repository = self.repository_factory()
             existing_events = await event_repository.list_run_events(resolution.run.id)
             initial_sequence = max(
                 (int(getattr(event, "sequence", 0) or 0) for event in existing_events),
@@ -847,7 +854,7 @@ class AgentRunService:
 
         definition = definition_from_run(resolution.run)
         adapter = adapter_for_definition(definition)
-        lifecycle_repository = AgentWorkflowRepository()
+        lifecycle_repository = self.repository_factory()
         runtime_request = AgentRuntimeRequest(
             run_id=resolution.run.id,
             thread_id=resolution.run.thread_id,
@@ -871,6 +878,17 @@ class AgentRunService:
             )
 
         try:
+            embedding_model = None
+            if definition.framework == "langgraph":
+                try:
+                    embedding_context = await require_thread_embedding_ready(resolution.run.thread_id)
+                    embedding_model = embedding_context.embedding_model
+                except (EmbeddingModelResolutionError, EmbeddingModelUnavailableError) as exc:
+                    raise RuntimeContractError(
+                        "embedding_model_unavailable",
+                        str(exc),
+                        retryable=True,
+                    ) from exc
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
                 execution_event_sink.bind_trace_recorder(resume_trace_recorder)
@@ -880,6 +898,7 @@ class AgentRunService:
                 execution_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
             runtime_context = RuntimeExecutionContext(
                 agent_run_context={"run": resolution.run},
+                embedding_model=embedding_model,
                 trace_recorder=resume_trace_recorder,
                 cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
             )

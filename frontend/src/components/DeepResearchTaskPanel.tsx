@@ -287,7 +287,11 @@ export default function DeepResearchTaskPanel({
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
-  const activeCapabilitiesState = useAgentRunCapabilities(task?.active_run_id, threadId, `${task?.status}:${task?.version}`);
+  const activeCapabilitiesState = useAgentRunCapabilities(
+    task?.active_run_id,
+    threadId,
+    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.checkpoint_thread_id}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
+  );
   const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
   const activeTaskCapabilities = activeCapabilitiesState.capabilities;
   const runtimeControlError = selectedCapabilitiesState.error || activeCapabilitiesState.error || '';
