@@ -43,6 +43,28 @@ _transport_execution_token: ContextVar[str | None] = ContextVar(
 )
 
 
+async def _mcp_run_cancel_requested(run_id: str) -> bool:
+    """Check cancellation without requiring every MCP call to own an AgentRun.
+
+    Curator and other system calls use ephemeral correlation IDs for tracing.
+    They still pass through the common MCP cancellation race, but those IDs are
+    not persisted product runs.  A missing run therefore means there is no
+    durable cancellation request; malformed or orphaned persisted runs should
+    continue to surface as errors.
+    """
+
+    try:
+        return await run_cancel_requested(run_id)
+    except ValueError as exc:
+        if str(exc) == f"Agent run {run_id!r} does not exist":
+            logger.debug(
+                "MCP call has no persisted AgentRun; continuing without cancellation polling | run_id=%s",
+                run_id,
+            )
+            return False
+        raise
+
+
 def _schema(model: type[Any]) -> dict[str, Any]:
     return model.model_json_schema() if hasattr(model, "model_json_schema") else model.schema()
 
@@ -156,7 +178,7 @@ class MCPServer:
                         if run_id:
                             result = await race_with_cancellation(
                                 definition.handler(request, context),
-                                lambda: run_cancel_requested(run_id),
+                                lambda: _mcp_run_cancel_requested(run_id),
                             )
                         else:
                             result = await definition.handler(request, context)

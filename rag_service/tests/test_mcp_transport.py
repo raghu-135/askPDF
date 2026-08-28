@@ -157,6 +157,31 @@ async def test_direct_mcp_call_does_not_require_framework_caller(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mcp_cancellation_allows_ephemeral_correlation_ids(monkeypatch):
+    from app.mcp import server as server_module
+
+    async def missing_run(run_id):
+        raise ValueError(f"Agent run {run_id!r} does not exist")
+
+    monkeypatch.setattr(server_module, "run_cancel_requested", missing_run)
+
+    assert await server_module._mcp_run_cancel_requested("curator-correlation-id") is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancellation_preserves_real_run_errors(monkeypatch):
+    from app.mcp import server as server_module
+
+    async def orphaned_run(_run_id):
+        raise ValueError("Agent run 'run-1' has no owning task")
+
+    monkeypatch.setattr(server_module, "run_cancel_requested", orphaned_run)
+
+    with pytest.raises(ValueError, match="has no owning task"):
+        await server_module._mcp_run_cancel_requested("run-1")
+
+
+@pytest.mark.asyncio
 async def test_internal_http_endpoint_preserves_mcp_protocol():
     from main import app
     from main import MCP_HTTP_APP
