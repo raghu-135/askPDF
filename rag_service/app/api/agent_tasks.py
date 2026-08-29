@@ -15,6 +15,7 @@ from app.db import get_thread, get_thread_settings
 from app.models.deep_research import (
     AgentTaskCommandRequest,
     AgentTaskCreateRequest,
+    AgentTaskResultReviewRequest,
 )
 from app.services import agent_task_repository as repository
 from app.services.agent_task_runtime import (
@@ -424,6 +425,50 @@ async def command_agent_task(
             status_code=500,
             detail={"code": "task_run_initialization_failed"},
         ) from exc
+
+
+@router.post("/agent-tasks/{task_id}/result-review/responses")
+async def respond_to_agent_task_result_review(
+    task_id: str,
+    req: AgentTaskResultReviewRequest,
+    thread_id: str = Query(min_length=1),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    task = await _owned_task(task_id, thread_id)
+    run = await repository.get_task_run(task.id)
+    if run is None or run.id != req.run_id:
+        raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
+    try:
+        await require_capability(
+            definition_from_run(run),
+            RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
+            registry=get_runtime_registry(),
+            run=run,
+            task=task,
+        )
+    except AgentRuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    try:
+        task, duplicate = await repository.respond_to_result_review(
+            task_id,
+            run_id=req.run_id,
+            interrupt_id=req.interrupt_id,
+            expected_version=req.expected_version,
+            decision=req.decision,
+            followup_input=req.followup_input,
+            idempotency_key=idempotency_key,
+        )
+        linked_run = None
+        if req.decision == "retry_with_input" and not duplicate:
+            linked_run = await ensure_task_run(task.id)
+            task = await repository.get_task(task.id) or task
+        return {
+            "task": _task_payload(task),
+            "linked_run": _run_payload(linked_run) if linked_run is not None else None,
+            "duplicate": duplicate,
+        }
+    except repository.AgentTaskConflict as exc:
+        raise _conflict(exc) from exc
 
 
 @router.get("/agent-tasks/{task_id}/todos")

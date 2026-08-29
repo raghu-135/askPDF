@@ -25,6 +25,7 @@ import {
   getAgentTaskTimeline,
   listAgentTasks,
   resumeAgentRun,
+  respondToAgentTaskResultReview,
   sendAgentRunFollowup,
   interruptAgentRunWithInput,
   steerAgentRunLive,
@@ -651,7 +652,32 @@ export default function DeepResearchTaskPanel({
   }, [effectiveSelectedRunCapabilities]);
   const stateUpdateAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'run.update_state');
   const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
-  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation);
+  const isResultReview = pendingInterrupt?.response_operation === 'task.result_review.respond';
+  const resultReviewAvailability = runtimeOperationAvailability(
+    effectiveSelectedRunCapabilities,
+    'task.result_review.respond',
+  );
+  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview);
+  const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
+    if (!task || !selectedRun || !pendingInterrupt) return;
+    const followup = decision === 'retry_with_input'
+      ? window.prompt('What should the linked retry address?')
+      : undefined;
+    if (decision === 'retry_with_input' && !followup?.trim()) return;
+    setDecisionSubmitting('approve');
+    setDecisionError('');
+    try {
+      await respondToAgentTaskResultReview(task.id, threadId, {
+        run_id: selectedRun.id,
+        interrupt_id: pendingInterrupt.interrupt_id,
+        expected_version: task.version,
+        decision,
+        followup_input: followup?.trim(),
+      });
+      await refresh();
+    } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
+    finally { setDecisionSubmitting(null); }
+  };
   useEffect(() => {
     if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
       setInteractionOperation(interactionDescriptors[0].id);
@@ -726,7 +752,16 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isResultReview ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Review incomplete result'}</Typography>
+      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
+      {pendingInterrupt.provisional_answer ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto', mb: 1 }}>{String(pendingInterrupt.provisional_answer)}</Typography> : null}
+      <Stack direction="row" spacing={1}>
+        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('accept')}>Accept with warnings</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
+      </Stack>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">

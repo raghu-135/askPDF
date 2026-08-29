@@ -92,6 +92,22 @@ class AgentTaskCommandRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class AgentTaskResultReviewRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200)
+    interrupt_id: str = Field(min_length=1, max_length=300)
+    expected_version: int = Field(ge=1)
+    decision: Literal["accept", "retry_with_input"]
+    followup_input: Optional[str] = Field(default=None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_followup(self):
+        if self.decision == "retry_with_input" and not str(self.followup_input or "").strip():
+            raise ValueError("retry_with_input requires followup_input")
+        if self.followup_input is not None:
+            self.followup_input = " ".join(self.followup_input.split()).strip()
+        return self
+
+
 class DeepResearchTodoProposal(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=300)

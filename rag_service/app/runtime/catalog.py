@@ -130,6 +130,7 @@ def result_to_product_payload(result: AgentRuntimeResult) -> dict[str, Any]:
         "agent_error": dict(result.error or {}),
         "runtime_metadata": dict(result.runtime_metadata or {}),
         "runtime_binding": result.continuation.to_dict() if result.continuation else None,
+        "runtime_task_result": result.task_result.to_dict() if result.task_result else payload.get("runtime_task_result"),
     })
     return payload
 

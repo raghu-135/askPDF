@@ -32,6 +32,7 @@ PUBLIC_OPERATION_IDS = frozenset({
     RuntimeOperationId.TASK_RESUME,
     RuntimeOperationId.TASK_CANCEL,
     RuntimeOperationId.TASK_RETRY,
+    RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
     RuntimeOperationId.ARTIFACT_LIST,
 })
 
@@ -80,6 +81,11 @@ def product_operation_descriptors() -> dict[RuntimeOperationId, RuntimeOperation
             owner=RuntimeOperationOwner.PRODUCT,
             enabled=True,
             semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_RETRY,
+        ),
+        RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND: conditional(
+            owner=RuntimeOperationOwner.PRODUCT,
+            enabled=True,
+            semantics=RuntimeCapabilitySemantics.PRODUCT_TASK_RESULT_REVIEW,
         ),
     }
 

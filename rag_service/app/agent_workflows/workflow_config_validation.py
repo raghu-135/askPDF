@@ -31,7 +31,7 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
         if not isinstance(task_policy, dict):
             errors.append("task_policy must be an object")
         else:
-            allowed_task_keys = {"builtin_only", "profiles", "limits", "compaction", "evidence"}
+            allowed_task_keys = {"builtin_only", "profiles", "limits", "compaction", "evidence", "orchestration"}
             unknown_task_keys = sorted(set(task_policy) - allowed_task_keys)
             if unknown_task_keys:
                 errors.append(f"task_policy has unknown keys: {', '.join(unknown_task_keys)}")
@@ -43,6 +43,34 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
             limits = task_policy.get("limits")
             if not isinstance(limits, dict):
                 errors.append("task_policy.limits must be an object")
+            orchestration = task_policy.get("orchestration")
+            if orchestration is not None:
+                if not isinstance(orchestration, dict):
+                    errors.append("task_policy.orchestration must be an object")
+                else:
+                    allowed_orchestration_keys = {
+                        "planner", "executor", "aggregator", "tool_policy", "result_schema",
+                        "incomplete_result_policy", "max_incomplete_review_rounds",
+                    }
+                    unknown = sorted(set(orchestration) - allowed_orchestration_keys)
+                    if unknown:
+                        errors.append(f"task_policy.orchestration has unknown keys: {', '.join(unknown)}")
+                    for strategy in ("planner", "executor", "aggregator"):
+                        if not isinstance(orchestration.get(strategy), str) or not orchestration.get(strategy):
+                            errors.append(f"task_policy.orchestration.{strategy} must be a non-empty string")
+                    if orchestration.get("incomplete_result_policy") not in {"review", "accept", "fail"}:
+                        errors.append("task_policy.orchestration.incomplete_result_policy must be review, accept, or fail")
+                    rounds = orchestration.get("max_incomplete_review_rounds")
+                    if not isinstance(rounds, int) or isinstance(rounds, bool) or not 0 <= rounds <= 5:
+                        errors.append("task_policy.orchestration.max_incomplete_review_rounds must be between 0 and 5")
+                    tool_policy = orchestration.get("tool_policy")
+                    if not isinstance(tool_policy, dict) or not isinstance(tool_policy.get("role_tools"), dict):
+                        errors.append("task_policy.orchestration.tool_policy.role_tools must be an object")
+                    elif any(
+                        not isinstance(values, list) or not all(isinstance(value, str) and value for value in values)
+                        for values in tool_policy["role_tools"].values()
+                    ):
+                        errors.append("task_policy.orchestration tool lists must contain non-empty strings")
 
     for key in ("use_web_search", "use_reranker"):
         if key in config and not isinstance(config[key], bool):

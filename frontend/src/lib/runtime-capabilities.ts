@@ -16,7 +16,8 @@ export type RuntimeControlOperation =
   | 'task.pause'
   | 'task.resume'
   | 'task.cancel'
-  | 'task.retry';
+  | 'task.retry'
+  | 'task.result_review.respond';
 
 export type TaskControlAction = 'start' | 'pause' | 'resume' | 'cancel' | 'retry';
 

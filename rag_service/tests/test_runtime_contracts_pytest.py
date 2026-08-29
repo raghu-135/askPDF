@@ -32,11 +32,14 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
     RuntimeArtifact,
     RuntimeTaskContext,
+    RuntimeTaskResult,
+    RuntimeTaskResultStatus,
     validated_disabled_operation_ids,
 )
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 from app.runtime.product_capabilities import project_public_capabilities
+from app.runtime.task_results import normalize_runtime_task_result, runtime_task_result_summary
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():
@@ -317,6 +320,30 @@ def test_runtime_task_context_and_artifact_are_json_compatible():
 
     assert artifact.to_dict()["kind"] == "intermediate_report"
     assert context.to_dict()["todos"][0]["id"] == "todo-1"
+
+
+def test_runtime_task_result_preserves_text_when_optional_structure_is_invalid():
+    result = normalize_runtime_task_result(
+        "A useful provisional answer",
+        structured_output_requested=True,
+        structured_validation_error=ValueError("invalid schema"),
+        framework_details={"framework": "langgraph"},
+    )
+
+    assert result.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS
+    assert result.text == "A useful provisional answer"
+    assert result.warnings[0]["code"] == "structured_output_invalid"
+    assert result.framework_details == {"framework": "langgraph"}
+    assert runtime_task_result_summary(result)["output_shape"] == "text"
+
+
+def test_runtime_task_result_rejects_empty_success_and_normalizes_empty_output_failure():
+    with pytest.raises(ValueError, match="usable output"):
+        RuntimeTaskResult(status=RuntimeTaskResultStatus.COMPLETED)
+
+    result = normalize_runtime_task_result("{}", structured_output_requested=True)
+    assert result.status is RuntimeTaskResultStatus.FAILED
+    assert result.error == {"code": "task_result_empty", "retryable": True}
 
 
 def test_langgraph_node_events_normalize_to_topology_linked_operations():

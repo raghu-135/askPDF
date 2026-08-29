@@ -520,6 +520,55 @@ async def test_attach_run_converges_on_existing_active_run(test_session_maker, s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["accept", "retry_with_input"])
+async def test_product_result_review_is_runtime_independent_and_idempotent(
+    test_session_maker, sample_thread, decision,
+):
+    await _seed_deep_workflow(test_session_maker)
+    task, _ = await repository.create_task(
+        thread_id=sample_thread.id, project_id=sample_thread.project_id, user_id=None,
+        workflow_id="deep_research_agent", objective="Review provisional result",
+        idempotency_key=str(uuid.uuid4()), config={"limits": {}},
+    )
+    run = await _attach_test_run(test_session_maker, task)
+    pending = {
+        "interrupt_id": f"result-review:{run.id}:1",
+        "type": "incomplete_result_review",
+        "response_operation": "task.result_review.respond",
+        "allowed_actions": ["accept", "retry_with_input"],
+        "review_round": 1,
+    }
+    await AgentWorkflowRepository().mark_run_awaiting_human(run.id, pending)
+    awaiting = await repository.set_task_runtime_status(
+        task.id, "awaiting_approval", phase="awaiting_result_review",
+    )
+    resolved, duplicate = await repository.respond_to_result_review(
+        task.id, run_id=run.id, interrupt_id=pending["interrupt_id"],
+        expected_version=awaiting.version, decision=decision,
+        followup_input="Address the missing mechanism." if decision == "retry_with_input" else None,
+        idempotency_key="review-once",
+    )
+
+    assert duplicate is False
+    assert resolved.status == ("completed" if decision == "accept" else "queued")
+    stored_run = await repository.get_task_run(task.id)
+    assert stored_run.status == "completed"
+    assert stored_run.pending_interrupt_json["decision"]["action"] == decision
+    run_events = await AgentWorkflowRepository().list_run_events(run.id)
+    assert [(event.kind, event.terminal) for event in run_events if event.terminal] == [("run.completed", True)]
+    repeated, duplicate = await repository.respond_to_result_review(
+        task.id, run_id=run.id, interrupt_id=pending["interrupt_id"],
+        expected_version=awaiting.version, decision=decision,
+        followup_input="Address the missing mechanism." if decision == "retry_with_input" else None,
+        idempotency_key="review-once",
+    )
+    assert duplicate is True
+    assert repeated.version == resolved.version
+    if decision == "retry_with_input":
+        assert resolved.config_json["result_review_context"][-1]["source_run_id"] == run.id
+
+
+@pytest.mark.asyncio
 async def test_task_run_terminal_state_and_journals_commit_together(test_session_maker, sample_thread):
     await _seed_deep_workflow(test_session_maker)
     task, _ = await repository.create_task(
@@ -654,25 +703,96 @@ def test_subagent_result_normalizes_common_model_schema_drift():
     assert result.usage == {"total_tokens": 120, "tool_calls": 2}
 
 
-def test_invalid_subagent_model_output_becomes_structured_retryable_failure():
-    result = deep_research_nodes._invalid_subagent_result(
-        response="{}",
-        initial_error=ValueError("invalid result"),
-        repair_error=ValueError("invalid repaired result"),
-    )
-
-    assert result.status == "failed"
-    assert result.retryable is True
-    assert result.error == {
-        "code": "subagent_result_invalid",
-        "retryable": True,
-        "details": {
-            "stage": "schema_repair",
-            "response_shape": "empty_object",
-            "initial_error_type": "ValueError",
-            "repair_error_type": "ValueError",
+def test_subagent_permissions_and_result_schema_are_definition_derived():
+    state = {
+        "task_orchestration": {
+            "tool_policy": {"role_tools": {"analyst": ["search_documents", "search_documents"]}},
         },
     }
+    assert deep_research_nodes._permitted_profile_tools(state, "analyst") == ("search_documents",)
+    assert deep_research_nodes._permitted_profile_tools(state, "unknown") == ()
+    deep_research_nodes._validate_requested_result(
+        {"answer": "done", "confidence": 1},
+        {"required": ["answer"], "properties": {"answer": {"type": "string"}, "confidence": {"type": "number"}}},
+    )
+    with pytest.raises(ValueError, match="missing required"):
+        deep_research_nodes._validate_requested_result({}, {"required": ["answer"]})
+
+
+@pytest.mark.asyncio
+async def test_subagent_action_selection_preserves_parent_objective(monkeypatch):
+    prompts: list[str] = []
+
+    async def call_model(_state, _config, _node, messages):
+        prompts.append(str(messages[-1].content))
+        return json.dumps({"action": "finish"}), {}
+
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    monkeypatch.setattr(
+        deep_research_nodes,
+        "services_from_config",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    state = {
+        "question": "What's the core idea of mem0? Explain in detail.",
+        "task_plan": {"success_criteria": ["Explain the architecture from the attached paper"]},
+        "task_orchestration": {
+            "tool_policy": {"role_tools": {"document_researcher": ["search_documents"]}},
+        },
+        "task_limits": {"max_tool_calls_per_subagent": 1},
+        "document_evidence": "Mem0 paper excerpts are available.",
+    }
+    item = {"todo": {
+        "profile_id": "document_researcher",
+        "title": "Collect document evidence",
+        "description": "Use the document profile to gather evidence for the objective.",
+    }}
+
+    outputs = await deep_research_nodes._invoke_profile_tools(state, _deep_config(), item)
+
+    assert outputs == []
+    assert "What's the core idea of mem0?" in prompts[0]
+    assert "Explain the architecture from the attached paper" in prompts[0]
+    assert '\"document_evidence_available\": true' in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_invalid_subagent_action_is_retryable_instead_of_silent_finish(monkeypatch):
+    monkeypatch.setattr(
+        deep_research_nodes,
+        "_call_model",
+        AsyncMock(return_value=("I should probably search the document.", {})),
+    )
+    monkeypatch.setattr(
+        deep_research_nodes,
+        "services_from_config",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    state = {
+        "question": "Explain mem0",
+        "task_orchestration": {
+            "tool_policy": {"role_tools": {"document_researcher": ["search_documents"]}},
+        },
+        "task_limits": {"max_tool_calls_per_subagent": 1},
+    }
+    item = {"todo": {"profile_id": "document_researcher", "description": "Collect evidence"}}
+
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        await deep_research_nodes._invoke_profile_tools(state, _deep_config(), item)
+
+    assert exc_info.value.code == "subagent_action_invalid"
+    assert exc_info.value.retryable is True
+
+
+def test_neutral_text_result_with_gap_requires_warning_outcome():
+    result = deep_research_nodes.normalize_runtime_task_result({
+        "status": "completed",
+        "text": "A provisional answer",
+        "gaps": ["The attached document could not be evaluated"],
+    })
+
+    assert result.status.value == "completed_with_warnings"
+    assert result.gaps == ("The attached document could not be evaluated",)
 
 
 def test_timeline_never_projects_active_subagents_as_failures():
@@ -1119,7 +1239,10 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     )
     completed_run = SimpleNamespace(**{**run.__dict__, "status": "completed", "completed_at": utc_now()})
     workflow_repository = SimpleNamespace(
-        list_run_events=AsyncMock(return_value=[]),
+        list_run_events=AsyncMock(return_value=[SimpleNamespace(
+            kind="tool.completed",
+            payload_json={"tool_name": "search_web", "ok": True, "result_count": 1},
+        )]),
         append_run_event=AsyncMock(return_value=True),
         update_runtime_binding=AsyncMock(),
         update_run_metadata_fields=AsyncMock(),

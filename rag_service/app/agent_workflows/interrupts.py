@@ -29,7 +29,11 @@ PENDING_INTERRUPT_LIST_LIMIT = 20
 PENDING_INTERRUPT_DICT_LIMIT = 50
 SUPPORTED_SPEC_SCHEMA_VERSION = 1
 INTERRUPT_RESUME_GUARD_SCHEMA_VERSION = 1
-PENDING_INTERRUPT_RESPONSE_OPERATIONS = frozenset({"run.resume", "run.approval.respond"})
+PENDING_INTERRUPT_RESPONSE_OPERATIONS = frozenset({
+    "run.resume",
+    "run.approval.respond",
+    "task.result_review.respond",
+})
 
 
 class AgentRunInterruptError(ValueError):

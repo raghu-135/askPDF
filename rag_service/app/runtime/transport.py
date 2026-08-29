@@ -26,6 +26,9 @@ from app.runtime.contracts import (
     RuntimeOperationOwner,
     RuntimeSupportLevel,
     RuntimeTerminalState,
+    RuntimeTaskResultStatus,
+    RuntimeTaskResult,
+    RuntimeArtifact,
     RuntimeApprovalResponse,
     RuntimeSteeringInput,
     RuntimeValidationIssue,
@@ -93,9 +96,22 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
 
 
 def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
+    task_value = value.get("task_result") if isinstance(value.get("task_result"), Mapping) else None
+    task_result = RuntimeTaskResult(
+        status=RuntimeTaskResultStatus(str(task_value.get("status"))),
+        text=task_value.get("text"),
+        structured_output=dict(task_value["structured_output"]) if isinstance(task_value.get("structured_output"), Mapping) else None,
+        artifacts=tuple(RuntimeArtifact(**dict(item)) for item in task_value.get("artifacts") or [] if isinstance(item, Mapping)),
+        warnings=tuple(dict(item) for item in task_value.get("warnings") or [] if isinstance(item, Mapping)),
+        gaps=tuple(str(item) for item in task_value.get("gaps") or []),
+        usage=dict(task_value.get("usage") or {}),
+        error=dict(task_value["error"]) if isinstance(task_value.get("error"), Mapping) else None,
+        framework_details=dict(task_value.get("framework_details") or {}),
+    ) if task_value is not None else None
     return AgentRuntimeResult(
         status=str(value.get("status") or "failed"),
         output=value.get("output"),
+        task_result=task_result,
         clarification=dict(value["clarification"]) if isinstance(value.get("clarification"), Mapping) else None,
         interruption=dict(value["interruption"]) if isinstance(value.get("interruption"), Mapping) else None,
         artifacts=tuple(dict(item) for item in value.get("artifacts") or [] if isinstance(item, Mapping)),

@@ -70,6 +70,16 @@ class RuntimeEventKind(str, Enum):
     RUNTIME_EVENT = "runtime.event"
 
 
+class RuntimeTaskResultStatus(str, Enum):
+    """Framework-neutral outcome of one agentic task execution."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
 CANONICAL_RUNTIME_EVENT_KINDS = frozenset(item.value for item in RuntimeEventKind) | RUNTIME_OPERATION_EVENT_KINDS
 TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
     RuntimeEventKind.RUN_COMPLETED.value,
@@ -106,6 +116,7 @@ class RuntimeOperationId(str, Enum):
     TASK_RESUME = "task.resume"
     TASK_CANCEL = "task.cancel"
     TASK_RETRY = "task.retry"
+    TASK_RESULT_REVIEW_RESPOND = "task.result_review.respond"
     SUBAGENT_LIST = "subagent.list"
     SUBAGENT_SEND = "subagent.send"
     SUBAGENT_CANCEL = "subagent.cancel"
@@ -142,6 +153,7 @@ class RuntimeCapabilitySemantics(str, Enum):
     PRODUCT_TASK_RESUME = "product_task_resume"
     PRODUCT_TASK_CANCEL = "product_task_cancel"
     PRODUCT_TASK_RETRY = "product_task_retry"
+    PRODUCT_TASK_RESULT_REVIEW = "product_task_result_review"
     RESUME_FROM_INTERRUPT = "resume_from_interrupt"
     CHECKPOINT_STATE_INSPECTION = "checkpoint_state_inspection"
     CHECKPOINT_BOUNDARY_UPDATE = "checkpoint_boundary_update"
@@ -555,6 +567,7 @@ class RuntimeValidationResult:
 class AgentRuntimeResult:
     status: str
     output: Any = None
+    task_result: Optional[RuntimeTaskResult] = None
     clarification: Optional[Mapping[str, Any]] = None
     interruption: Optional[Mapping[str, Any]] = None
     artifacts: tuple[Mapping[str, Any], ...] = ()
@@ -566,6 +579,8 @@ class AgentRuntimeResult:
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
+        if self.task_result is not None:
+            value["task_result"] = self.task_result.to_dict()
         value["artifacts"] = [dict(item) for item in self.artifacts]
         if self.continuation is not None:
             value["continuation"] = self.continuation.to_dict()
@@ -588,6 +603,71 @@ class RuntimeArtifact:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeTaskResult:
+    """Usable task output without imposing a research-specific schema.
+
+    Structured extensions are intentionally open while lifecycle vocabulary is
+    closed. Runtime-native values belong in ``framework_details``.
+    """
+
+    status: RuntimeTaskResultStatus
+    text: Optional[str] = None
+    structured_output: Optional[Mapping[str, Any]] = None
+    artifacts: tuple[RuntimeArtifact, ...] = ()
+    warnings: tuple[Mapping[str, Any], ...] = ()
+    gaps: tuple[str, ...] = ()
+    usage: Mapping[str, Any] = field(default_factory=dict)
+    error: Optional[Mapping[str, Any]] = None
+    framework_details: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, RuntimeTaskResultStatus):
+            raise ValueError("status must be a RuntimeTaskResultStatus")
+        if self.text is not None and not isinstance(self.text, str):
+            raise TypeError("text must be a string or null")
+        if self.text is not None and len(self.text) > 120_000:
+            raise ValueError("text exceeds the runtime task result limit")
+        if self.structured_output is not None and not isinstance(self.structured_output, Mapping):
+            raise TypeError("structured_output must be an object or null")
+        if not all(isinstance(item, RuntimeArtifact) for item in self.artifacts):
+            raise TypeError("artifacts must contain RuntimeArtifact values")
+        if len(self.artifacts) > 200:
+            raise ValueError("artifacts exceeds the runtime task result limit")
+        if not all(isinstance(item, Mapping) for item in self.warnings):
+            raise TypeError("warnings must contain objects")
+        if len(self.warnings) > 100:
+            raise ValueError("warnings exceeds the runtime task result limit")
+        if not all(isinstance(item, str) for item in self.gaps):
+            raise TypeError("gaps must contain strings")
+        if len(self.gaps) > 100:
+            raise ValueError("gaps exceeds the runtime task result limit")
+        if self.status in {
+            RuntimeTaskResultStatus.COMPLETED,
+            RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS,
+        } and not ((self.text or "").strip() or self.structured_output or self.artifacts):
+            raise ValueError("completed task results require usable output or artifacts")
+        if self.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS and not (self.warnings or self.gaps):
+            raise ValueError("completed_with_warnings requires warnings or gaps")
+
+    @property
+    def usable(self) -> bool:
+        return bool((self.text or "").strip() or self.structured_output or self.artifacts)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "text": self.text,
+            "structured_output": dict(self.structured_output) if self.structured_output is not None else None,
+            "artifacts": [item.to_dict() for item in self.artifacts],
+            "warnings": [dict(item) for item in self.warnings],
+            "gaps": list(self.gaps),
+            "usage": dict(self.usage),
+            "error": dict(self.error) if self.error is not None else None,
+            "framework_details": dict(self.framework_details),
+        }
 
 
 @dataclass(frozen=True)

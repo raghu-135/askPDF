@@ -22,6 +22,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
+from app.runtime.task_results import normalize_runtime_task_result
 
 
 def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
@@ -36,9 +37,22 @@ def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
         if checkpoint_thread_id and status == "awaiting_human"
         else None
     )
+    final_text = result.get("final_answer") or result.get("answer")
+    task_result = None
+    if status == "completed" and (final_text or result.get("runtime_artifacts")):
+        task_result = normalize_runtime_task_result({
+            "status": "completed_with_warnings" if result.get("warnings") or result.get("task_incomplete_reasons") or result.get("task_result_gaps") else "completed",
+            "text": final_text,
+            "structured_output": result.get("structured_output"),
+            "warnings": result.get("warnings") or [],
+            "gaps": list(dict.fromkeys([*(result.get("task_incomplete_reasons") or []), *(result.get("task_result_gaps") or [])])),
+            "usage": result.get("usage") or result.get("metrics") or {},
+            "framework_details": {"framework": "langgraph"},
+        })
     return AgentRuntimeResult(
         status=status,
         output=dict(result),
+        task_result=task_result,
         clarification={"options": list(result["clarification_options"])} if result.get("clarification_options") else None,
         interruption=interruption,
         usage=dict(result.get("usage") or result.get("metrics") or {}),
@@ -174,6 +188,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             task_run_plan_count=0,
             task_todos=[dict(todo) for todo in task.todos],
             task_budget_usage=dict(metadata.get("budget_usage") or {}),
+            task_orchestration=dict(metadata.get("orchestration") or {}),
             runtime_execution_mode=True,
             runtime_artifact_manifest=[dict(value) for value in task.artifact_manifests],
             runtime_artifact_contents=dict(task.artifact_contents),

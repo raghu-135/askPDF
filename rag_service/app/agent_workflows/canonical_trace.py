@@ -508,7 +508,7 @@ def _operations(events: Sequence[AgentRuntimeEvent], framework: str) -> list[dic
             row["duration_ms"] = payload.get("duration_ms") or payload.get("elapsed_ms")
             if row["duration_ms"] is None:
                 row["duration_ms"] = _duration_ms(row.get("started_at"), row.get("completed_at"))
-            row["output"] = _bounded_value(payload.get("output") or payload.get("output_summary") or payload.get("detail") or {})
+            row["output"] = _bounded_value(payload.get("result_summary") or payload.get("output") or payload.get("output_summary") or payload.get("detail") or {})
             row["error"] = _bounded_value(payload.get("error"))
     return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row["operation_id"]), int(row["visit_index"])))
 
@@ -650,7 +650,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         "primary_failure_event_id": (primary or {}).get("event_id"),
         "primary_basis": primary_basis if primary is not None else None,
         "location": (primary or {}).get("location") or {},
-        "failure_count": len([row for row in rows if row.get("classification") != "cancellation"]),
+        "failure_count": max(len(groups), 1 if terminal and terminal.get("kind") == "run.failed" else 0),
         "cancellation_count": len([row for row in rows if row.get("classification") == "cancellation"]),
     }
     return {

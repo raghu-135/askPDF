@@ -52,7 +52,24 @@
       "replans": 5,
       "task_policy": {
         "builtin_only": true,
+        "evidence": "document_when_available",
         "profiles": ["document_researcher", "web_researcher", "memory_researcher", "evidence_critic"],
+        "orchestration": {
+          "planner": "askpdf.default",
+          "executor": "askpdf.iterative_agent",
+          "aggregator": "askpdf.default",
+          "result_schema": null,
+          "incomplete_result_policy": "review",
+          "max_incomplete_review_rounds": 3,
+          "tool_policy": {
+            "role_tools": {
+              "document_researcher": ["search_documents", "search_thread_events"],
+              "web_researcher": ["search_web"],
+              "memory_researcher": ["search_durable_memory", "search_thread_conversation_history"],
+              "evidence_critic": []
+            }
+          }
+        },
         "limits": {
           "max_todos": 50,
           "max_plan_revisions": 8,

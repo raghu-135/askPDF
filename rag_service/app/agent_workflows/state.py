@@ -263,6 +263,9 @@ class RouterRagState(TypedDict, total=False):
     task_evidence_manifest: List[Dict[str, Any]]
     task_evidence_gaps: List[str]
     task_context_summary: Dict[str, Any]
+    task_orchestration: Dict[str, Any]
+    task_result_warnings: List[Dict[str, Any]]
+    task_result_gaps: List[str]
     task_memory_snapshot: Dict[str, Any]
     task_budget_usage: Dict[str, Any]
     task_controller_route: str

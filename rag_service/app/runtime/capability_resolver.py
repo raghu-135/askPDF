@@ -78,6 +78,7 @@ class CapabilityResolution:
 RESPONSE_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
+    RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
@@ -86,6 +87,7 @@ TASK_ONLY_OPERATIONS = frozenset({
     RuntimeOperationId.TASK_RESUME,
     RuntimeOperationId.TASK_CANCEL,
     RuntimeOperationId.TASK_RETRY,
+    RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
 })
 
 CHECKPOINT_OPERATIONS = frozenset({

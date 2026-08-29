@@ -761,12 +761,37 @@ def create_app() -> FastAPI:
             if terminal:
                 terminal_seen = True
                 status = "completed" if kind == "run.completed" else "cancelled" if kind == "run.cancelled" else "failed"
-                output = event_payload.get("output") or event_payload.get("content")
-                if output is not None:
-                    output = str(output)[:max_output_chars]
+                raw_output = event_payload.get("output") or event_payload.get("content")
+                output_mapping = dict(raw_output) if isinstance(raw_output, Mapping) else {}
+                text_output = output_mapping.get("text") or output_mapping.get("answer") or output_mapping.get("summary")
+                if text_output is None and raw_output is not None:
+                    text_output = str(raw_output)
+                if text_output is not None:
+                    text_output = str(text_output)[:max_output_chars]
+                warnings = [dict(value) for value in (output_mapping.get("warnings") or event_payload.get("warnings") or []) if isinstance(value, Mapping)]
+                gaps = [str(value) for value in (output_mapping.get("gaps") or event_payload.get("gaps") or []) if str(value).strip()]
+                result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
+                neutral_task_result = {
+                    "status": result_outcome,
+                    "text": text_output,
+                    "structured_output": output_mapping.get("structured_output") if isinstance(output_mapping.get("structured_output"), Mapping) else None,
+                    "artifacts": list(output_mapping.get("artifacts") or []),
+                    "warnings": warnings,
+                    "gaps": gaps,
+                    "usage": dict(output_mapping.get("usage") or event_payload.get("usage") or {}),
+                    "error": event_payload.get("error"),
+                    "framework_details": {"framework": "hermes", "native_output": output_mapping},
+                }
                 result = {
                     "status": status,
-                    "output": output,
+                    "task_result": neutral_task_result,
+                    "output": {
+                        "answer": text_output,
+                        "final_answer": text_output,
+                        "warnings": warnings,
+                        "task_incomplete_reasons": gaps,
+                        "runtime_task_result": neutral_task_result,
+                    },
                     "runtime_metadata": {
                         "session_id": session_id,
                         "upstream_run_id": upstream_run_id,
@@ -789,6 +814,14 @@ def create_app() -> FastAPI:
                         "operation_id": "hermes_session",
                         "operation_type": "agent_session",
                         "operation_label": "Hermes Agent",
+                        "result_summary": {
+                            "outcome": result_outcome,
+                            "output_shape": "structured" if neutral_task_result["structured_output"] is not None else "text" if text_output else "empty",
+                            "warning_count": len(warnings),
+                            "gap_count": len(gaps),
+                            "artifact_ids": [value.get("artifact_id") for value in neutral_task_result["artifacts"] if isinstance(value, Mapping) and value.get("artifact_id")],
+                            "usage": neutral_task_result["usage"],
+                        },
                         "visit_index": 1,
                         "status": status,
                         "error": event_payload.get("error"),
@@ -1337,14 +1370,8 @@ def create_app() -> FastAPI:
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         try:
             record = state["store"].records.get(run_id)
-            if record is None:
-                raise HTTPException(status_code=404, detail=_error(
-                    "runtime_run_not_found",
-                    "Hermes runtime run was not found",
-                    retryable=False,
-                ))
-            persisted_status = str(record.get("status") or "").lower()
-            if persisted_status in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
+            persisted_status = str((record or {}).get("status") or "").lower()
+            if record is not None and (persisted_status in {"completed", "failed", "cancelled"} or record.get("terminal_event_id")):
                 return _envelope(
                     status="ok",
                     request_id=request.headers.get("x-request-id"),

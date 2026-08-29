@@ -299,7 +299,7 @@ export const buildDiagnosticsFromTimeline = (events: AgentTraceTimelineEvent[]):
       primary_failure_event_id: primary?.event_id,
       primary_basis: primaryBasis,
       location: primary?.location || {},
-      failure_count: failures.filter((failure) => failure.classification !== 'cancellation').length,
+      failure_count: Math.max(groups.size, terminal?.kind === 'run.failed' ? 1 : 0),
       cancellation_count: failures.filter((failure) => failure.classification === 'cancellation').length,
     },
     failures,

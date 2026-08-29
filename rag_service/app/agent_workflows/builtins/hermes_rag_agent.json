@@ -28,6 +28,15 @@
         "builtin_only": true,
         "evidence": "document_when_available",
         "profiles": ["document_researcher", "memory_researcher", "evidence_critic"],
+        "orchestration": {
+          "planner": "runtime.native",
+          "executor": "runtime.native",
+          "aggregator": "runtime.native",
+          "result_schema": null,
+          "incomplete_result_policy": "review",
+          "max_incomplete_review_rounds": 3,
+          "tool_policy": {"role_tools": {}}
+        },
         "limits": {
           "max_todos": 50,
           "max_plan_revisions": 8,

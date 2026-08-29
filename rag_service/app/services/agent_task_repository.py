@@ -27,6 +27,7 @@ from app.db.models_sqlmodel import (
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import parse_datetime_utc, utc_now
 from app.agent_workflows.trace_details import sanitize_trace_detail
+from app.agent_workflows.trace_payloads import append_runtime_event_to_debug_payload
 from app.runtime.contracts import TERMINAL_RUNTIME_EVENT_KINDS
 from app.runtime.events import normalize_product_event_kind
 
@@ -1497,6 +1498,161 @@ async def set_task_runtime_status(task_id: str, status: str, *, phase: Optional[
             await _append_event(session, task, f"task.{status}", agent_run_id=task.active_run_id, payload={"phase": task.current_phase, "reason": reason, "version": task.version})
         await session.refresh(task)
         return task
+
+
+async def respond_to_result_review(
+    task_id: str,
+    *,
+    run_id: str,
+    interrupt_id: str,
+    expected_version: int,
+    decision: str,
+    followup_input: Optional[str],
+    idempotency_key: str,
+) -> tuple[AgentTask, bool]:
+    """Resolve a product-owned incomplete-result review atomically.
+
+    This deliberately does not call a runtime resume operation. A retry closes
+    the provisional run and queues a linked product run.
+    """
+
+    if decision not in {"accept", "retry_with_input"}:
+        raise AgentTaskConflict("result_review_decision_invalid", "Unsupported result review decision")
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
+            )).scalar_one_or_none()
+            if task is None:
+                raise AgentTaskConflict("task_not_found", "Agent task not found")
+            run = (await session.execute(
+                select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update()
+            )).scalar_one_or_none()
+            if run is None:
+                raise AgentTaskConflict("task_run_missing", "Agent task run not found")
+            pending = dict(run.pending_interrupt_json or {})
+            previous = pending.get("decision") if isinstance(pending.get("decision"), dict) else {}
+            if pending.get("status") != "pending":
+                if previous.get("idempotency_key") == idempotency_key:
+                    return task, True
+                raise AgentTaskConflict("result_review_already_resolved", "Result review is already resolved", current_version=task.version)
+            if task.version != expected_version:
+                raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
+            if task.status != AgentTaskStatus.AWAITING_APPROVAL.value or task.active_run_id != run.id:
+                raise AgentTaskConflict("result_review_not_pending", "Task is not awaiting this result review", current_version=task.version)
+            if pending.get("response_operation") != "task.result_review.respond" or pending.get("interrupt_id") != interrupt_id:
+                raise AgentTaskConflict("result_review_identity_mismatch", "Result review identity does not match", current_version=task.version)
+
+            now = utc_now()
+            pending["status"] = "resolved"
+            pending["resolved_at"] = now.isoformat()
+            pending["decision"] = {
+                "action": decision,
+                "followup_input": followup_input,
+                "idempotency_key": idempotency_key,
+            }
+            replace_jsonb_field(run, "pending_interrupt_json", pending)
+            run.status = AgentRunStatus.COMPLETED.value
+            run.completed_at = now
+            if isinstance(run.debug_trace_json, dict):
+                replace_jsonb_field(run, "debug_trace_json", append_runtime_event_to_debug_payload(
+                    run.debug_trace_json,
+                    "task.result_review.responded",
+                    attributes={
+                        "askpdf.task.id": task.id,
+                        "askpdf.run.id": run.id,
+                        "askpdf.result.outcome": "completed_with_warnings",
+                    },
+                    output_data={
+                        "decision": decision,
+                        "linked_retry": decision == "retry_with_input",
+                        "provisional_artifact_id": pending.get("provisional_artifact_id"),
+                    },
+                    run_status=AgentRunStatus.COMPLETED.value,
+                    completed_at=now,
+                ))
+            existing_terminal = (await session.execute(
+                select(AgentRunEvent).where(
+                    AgentRunEvent.agent_run_id == run.id,
+                    AgentRunEvent.terminal.is_(True),
+                )
+            )).scalar_one_or_none()
+            if existing_terminal is None:
+                latest_sequence = int((await session.execute(
+                    select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(
+                        AgentRunEvent.agent_run_id == run.id
+                    )
+                )).scalar_one())
+                session.add(AgentRunEvent(
+                    agent_run_id=run.id,
+                    event_id=f"result-review:{run.id}:{interrupt_id}:completed",
+                    sequence=latest_sequence + 1,
+                    attempt=max(1, int(run.task_attempt or 1)),
+                    kind="run.completed",
+                    occurred_at=now,
+                    payload_json={
+                        "status": "completed",
+                        "result_outcome": "completed_with_warnings",
+                        "review_decision": decision,
+                        "provisional_artifact_id": pending.get("provisional_artifact_id"),
+                    },
+                    terminal=True,
+                    source_metadata_json={"framework": "product", "source_event": "task.result_review.respond"},
+                ))
+
+            if decision == "accept":
+                task.status = AgentTaskStatus.COMPLETED.value
+                task.current_phase = AgentTaskStatus.COMPLETED.value
+                task.terminal_reason = "completed_with_warnings"
+                task.completed_at = now
+                task.expires_at = None
+                event_kind = "task.result_review_accepted"
+            else:
+                config = dict(task.config_json or {})
+                review_context = list(config.get("result_review_context") or [])
+                review_context.append({
+                    "source_run_id": run.id,
+                    "source_artifact_id": pending.get("provisional_artifact_id"),
+                    "followup_input": followup_input,
+                    "review_round": pending.get("review_round"),
+                })
+                config["result_review_context"] = review_context[-5:]
+                replace_jsonb_field(task, "config_json", config)
+                todos = list((await session.execute(
+                    select(AgentTaskTodo).where(
+                        AgentTaskTodo.task_id == task.id,
+                        AgentTaskTodo.status.in_(["failed", "blocked", "cancelled"]),
+                    ).with_for_update()
+                )).scalars().all())
+                for todo in todos:
+                    todo.status = "pending"
+                    todo.current_subagent_run_id = None
+                    todo.terminal_reason = None
+                    todo.progress = 0
+                    todo.version += 1
+                    todo.updated_at = now
+                task.status = AgentTaskStatus.QUEUED.value
+                task.current_phase = "result_review_retry_queued"
+                task.terminal_reason = None
+                task.queued_at = now
+                task.completed_at = None
+                task.expires_at = now + timedelta(hours=24)
+                event_kind = "task.result_review_retry_queued"
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.version += 1
+            await _append_event(
+                session, task, event_kind, agent_run_id=run.id,
+                artifact_id=pending.get("provisional_artifact_id"),
+                payload={
+                    "interrupt_id": interrupt_id,
+                    "decision": decision,
+                    "version": task.version,
+                    "linked_retry": decision == "retry_with_input",
+                },
+            )
+        await session.refresh(task)
+        return task, False
 
 
 async def expire_stale_tasks(*, limit: int = 100) -> int:

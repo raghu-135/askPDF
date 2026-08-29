@@ -33,6 +33,7 @@ from app.runtime.catalog import (
 from app.runtime.registry import RuntimeRegistry, adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.operational_limits import positive_float_value
+from app.runtime.task_results import normalize_runtime_task_result
 
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,15 @@ async def _invoke_task_runtime(
     projection = dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {})
     persisted_result = projection.get("runtime_result")
     if isinstance(persisted_result, dict):
+        persisted_task_result = persisted_result.get("runtime_task_result")
         return AgentRuntimeResult(
             status=str(persisted_result.get("status") or AgentRunStatus.FAILED.value),
-            output=persisted_result.get("answer"),
+            output=(dict(persisted_result) if isinstance(persisted_task_result, Mapping) else persisted_result.get("answer")),
+            task_result=(
+                normalize_runtime_task_result(persisted_task_result)
+                if isinstance(persisted_task_result, Mapping)
+                else None
+            ),
             interruption=persisted_result.get("pending_interrupt"),
             runtime_metadata=dict(persisted_result.get("runtime_metadata") or {}),
             error=dict(persisted_result.get("agent_error") or {}),
@@ -420,6 +427,14 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return
 
     config = dict(task.config_json or {})
+    review_context = [
+        dict(value) for value in config.get("result_review_context") or []
+        if isinstance(value, Mapping)
+    ]
+    followup_input = str((review_context[-1] if review_context else {}).get("followup_input") or "").strip()
+    runtime_question = task.objective
+    if followup_input:
+        runtime_question = f"{task.objective}\n\nResult review follow-up: {followup_input}"
     existing_artifacts = await tasks.list_artifacts(task.id)
     artifact_manifest: list[dict[str, Any]] = []
     artifact_contents: dict[str, str] = {}
@@ -479,7 +494,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             )
         task_context = RuntimeTaskContext(
             task_id=task.id,
-            objective=task.objective,
+            objective=runtime_question,
             todos=tuple({
                 "id": todo.id,
                 "title": todo.title,
@@ -513,6 +528,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "enabled_profiles": list(config.get("enabled_profiles") or []),
                 "plan_revision": max((todo.updated_revision for todo in todos), default=0),
                 "budget_usage": dict(task.budgets_json or {}),
+                "orchestration": dict(
+                    (dict((resolved_spec.get("config") or {}).get("task_policy") or {})).get("orchestration")
+                    or {}
+                ),
             },
             context_data=await _task_context_snapshot(task, thread, config),
         )
@@ -522,7 +541,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             definition_id=definition.definition_id,
             framework=definition.framework,
             builder_id=definition.builder_id,
-            input={"question": task.objective},
+            input={"question": runtime_question},
             task_id=task.id,
             continuation=continuation_from_run(run),
         )
@@ -694,6 +713,25 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 if isinstance(value, dict) and value.get("id")
             ]
             incomplete_reasons = [str(value) for value in result.get("task_incomplete_reasons") or []]
+            result_warnings = [
+                dict(value) for value in result.get("warnings") or [] if isinstance(value, Mapping)
+            ]
+            grounding = result.get("grounding") if isinstance(result.get("grounding"), Mapping) else None
+            if grounding is not None and grounding.get("grounded") is False:
+                incomplete_reasons.append(
+                    f"Required {grounding.get('requirement') or 'research'} evidence was not established."
+                )
+                result_warnings.append({
+                    "code": "grounding_requirement_unsatisfied",
+                    "details": dict(grounding),
+                })
+            incomplete_reasons = list(dict.fromkeys(incomplete_reasons))
+            if incomplete and not incomplete_reasons:
+                incomplete_reasons = [
+                    f"Required work item {todo.id} ended with status {todo.status}."
+                    for todo in terminal_todos
+                    if todo.required and todo.status != "completed"
+                ]
             final_artifact = await persist_task_artifact(
                 task_id=task.id,
                 agent_run_id=run.id,
@@ -710,14 +748,86 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     ),
                     "evidence_manifest": evidence_manifest,
                     "evidence_gaps": incomplete_reasons,
+                    "warnings": result_warnings,
+                    "outcome": "completed_with_warnings" if incomplete or result_warnings else "completed",
                 },
                 source_refs={"artifact_ids": [str(item["id"]) for item in evidence_manifest]},
             )
+            orchestration = dict(
+                (dict((resolved_spec.get("config") or {}).get("task_policy") or {})).get("orchestration")
+                or {}
+            )
+            incomplete_policy = str(orchestration.get("incomplete_result_policy") or "review")
+            max_review_rounds = min(5, max(0, int(orchestration.get("max_incomplete_review_rounds") or 3)))
+            needs_review = bool(incomplete or incomplete_reasons or result_warnings)
+            if needs_review and incomplete_policy == "fail":
+                await _finalize_task_run(
+                    task=task, run=run, recorder=trace, sink=runtime_event_sink,
+                    run_status=AgentRunStatus.FAILED.value,
+                    task_status=AgentTaskStatus.FAILED.value,
+                    metrics=metrics, result=result,
+                    error={"code": "incomplete_result_rejected", "retryable": False},
+                    reason="incomplete_result_rejected",
+                    final_artifact_id=final_artifact.id,
+                )
+                return
+            review_round = max(1, int(getattr(run, "task_attempt", 1) or 1))
+            if needs_review and incomplete_policy == "review" and review_round <= max_review_rounds:
+                pending = {
+                    "interrupt_id": f"result-review:{run.id}:{review_round}",
+                    "type": "incomplete_result_review",
+                    "kind": "approval",
+                    "title": "Review incomplete result",
+                    "body": "The agent returned usable output with warnings or unresolved gaps.",
+                    "response_operation": RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND.value,
+                    "allowed_actions": ["accept", "retry_with_input"],
+                    "response_schema": {
+                        "type": "object",
+                        "properties": {"followup_input": {"type": "string", "maxLength": 20000}},
+                    },
+                    "review_round": review_round,
+                    "max_review_rounds": max_review_rounds,
+                    "provisional_artifact_id": final_artifact.id,
+                    "provisional_answer": final_answer,
+                    "warnings": result_warnings,
+                    "gaps": incomplete_reasons,
+                }
+                debug_payload = finalize_and_merge_debug_payload(
+                    recorder=trace, run=run, metrics=metrics, result={
+                        **result,
+                        "result_outcome": "completed_with_warnings",
+                        "warnings": result_warnings,
+                        "gaps": incomplete_reasons,
+                        "provisional_artifact_id": final_artifact.id,
+                    },
+                    route=result.get("route"), route_reason="awaiting_review",
+                    run_status=AgentRunStatus.AWAITING_HUMAN.value,
+                )
+                await repository.mark_run_awaiting_human(
+                    run.id, pending, metrics_json=metrics, debug_trace_json=debug_payload,
+                )
+                await tasks.set_task_runtime_status(
+                    task.id, AgentTaskStatus.AWAITING_APPROVAL.value,
+                    phase="awaiting_result_review", reason="incomplete_result",
+                )
+                await tasks.append_event(
+                    task.id, "task.result_review_requested", agent_run_id=run.id,
+                    artifact_id=final_artifact.id,
+                    payload={
+                        "interrupt_id": pending["interrupt_id"],
+                        "result_outcome": "completed_with_warnings",
+                        "warnings": result_warnings,
+                        "gaps": incomplete_reasons,
+                        "review_round": review_round,
+                    },
+                )
+                await runtime_event_sink.finish_boundary()
+                return
             await _finalize_task_run(
                 task=task, run=run, recorder=trace, sink=runtime_event_sink,
                 run_status=status, task_status=AgentTaskStatus.COMPLETED.value,
                 metrics=metrics, result=result, error=error,
-                reason="incomplete" if incomplete else "completed",
+                reason="completed_with_warnings" if needs_review else "completed",
                 final_artifact_id=final_artifact.id,
             )
         else:
