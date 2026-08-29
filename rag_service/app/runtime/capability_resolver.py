@@ -79,6 +79,7 @@ RESPONSE_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
     RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
+    RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND,
 })
 
 TASK_ONLY_OPERATIONS = frozenset({
@@ -88,6 +89,8 @@ TASK_ONLY_OPERATIONS = frozenset({
     RuntimeOperationId.TASK_CANCEL,
     RuntimeOperationId.TASK_RETRY,
     RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
+    RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND,
+    RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
 })
 
 CHECKPOINT_OPERATIONS = frozenset({
@@ -453,6 +456,21 @@ async def resolve_run_capability_resolution(
                 )
 
     task_status = str(getattr(task, "status", "") or status)
+    budget_review = operations.get(RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND)
+    if budget_review is not None:
+        operations[RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND] = replace(
+            budget_review,
+            preserves_run_id=definition.framework == "langgraph",
+            preserves_session_id=True,
+        )
+    course_correction = operations.get(RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT)
+    if course_correction is not None and task_status not in {
+        AgentTaskStatus.RUNNING.value, AgentTaskStatus.QUEUED.value,
+    }:
+        operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT] = _disabled(
+            course_correction, RuntimeCapabilityDisabledReason.TASK_TERMINAL
+            if task_status in TERMINAL_TASK_STATES else RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE,
+        )
     run_metadata = getattr(run, "run_metadata_json", None)
     cancellation_pending = (
         status not in TERMINAL_RUN_STATES

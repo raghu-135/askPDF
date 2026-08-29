@@ -35,6 +35,8 @@ from app.services import agent_task_repository as repository
 from app.services import agent_task_presentation
 from app.services import agent_task_runtime
 from app.services import agent_task_maintenance
+from app.services.agent_task_budgets import initial_budget_state, normalize_budget_state, reset_tranche
+from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.services.content_store import SharedVolumeContentStore, set_content_store
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
@@ -569,6 +571,40 @@ async def test_product_result_review_is_runtime_independent_and_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_budget_review_continue_resets_only_tranche_and_is_repeatable(
+    test_session_maker, sample_thread,
+):
+    await _seed_deep_workflow(test_session_maker)
+    task, _ = await repository.create_task(
+        thread_id=sample_thread.id, project_id=sample_thread.project_id, user_id=None,
+        workflow_id="deep_research_agent", objective="Repeat budget tranche",
+        idempotency_key=str(uuid.uuid4()), config={"limits": {"max_model_calls": 2}},
+    )
+    run = await _attach_test_run(test_session_maker, task)
+    await repository.consume_budget(task.id, model_calls=2, model_tokens=50)
+    awaiting, pending = await repository.create_budget_review(
+        task.id, run_id=run.id, provisional_answer="Useful partial answer",
+        warnings=[{"code": "budget_tranche_exhausted"}], gaps=["remaining topic"],
+    )
+    continued, duplicate, linked = await repository.respond_to_budget_review(
+        task.id, run_id=run.id, interrupt_id=pending["interrupt_id"],
+        expected_version=awaiting.version, decision="continue", guidance=None,
+        idempotency_key="continue-tranche-1",
+    )
+    assert duplicate is False and linked is False
+    assert continued.status == "queued"
+    assert continued.budgets_json["tranche_index"] == 2
+    assert continued.budgets_json["tranche_usage"]["model_calls"] == 0
+    assert continued.budgets_json["lifetime_usage"]["model_calls"] == 2
+    repeated, duplicate, _ = await repository.respond_to_budget_review(
+        task.id, run_id=run.id, interrupt_id=pending["interrupt_id"],
+        expected_version=awaiting.version, decision="continue", guidance=None,
+        idempotency_key="continue-tranche-1",
+    )
+    assert duplicate is True and repeated.version == continued.version
+
+
+@pytest.mark.asyncio
 async def test_task_run_terminal_state_and_journals_commit_together(test_session_maker, sample_thread):
     await _seed_deep_workflow(test_session_maker)
     task, _ = await repository.create_task(
@@ -634,10 +670,24 @@ def test_deep_research_builtin_is_valid_and_compilable():
     resolved = WorkflowResolver().resolve(spec, thread_settings={"replans": 10})
     assert resolved["config"]["replans"] == 5
     visit_limits = resolved["config"]["loop_policy"]["node_visit_limits"]
-    assert visit_limits["deep_task_planner"] == 6
-    assert visit_limits["deep_research_subagent"] == 100
-    assert 1 <= visit_limits["deep_coordinator"] <= 60
+    assert visit_limits["deep_task_planner"] == 1_000_000
+    assert visit_limits["deep_research_subagent"] == 1_000_000
+    assert visit_limits["deep_coordinator"] == 1_000_000
     assert visit_limits["task_pause_gate"] == 16
+
+
+def test_environment_budget_is_snapshotted_and_continuation_preserves_lifetime(monkeypatch):
+    monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "3")
+    state = initial_budget_state(apply_deep_agent_env_overrides({"max_model_calls": 99}, "langgraph"))
+    assert state["tranche_limits"]["model_calls"] == 3
+    state["tranche_usage"]["model_calls"] = 3
+    state["lifetime_usage"]["model_calls"] = 3
+    monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "7")
+    normalized = normalize_budget_state(state, {"max_model_calls": 99})
+    assert normalized["tranche_limits"]["model_calls"] == 3
+    continued = reset_tranche(normalized)
+    assert continued["tranche_usage"]["model_calls"] == 0
+    assert continued["lifetime_usage"]["model_calls"] == 3
 
 
 @pytest.mark.asyncio
@@ -1108,6 +1158,8 @@ async def test_deep_scheduler_reuses_task_wide_web_approval(monkeypatch):
     todo = _ready_web_todo()
     monkeypatch.setattr(repository, "schedule_ready_todos", AsyncMock(return_value=[todo]))
     monkeypatch.setattr(repository, "list_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "budget_boundary", AsyncMock(return_value=None))
+    monkeypatch.setattr(repository, "pending_course_corrections", AsyncMock(return_value=[]))
     monkeypatch.setattr(deep_research_nodes, "interrupt", lambda *_args, **_kwargs: pytest.fail("approved task must not interrupt again"))
 
     result = await deep_research_nodes.deep_task_scheduler({
@@ -1125,6 +1177,8 @@ async def test_deep_scheduler_ask_mode_offers_once_and_task_scope(monkeypatch):
     captured = {}
     monkeypatch.setattr(repository, "schedule_ready_todos", AsyncMock(return_value=[todo]))
     monkeypatch.setattr(repository, "list_todos", AsyncMock(return_value=[todo]))
+    monkeypatch.setattr(repository, "budget_boundary", AsyncMock(return_value=None))
+    monkeypatch.setattr(repository, "pending_course_corrections", AsyncMock(return_value=[]))
 
     def approve_for_task(payload):
         captured.update(payload)
@@ -1757,11 +1811,12 @@ async def test_todo_identity_is_task_scoped_and_budget_terminal_guards_are_atomi
         assert [todo.id for todo in await repository.list_todos(task.id)] == ["shared-logical-id"]
         tasks.append(task)
 
-    await repository.consume_budget(tasks[0].id, model_tokens=10, tool_calls=2)
-    with pytest.raises(repository.AgentTaskConflict, match="token budget"):
-        await repository.consume_budget(tasks[0].id, model_tokens=1)
-    with pytest.raises(repository.AgentTaskConflict, match="tool-call budget"):
-        await repository.consume_budget(tasks[0].id, tool_calls=1)
+    usage = await repository.consume_budget(tasks[0].id, model_tokens=10, tool_calls=2)
+    assert set(usage["boundary"]["dimensions"]) == {"model_tokens", "tool_calls"}
+    usage = await repository.consume_budget(tasks[0].id, model_tokens=1, tool_calls=1)
+    assert usage["tranche_usage"]["model_tokens"] == 11
+    assert usage["lifetime_usage"]["tool_calls"] == 3
+    assert usage["boundary"]["tranche_index"] == 1
 
     cancelled = await repository.complete_task(tasks[0].id, status="cancelled", reason="user")
     unchanged = await repository.complete_task(tasks[0].id, status="failed", reason="late_worker")
@@ -1995,9 +2050,10 @@ async def test_identical_artifact_content_deduplicates_only_within_one_owner(
 
 
 @pytest.mark.asyncio
-async def test_active_runtime_is_accrued_and_exhaustion_cancels_dispatch(
-    test_session_maker, sample_thread,
+async def test_active_runtime_is_accrued_and_requests_a_repeatable_boundary(
+    test_session_maker, sample_thread, monkeypatch,
 ):
+    monkeypatch.setenv("DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS", "5000")
     await _seed_deep_workflow(test_session_maker)
     task, _ = await repository.create_task(
         thread_id=sample_thread.id, project_id=sample_thread.project_id, user_id=None,
@@ -2015,11 +2071,13 @@ async def test_active_runtime_is_accrued_and_exhaustion_cancels_dispatch(
             stored = await session.get(type(task), task.id)
             stored.heartbeat_at = utc_now() - timedelta(seconds=10)
 
-    assert await repository.heartbeat_task(task.id, "worker-1", lease_seconds=60) is False
+    assert await repository.heartbeat_task(task.id, "worker-1", lease_seconds=60) is True
     exhausted = await repository.get_task(task.id)
-    assert exhausted.status == "cancelling"
-    assert exhausted.terminal_reason == "active_runtime_budget_exhausted"
-    assert exhausted.budgets_json["elapsed_active_ms"] >= 5_000
+    assert exhausted.status == "running"
+    assert exhausted.terminal_reason is None
+    assert exhausted.budgets_json["tranche_usage"]["elapsed_active_ms"] >= 5_000
+    assert exhausted.budgets_json["lifetime_usage"]["elapsed_active_ms"] >= 5_000
+    assert exhausted.budgets_json["boundary"]["dimensions"] == ["elapsed_active_ms"]
 
 
 @pytest.mark.asyncio

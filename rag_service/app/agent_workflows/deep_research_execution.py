@@ -139,6 +139,16 @@ class DeepResearchExecutionServices:
     async def pause_requested(self) -> bool:
         return bool(self.state.get("task_pause_requested"))
 
+    async def budget_boundary(self) -> Mapping[str, Any] | None:
+        boundary = self.state.get("task_budget_boundary")
+        return dict(boundary) if isinstance(boundary, Mapping) else None
+
+    async def pending_course_corrections(self) -> list[dict[str, Any]]:
+        return [dict(value) for value in self.state.get("task_course_corrections") or [] if isinstance(value, Mapping)]
+
+    async def mark_course_corrections_applied(self, correction_ids: list[str], *, plan_revision: int) -> None:
+        return None
+
     async def assemble_artifact_context(self, compact: Compactor) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -212,6 +222,20 @@ class ProductExecutionServices(DeepResearchExecutionServices):
         from app.services.agent_task_repository import get_task
         task = await get_task(str(self.state.get("agent_task_id") or ""))
         return bool(self.state.get("task_pause_requested")) or bool(task and task.status == "pausing")
+
+    async def budget_boundary(self) -> Mapping[str, Any] | None:
+        from app.services.agent_task_repository import budget_boundary
+        return await budget_boundary(str(self.state.get("agent_task_id") or ""))
+
+    async def pending_course_corrections(self) -> list[dict[str, Any]]:
+        from app.services.agent_task_repository import pending_course_corrections
+        return await pending_course_corrections(str(self.state.get("agent_task_id") or ""))
+
+    async def mark_course_corrections_applied(self, correction_ids: list[str], *, plan_revision: int) -> None:
+        from app.services.agent_task_repository import mark_course_corrections_applied
+        await mark_course_corrections_applied(
+            str(self.state.get("agent_task_id") or ""), correction_ids, plan_revision=plan_revision,
+        )
 
     async def assemble_artifact_context(self, compact: Compactor) -> dict[str, Any]:
         from app.services.agent_task_repository import invalidate_context_summaries, list_artifacts, list_task_runs

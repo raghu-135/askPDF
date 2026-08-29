@@ -1287,7 +1287,7 @@ export interface AgentRunPendingInterrupt {
   node_id?: string | null;
   type?: string | null;
   kind?: 'approval' | 'interrupt' | string | null;
-  response_operation: 'run.resume' | 'run.approval.respond' | 'task.result_review.respond';
+  response_operation: 'run.resume' | 'run.approval.respond' | 'task.result_review.respond' | 'task.budget_review.respond';
   response_schema?: Record<string, any>;
   status?: InterruptStatusValue | string;
   requested_at?: string | null;
@@ -2361,7 +2361,7 @@ export interface AgentTaskSummary {
   total_todos: number;
   current_phase: string;
   terminal_reason?: string | null;
-  budgets: Record<string, number>;
+  budgets: Record<string, unknown>;
   configuration: Record<string, any>;
   created_at: string;
   updated_at: string;
@@ -2552,6 +2552,36 @@ export async function respondToAgentTaskResultReview(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function respondToAgentTaskBudgetReview(
+  taskId: string,
+  threadId: string,
+  payload: {
+    run_id: string;
+    interrupt_id: string;
+    expected_version: number;
+    decision: 'continue' | 'accept_partial' | 'steer';
+    guidance?: string;
+  },
+): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/budget-review/responses?${taskQuery(threadId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function submitAgentTaskCourseCorrection(
+  taskId: string,
+  threadId: string,
+  payload: { run_id: string; expected_version: number; instruction: string; scope?: 'remaining_work' },
+): Promise<{ task: AgentTaskSummary; correction: Record<string, unknown>; duplicate: boolean }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/course-corrections?${taskQuery(threadId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ scope: 'remaining_work', ...payload }),
   });
   if (!response.ok) throw new Error(await readApiError(response));
   return response.json();

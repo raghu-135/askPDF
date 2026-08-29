@@ -67,6 +67,15 @@ class RuntimeEventKind(str, Enum):
     WORKER_CANCELLED = "worker.cancelled"
     AGGREGATION_COMPLETED = "aggregation.completed"
     AGGREGATION_PARTIAL = "aggregation.partial"
+    BUDGET_BOUNDARY_REQUESTED = "budget.boundary_requested"
+    PROVISIONAL_SYNTHESIS_STARTED = "provisional_synthesis.started"
+    PROVISIONAL_SYNTHESIS_COMPLETED = "provisional_synthesis.completed"
+    PROVISIONAL_SYNTHESIS_FAILED = "provisional_synthesis.failed"
+    INTERVENTION_RESPONDED = "intervention.responded"
+    PLAN_SUPERSEDED = "plan.superseded"
+    COURSE_CORRECTION_APPLIED = "course_correction.applied"
+    CHECKPOINT_CONTINUED = "checkpoint.continued"
+    LINKED_RUN_CREATED = "linked_run.created"
     RUNTIME_EVENT = "runtime.event"
 
 
@@ -90,6 +99,7 @@ TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
 RUNTIME_EVENT_FAMILY_PREFIXES = (
     "run.", "output.", "llm.", "reasoning.", "interrupt.", "approval.",
     "tool.", "subagent.", "artifact.", "operation.", "dispatch.", "worker.", "aggregation.",
+    "budget.", "provisional_synthesis.", "intervention.", "plan.", "course_correction.", "checkpoint.", "linked_run.",
 )
 
 
@@ -117,6 +127,8 @@ class RuntimeOperationId(str, Enum):
     TASK_CANCEL = "task.cancel"
     TASK_RETRY = "task.retry"
     TASK_RESULT_REVIEW_RESPOND = "task.result_review.respond"
+    TASK_BUDGET_REVIEW_RESPOND = "task.budget_review.respond"
+    TASK_COURSE_CORRECTION_SUBMIT = "task.course_correction.submit"
     SUBAGENT_LIST = "subagent.list"
     SUBAGENT_SEND = "subagent.send"
     SUBAGENT_CANCEL = "subagent.cancel"
@@ -154,6 +166,8 @@ class RuntimeCapabilitySemantics(str, Enum):
     PRODUCT_TASK_CANCEL = "product_task_cancel"
     PRODUCT_TASK_RETRY = "product_task_retry"
     PRODUCT_TASK_RESULT_REVIEW = "product_task_result_review"
+    PRODUCT_TASK_BUDGET_REVIEW = "product_task_budget_review"
+    PRODUCT_TASK_COURSE_CORRECTION = "product_task_course_correction"
     RESUME_FROM_INTERRUPT = "resume_from_interrupt"
     CHECKPOINT_STATE_INSPECTION = "checkpoint_state_inspection"
     CHECKPOINT_BOUNDARY_UPDATE = "checkpoint_boundary_update"

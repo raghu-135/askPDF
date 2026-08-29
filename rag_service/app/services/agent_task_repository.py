@@ -30,6 +30,12 @@ from app.agent_workflows.trace_details import sanitize_trace_detail
 from app.agent_workflows.trace_payloads import append_runtime_event_to_debug_payload
 from app.runtime.contracts import TERMINAL_RUNTIME_EVENT_KINDS
 from app.runtime.events import normalize_product_event_kind
+from app.services.agent_task_budgets import (
+    exhausted_dimensions,
+    initial_budget_state,
+    normalize_budget_state,
+    reset_tranche,
+)
 
 
 ACTIVE_TASK_STATUSES = {
@@ -103,14 +109,7 @@ async def create_task(
             objective_hash=hashlib.sha256(objective.casefold().encode("utf-8")).hexdigest(),
             create_idempotency_key=idempotency_key,
             config_json=config,
-            budgets_json={
-                "model_tokens": 0,
-                "model_calls": 0,
-                "tool_calls": 0,
-                "subagent_attempts": 0,
-                "artifact_bytes": 0,
-                "elapsed_active_ms": 0,
-            },
+            budgets_json=initial_budget_state((config or {}).get("limits") or {}),
             expires_at=utc_now() + timedelta(hours=24),
         )
         session.add(task)
@@ -194,24 +193,27 @@ async def consume_budget(
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
             limits = (task.config_json or {}).get("limits") or {}
-            usage = dict(task.budgets_json or {})
-            next_model_calls = int(usage.get("model_calls") or 0) + model_calls
-            next_model_tokens = int(usage.get("model_tokens") or 0) + model_tokens
-            next_tool_calls = int(usage.get("tool_calls") or 0) + tool_calls
-            if next_model_calls > int(limits.get("max_model_calls", 10_000)):
-                raise AgentTaskConflict("model_call_budget_exhausted", "Task model-call budget exhausted")
-            if next_model_tokens > int(limits.get("max_model_tokens", 500_000)):
-                raise AgentTaskConflict("model_token_budget_exhausted", "Task model-token budget exhausted")
-            if next_tool_calls > int(limits.get("max_tool_calls", 100)):
-                raise AgentTaskConflict("tool_call_budget_exhausted", "Task tool-call budget exhausted")
-            usage["model_calls"] = next_model_calls
-            usage["model_tokens"] = next_model_tokens
-            usage["tool_calls"] = next_tool_calls
+            usage = normalize_budget_state(task.budgets_json, limits)
+            increments = {"model_calls": model_calls, "model_tokens": model_tokens, "tool_calls": tool_calls}
+            for key, amount in increments.items():
+                increment = max(0, int(amount or 0))
+                usage["tranche_usage"][key] = int(usage["tranche_usage"].get(key) or 0) + increment
+                usage["lifetime_usage"][key] = int(usage["lifetime_usage"].get(key) or 0) + increment
+            exhausted = exhausted_dimensions(usage)
+            if exhausted and not isinstance(usage.get("boundary"), dict):
+                usage["boundary"] = {
+                    "status": "requested",
+                    "dimensions": exhausted,
+                    "tranche_index": usage["tranche_index"],
+                    "requested_at": utc_now().isoformat(),
+                }
             replace_jsonb_field(task, "budgets_json", usage)
             task.version += 1
             await _append_event(session, task, "task.budget_updated", agent_run_id=task.active_run_id, payload={
-                "model_calls": usage["model_calls"], "model_tokens": usage["model_tokens"],
-                "tool_calls": usage["tool_calls"],
+                "tranche_index": usage["tranche_index"],
+                "tranche_usage": usage["tranche_usage"],
+                "lifetime_usage": usage["lifetime_usage"],
+                "exhausted_dimensions": exhausted,
             })
         return usage
 
@@ -940,23 +942,34 @@ async def _accrue_active_runtime(session: Any, task: AgentTask, *, now: Any, cap
     increment = min(max(0, int((now - previous).total_seconds() * 1000)), max(1, cap_ms))
     if increment <= 0:
         return 0
-    budgets = dict(task.budgets_json or {})
-    elapsed = int(budgets.get("elapsed_active_ms") or 0) + increment
-    budgets["elapsed_active_ms"] = elapsed
-    replace_jsonb_field(task, "budgets_json", budgets)
     limits = (task.config_json or {}).get("limits") or {}
-    maximum = int(limits.get("max_active_runtime_ms", 3_600_000))
-    if elapsed >= maximum and task.status == AgentTaskStatus.RUNNING.value:
-        task.status = AgentTaskStatus.CANCELLING.value
-        task.current_phase = "active_runtime_budget_exhausted"
-        task.terminal_reason = "active_runtime_budget_exhausted"
+    budgets = normalize_budget_state(task.budgets_json, limits)
+    elapsed = int(budgets["tranche_usage"].get("elapsed_active_ms") or 0) + increment
+    lifetime_elapsed = int(budgets["lifetime_usage"].get("elapsed_active_ms") or 0) + increment
+    budgets["tranche_usage"]["elapsed_active_ms"] = elapsed
+    budgets["lifetime_usage"]["elapsed_active_ms"] = lifetime_elapsed
+    exhausted = exhausted_dimensions(budgets)
+    if exhausted and not isinstance(budgets.get("boundary"), dict):
+        budgets["boundary"] = {
+            "status": "requested",
+            "dimensions": exhausted,
+            "tranche_index": budgets["tranche_index"],
+            "requested_at": now.isoformat(),
+        }
+    replace_jsonb_field(task, "budgets_json", budgets)
+    maximum = int((budgets.get("tranche_limits") or {}).get("elapsed_active_ms") or 3_600_000)
     task.version += 1
     await _append_event(
         session,
         task,
         "task.budget_updated",
         agent_run_id=task.active_run_id,
-        payload={"elapsed_active_ms": elapsed, "max_active_runtime_ms": maximum},
+        payload={
+            "elapsed_active_ms": elapsed,
+            "lifetime_elapsed_active_ms": lifetime_elapsed,
+            "max_active_runtime_ms": maximum,
+            "exhausted_dimensions": exhausted,
+        },
     )
     return increment
 
@@ -966,9 +979,17 @@ async def active_runtime_budget_exhausted(task_id: str) -> bool:
     if task is None:
         return True
     limits = (task.config_json or {}).get("limits") or {}
-    return int((task.budgets_json or {}).get("elapsed_active_ms") or 0) >= int(
-        limits.get("max_active_runtime_ms", 3_600_000)
-    )
+    state = normalize_budget_state(task.budgets_json, limits)
+    return "elapsed_active_ms" in exhausted_dimensions(state)
+
+
+async def budget_boundary(task_id: str) -> Optional[Dict[str, Any]]:
+    task = await get_task(task_id)
+    if task is None:
+        return None
+    state = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
+    boundary = state.get("boundary")
+    return dict(boundary) if isinstance(boundary, dict) and boundary.get("status") == "requested" else None
 
 
 async def attach_run(task_id: str, run: AgentRun, *, parent_run_id: Optional[str] = None) -> AgentRun:
@@ -1045,7 +1066,7 @@ async def persist_plan(
                     AgentTaskPlanRevision.agent_run_id == agent_run_id,
                 )
             )).scalar_one())
-            if run_revision_count >= int(limits.get("max_plan_revisions", 8)):
+            if reason != "course_correction" and run_revision_count >= int(limits.get("max_plan_revisions", 8)):
                 raise AgentTaskConflict("plan_revision_budget_exhausted", "Plan revision limit reached")
             enabled_profiles = set((task.config_json or {}).get("enabled_profiles") or [])
             for todo in proposal.todos:
@@ -1122,7 +1143,11 @@ async def persist_plan(
             task.total_todos = len(persisted)
             task.current_phase = "planned"
             task.version += 1
-            await _append_event(session, task, "plan.revised", agent_run_id=agent_run_id, payload={"revision": revision_number, "todo_count": len(persisted), "content_hash": revision.content_hash})
+            await _append_event(
+                session, task, "plan.superseded" if reason == "course_correction" else "plan.revised",
+                agent_run_id=agent_run_id,
+                payload={"revision": revision_number, "todo_count": len(persisted), "content_hash": revision.content_hash, "reason": reason},
+            )
         await session.refresh(revision)
         return revision, persisted
 
@@ -1233,8 +1258,8 @@ async def record_subagent_started(
             todo = await session.get(AgentTaskTodo, (task_id, todo_id))
             if todo is not None:
                 todo.current_subagent_run_id = row.id
-            budgets = dict(task.budgets_json or {})
-            budgets["subagent_attempts"] = int(budgets.get("subagent_attempts") or 0) + 1
+            budgets = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
+            budgets["lifetime_usage"]["subagent_attempts"] = int(budgets["lifetime_usage"].get("subagent_attempts") or 0) + 1
             replace_jsonb_field(task, "budgets_json", budgets)
             await _append_event(session, task, "subagent.started", agent_run_id=agent_run_id, todo_id=todo_id, subagent_run_id=row.id, payload={"profile_id": profile_id, "attempt": attempt})
         await session.refresh(row)
@@ -1308,16 +1333,16 @@ async def register_artifact(metadata: AgentTaskArtifact) -> tuple[AgentTaskArtif
                 AgentTaskArtifact.task_id == task.id,
                 AgentTaskArtifact.validity != "deleted",
             ))).scalar_one())
-            budgets = dict(task.budgets_json or {})
+            budgets = normalize_budget_state(task.budgets_json, limits)
             if artifact_count >= int(limits.get("max_artifacts", 200)):
                 raise AgentTaskConflict("artifact_count_budget_exhausted", "Task artifact count limit reached")
             if metadata.byte_size > int(limits.get("max_single_artifact_bytes", 10_485_760)):
                 raise AgentTaskConflict("artifact_size_budget_exhausted", "Task artifact exceeds its configured size limit")
-            if int(budgets.get("artifact_bytes") or 0) + metadata.byte_size > int(limits.get("max_artifact_bytes", 104_857_600)):
+            if int(budgets["lifetime_usage"].get("artifact_bytes") or 0) + metadata.byte_size > int(limits.get("max_artifact_bytes", 104_857_600)):
                 raise AgentTaskConflict("artifact_bytes_budget_exhausted", "Task artifact byte budget exhausted")
             session.add(metadata)
             await session.flush()
-            budgets["artifact_bytes"] = int(budgets.get("artifact_bytes") or 0) + metadata.byte_size
+            budgets["lifetime_usage"]["artifact_bytes"] = int(budgets["lifetime_usage"].get("artifact_bytes") or 0) + metadata.byte_size
             replace_jsonb_field(task, "budgets_json", budgets)
             await _append_event(session, task, "artifact.created", agent_run_id=metadata.agent_run_id, todo_id=metadata.todo_id, subagent_run_id=metadata.subagent_run_id, artifact_id=metadata.id, payload={"kind": metadata.kind, "byte_size": metadata.byte_size, "sha256": metadata.sha256})
         await session.refresh(metadata)
@@ -1653,6 +1678,311 @@ async def respond_to_result_review(
             )
         await session.refresh(task)
         return task, False
+
+
+async def respond_to_budget_review(
+    task_id: str,
+    *,
+    run_id: str,
+    interrupt_id: str,
+    expected_version: int,
+    decision: str,
+    guidance: Optional[str],
+    idempotency_key: str,
+) -> tuple[AgentTask, bool, bool]:
+    """Resolve a repeatable budget boundary for checkpoint or linked continuation."""
+
+    if decision not in {"continue", "accept_partial", "steer"}:
+        raise AgentTaskConflict("budget_review_decision_invalid", "Unsupported budget review decision")
+    if decision == "steer" and not str(guidance or "").strip():
+        raise AgentTaskConflict("budget_review_guidance_required", "Steering guidance is required")
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one_or_none()
+            run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update())).scalar_one_or_none()
+            if task is None or run is None:
+                raise AgentTaskConflict("task_run_missing", "Agent task run not found")
+            pending = dict(run.pending_interrupt_json or {})
+            previous = pending.get("decision") if isinstance(pending.get("decision"), dict) else {}
+            if pending.get("status") != "pending":
+                if previous.get("idempotency_key") == idempotency_key:
+                    return task, True, str(run.framework or "") == "hermes"
+                raise AgentTaskConflict("budget_review_already_resolved", "Budget review is already resolved", current_version=task.version)
+            if task.version != expected_version:
+                raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
+            if task.status != AgentTaskStatus.AWAITING_APPROVAL.value or task.active_run_id != run.id:
+                raise AgentTaskConflict("budget_review_not_pending", "Task is not awaiting this budget review", current_version=task.version)
+            if pending.get("response_operation") != "task.budget_review.respond" or pending.get("interrupt_id") != interrupt_id:
+                raise AgentTaskConflict("budget_review_identity_mismatch", "Budget review identity does not match", current_version=task.version)
+
+            now = utc_now()
+            pending["status"] = "resolved"
+            pending["resolved_at"] = now.isoformat()
+            pending["decision"] = {"action": decision, "guidance": guidance, "idempotency_key": idempotency_key}
+            replace_jsonb_field(run, "pending_interrupt_json", pending)
+            linked_run = str(run.framework or "") == "hermes"
+            if decision == "accept_partial":
+                if not str(pending.get("provisional_answer") or "").strip():
+                    raise AgentTaskConflict("budget_partial_answer_unavailable", "No provisional answer is available to accept")
+                run.status = AgentRunStatus.COMPLETED.value
+                run.completed_at = now
+                task.status = AgentTaskStatus.COMPLETED.value
+                task.current_phase = AgentTaskStatus.COMPLETED.value
+                task.terminal_reason = "completed_with_warnings"
+                task.completed_at = now
+                task.expires_at = None
+                event_kind = "task.budget_review_partial_accepted"
+            else:
+                budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
+                replace_jsonb_field(task, "budgets_json", reset_tranche(budget))
+                if guidance:
+                    config = dict(task.config_json or {})
+                    corrections = list(config.get("course_corrections") or [])
+                    corrections.append({
+                        "id": str(uuid.uuid4()), "instruction": guidance, "scope": "remaining_work",
+                        "status": "pending", "source": "budget_review", "source_run_id": run.id,
+                        "submitted_at": now.isoformat(),
+                    })
+                    config["course_corrections"] = corrections
+                    replace_jsonb_field(task, "config_json", config)
+                task.status = AgentTaskStatus.QUEUED.value
+                task.current_phase = "budget_continuation_queued"
+                task.terminal_reason = None
+                task.queued_at = now
+                task.completed_at = None
+                task.expires_at = now + timedelta(hours=24)
+                if linked_run:
+                    run.status = AgentRunStatus.COMPLETED.value
+                    run.completed_at = now
+                else:
+                    run.status = AgentRunStatus.RUNNING.value
+                event_kind = "task.budget_review_steered" if decision == "steer" else "task.budget_review_continued"
+            if decision == "accept_partial" or linked_run:
+                latest_sequence = int((await session.execute(
+                    select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(AgentRunEvent.agent_run_id == run.id)
+                )).scalar_one())
+                terminal_exists = (await session.execute(select(AgentRunEvent.id).where(
+                    AgentRunEvent.agent_run_id == run.id, AgentRunEvent.terminal.is_(True),
+                ))).scalar_one_or_none()
+                if terminal_exists is None:
+                    session.add(AgentRunEvent(
+                        agent_run_id=run.id,
+                        event_id=f"budget-review:{run.id}:{interrupt_id}:completed",
+                        sequence=latest_sequence + 1,
+                        attempt=max(1, int(run.task_attempt or 1)),
+                        kind="run.completed", occurred_at=now, terminal=True,
+                        payload_json={
+                            "status": "completed", "result_outcome": "completed_with_warnings",
+                            "review_decision": decision, "linked_continuation": linked_run,
+                            "provisional_answer": pending.get("provisional_answer"),
+                        },
+                        source_metadata_json={"framework": "product", "source_event": "task.budget_review.respond"},
+                    ))
+            if isinstance(run.debug_trace_json, dict):
+                replace_jsonb_field(run, "debug_trace_json", append_runtime_event_to_debug_payload(
+                    run.debug_trace_json,
+                    "intervention.responded",
+                    attributes={
+                        "askpdf.task.id": task.id, "askpdf.run.id": run.id,
+                        "askpdf.intervention.kind": "budget_review",
+                    },
+                    output_data={"decision": decision, "linked_run": linked_run, "guidance_provided": bool(guidance)},
+                    run_status=run.status,
+                    completed_at=run.completed_at,
+                ))
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.version += 1
+            await _append_event(session, task, event_kind, agent_run_id=run.id, artifact_id=pending.get("provisional_artifact_id"), payload={
+                "interrupt_id": interrupt_id, "decision": decision, "guidance": guidance,
+                "linked_run": linked_run and decision != "accept_partial", "version": task.version,
+            })
+        await session.refresh(task)
+        return task, False, linked_run and decision != "accept_partial"
+
+
+async def create_budget_review(
+    task_id: str,
+    *,
+    run_id: str,
+    provisional_answer: str,
+    warnings: list[Dict[str, Any]] | None = None,
+    gaps: list[str] | None = None,
+) -> tuple[AgentTask, Dict[str, Any]]:
+    """Create one durable review for the currently exhausted tranche."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update())).scalar_one()
+            existing = dict(run.pending_interrupt_json or {})
+            if existing.get("status") == "pending" and existing.get("response_operation") == "task.budget_review.respond":
+                return task, existing
+            budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
+            boundary = dict(budget.get("boundary") or {})
+            interrupt_id = str(uuid.uuid4())
+            pending = {
+                "interrupt_id": interrupt_id,
+                "type": "budget_review",
+                "response_operation": "task.budget_review.respond",
+                "status": "pending",
+                "title": "Research budget reached",
+                "allowed_actions": ["continue", "accept_partial", "steer"],
+                "boundary_strategy": "safe_atomic_boundary",
+                "continuation_semantics": "linked_run" if str(run.framework or "") == "hermes" else "checkpoint_same_run",
+                "preserves_run_id": str(run.framework or "") != "hermes",
+                "artifact_inheritance": "valid_artifacts",
+                "safe_boundary_latency": "after_active_workers",
+                "provisional_answer": str(provisional_answer or "").strip(),
+                "warnings": list(warnings or []),
+                "gaps": list(gaps or []),
+                "usage": {
+                    "tranche_index": budget.get("tranche_index"),
+                    "tranche_limits": budget.get("tranche_limits"),
+                    "tranche_usage": budget.get("tranche_usage"),
+                    "lifetime_usage": budget.get("lifetime_usage"),
+                    "exhausted_dimensions": boundary.get("dimensions") or exhausted_dimensions(budget),
+                },
+                "created_at": utc_now().isoformat(),
+            }
+            replace_jsonb_field(run, "pending_interrupt_json", pending)
+            run.status = AgentRunStatus.AWAITING_HUMAN.value
+            if isinstance(run.debug_trace_json, dict):
+                debug_payload = append_runtime_event_to_debug_payload(
+                    run.debug_trace_json, "provisional_synthesis.completed",
+                    attributes={"askpdf.task.id": task.id, "askpdf.run.id": run.id},
+                    output_data={"usable_output": bool(pending["provisional_answer"]), "gaps": pending["gaps"], "warnings": pending["warnings"]},
+                    run_status=AgentRunStatus.AWAITING_HUMAN.value,
+                )
+                replace_jsonb_field(run, "debug_trace_json", append_runtime_event_to_debug_payload(
+                    debug_payload, "budget.boundary_requested",
+                    attributes={"askpdf.task.id": task.id, "askpdf.run.id": run.id},
+                    output_data={"usage": pending["usage"], "continuation_semantics": pending["continuation_semantics"]},
+                    run_status=AgentRunStatus.AWAITING_HUMAN.value,
+                ))
+            task.status = AgentTaskStatus.AWAITING_APPROVAL.value
+            task.current_phase = "budget_review"
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.version += 1
+            await _append_event(session, task, "task.budget_review_requested", agent_run_id=run.id, payload={
+                "interrupt_id": interrupt_id, "usage": pending["usage"],
+                "accept_partial_enabled": bool(pending["provisional_answer"]), "version": task.version,
+            })
+        await session.refresh(task)
+        return task, pending
+
+
+async def submit_course_correction(
+    task_id: str,
+    *,
+    run_id: str,
+    expected_version: int,
+    instruction: str,
+    scope: str,
+    idempotency_key: str,
+) -> tuple[AgentTask, bool, Dict[str, Any]]:
+    """Persist user-authored steering for the next safe orchestration boundary."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one_or_none()
+            run = await session.get(AgentRun, run_id)
+            if task is None or run is None or run.task_id != task_id:
+                raise AgentTaskConflict("task_run_missing", "Agent task run not found")
+            if task.version != expected_version:
+                raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
+            if task.status not in {AgentTaskStatus.RUNNING.value, AgentTaskStatus.QUEUED.value, AgentTaskStatus.AWAITING_APPROVAL.value}:
+                raise AgentTaskConflict("course_correction_unavailable", "Course correction is unavailable for this task state", current_version=task.version)
+            config = dict(task.config_json or {})
+            corrections = list(config.get("course_corrections") or [])
+            duplicate = next((value for value in corrections if isinstance(value, dict) and value.get("idempotency_key") == idempotency_key), None)
+            if duplicate is not None:
+                return task, True, dict(duplicate)
+            correction = {
+                "id": str(uuid.uuid4()), "instruction": " ".join(instruction.split()).strip(),
+                "scope": scope, "status": "pending", "source": "user", "source_run_id": run.id,
+                "idempotency_key": idempotency_key, "submitted_at": utc_now().isoformat(),
+            }
+            corrections.append(correction)
+            config["course_corrections"] = corrections
+            replace_jsonb_field(task, "config_json", config)
+            task.version += 1
+            await _append_event(session, task, "task.course_correction_submitted", agent_run_id=run.id, payload={**correction, "version": task.version})
+        await session.refresh(task)
+        return task, False, correction
+
+
+async def pending_course_corrections(task_id: str) -> list[Dict[str, Any]]:
+    task = await get_task(task_id)
+    return [dict(value) for value in ((task.config_json or {}).get("course_corrections") or []) if isinstance(value, dict) and value.get("status") == "pending"] if task else []
+
+
+async def mark_course_corrections_applied(task_id: str, correction_ids: Iterable[str], *, plan_revision: int) -> None:
+    selected = {str(value) for value in correction_ids}
+    if not selected:
+        return
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            config = dict(task.config_json or {})
+            corrections = list(config.get("course_corrections") or [])
+            now = utc_now().isoformat()
+            for value in corrections:
+                if isinstance(value, dict) and str(value.get("id")) in selected:
+                    value.update({"status": "applied", "applied_at": now, "plan_revision": plan_revision})
+            config["course_corrections"] = corrections
+            replace_jsonb_field(task, "config_json", config)
+            await _append_event(session, task, "task.course_correction_applied", agent_run_id=task.active_run_id, payload={"correction_ids": sorted(selected), "plan_revision": plan_revision})
+
+
+async def queue_hermes_course_correction(task_id: str, *, run_id: str) -> AgentTask:
+    """Close a Hermes execution at its terminal boundary and queue its linked correction run."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update())).scalar_one()
+            corrections = [
+                dict(value) for value in (task.config_json or {}).get("course_corrections") or []
+                if isinstance(value, dict) and value.get("status") == "pending"
+            ]
+            if not corrections:
+                return task
+            now = utc_now()
+            run.status = AgentRunStatus.COMPLETED.value
+            run.completed_at = now
+            if isinstance(run.debug_trace_json, dict):
+                replace_jsonb_field(run, "debug_trace_json", append_runtime_event_to_debug_payload(
+                    run.debug_trace_json, "linked_run.created",
+                    attributes={"askpdf.task.id": task.id, "askpdf.run.id": run.id},
+                    output_data={"parent_run_id": run.id, "correction_ids": [value.get("id") for value in corrections]},
+                    run_status=AgentRunStatus.COMPLETED.value, completed_at=now,
+                ))
+            task.status = AgentTaskStatus.QUEUED.value
+            task.current_phase = "course_correction_queued"
+            task.queued_at = now
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.version += 1
+            latest_sequence = int((await session.execute(
+                select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(AgentRunEvent.agent_run_id == run.id)
+            )).scalar_one())
+            if (await session.execute(select(AgentRunEvent.id).where(
+                AgentRunEvent.agent_run_id == run.id, AgentRunEvent.terminal.is_(True),
+            ))).scalar_one_or_none() is None:
+                session.add(AgentRunEvent(
+                    agent_run_id=run.id, event_id=f"course-correction:{run.id}:completed",
+                    sequence=latest_sequence + 1, attempt=max(1, int(run.task_attempt or 1)),
+                    kind="run.completed", occurred_at=now, terminal=True,
+                    payload_json={"status": "completed", "linked_continuation": True, "correction_ids": [value.get("id") for value in corrections]},
+                    source_metadata_json={"framework": "product", "source_event": "task.course_correction.submit"},
+                ))
+            await _append_event(session, task, "linked_run.created", agent_run_id=run.id, payload={
+                "parent_run_id": run.id, "correction_ids": [value.get("id") for value in corrections], "version": task.version,
+            })
+        await session.refresh(task)
+        return task
 
 
 async def expire_stale_tasks(*, limit: int = 100) -> int:

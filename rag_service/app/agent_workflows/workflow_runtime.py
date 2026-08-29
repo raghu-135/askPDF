@@ -4,7 +4,7 @@ import os
 from copy import deepcopy
 from typing import Any, Dict
 
-from app.agent_workflows.enums import WorkflowNodeType, WorkflowRuntimeKind
+from app.agent_workflows.enums import RouteFunctionId, WorkflowNodeType, WorkflowRuntimeKind
 
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
 DEFAULT_AGENT_WORKFLOW_KEY = "_".join((WorkflowNodeType.ROUTER.value, "rag", "agent"))
@@ -113,6 +113,10 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
     except (TypeError, ValueError):
         replans = 1
     repeatable_node_types = repeatable_node_types_for_replans({**spec, "config": config})
+    repeatable_budget_intervention = any(
+        isinstance(edge, dict) and edge.get("route_fn") == RouteFunctionId.BUDGET_REVIEW.value
+        for edge in graph.get("edges", [])
+    )
     node_visit_limits = {
         node_id: replans + 1
         for node_id, node_type in node_types.items()
@@ -157,14 +161,14 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
         elif node_type == WorkflowNodeType.ANSWER_REVISER.value:
             node_visit_limits[node_id] = 1
         elif node_type == WorkflowNodeType.DEEP_TASK_PLANNER.value:
-            node_visit_limits[node_id] = replans + 1
+            node_visit_limits[node_id] = node_type_max_visits(node_type) if repeatable_budget_intervention else replans + 1
         elif node_type in {
             WorkflowNodeType.DEEP_TASK_SCHEDULER.value,
             WorkflowNodeType.DEEP_COORDINATOR.value,
         }:
-            node_visit_limits[node_id] = deep_control_visits
+            node_visit_limits[node_id] = node_type_max_visits(node_type) if repeatable_budget_intervention else deep_control_visits
         elif node_type == WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value:
-            node_visit_limits[node_id] = max_todos * max_attempts
+            node_visit_limits[node_id] = node_type_max_visits(node_type) if repeatable_budget_intervention else max_todos * max_attempts
         elif node_type == WorkflowNodeType.HITL_GATE.value and workflow_runtime_features(spec).get("supports_long_running_tasks"):
             node_visit_limits[node_id] = max_interrupts
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)

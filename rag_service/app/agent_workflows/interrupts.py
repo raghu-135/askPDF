@@ -33,6 +33,7 @@ PENDING_INTERRUPT_RESPONSE_OPERATIONS = frozenset({
     "run.resume",
     "run.approval.respond",
     "task.result_review.respond",
+    "task.budget_review.respond",
 })
 
 

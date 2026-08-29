@@ -13,7 +13,9 @@ from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.service import AgentRunService
 from app.db import get_thread, get_thread_settings
 from app.models.deep_research import (
+    AgentTaskBudgetReviewRequest,
     AgentTaskCommandRequest,
+    AgentTaskCourseCorrectionRequest,
     AgentTaskCreateRequest,
     AgentTaskResultReviewRequest,
 )
@@ -469,6 +471,57 @@ async def respond_to_agent_task_result_review(
         }
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc
+
+
+@router.post("/agent-tasks/{task_id}/budget-review/responses")
+async def respond_to_agent_task_budget_review(
+    task_id: str,
+    req: AgentTaskBudgetReviewRequest,
+    thread_id: str = Query(min_length=1),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    task = await _owned_task(task_id, thread_id)
+    run = await repository.get_task_run(task.id)
+    if run is None or run.id != req.run_id:
+        raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
+    try:
+        await require_capability(definition_from_run(run), RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND, registry=get_runtime_registry(), run=run, task=task)
+        task, duplicate, linked = await repository.respond_to_budget_review(
+            task_id, run_id=req.run_id, interrupt_id=req.interrupt_id,
+            expected_version=req.expected_version, decision=req.decision,
+            guidance=req.guidance, idempotency_key=idempotency_key,
+        )
+        linked_run = await ensure_task_run(task.id) if linked and not duplicate else None
+        task = await repository.get_task(task.id) or task
+        return {"task": _task_payload(task), "linked_run": _run_payload(linked_run) if linked_run else None, "duplicate": duplicate}
+    except repository.AgentTaskConflict as exc:
+        raise _conflict(exc) from exc
+    except AgentRuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+
+
+@router.post("/agent-tasks/{task_id}/course-corrections")
+async def submit_agent_task_course_correction(
+    task_id: str,
+    req: AgentTaskCourseCorrectionRequest,
+    thread_id: str = Query(min_length=1),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    task = await _owned_task(task_id, thread_id)
+    run = await repository.get_task_run(task.id)
+    if run is None or run.id != req.run_id:
+        raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
+    try:
+        await require_capability(definition_from_run(run), RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT, registry=get_runtime_registry(), run=run, task=task)
+        task, duplicate, correction = await repository.submit_course_correction(
+            task_id, run_id=req.run_id, expected_version=req.expected_version,
+            instruction=req.instruction, scope=req.scope, idempotency_key=idempotency_key,
+        )
+        return {"task": _task_payload(task), "correction": correction, "duplicate": duplicate}
+    except repository.AgentTaskConflict as exc:
+        raise _conflict(exc) from exc
+    except AgentRuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
 
 
 @router.get("/agent-tasks/{task_id}/todos")

@@ -79,6 +79,7 @@
           "max_attempts_per_todo": 2,
           "subagent_timeout_ms": 180000,
           "max_active_runtime_ms": 3600000,
+          "max_model_calls": 10000,
           "max_tool_calls": 100,
           "max_model_tokens": 500000,
           "max_artifacts": 200,
@@ -107,15 +108,15 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 240,
+        "max_total_visits": 1000000,
         "node_visit_limits": {
           "context_loader": 1,
-          "deep_task_planner": 8,
-          "deep_task_scheduler": 60,
-          "deep_research_subagent": 100,
-          "deep_coordinator": 60,
-          "deep_task_synthesizer": 1,
-          "evidence_critic": 1,
+          "deep_task_planner": 1000000,
+          "deep_task_scheduler": 1000000,
+          "deep_research_subagent": 1000000,
+          "deep_coordinator": 1000000,
+          "deep_task_synthesizer": 1000000,
+          "evidence_critic": 1000000,
           "task_pause_gate": 16,
           "finalizer": 1
         }
@@ -148,7 +149,11 @@
           }},
           {"from": "task_pause_gate", "conditional": true, "route_fn": "hitl_gate_route", "routes": {"approve": "deep_task_scheduler", "reject": "finalizer"}},
           {"from": "deep_task_synthesizer", "to": "evidence_critic"},
-          {"from": "evidence_critic", "to": "finalizer"},
+          {"from": "evidence_critic", "conditional": true, "route_fn": "budget_review_route", "routes": {
+            "continue": "deep_task_scheduler",
+            "steer": "deep_task_planner",
+            "accept_partial": "finalizer"
+          }},
           {"from": "finalizer", "to": "END"}
         ]
       }

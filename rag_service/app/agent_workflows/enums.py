@@ -100,6 +100,7 @@ class RouteFunctionId(str, Enum):
     GROUNDED_ANSWER = "grounded_answer_route"
     DEEP_TASK_DISPATCH = "deep_task_dispatch_route"
     DEEP_TASK = "deep_task_route"
+    BUDGET_REVIEW = "budget_review_route"
 
 
 class WorkflowNodeType(str, Enum):

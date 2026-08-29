@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Box, Button, Chip,
   Divider, IconButton, LinearProgress, ListItemIcon, ListItemText,
-  Menu, MenuItem, Stack, Tooltip, Typography,
+  Menu, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -26,6 +26,8 @@ import {
   listAgentTasks,
   resumeAgentRun,
   respondToAgentTaskResultReview,
+  respondToAgentTaskBudgetReview,
+  submitAgentTaskCourseCorrection,
   sendAgentRunFollowup,
   interruptAgentRunWithInput,
   steerAgentRunLive,
@@ -269,6 +271,9 @@ export default function DeepResearchTaskPanel({
   const [items, setItems] = useState<AgentTaskTimelineItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
+  const [reviewGuidance, setReviewGuidance] = useState('');
+  const [courseCorrection, setCourseCorrection] = useState('');
+  const [stateUpdateText, setStateUpdateText] = useState('');
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
@@ -653,16 +658,17 @@ export default function DeepResearchTaskPanel({
   const stateUpdateAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'run.update_state');
   const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
   const isResultReview = pendingInterrupt?.response_operation === 'task.result_review.respond';
+  const isBudgetReview = pendingInterrupt?.response_operation === 'task.budget_review.respond';
   const resultReviewAvailability = runtimeOperationAvailability(
     effectiveSelectedRunCapabilities,
     'task.result_review.respond',
   );
-  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview);
+  const budgetReviewAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.budget_review.respond');
+  const courseCorrectionAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.course_correction.submit');
+  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
     if (!task || !selectedRun || !pendingInterrupt) return;
-    const followup = decision === 'retry_with_input'
-      ? window.prompt('What should the linked retry address?')
-      : undefined;
+    const followup = decision === 'retry_with_input' ? reviewGuidance : undefined;
     if (decision === 'retry_with_input' && !followup?.trim()) return;
     setDecisionSubmitting('approve');
     setDecisionError('');
@@ -675,6 +681,20 @@ export default function DeepResearchTaskPanel({
         followup_input: followup?.trim(),
       });
       await refresh();
+    } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
+    finally { setDecisionSubmitting(null); }
+  };
+  const respondToBudgetReview = async (decision: 'continue' | 'accept_partial' | 'steer') => {
+    if (!task || !selectedRun || !pendingInterrupt) return;
+    if (decision === 'steer' && !reviewGuidance.trim()) return;
+    setDecisionSubmitting('approve'); setDecisionError('');
+    try {
+      await respondToAgentTaskBudgetReview(task.id, threadId, {
+        run_id: selectedRun.id, interrupt_id: pendingInterrupt.interrupt_id,
+        expected_version: task.version, decision,
+        guidance: decision === 'steer' ? reviewGuidance.trim() : undefined,
+      });
+      setReviewGuidance(''); await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
     finally { setDecisionSubmitting(null); }
   };
@@ -752,13 +772,25 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isResultReview ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isBudgetReview ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Research budget reached'}</Typography>
+      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
+      {pendingInterrupt.provisional_answer ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', maxHeight: 280, overflow: 'auto', mb: 1 }}>{String(pendingInterrupt.provisional_answer)}</Typography> : <Alert severity="warning" sx={{ mb: 1 }}>No usable provisional answer was produced. Continue or steer the research.</Alert>}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Optional guidance for the next tranche" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} sx={{ mb: 1 }} />
+      <Stack direction="row" spacing={1} flexWrap="wrap">
+        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Accept partial answer</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('continue')}>Continue research</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('steer')}>Steer and continue</Button>
+      </Stack>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && isResultReview ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Review incomplete result'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
       {pendingInterrupt.provisional_answer ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto', mb: 1 }}>{String(pendingInterrupt.provisional_answer)}</Typography> : null}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Guidance for retry" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} sx={{ mb: 1 }} />
       <Stack direction="row" spacing={1}>
         <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('accept')}>Accept with warnings</Button>
-        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
       </Stack>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
     </Box> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
@@ -780,7 +812,16 @@ export default function DeepResearchTaskPanel({
     /> : undefined}
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-    </Box> : interactionDescriptors.length > 0 || stateUpdateAvailability.visible ? <Box sx={{ pb: 1 }}>
+    </Box> : interactionDescriptors.length > 0 || stateUpdateAvailability.visible || courseCorrectionAvailability.visible ? <Box sx={{ pb: 1 }}>
+      {courseCorrectionAvailability.visible && task.status === 'running' ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
+        <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
+        <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
+          if (!selectedRun || !task) return;
+          void submitAgentTaskCourseCorrection(task.id, threadId, { run_id: selectedRun.id, expected_version: task.version, instruction: courseCorrection.trim() })
+            .then(() => { setCourseCorrection(''); return refresh(); })
+            .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+        }}>Redirect research</Button>
+      </Stack> : null}
       <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
         {interactionDescriptors.map((operation) => <Button
           key={operation.id}
@@ -790,13 +831,12 @@ export default function DeepResearchTaskPanel({
           title={operation.availability.disabledReason}
           onClick={() => setInteractionOperation(operation.id)}
         >{operation.label}</Button>)}
-        {stateUpdateAvailability.visible && <Button size="small" variant="outlined" disabled={!stateUpdateAvailability.enabled} title={stateUpdateAvailability.disabledReason} onClick={() => {
-          const raw = window.prompt('State update JSON');
-          if (!raw || !selectedRun) return;
+        {stateUpdateAvailability.visible && <><TextField size="small" label="State update JSON" value={stateUpdateText} onChange={(event) => setStateUpdateText(event.target.value)} /><Button size="small" variant="outlined" disabled={!stateUpdateAvailability.enabled || !stateUpdateText.trim()} title={stateUpdateAvailability.disabledReason} onClick={() => {
+          if (!stateUpdateText.trim() || !selectedRun) return;
           try {
-            void updateAgentRunState(selectedRun.id, threadId, JSON.parse(raw)).then(() => refresh()).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+            void updateAgentRunState(selectedRun.id, threadId, JSON.parse(stateUpdateText)).then(() => { setStateUpdateText(''); return refresh(); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
           } catch { setError('State update must be valid JSON.'); }
-        }}>Update state</Button>}
+        }}>Update state</Button></>}
       </Stack>
       {interactionDescriptors.length > 0 && <ConversationComposer
           placeholder={interactionDescriptors.find((operation) => operation.id === interactionOperation)?.placeholder || 'Send runtime input…'}

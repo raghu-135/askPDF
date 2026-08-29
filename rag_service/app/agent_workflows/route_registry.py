@@ -118,6 +118,15 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
             "fail": [WorkflowNodeType.FINALIZER.value],
         },
     },
+    RouteFunctionId.BUDGET_REVIEW.value: {
+        "allowed_source_types": [WorkflowNodeType.EVIDENCE_CRITIC.value],
+        "route_labels": ["continue", "steer", "accept_partial"],
+        "target_types_by_label": {
+            "continue": [WorkflowNodeType.DEEP_TASK_SCHEDULER.value],
+            "steer": [WorkflowNodeType.DEEP_TASK_PLANNER.value],
+            "accept_partial": [WorkflowNodeType.FINALIZER.value],
+        },
+    },
 }
 
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -163,6 +172,11 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "synthesize": {"display_name": "Synthesize", "description": "Build the final report.", "order": 2},
         "pause": {"display_name": "Pause", "description": "Checkpoint for human continuation.", "order": 3},
         "fail": {"display_name": "Fail", "description": "Finalize a terminal failure.", "order": 4},
+    },
+    RouteFunctionId.BUDGET_REVIEW.value: {
+        "continue": {"display_name": "Continue research", "description": "Grant another budget tranche.", "order": 0},
+        "steer": {"display_name": "Steer and continue", "description": "Apply guidance and grant another tranche.", "order": 1},
+        "accept_partial": {"display_name": "Accept partial", "description": "Complete with the provisional answer.", "order": 2},
     },
 }
 

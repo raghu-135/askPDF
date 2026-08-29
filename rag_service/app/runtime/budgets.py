@@ -8,6 +8,9 @@ from typing import Any, Mapping
 
 
 DEEP_AGENT_BUDGET_KEYS = frozenset({
+    "max_model_calls",
+    "max_model_tokens",
+    "max_tool_calls",
     "max_active_runtime_ms",
     "max_duration_seconds",
     "max_output_chars",
@@ -25,6 +28,9 @@ DEEP_AGENT_BUDGET_KEYS = frozenset({
 DEEP_AGENT_FRAMEWORK_KEYS: dict[str, frozenset[str]] = {
     "langgraph": DEEP_AGENT_BUDGET_KEYS,
     "hermes": frozenset({
+        "max_model_calls",
+        "max_model_tokens",
+        "max_tool_calls",
         "max_active_runtime_ms",
         "max_duration_seconds",
         "max_output_chars",
@@ -34,6 +40,9 @@ DEEP_AGENT_FRAMEWORK_KEYS: dict[str, frozenset[str]] = {
 }
 
 _ENV_SPECS: dict[str, tuple[str, int]] = {
+    "max_model_calls": ("MAX_MODEL_CALLS", 1),
+    "max_model_tokens": ("MAX_MODEL_TOKENS", 1),
+    "max_tool_calls": ("MAX_TOOL_CALLS", 1),
     "max_active_runtime_ms": ("MAX_ACTIVE_RUNTIME_MS", 1),
     "max_duration_seconds": ("MAX_DURATION_MS", 1000),
     "max_output_chars": ("MAX_OUTPUT_CHARS", 1),
