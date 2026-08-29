@@ -24,6 +24,19 @@ def _event_payload(event: Any) -> Mapping[str, Any]:
     return payload if isinstance(payload, Mapping) else {}
 
 
+def _error_code(value: Any) -> str:
+    """Read error codes defensively across runtime event envelopes.
+
+    Some upstream runtimes use ``error: true`` as a failure marker and put
+    the detailed error elsewhere (or omit it). A boolean must never be
+    treated as a mapping during product-owned grounding evaluation.
+    """
+
+    if isinstance(value, Mapping):
+        return str(value.get("code") or "tool_failed")
+    return "tool_failed"
+
+
 class AgentGroundingEvaluator:
     """Evaluate askPDF's evidence policy from neutral runtime records."""
 
@@ -64,7 +77,7 @@ class AgentGroundingEvaluator:
             "evidence_result_count": result_count or fallback_count,
             "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
             "failed_tool_count": len(failures),
-            "failure_codes": sorted({str((item.get("error") or {}).get("code") or "tool_failed") for item in failures}),
+            "failure_codes": sorted({_error_code(item.get("error")) for item in failures}),
         }
 
     @staticmethod

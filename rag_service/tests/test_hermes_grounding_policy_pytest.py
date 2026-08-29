@@ -27,6 +27,17 @@ def test_document_grounding_summary_reports_missing_document_evidence():
     assert summary["failure_codes"] == ["tool_arguments_invalid"]
 
 
+def test_grounding_summary_handles_boolean_error_markers():
+    summary = evaluator.evaluate(
+        {},
+        [_event("tool.failed", tool_name="search_document_by_id", error=True)],
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["failure_codes"] == ["tool_failed"]
+
+
 def test_later_successful_document_retrieval_satisfies_grounding():
     events = [
         _event("tool.failed", tool_name="search_documents", error={"code": "tool_execution_failed"}),

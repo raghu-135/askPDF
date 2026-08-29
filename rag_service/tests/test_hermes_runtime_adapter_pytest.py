@@ -218,8 +218,9 @@ def test_document_task_context_reinforces_progressive_tool_disclosure():
         },
     )
 
-    assert "tool_search` searches the deferred tool catalog, not document contents" in value
-    assert "semantic search uploaded document file_hash" in value
+    assert "already exposed directly in the model-facing MCP tool list" in value
+    assert "Do not route an already-listed AskPDF tool through" in value
+    assert "tool_search" in value
     assert "`limit`" not in value
     assert value.index("Hermes bridge requirement") < value.index("askPDF task context:")
 
@@ -296,6 +297,19 @@ def test_hermes_failed_tool_completion_is_projected_as_failure():
 
     assert kind == "tool.failed"
     assert payload["ok"] is False
+    assert payload["event"] == "tool.failed"
+
+
+def test_hermes_boolean_tool_error_is_projected_as_failure():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {"tool": "search_documents", "error": True},
+    )
+
+    assert kind == "tool.failed"
+    assert payload["ok"] is False
+    assert payload["error"] is True
+    assert payload["event"] == "tool.failed"
 
 
 def test_hermes_tool_completion_preserves_bounded_evidence_metadata():

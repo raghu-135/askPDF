@@ -40,10 +40,10 @@ from runtime_protocol import json_envelope, sse_encode, structured_error, valida
 logger = logging.getLogger(__name__)
 
 _DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
-- `tool_search` searches the deferred tool catalog, not document contents. Search for the required capability, not the user's subject matter.
-- Start by calling `tool_search` with a nonempty capability query such as `semantic search uploaded document file_hash`.
-- Use the exact namespaced match with `tool_describe`, then invoke it with `tool_call` and schema-valid arguments.
-- Only the underlying document-retrieval `tool_call` result is evidence. No `tool_search` match means retry capability discovery; it does not mean the documents contain no evidence."""
+- AskPDF document tools are already exposed directly in the model-facing MCP tool list.
+- Call the exact namespaced AskPDF document-retrieval tool directly with schema-valid arguments (for example, `askpdf_<server>__search_documents` or `askpdf_<server>__search_document_by_id`).
+- Do not route an already-listed AskPDF tool through `tool_search`, `tool_describe`, or `tool_call`; those APIs are only for genuinely deferred tools.
+- Only a successful document-retrieval tool result is evidence. Tool-discovery failures do not mean the documents contain no evidence."""
 
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
@@ -282,6 +282,7 @@ def _normalized_tool_payload(kind: str, payload: Mapping[str, Any]) -> tuple[str
         kind = "tool.failed"
     normalized = {
         **data,
+        "event": kind,
         "tool_name": tool_name or None,
         "tool_call_id": call_id or None,
         "request_id": str(data.get("request_id") or call_id or "") or None,
