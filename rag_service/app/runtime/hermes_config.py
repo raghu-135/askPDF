@@ -57,7 +57,7 @@ def hermes_model_context_length(*, required: bool = True) -> int | None:
 def hermes_model_provider() -> str:
     """Return the Hermes provider selected at the deployment boundary."""
 
-    provider = os.getenv("HERMES_MODEL_PROVIDER", "custom").strip().lower()
+    provider = os.getenv("HERMES_MODEL_PROVIDER", "").strip().lower()
     if not provider or any(character.isspace() for character in provider):
         raise HermesConfigurationError(
             "hermes_model_provider_invalid",

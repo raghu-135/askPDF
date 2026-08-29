@@ -18,12 +18,11 @@ from hermes_runtime.pinned_contract import (
     HERMES_CONFIG_SCHEMA_VERSION, HERMES_PROFILE_NAMES, provider_requires_api_key,
     validate_provider_context,
 )
+from runtime_protocol.configuration import validate_runtime_environment
 
 
 PROFILE_PREFIX = "askpdf-run-"
 TOKEN_HEADER = "X-AskPDF-Execution-Context"
-PINNED_HERMES_UID = 10_000
-PINNED_HERMES_GID = 10_000
 TOMBSTONE_FILE = ".askpdf-retired.json"
 
 
@@ -112,7 +111,7 @@ def render_bootstrap_config() -> None:
 
 
 def configured_provider() -> str:
-    provider = os.getenv("HERMES_MODEL_PROVIDER", "custom").strip().lower()
+    provider = os.getenv("HERMES_MODEL_PROVIDER", "").strip().lower()
     if not provider or any(character.isspace() for character in provider):
         raise RuntimeError("HERMES_MODEL_PROVIDER must be a provider identifier")
     return provider
@@ -120,7 +119,7 @@ def configured_provider() -> str:
 
 class RunProfileManager:
     def __init__(self, root: str | None = None) -> None:
-        self.root = Path(root or os.getenv("HERMES_PROFILE_ROOT", "/opt/data/profiles"))
+        self.root = Path(root or os.getenv("HERMES_PROFILE_ROOT", ""))
         self.root.mkdir(parents=True, exist_ok=True)
         self._active: set[str] = set()
 
@@ -229,8 +228,8 @@ class RunProfileManager:
         if provider_api_key:
             profile_environment.append(f"OPENAI_API_KEY={provider_api_key}")
         env_file.write_text("\n".join(profile_environment) + "\n")
-        profile_uid = int(os.getenv("HERMES_PROFILE_UID", str(PINNED_HERMES_UID)))
-        profile_gid = int(os.getenv("HERMES_PROFILE_GID", str(PINNED_HERMES_GID)))
+        profile_uid = int(os.getenv("HERMES_PROFILE_UID", ""))
+        profile_gid = int(os.getenv("HERMES_PROFILE_GID", ""))
         config_file = temporary / "config.yaml"
         for path, mode in ((temporary, 0o750), (config_file, 0o600), (env_file, 0o600)):
             os.chown(path, profile_uid, profile_gid)
@@ -326,4 +325,5 @@ class RunProfileManager:
 
 
 if __name__ == "__main__":
+    validate_runtime_environment(service="hermes_profile")
     render_bootstrap_config()

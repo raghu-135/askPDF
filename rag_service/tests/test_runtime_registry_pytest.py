@@ -14,9 +14,10 @@ class FakeAdapter:
     builder_id = "fake_builder"
 
 
-def test_runtime_mode_defaults_to_external(monkeypatch):
+def test_runtime_mode_requires_explicit_configuration(monkeypatch):
     monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
-    assert agent_runtime_mode() is AgentRuntimeMode.EXTERNAL
+    with pytest.raises(RuntimeError, match="AGENT_RUNTIME_MODE"):
+        agent_runtime_mode()
 
 
 @pytest.mark.parametrize(
@@ -36,6 +37,24 @@ def test_runtime_mode_rejects_invalid_value(monkeypatch):
 
 def test_default_registry_uses_external_adapter_without_importing_in_process(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime.test")
+    for name, value in {
+        "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
+        "AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS": "300",
+        "AGENT_RUNTIME_READ_TIMEOUT_SECONDS": "600",
+        "AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS": "3",
+        "AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS": "1",
+        "AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS": "30",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS": "0.5",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES": "8192",
+    }.items():
+        monkeypatch.setenv(name, value)
+    for suffix in (
+        "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT", "WAKE_LIMIT_SECONDS",
+        "SUBAGENT_TIMEOUT_MS", "DISPATCH_TIMEOUT_MS", "WORKER_TIMEOUT_MS", "WEB_WORKER_TIMEOUT_MS",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_{suffix}", "7200000" if suffix == "MAX_DURATION_MS" else "100")
     registry = RuntimeRegistry()
     registry.initialize()
     definition = AgentDefinition(

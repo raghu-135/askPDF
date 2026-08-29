@@ -37,19 +37,9 @@ services:
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
       - POSTGRES_POOL_SIZE=10
       - POSTGRES_MAX_OVERFLOW=20
-      - ASKPDF_AGENT_CHECKPOINTER=postgres
-      - AGENT_RUNTIME_MODE=${AGENT_RUNTIME_MODE:-external}
-      - LANGGRAPH_RUNTIME_URL=http://langgraph-runtime:8100
-      - COMPOSE_PROFILES=${COMPOSE_PROFILES:-}
-      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-}
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:-custom}
-      - HERMES_MCP_CONTEXT_SECRET=${HERMES_MCP_CONTEXT_SECRET:-}
-      - HERMES_RUNTIME_URL=http://hermes-runtime:8200
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
-      - MCP_LOOPBACK_URL=${MCP_LOOPBACK_URL:-http://127.0.0.1:8000/internal/mcp/}
     env_file:
       - path: .env
         required: true
@@ -79,11 +69,6 @@ services:
       dockerfile: runtime_service/Dockerfile
     environment:
       - LOG_LEVEL=INFO
-      - ASKPDF_AGENT_CHECKPOINTER=postgres
-      - AGENT_CHECKPOINT_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      - ASKPDF_AGENT_CHECKPOINTER_SETUP=true
-      - ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=false
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - MCP_TRANSPORT=loopback_http
@@ -111,29 +96,25 @@ services:
       dockerfile: hermes_runtime/Dockerfile
     command: ["python", "-m", "hermes_runtime.profile_manager"]
     environment:
-      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-}
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:-custom}
       - HERMES_DATA_ROOT=/opt/data
-      - API_SERVER_KEY=${API_SERVER_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - HERMES_MCP_CONTEXT_SECRET=${HERMES_MCP_CONTEXT_SECRET:-}
+    env_file:
+      - path: .env
+        required: true
     volumes:
       - hermes_data:/opt/data
 
   hermes:
     profiles: ["hermes"]
     build:
-      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}
+      # Keep this pinned revision visible for consistency checks; the actual
+      # build context is always supplied by HERMES_UPSTREAM_REVISION in .env.
+      # Pinned revision: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
     environment:
       - API_SERVER_ENABLED=true
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_PORT=8642
-      - API_SERVER_KEY=${API_SERVER_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-askpdf-local-provider}
-      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-}
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:-custom}
       - GATEWAY_MULTIPLEX_PROFILES=true
-      - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}
       - ASKPDF_HERMES_COMPAT_ENABLED=1
       - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
     env_file:
@@ -165,18 +146,9 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - HERMES_API_URL=http://hermes:8642
-      - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
-      - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-http://rag-service:8000/health}
-      - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
-      - HERMES_API_TOKEN=${API_SERVER_KEY:-}
-      - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
-      - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:-bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894}
-      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:-}
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:-custom}
-      - HERMES_PROFILE_ROOT=/opt/data/profiles
-      - HERMES_PROFILE_UID=10000
-      - HERMES_PROFILE_GID=10000
-      - HERMES_RUNTIME_STATE_PATH=/var/lib/hermes/runtime-state.json
+      - ASKPDF_MCP_URL=http://rag-service:8000/internal/mcp/
+      - ASKPDF_MCP_HEALTH_URL=http://rag-service:8000/health
+      - HERMES_API_TOKEN=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
     env_file:
       - path: .env
         required: true
@@ -244,7 +216,6 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
     env_file:
       - path: .env
         required: true

@@ -32,14 +32,15 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert hermes["profiles"] == ["hermes"]
     assert adapter["profiles"] == ["hermes"]
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
-    assert "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894" in hermes["build"]["context"]
+    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["context"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in hermes["volumes"]
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
     assert adapter["depends_on"]["hermes"]["condition"] == "service_healthy"
-    assert "COMPOSE_PROFILES=${COMPOSE_PROFILES:-}" in set(services["rag-service"]["environment"])
+    assert "COMPOSE_PROFILES" not in services["rag-service"].get("environment", {})
+    assert services["rag-service"]["env_file"][0]["path"] == ".env"
 
 
 def test_pinned_contract_copies_match_authoritative_module():

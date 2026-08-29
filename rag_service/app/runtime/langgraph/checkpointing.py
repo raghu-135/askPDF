@@ -19,8 +19,8 @@ _POSTGRES_SETUP_LOCK = asyncio.Lock()
 _POSTGRES_SETUP_COMPLETE: set[str] = set()
 
 
-def _truthy_env(name: str, default: str = "") -> bool:
-    value = os.environ.get(name, default)
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -38,7 +38,7 @@ async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     An explicit Postgres mode fails closed when the configured saver is unavailable.
     """
 
-    mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", AgentCheckpointerMode.MEMORY.value).strip().lower()
+    mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", "").strip().lower()
     if mode == AgentCheckpointerMode.MEMORY.value:
         yield _MEMORY_CHECKPOINTER
         return
@@ -55,7 +55,7 @@ async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
         raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL")
 
     async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
-        if setup and _truthy_env("ASKPDF_AGENT_CHECKPOINTER_SETUP", "true"):
+        if setup and _truthy_env("ASKPDF_AGENT_CHECKPOINTER_SETUP"):
             if checkpoint_url not in _POSTGRES_SETUP_COMPLETE:
                 async with _POSTGRES_SETUP_LOCK:
                     if checkpoint_url not in _POSTGRES_SETUP_COMPLETE:

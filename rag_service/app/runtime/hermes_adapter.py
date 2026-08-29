@@ -85,8 +85,11 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         })
 
     def __init__(self, base_url: str | None = None, **kwargs: Any) -> None:
+        configured_base_url = base_url or os.getenv("HERMES_RUNTIME_URL", "").strip()
+        if not configured_base_url:
+            raise RuntimeError("runtime_configuration_invalid", "HERMES_RUNTIME_URL is required for the Hermes runtime")
         self.transport = RuntimeTransportConnector(
-            base_url=base_url or os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200"),
+            base_url=configured_base_url,
             framework=self.framework,
             authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN"),
             visualization_id=self.visualization_id,

@@ -9,6 +9,7 @@ from .protocol import (
     structured_error,
     validate_event_mapping,
 )
+from .configuration import RuntimeConfigurationError, RuntimeEnvironment, validate_runtime_environment
 
 __all__ = [
     "CANONICAL_RUNTIME_EVENT_KINDS",
@@ -18,4 +19,7 @@ __all__ = [
     "sse_encode",
     "structured_error",
     "validate_event_mapping",
+    "RuntimeConfigurationError",
+    "RuntimeEnvironment",
+    "validate_runtime_environment",
 ]

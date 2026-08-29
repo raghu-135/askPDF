@@ -62,6 +62,7 @@ from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOO
 from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
 from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
+from runtime_protocol.configuration import validate_runtime_environment
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
@@ -124,6 +125,7 @@ async def lifespan(app: FastAPI):
     agent_task_worker = None
     mcp_lifespans = []
     try:
+        validate_runtime_environment(service="control_plane")
         if hermes_runtime_enabled():
             validate_hermes_model_compatibility()
         get_runtime_registry().initialize()

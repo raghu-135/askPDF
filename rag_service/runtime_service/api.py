@@ -26,6 +26,7 @@ from app.runtime.transport import (
 )
 from app.runtime.langgraph_capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from app.runtime.budgets import deep_agent_budgets
+from runtime_protocol.configuration import validate_runtime_environment
 from runtime_service.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
 from runtime_service.dependencies import (
     DependencyMonitor,
@@ -120,6 +121,7 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
 
 
 def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
+    validate_runtime_environment(service="langgraph")
     runtime_state: dict[str, Any] = {
         "draining": False,
         "started": False,
@@ -145,7 +147,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         dependency_stop = asyncio.Event()
         await dependency_monitor.refresh()
         dependency_task = asyncio.create_task(dependency_monitor.run(dependency_stop), name="agent-runtime-dependency-monitor")
-        recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
         from app.runtime.operational_limits import required_positive_float, required_positive_int
 
         recovery_interval = required_positive_float("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS")

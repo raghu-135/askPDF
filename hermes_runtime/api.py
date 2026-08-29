@@ -35,6 +35,7 @@ from hermes_runtime.profile_manager import (
     validate_provider_context,
 )
 from runtime_protocol import json_envelope, sse_encode, structured_error, validate_event_mapping
+from runtime_protocol.configuration import validate_runtime_environment
 
 
 logger = logging.getLogger(__name__)
@@ -430,12 +431,13 @@ async def _stop_and_confirm_upstream_run(
 
 
 def create_app() -> FastAPI:
+    validate_runtime_environment(service="hermes")
     hermes_api_url = os.getenv("HERMES_API_URL", "").strip()
     if not hermes_api_url:
         raise RuntimeError(
             "HERMES_API_URL is required for the Hermes runtime"
         )
-    storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "file").strip().lower()
+    storage_backend = os.getenv("HERMES_RUNTIME_STORAGE_BACKEND", "").strip().lower()
     worker_count = required_positive_int("HERMES_RUNTIME_WORKERS")
     if storage_backend != "file":
         raise RuntimeError("Hermes PostgreSQL execution storage is not enabled")
@@ -483,7 +485,7 @@ def create_app() -> FastAPI:
             except asyncio.CancelledError:
                 pass
 
-    app = FastAPI(title="AskPDF Hermes Runtime", version=os.getenv("HERMES_RUNTIME_VERSION", "hermes-gateway-1"), lifespan=lifespan)
+    app = FastAPI(title="AskPDF Hermes Runtime", version=os.getenv("HERMES_RUNTIME_VERSION", ""), lifespan=lifespan)
 
     def upstream_url() -> str:
         return hermes_api_url.rstrip("/")
@@ -508,7 +510,7 @@ def create_app() -> FastAPI:
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
         hermes_ready = False
-        mcp_required = os.getenv("ASKPDF_MCP_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+        mcp_required = os.getenv("ASKPDF_MCP_REQUIRED", "").lower() in {"1", "true", "yes", "on"}
         mcp_ready = not mcp_required
         mcp_checked = False
         try:
@@ -696,7 +698,7 @@ def create_app() -> FastAPI:
         session_id = (neutral_request.get("continuation") or {}).get("payload", {}).get("session_id")
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
-        sequence = store.next_sequence(run_id) if os.getenv("HERMES_RUNTIME_EVENT_ID_MODE", "durable").strip().lower() == "durable" else 1
+        sequence = store.next_sequence(run_id) if os.getenv("HERMES_RUNTIME_EVENT_ID_MODE", "").strip().lower() == "durable" else 1
         event_budget = _HermesEventBudget(
             max_lifecycle_events=max_events,
             max_output_chars=max_output_chars,

@@ -128,7 +128,10 @@ class RuntimeTransportConnector:
         self.authorization_envs = authorization_envs or (authorization_env,)
         self.visualization_id = visualization_id
         self.replay_by_event_id = replay_by_event_id
-        self.base_url = (base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime:8100")).rstrip("/")
+        configured_base_url = base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "").strip()
+        if not configured_base_url:
+            raise RuntimeError("runtime_configuration_invalid", "LANGGRAPH_RUNTIME_URL is required for the external runtime")
+        self.base_url = configured_base_url.rstrip("/")
         self._client = client
         self._owns_client = client is None
         self._timeout = httpx.Timeout(

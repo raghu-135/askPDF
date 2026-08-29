@@ -3,6 +3,16 @@ import pytest
 from app.runtime.budgets import apply_deep_agent_env_overrides, deep_agent_budgets
 
 
+@pytest.fixture(autouse=True)
+def configured_common_budgets(monkeypatch):
+    for suffix in (
+        "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT", "WAKE_LIMIT_SECONDS",
+        "SUBAGENT_TIMEOUT_MS", "DISPATCH_TIMEOUT_MS", "WORKER_TIMEOUT_MS", "WEB_WORKER_TIMEOUT_MS",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_{suffix}", "7200000" if suffix == "MAX_DURATION_MS" else "100")
+
+
 def test_common_configured_budgets_are_shared():
     assert deep_agent_budgets("langgraph")["max_duration_seconds"] == 7200
     assert deep_agent_budgets("hermes")["max_duration_seconds"] == 7200

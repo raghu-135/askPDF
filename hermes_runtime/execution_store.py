@@ -74,7 +74,7 @@ class HermesExecutionStore:
     })
 
     def __init__(self, path: str | None = None) -> None:
-        self.path = Path(path or os.getenv("HERMES_RUNTIME_STATE_PATH", "/tmp/askpdf-hermes-runtime.json"))
+        self.path = Path(path or os.getenv("HERMES_RUNTIME_STATE_PATH", ""))
         self.records: dict[str, dict[str, Any]] = {}
         self._load()
 

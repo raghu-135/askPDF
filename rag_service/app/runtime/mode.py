@@ -14,17 +14,13 @@ class AgentRuntimeMode(str, Enum):
 def agent_runtime_mode() -> AgentRuntimeMode:
     """Resolve runtime mode with external execution as the safe default."""
 
-    configured = os.getenv("AGENT_RUNTIME_MODE")
-    if configured is not None:
-        value = configured.strip().lower()
-        try:
-            return AgentRuntimeMode(value)
-        except ValueError as exc:
-            raise RuntimeError(
-                "AGENT_RUNTIME_MODE must be 'external' or 'in_process'"
-            ) from exc
-
-    return AgentRuntimeMode.EXTERNAL
+    configured = os.getenv("AGENT_RUNTIME_MODE", "").strip().lower()
+    try:
+        return AgentRuntimeMode(configured)
+    except ValueError as exc:
+        raise RuntimeError(
+            "AGENT_RUNTIME_MODE must be 'external' or 'in_process'"
+        ) from exc
 
 
 def external_runtime_enabled() -> bool:
