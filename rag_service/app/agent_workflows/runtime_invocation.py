@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
+from app.agent.tool_contract import normalize_tool_result
 from app.agent_workflows.enums import NodeEventStatus
 from app.agent_workflows.chat_cancellation import raise_if_chat_run_cancelled
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
@@ -28,6 +29,7 @@ from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
 from app.mcp.langchain_adapter import create_mcp_langchain_tool
 from app.mcp.errors import MCPUnavailableError
+from app.runtime.evidence import evidence_event_fields
 
 
 logger = logging.getLogger(__name__)
@@ -256,11 +258,14 @@ async def invoke_tool_for_node(
         )
         await _emit_progress_event(config, "tool.started", progress)
         result = await executor.ainvoke(tool_input, config=config)
-        await _emit_progress_event(config, "tool.completed", {
+        normalized_result = normalize_tool_result(result, tool_name=tool_name, config=config)
+        tool_ok = bool(normalized_result.get("ok", True))
+        await _emit_progress_event(config, "tool.completed" if tool_ok else "tool.failed", {
             **progress,
-            "status": "completed",
-            "ok": True,
+            "status": "completed" if tool_ok else "failed",
+            "ok": tool_ok,
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            **evidence_event_fields(normalized_result),
         })
         return result
     except Exception as exc:

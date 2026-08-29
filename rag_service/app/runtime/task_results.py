@@ -11,6 +11,58 @@ from app.runtime.contracts import (
 )
 
 
+_CANONICAL_TEXT_KEYS = ("text", "summary", "answer")
+_TEXT_ALIAS_KEYS = ("output", "content", "result", "message")
+_NON_ANSWER_BLOCK_TYPES = frozenset({"reasoning", "thinking", "tool_use", "tool_call"})
+_RESULT_CONTROL_KEYS = frozenset({
+    "status", "warnings", "gaps", "uncovered_gaps", "error", "usage",
+    "framework_details", "artifacts", "structured", "structured_output",
+    *_CANONICAL_TEXT_KEYS,
+})
+
+
+def _usable_text(value: Any, *, depth: int = 0) -> str | None:
+    """Extract answer text from bounded, framework-neutral response shapes."""
+
+    if depth > 3:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text and text not in {"{}", "[]", "null"} else None
+    if isinstance(value, Mapping):
+        block_type = str(value.get("type") or "").strip().lower()
+        if block_type in _NON_ANSWER_BLOCK_TYPES:
+            return None
+        for key in (*_CANONICAL_TEXT_KEYS, *_TEXT_ALIAS_KEYS):
+            if key in value:
+                text = _usable_text(value.get(key), depth=depth + 1)
+                if text:
+                    return text
+        return None
+    if isinstance(value, (list, tuple)):
+        parts = [
+            text for item in value
+            if (text := _usable_text(item, depth=depth + 1))
+        ]
+        return "\n\n".join(parts).strip() or None
+    return None
+
+
+def _has_usable_structured_content(value: Any, *, depth: int = 0) -> bool:
+    if depth > 4 or value in (None, "", [], {}):
+        return False
+    if isinstance(value, Mapping):
+        if str(value.get("type") or "").strip().lower() in _NON_ANSWER_BLOCK_TYPES:
+            return False
+        return any(
+            _has_usable_structured_content(item, depth=depth + 1)
+            for key, item in value.items() if key != "type"
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_has_usable_structured_content(item, depth=depth + 1) for item in value)
+    return True
+
+
 def _objects(value: Any) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, (list, tuple)):
         return ()
@@ -43,14 +95,40 @@ def normalize_runtime_task_result(
 
     data = dict(value) if isinstance(value, Mapping) else {}
     raw_status = str(data.get("status") or "completed")
-    text_value = data.get("text", data.get("summary", data.get("answer", value if isinstance(value, str) else None)))
-    text = str(text_value).strip() if text_value is not None else None
-    if text in {"{}", "[]", "null"}:
-        text = None
+    canonical_text_value = next(
+        (data.get(key) for key in _CANONICAL_TEXT_KEYS if data.get(key) is not None),
+        value if isinstance(value, str) else None,
+    )
+    text = _usable_text(canonical_text_value)
+    extracted_from_alias = False
+    if text is None and data:
+        for key in _TEXT_ALIAS_KEYS:
+            if key not in data:
+                continue
+            text = _usable_text(data.get(key))
+            if text:
+                extracted_from_alias = True
+                break
     structured = data.get("structured_output")
     if structured is None and isinstance(data.get("structured"), Mapping):
         structured = data["structured"]
     warnings = list(_objects(data.get("warnings")))
+    if extracted_from_alias:
+        warnings.append({
+            "code": "task_result_envelope_noncanonical",
+            "message": "Usable output was preserved from a noncanonical result field.",
+        })
+    if structured is None and text is None and data:
+        extensions = {
+            key: item for key, item in data.items()
+            if key not in _RESULT_CONTROL_KEYS and _has_usable_structured_content(item)
+        }
+        if extensions:
+            structured = extensions
+            warnings.append({
+                "code": "task_result_envelope_noncanonical",
+                "message": "Usable structured output was preserved from noncanonical result fields.",
+            })
     gaps = _strings(data.get("gaps", data.get("uncovered_gaps")))
     error = dict(data["error"]) if isinstance(data.get("error"), Mapping) else None
 

@@ -89,6 +89,15 @@ class RuntimeTaskResultStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class RuntimeEvidenceKind(str, Enum):
+    """Framework-neutral categories for inherited and tool-produced evidence."""
+
+    DOCUMENT = "document"
+    WEB = "web"
+    CONVERSATION = "conversation"
+    MEMORY = "memory"
+
+
 CANONICAL_RUNTIME_EVENT_KINDS = frozenset(item.value for item in RuntimeEventKind) | RUNTIME_OPERATION_EVENT_KINDS
 TERMINAL_RUNTIME_EVENT_KINDS = frozenset({
     RuntimeEventKind.RUN_COMPLETED.value,
@@ -118,7 +127,6 @@ class RuntimeOperationId(str, Enum):
     RUN_SEND_FOLLOWUP = "run.send_followup"
     RUN_INTERRUPT_WITH_INPUT = "run.interrupt_with_input"
     RUN_STEER_LIVE = "run.steer_live"
-    RUN_UPDATE_STATE = "run.update_state"
     RUN_REPLAY = "run.replay"
     RUN_FORK = "run.fork"
     TASK_START = "task.start"
@@ -170,7 +178,6 @@ class RuntimeCapabilitySemantics(str, Enum):
     PRODUCT_TASK_COURSE_CORRECTION = "product_task_course_correction"
     RESUME_FROM_INTERRUPT = "resume_from_interrupt"
     CHECKPOINT_STATE_INSPECTION = "checkpoint_state_inspection"
-    CHECKPOINT_BOUNDARY_UPDATE = "checkpoint_boundary_update"
     CHECKPOINT_THREAD_CLEANUP = "checkpoint_thread_cleanup"
     DEFINITION_PLANNER_NODES = "definition_planner_nodes"
     DEFINITION_PARALLEL_DISPATCH = "definition_parallel_dispatch"
@@ -617,6 +624,42 @@ class RuntimeArtifact:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeInheritedEvidence:
+    """Bounded evidence handed from product retrieval to an agent worker."""
+
+    packet_id: str
+    kind: RuntimeEvidenceKind
+    content: str = ""
+    sources: tuple[Mapping[str, Any], ...] = ()
+    warnings: tuple[str, ...] = ()
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+    available: bool = False
+    explicit_gap: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.packet_id.strip():
+            raise ValueError("evidence packet_id must not be empty")
+        if not isinstance(self.kind, RuntimeEvidenceKind):
+            raise ValueError("kind must be a RuntimeEvidenceKind")
+        if len(self.content) > 32_000:
+            raise ValueError("evidence content exceeds the inherited packet limit")
+        if len(self.sources) > 100:
+            raise ValueError("evidence sources exceeds the inherited packet limit")
+        if not all(isinstance(item, Mapping) for item in self.sources):
+            raise TypeError("evidence sources must contain objects")
+        if not all(isinstance(item, str) for item in self.warnings):
+            raise TypeError("evidence warnings must contain strings")
+        if self.explicit_gap and self.available:
+            raise ValueError("explicit-gap evidence cannot be marked available")
+
+    def to_dict(self) -> Dict[str, Any]:
+        value = asdict(self)
+        value["kind"] = self.kind.value
+        value["sources"] = [dict(item) for item in self.sources]
+        return value
 
 
 @dataclass(frozen=True)

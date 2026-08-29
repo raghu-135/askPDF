@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 grounding_evaluator = AgentGroundingEvaluator()
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
+CANCELLATION_RETRY_SECONDS = 2.0
 
 
 async def _invoke_task_runtime(
@@ -408,7 +409,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             AgentRunStatus.AWAITING_HUMAN.value,
         }:
             try:
-                await request_task_cancellation(task, active_run)
+                cancellation = await request_task_cancellation(task, active_run)
+                if cancellation.get("runtime_confirmation") == "terminal":
+                    from app.services.agent_runtime_reconciliation import reconcile_run_by_id
+
+                    await reconcile_run_by_id(str(active_run.id))
             except AgentRuntimeError as exc:
                 logger.warning(
                     "Runtime cancellation remains pending after worker recovery | task_id=%s run_id=%s code=%s",
@@ -422,7 +427,15 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 status=AgentTaskStatus.CANCELLED.value,
                 reason="cancelled_by_user",
             )
-        await tasks.release_task_lease(task_id, worker_id, lease_seconds=LEASE_SECONDS)
+        refreshed = await tasks.get_task(task_id)
+        if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLING.value:
+            await tasks.defer_task_lease(
+                task_id,
+                worker_id,
+                retry_seconds=CANCELLATION_RETRY_SECONDS,
+            )
+        else:
+            await tasks.release_task_lease(task_id, worker_id, lease_seconds=LEASE_SECONDS)
         return
     run = await ensure_task_run(task_id)
     task = await tasks.get_task(task_id)

@@ -38,13 +38,12 @@ class CapabilityAdapter:
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.RUN_UPDATE_STATE,
         RuntimeOperationId.RUN_REPLAY,
         RuntimeOperationId.RUN_SEND_FOLLOWUP,
     })
 
     def __init__(self, *, unsupported=()):
-        self.calls = {"cancel": 0, "resume": 0, "update_state": 0, "replay": 0, "inspect_state": 0}
+        self.calls = {"cancel": 0, "resume": 0, "replay": 0, "inspect_state": 0}
         self.unsupported = set(unsupported)
         self.capability_definition_ids = []
         self.deployment_capability_calls = 0
@@ -62,7 +61,6 @@ class CapabilityAdapter:
                 RuntimeOperationId.TASK_CANCEL: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
                 RuntimeOperationId.TASK_RETRY: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
                 RuntimeOperationId.RUN_INSPECT_STATE: native(),
-                RuntimeOperationId.RUN_UPDATE_STATE: unsupported(),
                 RuntimeOperationId.RUN_REPLAY: unsupported(),
                 RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
             }
@@ -87,10 +85,6 @@ class CapabilityAdapter:
     async def resume(self, request, *, interrupt, context, event_sink=None):
         self.calls["resume"] += 1
         return None
-
-    async def update_state(self, request, update):
-        self.calls["update_state"] += 1
-        return {"status": "updated"}
 
     async def replay(self, request, checkpoint_id):
         self.calls["replay"] += 1
@@ -683,7 +677,6 @@ async def test_cancellation_is_available_after_pending_marker_clears_and_termina
 @pytest.mark.parametrize("operation", [
     RuntimeOperationId.RUN_STEER_LIVE,
     RuntimeOperationId.RUN_RESUME,
-    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.RUN_REPLAY,
 ])
 async def test_unsupported_operations_are_rejected_without_runtime_invocation(operation):
@@ -850,43 +843,6 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("status", "boundary", "binding", "binding_status", "expected_reason"),
-    [
-        ("running", False, True, "active", "run_not_checkpoint_boundary"),
-        ("paused", True, True, "active", None),
-        ("awaiting_human", True, True, "active", None),
-        ("completed", True, True, "active", "run_terminal"),
-        ("running", True, True, "stale", "runtime_binding_unavailable"),
-        ("running", False, False, "active", "runtime_binding_unavailable"),
-    ],
-)
-async def test_checkpoint_operations_use_explicit_run_boundary_fact(
-    status, boundary, binding, binding_status, expected_reason,
-):
-    class CheckpointCapabilityAdapter(CapabilityAdapter):
-        async def capabilities(self, definition):
-            capabilities = await super().capabilities(definition)
-            operations = dict(capabilities.operations)
-            operations[RuntimeOperationId.RUN_UPDATE_STATE] = native()
-            return RuntimeCapabilities(operations=operations)
-
-    run = SimpleNamespace(
-        status=status,
-        pending_interrupt_json=None,
-        runtime_binding_json={"binding_type": "fake"} if binding else None,
-        runtime_binding_status=binding_status,
-        run_metadata_json={"checkpoint_boundary_available": boundary},
-    )
-    capabilities = await resolve_capabilities(
-        _definition(), registry=RuntimeRegistry(adapters=[CheckpointCapabilityAdapter()]), run=run,
-    )
-    descriptor = capabilities.operations[RuntimeOperationId.RUN_UPDATE_STATE]
-    assert descriptor.enabled is (expected_reason is None)
-    assert (descriptor.disabled_reason.value if hasattr(descriptor.disabled_reason, "value") else descriptor.disabled_reason) == expected_reason
 
 
 @pytest.mark.asyncio

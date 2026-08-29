@@ -74,7 +74,6 @@ test('distinct runtime interactions are evaluated independently', () => {
     'run.send_followup': { support: 'native', enabled: true },
     'run.interrupt_with_input': { support: 'emulated', enabled: true },
     'run.steer_live': { support: 'unsupported', enabled: false, disabled_reason: 'runtime_capability_unsupported' },
-    'run.update_state': { support: 'conditional', enabled: false, disabled_reason: 'run_not_checkpoint_boundary' },
   });
 
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.cancel'), true);
@@ -85,7 +84,6 @@ test('distinct runtime interactions are evaluated independently', () => {
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.send_followup'), true);
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.interrupt_with_input'), true);
   assert.equal(isRuntimeOperationEnabled(capabilities, 'run.steer_live'), false);
-  assert.equal(isRuntimeOperationEnabled(capabilities, 'run.update_state'), false);
 });
 
 test('interrupt response operations fail closed when missing or unknown', () => {

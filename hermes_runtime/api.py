@@ -263,6 +263,18 @@ def _normalized_tool_payload(kind: str, payload: Mapping[str, Any]) -> tuple[str
     arguments = data.get("arguments") or data.get("args") or data.get("input")
     argument_names = sorted(str(key) for key in arguments) if isinstance(arguments, Mapping) else []
     error = data.get("error")
+    result_value = data.get("result") if isinstance(data.get("result"), Mapping) else {}
+    content = str(
+        data.get("content") or data.get("result_preview") or result_value.get("content") or ""
+    )
+    sources = data.get("sources") or result_value.get("sources") or []
+    warnings = data.get("warnings") or result_value.get("warnings") or []
+    warning_values = [str(value) for value in warnings] if isinstance(warnings, list) else []
+    explicit_gap_codes = {
+        "missing_document_vectors", "missing_thread_context", "no_relevant_content",
+        "no_relevant_conversation_history", "no_relevant_memory", "no_thread_documents",
+        "no_usable_web_results", "web_search_disabled",
+    }
     ok = data.get("ok")
     if ok is None and kind == "tool.completed":
         ok = not bool(error)
@@ -276,7 +288,12 @@ def _normalized_tool_payload(kind: str, payload: Mapping[str, Any]) -> tuple[str
         "provided_argument_names": argument_names,
         "ok": bool(ok) if ok is not None else None,
         "duration_ms": data.get("duration_ms") or data.get("elapsed_ms"),
-        "result_count": data.get("result_count") or data.get("source_count") or 0,
+        "result_count": data.get("result_count") or data.get("source_count") or (len(sources) if isinstance(sources, list) else 0),
+        "result_chars": int(data.get("result_chars") or len(content)),
+        "source_count": int(data.get("source_count") or (len(sources) if isinstance(sources, list) else 0)),
+        "warnings": warning_values,
+        "explicit_gap": bool(not sources and warning_values and set(warning_values).issubset(explicit_gap_codes)),
+        **({"result_preview": content[:2000]} if content else {}),
         "source": data.get("source") or "hermes",
         "error": error,
     }
@@ -589,10 +606,6 @@ def create_app() -> FastAPI:
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.interrupt_with_input": {
-                        "support": "unsupported", "owner": "runtime", "enabled": False,
-                        "disabled_reason": "runtime_capability_unsupported",
-                    },
-                    "run.update_state": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },

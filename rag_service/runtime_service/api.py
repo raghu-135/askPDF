@@ -677,7 +677,14 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         if request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         durable = await execution_store.get(run_id)
-        runtime_inspection = dict(await get_adapter().inspect_state(request))
+        # A terminal durable execution is authoritative and no longer needs a
+        # framework checkpoint binding. This is especially important during
+        # cancellation recovery of runs created before bindings were persisted.
+        runtime_inspection = (
+            {}
+            if durable is not None and durable.status in {"completed", "failed", "cancelled", "no_continuation"}
+            else dict(await get_adapter().inspect_state(request))
+        )
         if durable is not None:
             runtime_inspection.update({
                 "run_id": run_id,
@@ -685,22 +692,10 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 "cancel_requested": durable.cancel_requested,
                 "last_sequence": durable.next_sequence - 1,
                 "durable": execution_store.durable,
+                "result": dict(durable.result) if isinstance(durable.result, Mapping) else None,
+                "error": dict(durable.error) if isinstance(durable.error, Mapping) else None,
             })
         return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=runtime_inspection)
-
-    @app.post("/v1/runs/{run_id}/state")
-    async def update_state(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
-        request = request_from_dict(payload["request"])
-        if request.run_id != run_id:
-            raise HTTPException(status_code=400, detail="run_id does not match request path")
-        update = payload.get("update")
-        if not isinstance(update, Mapping) or not update:
-            raise HTTPException(status_code=422, detail={"code": "invalid_state_update", "safe_message": "State update must be a non-empty object", "retryable": False})
-        try:
-            result = await get_adapter().update_state(request, dict(update))
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
-        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=dict(result))
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:

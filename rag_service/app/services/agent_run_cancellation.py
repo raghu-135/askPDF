@@ -65,11 +65,16 @@ async def request_task_cancellation(
             details={"operation_id": RuntimeOperationId.RUN_CANCEL.value, "run_id": str(run.id)},
         ) from exc
     value = dict(result) if isinstance(result, Mapping) else {"result": result}
+    upstream_status = str(value.get("status") or value.get("run_status") or "").strip()
     return {
         **value,
         "status": "cancelling",
         "run_id": str(run.id),
-        "runtime_confirmation": "pending",
+        "runtime_status": upstream_status or None,
+        "runtime_confirmation": (
+            "terminal" if upstream_status in {"completed", "failed", "cancelled", "canceled", "no_continuation"}
+            else "pending"
+        ),
     }
 
 

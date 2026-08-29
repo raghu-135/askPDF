@@ -176,17 +176,6 @@ class AgentRunInputOperationRequest(BaseModel):
     def bounded_input(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return validate_bounded_json(value, field_name="input")
 
-
-class AgentRunStateUpdateRequest(BaseModel):
-    thread_id: str = Field(..., min_length=1)
-    update: Dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("update")
-    @classmethod
-    def bounded_update(cls, value: Dict[str, Any]) -> Dict[str, Any]:
-        return validate_bounded_json(value, field_name="update")
-
-
 class BuilderTransientMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., min_length=1, max_length=20000)
@@ -817,7 +806,6 @@ async def _execute_run_operation(
     *,
     thread_id: str,
     input: Optional[Dict[str, Any]] = None,
-    update: Optional[Dict[str, Any]] = None,
     idempotency_key: str,
 ) -> Dict[str, Any]:
     if operation in {
@@ -839,7 +827,6 @@ async def _execute_run_operation(
             run,
             operation,
             input=input,
-            update=update,
             idempotency_key=idempotency_key,
         )
     except RuntimeError as exc:
@@ -888,23 +875,6 @@ async def steer_agent_run_live(
         RuntimeOperationId.RUN_STEER_LIVE,
         thread_id=req.thread_id,
         input=req.input,
-        idempotency_key=idempotency_key,
-    )
-
-
-@router.post("/agent-runs/{run_id}/state-updates")
-async def update_agent_run_state(
-    run_id: str,
-    req: AgentRunStateUpdateRequest,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
-):
-    if not req.update:
-        raise HTTPException(status_code=422, detail={"code": "invalid_state_update", "safe_message": "State update must be a non-empty object", "retryable": False})
-    return await _execute_run_operation(
-        run_id,
-        RuntimeOperationId.RUN_UPDATE_STATE,
-        thread_id=req.thread_id,
-        update=req.update,
         idempotency_key=idempotency_key,
     )
 

@@ -187,7 +187,7 @@ def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_state_update_requires_a_checkpoint_binding_at_run_level():
+async def test_state_update_is_absent_at_run_level():
     definition = _definition()
     registry = RuntimeRegistry(adapters=[LangGraphRuntimeAdapter()])
 
@@ -201,8 +201,6 @@ async def test_state_update_requires_a_checkpoint_binding_at_run_level():
             "runtime_binding_status": "active",
         })(),
     )
-    assert unbound.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].enabled is False
-    assert unbound.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].disabled_reason == "runtime_binding_unavailable"
 
     bound = await resolve_capabilities(
         definition,
@@ -215,7 +213,8 @@ async def test_state_update_requires_a_checkpoint_binding_at_run_level():
             "run_metadata_json": {"runtime_started": True, "checkpoint_boundary_available": True},
         })(),
     )
-    assert bound.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].enabled is True
+    assert "run.update_state" not in unbound.operations
+    assert "run.update_state" not in bound.operations
 
 
 @pytest.mark.asyncio

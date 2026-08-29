@@ -31,7 +31,6 @@ import {
   sendAgentRunFollowup,
   interruptAgentRunWithInput,
   steerAgentRunLive,
-  updateAgentRunState,
   type AgentTaskRun,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
@@ -273,7 +272,6 @@ export default function DeepResearchTaskPanel({
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [reviewGuidance, setReviewGuidance] = useState('');
   const [courseCorrection, setCourseCorrection] = useState('');
-  const [stateUpdateText, setStateUpdateText] = useState('');
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
@@ -655,7 +653,6 @@ export default function DeepResearchTaskPanel({
       .map((item) => ({ ...item, availability: runtimeOperationAvailability(effectiveSelectedRunCapabilities, item.id) }))
       .filter((item) => item.availability.visible);
   }, [effectiveSelectedRunCapabilities]);
-  const stateUpdateAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'run.update_state');
   const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
   const isResultReview = pendingInterrupt?.response_operation === 'task.result_review.respond';
   const isBudgetReview = pendingInterrupt?.response_operation === 'task.budget_review.respond';
@@ -812,7 +809,7 @@ export default function DeepResearchTaskPanel({
     /> : undefined}
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-    </Box> : interactionDescriptors.length > 0 || stateUpdateAvailability.visible || courseCorrectionAvailability.visible ? <Box sx={{ pb: 1 }}>
+    </Box> : interactionDescriptors.length > 0 || courseCorrectionAvailability.visible ? <Box sx={{ pb: 1 }}>
       {courseCorrectionAvailability.visible && task.status === 'running' ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
         <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
         <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
@@ -831,12 +828,6 @@ export default function DeepResearchTaskPanel({
           title={operation.availability.disabledReason}
           onClick={() => setInteractionOperation(operation.id)}
         >{operation.label}</Button>)}
-        {stateUpdateAvailability.visible && <><TextField size="small" label="State update JSON" value={stateUpdateText} onChange={(event) => setStateUpdateText(event.target.value)} /><Button size="small" variant="outlined" disabled={!stateUpdateAvailability.enabled || !stateUpdateText.trim()} title={stateUpdateAvailability.disabledReason} onClick={() => {
-          if (!stateUpdateText.trim() || !selectedRun) return;
-          try {
-            void updateAgentRunState(selectedRun.id, threadId, JSON.parse(stateUpdateText)).then(() => { setStateUpdateText(''); return refresh(); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-          } catch { setError('State update must be valid JSON.'); }
-        }}>Update state</Button></>}
       </Stack>
       {interactionDescriptors.length > 0 && <ConversationComposer
           placeholder={interactionDescriptors.find((operation) => operation.id === interactionOperation)?.placeholder || 'Send runtime input…'}

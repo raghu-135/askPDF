@@ -6,7 +6,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, Dict, Iterable, Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 
@@ -882,7 +882,18 @@ async def claim_next_task(worker_id: str, *, lease_seconds: int = 60) -> Optiona
                     ]),
                     or_(AgentTask.lease_expires_at.is_(None), AgentTask.lease_expires_at < now),
                 )
-                .order_by(AgentTask.queued_at, AgentTask.created_at)
+                # Cancellation recovery must never starve runnable work. A
+                # runtime may acknowledge cancellation before it reaches a
+                # terminal boundary, so cancelling tasks are retried only
+                # after queued/running work that is ready now.
+                .order_by(
+                    case(
+                        (AgentTask.status == AgentTaskStatus.CANCELLING.value, 1),
+                        else_=0,
+                    ),
+                    AgentTask.queued_at,
+                    AgentTask.created_at,
+                )
                 .with_for_update(skip_locked=True)
                 .limit(1)
             )).scalar_one_or_none()
@@ -932,6 +943,21 @@ async def release_task_lease(task_id: str, worker_id: str, *, lease_seconds: int
                 await _accrue_active_runtime(session, task, now=now, cap_ms=max(15, lease_seconds) * 1000)
                 task.lease_owner = None
                 task.lease_expires_at = None
+                task.heartbeat_at = now
+
+
+async def defer_task_lease(task_id: str, worker_id: str, *, retry_seconds: float) -> None:
+    """Release a task while preventing a tight recovery/reclaim loop."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
+            )).scalar_one_or_none()
+            if task is not None and task.lease_owner == worker_id:
+                now = utc_now()
+                task.lease_owner = None
+                task.lease_expires_at = now + timedelta(seconds=max(0.2, retry_seconds))
                 task.heartbeat_at = now
 
 

@@ -83,7 +83,7 @@ async def test_external_hermes_runtime_contract_and_execution():
         assert capabilities.operations["run.events"].enabled is True
         assert capabilities.operations["run.cancel"].enabled is True
         assert capabilities.operations["run.steer_live"].enabled is False
-        for operation in ("run.send_followup", "run.interrupt_with_input", "run.update_state"):
+        for operation in ("run.send_followup", "run.interrupt_with_input"):
             assert capabilities.operations[operation].enabled is False
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True

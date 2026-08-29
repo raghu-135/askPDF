@@ -42,6 +42,7 @@ from app.services.task_artifact_service import artifact_ownership_key, persist_t
 from app.time_utils import utc_now
 from app.runtime.errors import RuntimeError as AgentRuntimeError
 from app.runtime.events import create_runtime_event
+from app.runtime.evidence import evidence_event_fields, inherited_evidence_packets, tool_result_evidence
 from app.runtime.adapter import RuntimeExecutionContext
 from app.runtime.contracts import (
     AgentDefinition,
@@ -790,7 +791,10 @@ async def test_subagent_action_selection_preserves_parent_objective(monkeypatch)
             "tool_policy": {"role_tools": {"document_researcher": ["search_documents"]}},
         },
         "task_limits": {"max_tool_calls_per_subagent": 1},
-        "document_evidence": "Mem0 paper excerpts are available.",
+        "pre_fetch_bundle": {
+            "document_evidence_text": "The attached paper describes a persistent memory architecture.",
+            "document_sources": [{"file_hash": "paper-1", "file_name": "paper.pdf"}],
+        },
     }
     item = {"todo": {
         "profile_id": "document_researcher",
@@ -803,7 +807,40 @@ async def test_subagent_action_selection_preserves_parent_objective(monkeypatch)
     assert outputs == []
     assert "What's the core idea of mem0?" in prompts[0]
     assert "Explain the architecture from the attached paper" in prompts[0]
-    assert '\"document_evidence_available\": true' in prompts[0]
+    assert 'inherited:document:' in prompts[0]
+    assert "persistent memory architecture" in prompts[0]
+
+
+def test_inherited_evidence_is_profile_scoped_and_uses_source_snippets():
+    bundle = {
+        "document_evidence_text": "Document evidence",
+        "document_sources": [{"file_hash": "paper-1", "file_name": "paper.pdf"}],
+        "web_sources": [{"url": "https://example.test", "title": "Example", "text": "Web evidence"}],
+        "semantic_history_text": "Conversation evidence",
+        "durable_memory_text": "Remembered evidence",
+    }
+
+    document = inherited_evidence_packets(bundle, profile_id="document_researcher")
+    web = inherited_evidence_packets(bundle, profile_id="web_researcher")
+    memory = inherited_evidence_packets(bundle, profile_id="memory_researcher")
+
+    assert [packet.kind.value for packet in document] == ["document"]
+    assert [packet.kind.value for packet in web] == ["web"]
+    assert web[0].content == "[Example]\nWeb evidence"
+    assert [packet.kind.value for packet in memory] == ["conversation", "memory"]
+    assert document[0].sources[0]["file_hash"] == "paper-1"
+
+
+def test_tool_gap_is_explicit_but_not_available_evidence():
+    packet = tool_result_evidence({
+        "content": "No relevant content found.",
+        "sources": [],
+        "warnings": ["no_relevant_content"],
+        "trace": {"tool_name": "search_documents", "tool_call_id": "call-1"},
+    })
+
+    assert packet.explicit_gap is True
+    assert packet.available is False
 
 
 @pytest.mark.asyncio
@@ -832,6 +869,65 @@ async def test_invalid_subagent_action_is_retryable_instead_of_silent_finish(mon
 
     assert exc_info.value.code == "subagent_action_invalid"
     assert exc_info.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_subagent_cannot_finish_without_evidence_or_concrete_gap(monkeypatch):
+    call_model = AsyncMock(return_value=(json.dumps({"action": "finish"}), {}))
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    monkeypatch.setattr(
+        deep_research_nodes,
+        "services_from_config",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    state = {
+        "question": "Explain the architecture",
+        "task_orchestration": {
+            "tool_policy": {"role_tools": {"document_researcher": ["search_documents"]}},
+        },
+        "task_limits": {"max_tool_calls_per_subagent": 1},
+        "pre_fetch_bundle": {},
+    }
+
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        await deep_research_nodes._invoke_profile_tools(
+            state,
+            _deep_config(),
+            {"todo": {"profile_id": "document_researcher", "description": "Collect evidence"}},
+        )
+
+    assert exc_info.value.code == "subagent_finish_without_evidence"
+    assert call_model.await_count == 2
+
+
+def test_document_absence_assertion_conflicts_with_available_inherited_evidence():
+    packets = [{"packet_id": "document-1", "kind": "document", "available": True}]
+
+    assert deep_research_nodes._contradicts_inherited_evidence(
+        "document_researcher", "No source documents were provided.", packets,
+    ) is True
+    assert deep_research_nodes._contradicts_inherited_evidence(
+        "document_researcher", "The document leaves implementation details unresolved.", packets,
+    ) is False
+
+
+def test_evidence_event_fields_are_bounded_and_distinguish_explicit_gaps():
+    event = evidence_event_fields({
+        "content": "x" * 5_000,
+        "sources": [],
+        "warnings": ["no_relevant_content"],
+    })
+
+    assert event["result_chars"] == 5_000
+    assert event["source_count"] == 0
+    assert len(event["result_preview"]) == 2_000
+    assert event["explicit_gap"] is True
+
+
+def test_manual_state_update_product_route_is_removed():
+    assert "/agent-runs/{run_id}/state-updates" not in {
+        route.path for route in agent_workflows_api.router.routes
+    }
 
 
 def test_neutral_text_result_with_gap_requires_warning_outcome():
@@ -1592,19 +1688,23 @@ async def test_restarted_runner_resubmits_reclaimed_cancellation_without_termina
     active_run = SimpleNamespace(id="run-1", status="running")
     request_cancel = AsyncMock(return_value={"status": "cancelling"})
     complete_task = AsyncMock()
-    release_lease = AsyncMock()
+    defer_lease = AsyncMock()
 
-    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(side_effect=[task, task]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=active_run))
     monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", complete_task)
-    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", release_lease)
+    monkeypatch.setattr(agent_task_runtime.tasks, "defer_task_lease", defer_lease)
     monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", request_cancel)
 
     await agent_task_runtime.execute_claimed_task(task.id, "replacement-worker")
 
     request_cancel.assert_awaited_once_with(task, active_run)
     complete_task.assert_not_awaited()
-    release_lease.assert_awaited_once_with(task.id, "replacement-worker", lease_seconds=60)
+    defer_lease.assert_awaited_once_with(
+        task.id,
+        "replacement-worker",
+        retry_seconds=agent_task_runtime.CANCELLATION_RETRY_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -1649,6 +1749,68 @@ async def test_queued_task_without_runtime_cancels_immediately(
 
     reclaimed = await repository.claim_next_task("replacement-worker")
     assert reclaimed is None
+
+
+@pytest.mark.asyncio
+async def test_pending_cancellation_does_not_starve_a_queued_task(
+    test_session_maker,
+    sample_thread,
+):
+    await _seed_deep_workflow(test_session_maker)
+    cancelling, _ = await repository.create_task(
+        thread_id=sample_thread.id,
+        project_id=sample_thread.project_id,
+        user_id=None,
+        workflow_id="deep_research_agent",
+        objective="Older cancellation",
+        idempotency_key="older-cancellation",
+        config={},
+    )
+    cancelling, _, _ = await repository.apply_command(
+        cancelling.id,
+        action="start",
+        idempotency_key="start-older-cancellation",
+        expected_version=cancelling.version,
+    )
+    cancelling_run = await _attach_test_run(test_session_maker, cancelling)
+    async with test_session_maker() as session:
+        async with session.begin():
+            stored_run = await session.get(AgentRun, cancelling_run.id)
+            stored_run.run_metadata_json = {
+                **dict(stored_run.run_metadata_json or {}),
+                "runtime_started": True,
+            }
+    cancelling = await repository.get_task(cancelling.id)
+    assert cancelling is not None
+    cancelling, _, _ = await repository.apply_command(
+        cancelling.id,
+        action="cancel",
+        idempotency_key="cancel-older-cancellation",
+        expected_version=cancelling.version,
+    )
+    assert cancelling.status == "cancelling"
+
+    queued, _ = await repository.create_task(
+        thread_id=sample_thread.id,
+        project_id=sample_thread.project_id,
+        user_id=None,
+        workflow_id="deep_research_agent",
+        objective="Runnable work",
+        idempotency_key="runnable-work",
+        config={},
+    )
+    queued, _, _ = await repository.apply_command(
+        queued.id,
+        action="start",
+        idempotency_key="start-runnable-work",
+        expected_version=queued.version,
+    )
+    await _attach_test_run(test_session_maker, queued)
+
+    claimed = await repository.claim_next_task("worker-1")
+
+    assert claimed is not None
+    assert claimed.id == queued.id
 
 
 @pytest.mark.asyncio

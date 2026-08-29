@@ -16,6 +16,12 @@ class Adapter:
         return {"status": "cancellation_requested"}
 
 
+class TerminalAdapter(Adapter):
+    async def cancel(self, request):
+        self.requests.append(request)
+        return {"status": "completed", "no_op": True}
+
+
 class Registry:
     def __init__(self, adapter):
         self.adapter = adapter
@@ -46,6 +52,20 @@ async def test_active_task_cancellation_is_submitted_but_not_terminal(monkeypatc
     assert len(adapter.requests) == 1
     capability.assert_awaited_once()
     assert capability.await_args.kwargs == {"registry": registry, "run": run}
+
+
+@pytest.mark.asyncio
+async def test_terminal_runtime_cancellation_response_preserves_terminal_status(monkeypatch):
+    monkeypatch.setattr(cancellation, "require_capability", AsyncMock())
+    result = await cancellation.request_task_cancellation(
+        SimpleNamespace(id="task-1", status="cancelling"),
+        _run(),
+        registry=Registry(TerminalAdapter()),
+    )
+
+    assert result["status"] == "cancelling"
+    assert result["runtime_status"] == "completed"
+    assert result["runtime_confirmation"] == "terminal"
 
 
 @pytest.mark.asyncio

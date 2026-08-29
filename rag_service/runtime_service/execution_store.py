@@ -431,6 +431,11 @@ class ExecutionStore:
                 return CancellationOutcome("unknown")
             if record.status in TERMINAL_STATUSES:
                 return CancellationOutcome("terminal", record.status)
+            if record.status in {"awaiting_human", "paused"}:
+                record.status = "cancelled"
+                record.cancel_requested = False
+                record.updated_at = _now()
+                return CancellationOutcome("terminal", record.status)
             record.cancel_requested = True
             return CancellationOutcome("requested", record.status)
         async with self._pool.acquire() as connection:
@@ -444,6 +449,12 @@ class ExecutionStore:
                 status = str(record["status"])
                 if status in TERMINAL_STATUSES:
                     return CancellationOutcome("terminal", status)
+                if status in {"awaiting_human", "paused"}:
+                    await connection.execute(
+                        "update runtime_executions set status='cancelled', cancel_requested=false, updated_at=now() where run_id=$1",
+                        run_id,
+                    )
+                    return CancellationOutcome("terminal", "cancelled")
                 await connection.execute(
                     "update runtime_executions set cancel_requested=true, updated_at=now() where run_id=$1 and status not in ('completed','failed','cancelled','no_continuation')",
                     run_id,

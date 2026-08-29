@@ -457,6 +457,7 @@ class NodeRegistry:
                     "recent_history_text": "",
                     "semantic_history_text": conversation.get("content", ""),
                     "document_evidence_text": document.get("content", ""),
+                    "web_evidence_text": web.get("content", ""),
                     "durable_memory_text": memory.get("content", ""),
                     "document_sources": document.get("sources", []),
                     "web_sources": web.get("sources", []),

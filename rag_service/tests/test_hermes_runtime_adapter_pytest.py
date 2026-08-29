@@ -298,6 +298,26 @@ def test_hermes_failed_tool_completion_is_projected_as_failure():
     assert payload["ok"] is False
 
 
+def test_hermes_tool_completion_preserves_bounded_evidence_metadata():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {
+            "tool": "search_web",
+            "result": {
+                "content": "evidence " * 500,
+                "sources": [{"url": "https://example.test"}],
+                "warnings": [],
+            },
+        },
+    )
+
+    assert kind == "tool.completed"
+    assert payload["result_chars"] == len("evidence " * 500)
+    assert payload["source_count"] == 1
+    assert len(payload["result_preview"]) == 2000
+    assert payload["explicit_gap"] is False
+
+
 @pytest.mark.asyncio
 async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
     requested = []

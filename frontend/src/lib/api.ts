@@ -2614,10 +2614,6 @@ export async function steerAgentRunLive(runId: string, threadId: string, text: s
   return operateAgentRun(runId, threadId, 'steer-live', { input: { text } });
 }
 
-export async function updateAgentRunState(runId: string, threadId: string, update: Record<string, any>): Promise<Record<string, any>> {
-  return operateAgentRun(runId, threadId, 'state-updates', { update });
-}
-
 export async function getAgentTaskTodos(taskId: string, threadId: string): Promise<AgentTaskTodo[]> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/todos?${taskQuery(threadId)}`);
   if (!response.ok) throw new Error(await readApiError(response));

@@ -123,7 +123,16 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     )
     status = "preserved"
     task = await tasks.get_task(str(run.task_id)) if getattr(run, "task_id", None) else None
-    if task is not None and str(task.status) == "cancelling" and str(run.status) in {"running", "awaiting_human"}:
+    known_status = str((result or {}).get("status") or "") if isinstance(result, Mapping) else ""
+    if (
+        task is not None
+        and str(task.status) == "cancelling"
+        and known_status in {"completed", "failed", "cancelled", "canceled", "no_continuation"}
+    ):
+        await reconcile_known_result(run, result, AgentRuntimeProjection())
+        result = None
+        status = "projected"
+    elif task is not None and str(task.status) == "cancelling" and str(run.status) in {"running", "awaiting_human"}:
         inspection = await adapter.inspect_state(request)
         runtime_status = str(inspection.get("status") or (inspection.get("result") or {}).get("status") or "")
         if runtime_status in {"cancelled", "canceled"}:
@@ -137,6 +146,18 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
                 result=cancelled_result,
                 terminal_event_id=str(inspection.get("terminal_event_id") or "") or None,
             )
+            status = "projected"
+        elif runtime_status in {"completed", "failed", "no_continuation"}:
+            terminal_result = (
+                dict(inspection.get("result"))
+                if isinstance(inspection.get("result"), Mapping)
+                else {
+                    "status": runtime_status,
+                    "error": dict(inspection.get("error") or {}),
+                }
+            )
+            terminal_result.setdefault("status", runtime_status)
+            await reconcile_known_result(run, terminal_result, AgentRuntimeProjection())
             status = "projected"
         else:
             await request_task_cancellation(task, run)

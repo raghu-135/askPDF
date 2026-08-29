@@ -509,7 +509,6 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.RUN_UPDATE_STATE,
         RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
         RuntimeOperationId.TRACE_PROJECT,
     })
@@ -560,10 +559,6 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json={"request": request.to_dict()})
-        return dict(value or {}) if isinstance(value, Mapping) else {}
-
-    async def update_state(self, request: AgentRuntimeRequest, update: Mapping[str, Any]) -> Mapping[str, Any]:
-        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/state", request=request, json={"request": request.to_dict(), "update": dict(update)})
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:

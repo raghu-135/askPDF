@@ -184,13 +184,6 @@ class AgentRuntimeAdapter(ABC):
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.inspect_state", "This runtime does not expose durable state inspection")
 
-    async def update_state(
-        self,
-        request: AgentRuntimeRequest,
-        update: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
-        self._unsupported("run.update_state", "This runtime does not expose durable state updates")
-
     async def replay(self, request: AgentRuntimeRequest, checkpoint_id: str) -> AgentRuntimeResult:
         self._unsupported("run.replay", "This runtime does not expose checkpoint replay")
 

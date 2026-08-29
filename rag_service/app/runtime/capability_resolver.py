@@ -60,7 +60,6 @@ ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_SEND_FOLLOWUP,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
     RuntimeOperationId.RUN_STEER_LIVE,
-    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
 })
@@ -96,7 +95,6 @@ TASK_ONLY_OPERATIONS = frozenset({
 CHECKPOINT_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_INSPECT_STATE,
-    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.RUN_REPLAY,
     RuntimeOperationId.RUN_FORK,
     RuntimeOperationId.RUN_CONTINUATION_CLEANUP,

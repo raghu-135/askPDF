@@ -11,7 +11,6 @@ export type RuntimeControlOperation =
   | 'run.send_followup'
   | 'run.interrupt_with_input'
   | 'run.steer_live'
-  | 'run.update_state'
   | 'task.start'
   | 'task.pause'
   | 'task.resume'

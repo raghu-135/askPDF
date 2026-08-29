@@ -26,7 +26,6 @@ PUBLIC_OPERATION_IDS = frozenset({
     RuntimeOperationId.RUN_SEND_FOLLOWUP,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
     RuntimeOperationId.RUN_STEER_LIVE,
-    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.TASK_START,
     RuntimeOperationId.TASK_PAUSE,
     RuntimeOperationId.TASK_RESUME,

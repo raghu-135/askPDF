@@ -161,7 +161,6 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
         ("run.interrupt_with_input", lambda: adapter.interrupt_with_input(request, {})),
         ("run.steer_live", lambda: adapter.steer_live(request, RuntimeSteeringInput("focus"))),
         ("run.inspect_state", lambda: adapter.inspect_state(request)),
-        ("run.update_state", lambda: adapter.update_state(request, {})),
         ("run.replay", lambda: adapter.replay(request, "checkpoint-1")),
         ("run.fork", lambda: adapter.fork(request, "checkpoint-1")),
         ("subagent.list", lambda: adapter.list_subagents(request)),
@@ -201,6 +200,10 @@ def test_runtime_event_can_carry_an_opaque_continuation_binding():
         continuation=binding,
     )
     assert event.to_dict()["continuation"]["payload"]["upstream_run_id"] == "hermes-run-7"
+
+
+def test_manual_state_update_is_not_a_runtime_operation():
+    assert "run.update_state" not in {operation.value for operation in RuntimeOperationId}
 
 
 def test_catalog_identity_is_concrete_and_category_is_metadata_only():
@@ -344,6 +347,56 @@ def test_runtime_task_result_rejects_empty_success_and_normalizes_empty_output_f
     result = normalize_runtime_task_result("{}", structured_output_requested=True)
     assert result.status is RuntimeTaskResultStatus.FAILED
     assert result.error == {"code": "task_result_empty", "retryable": True}
+
+
+def test_runtime_task_result_preserves_nested_text_from_noncanonical_envelope():
+    result = normalize_runtime_task_result({
+        "status": "completed",
+        "output": {
+            "content": [
+                {"type": "reasoning", "text": "internal analysis"},
+                {"type": "text", "text": "The grounded answer."},
+            ],
+        },
+    })
+
+    assert result.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS
+    assert result.text == "The grounded answer."
+    assert result.warnings == ({
+        "code": "task_result_envelope_noncanonical",
+        "message": "Usable output was preserved from a noncanonical result field.",
+    },)
+
+
+def test_runtime_task_result_does_not_treat_reasoning_only_blocks_as_an_answer():
+    result = normalize_runtime_task_result({
+        "status": "completed",
+        "content": [{"type": "reasoning", "text": "internal analysis"}],
+    })
+
+    assert result.status is RuntimeTaskResultStatus.FAILED
+    assert result.text is None
+    assert result.error == {"code": "task_result_empty", "retryable": True}
+    assert result.warnings == ()
+
+
+def test_runtime_task_result_preserves_unwrapped_structured_extensions():
+    result = normalize_runtime_task_result({
+        "status": "completed",
+        "definition": "The generals must agree despite traitorous participants.",
+        "conditions": {"IC1": "Loyal lieutenants obey the same order."},
+        "warnings": [{"code": "W001", "description": "Solvability is covered later."}],
+    })
+
+    assert result.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS
+    assert result.text is None
+    assert result.structured_output == {
+        "definition": "The generals must agree despite traitorous participants.",
+        "conditions": {"IC1": "Loyal lieutenants obey the same order."},
+    }
+    assert [warning["code"] for warning in result.warnings] == [
+        "W001", "task_result_envelope_noncanonical",
+    ]
 
 
 def test_langgraph_node_events_normalize_to_topology_linked_operations():

@@ -10,6 +10,25 @@ from runtime_service.execution_store import ExecutionConflictError, ExecutionSto
 
 
 @pytest.mark.asyncio
+async def test_cancel_terminalizes_an_execution_waiting_for_human() -> None:
+    store = ExecutionStore(database_url="")
+    record = await store.create(
+        "run-awaiting-human",
+        "start",
+        {"run_id": "run-awaiting-human"},
+        {},
+    )
+    record.status = "awaiting_human"
+
+    outcome = await store.request_cancel(record.run_id)
+
+    assert outcome.is_terminal is True
+    assert outcome.run_status == "cancelled"
+    assert (await store.get(record.run_id)).status == "cancelled"
+    assert (await store.get(record.run_id)).cancel_requested is False
+
+
+@pytest.mark.asyncio
 async def test_request_cancel_returns_typed_outcomes_and_preserves_terminal_state() -> None:
     store = ExecutionStore()
 

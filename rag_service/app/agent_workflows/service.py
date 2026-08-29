@@ -190,7 +190,6 @@ class AgentRunService:
         operation: RuntimeOperationId,
         *,
         input: Optional[Dict[str, Any]] = None,
-        update: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         definition = definition_from_run(run)
@@ -203,11 +202,9 @@ class AgentRunService:
         request_payload = {
             "operation": operation.value,
             "input": dict(input or {}),
-            "update": dict(update or {}),
         }
         try:
             validate_bounded_json(request_payload["input"], field_name="input")
-            validate_bounded_json(request_payload["update"], field_name="update")
         except ValueError as exc:
             raise RuntimeContractError(
                 "runtime_payload_invalid",
@@ -266,8 +263,6 @@ class AgentRunService:
             elif operation is RuntimeOperationId.RUN_STEER_LIVE:
                 text = str((input or {}).get("text") or "").strip()
                 result = dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
-            elif operation is RuntimeOperationId.RUN_UPDATE_STATE:
-                result = dict(await adapter.update_state(request, dict(update or {})))
             else:
                 raise ValueError(f"Unsupported runtime operation: {operation}")
             await complete_runtime_operation(operation_record.id, result=result)
