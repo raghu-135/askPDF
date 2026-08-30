@@ -326,6 +326,20 @@ async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pause_request_is_persisted_for_external_execution() -> None:
+    store = ExecutionStore()
+    await store.create("run-pause", "start", _request("run-pause"), _payload("run-pause"))
+    app = create_app(execution_store=store)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        response = await client.post("/v1/runs/run-pause/pause", json={"request": _request("run-pause")})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["status"] == "pause_requested"
+    assert await store.is_pause_requested("run-pause") is True
+
+
+@pytest.mark.asyncio
 async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(monkeypatch: pytest.MonkeyPatch) -> None:
     started = asyncio.Event()
     stopped = asyncio.Event()

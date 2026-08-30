@@ -465,6 +465,54 @@ class ExecutionStore:
         record = await self.get(run_id)
         return bool(record and record.cancel_requested)
 
+    async def request_pause(self, run_id: str) -> dict[str, Any]:
+        """Persist a cooperative pause request without changing execution ownership."""
+        if self._pool is None:
+            record = self._records.get(run_id)
+            if record is None:
+                return {"status": "unknown", "run_id": run_id}
+            if record.status in TERMINAL_STATUSES:
+                return {"status": "terminal", "run_id": run_id, "run_status": record.status}
+            if record.status in {"awaiting_human", "paused"}:
+                return {"status": "already_paused", "run_id": run_id, "run_status": record.status}
+            record.payload["pause_requested"] = True
+            record.updated_at = _now()
+            return {"status": "pause_requested", "run_id": run_id, "run_status": record.status}
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    "select status, payload from runtime_executions where run_id=$1 for update",
+                    run_id,
+                )
+                if row is None:
+                    return {"status": "unknown", "run_id": run_id}
+                status = str(row["status"])
+                if status in TERMINAL_STATUSES:
+                    return {"status": "terminal", "run_id": run_id, "run_status": status}
+                if status in {"awaiting_human", "paused"}:
+                    return {"status": "already_paused", "run_id": run_id, "run_status": status}
+                await connection.execute(
+                    "update runtime_executions set payload=payload || '{\"pause_requested\": true}'::jsonb, updated_at=now() where run_id=$1",
+                    run_id,
+                )
+                return {"status": "pause_requested", "run_id": run_id, "run_status": status}
+
+    async def is_pause_requested(self, run_id: str) -> bool:
+        record = await self.get(run_id)
+        return bool(record and record.payload.get("pause_requested") is True)
+
+    async def clear_pause_request(self, run_id: str) -> None:
+        if self._pool is None:
+            record = self._records.get(run_id)
+            if record is not None:
+                record.payload.pop("pause_requested", None)
+                record.updated_at = _now()
+            return
+        await self._pool.execute(
+            "update runtime_executions set payload=payload - 'pause_requested', updated_at=now() where run_id=$1",
+            run_id,
+        )
+
     async def append(self, run_id: str, event: Mapping[str, Any], result: Mapping[str, Any] | None = None, *, attempt: int | None = None, owner_id: str | None = None, fencing_token: int | None = None) -> dict[str, Any]:
         item = dict(event)
         if self._pool is None:
@@ -618,10 +666,17 @@ class ExecutionStore:
                 else:
                     item["attempt"] = effective_attempt
                     item["event_id"] = _event_id(run_id, effective_attempt, str(item["event_id"]))
-                    item["sequence"] = record.next_sequence
+                    occupied = {
+                        int(value.get("sequence", 0))
+                        for value in self._events.get(run_id, [])
+                    }
+                    sequence = record.next_sequence
+                    while sequence in occupied:
+                        sequence += 1
+                    item["sequence"] = sequence
                     item["result"] = safe_result
                     self._events.setdefault(run_id, []).append(item)
-                    record.next_sequence += 1
+                    record.next_sequence = max(record.next_sequence, sequence + 1)
                     stored = item
                 record.status = status
                 record.result = dict(safe_result)
@@ -667,6 +722,16 @@ class ExecutionStore:
                     )
                 else:
                     sequence = int(record["next_sequence"])
+                    existing_sequence = await connection.fetchrow(
+                        "select sequence from runtime_events where run_id=$1 and sequence=$2 for update",
+                        run_id, sequence,
+                    )
+                    if existing_sequence is not None:
+                        # Older runtime versions could commit a resumable
+                        # event without advancing next_sequence. Recovery may
+                        # then be finalizing a cancellation or failure while
+                        # that event is already occupying the next slot.
+                        sequence = int(existing_sequence["sequence"]) + 1
                     event_id = _event_id(run_id, effective_attempt, str(item["event_id"]))
                     stored = await connection.fetchrow(
                         """insert into runtime_events(
@@ -681,8 +746,8 @@ class ExecutionStore:
                         json.dumps(safe_result),
                     )
                     await connection.execute(
-                        "update runtime_executions set next_sequence=next_sequence+1 where run_id=$1",
-                        run_id,
+                        "update runtime_executions set next_sequence=greatest(next_sequence, $2) where run_id=$1",
+                        run_id, sequence + 1,
                     )
                 await connection.execute(
                     """update runtime_executions
@@ -692,6 +757,122 @@ class ExecutionStore:
                        where run_id=$1""",
                     run_id, status, json.dumps(safe_result), json.dumps(safe_error) if safe_error else None,
                     json.dumps(_json_safe(item.get("continuation"))) if item.get("continuation") is not None else None,
+                )
+                if record["last_operation_id"]:
+                    await connection.execute(
+                        "update runtime_operations set status=$3, result=$4::jsonb where run_id=$1 and operation_id=$2",
+                        run_id, record["last_operation_id"], status, json.dumps(safe_result),
+                    )
+                return _event_row_to_dict(stored)
+
+    async def checkpoint_execution(
+        self,
+        run_id: str,
+        checkpoint_event: Mapping[str, Any],
+        result: Mapping[str, Any],
+        *,
+        status: str,
+        continuation: Mapping[str, Any] | None,
+        attempt: int | None = None,
+        owner_id: str,
+        fencing_token: int,
+    ) -> dict[str, Any]:
+        """Persist a resumable checkpoint and release the runtime lease."""
+        if status not in {"awaiting_human", "paused"}:
+            raise ValueError("runtime checkpoint requires a resumable status")
+        item = dict(checkpoint_event)
+        if bool(item.get("terminal")):
+            raise ValueError("runtime checkpoint event must be nonterminal")
+        safe_result = _json_safe(dict(result))
+        safe_continuation = _json_safe(dict(continuation)) if continuation else None
+        if self._pool is None:
+            async with self._lock:
+                record = self._records[run_id]
+                if record.owner_id != owner_id or record.fencing_token != fencing_token:
+                    raise LeaseLostError(f"lost runtime lease for {run_id}")
+                effective_attempt = attempt or record.attempt
+                item["attempt"] = effective_attempt
+                event_id = _event_id(run_id, effective_attempt, str(item["event_id"]))
+                existing = next(
+                    (value for value in self._events.setdefault(run_id, []) if value.get("event_id") == event_id),
+                    None,
+                )
+                if existing is not None:
+                    record.status = status
+                    record.result = dict(safe_result)
+                    record.continuation = dict(safe_continuation) if safe_continuation else None
+                    record.owner_id = record.lease_expires_at = record.heartbeat_at = None
+                    record.updated_at = _now()
+                    return dict(existing)
+                item["event_id"] = event_id
+                item["sequence"] = record.next_sequence
+                item["result"] = safe_result
+                item["continuation"] = safe_continuation
+                self._events.setdefault(run_id, []).append(item)
+                record.next_sequence += 1
+                record.status = status
+                record.result = dict(safe_result)
+                record.continuation = dict(safe_continuation) if safe_continuation else None
+                record.owner_id = record.lease_expires_at = record.heartbeat_at = None
+                record.updated_at = _now()
+                return dict(item)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                record = await connection.fetchrow(
+                    """select attempt, next_sequence, last_operation_id from runtime_executions
+                       where run_id=$1 and owner_id=$2 and fencing_token=$3
+                         and (lease_expires_at is null or lease_expires_at > now()) for update""",
+                    run_id, owner_id, fencing_token,
+                )
+                if record is None:
+                    raise LeaseLostError(f"lost runtime lease for {run_id}")
+                effective_attempt = attempt or int(record["attempt"])
+                event_id = _event_id(run_id, effective_attempt, str(item["event_id"]))
+                # A worker can lose its lease after inserting the checkpoint
+                # event but before the caller observes completion. Recovery
+                # must finish that checkpoint instead of inserting the same
+                # event at the stale next_sequence again.
+                existing = await connection.fetchrow(
+                    "select * from runtime_events where run_id=$1 and event_id=$2 for update",
+                    run_id, event_id,
+                )
+                if existing is not None:
+                    await connection.execute(
+                        """update runtime_executions
+                           set status=$2, result=$3::jsonb, continuation=$4::jsonb,
+                               next_sequence=greatest(next_sequence, $5),
+                               owner_id=null, lease_expires_at=null, heartbeat_at=null, updated_at=now()
+                           where run_id=$1""",
+                        run_id, status, json.dumps(safe_result),
+                        json.dumps(safe_continuation) if safe_continuation else None,
+                        int(existing["sequence"]) + 1,
+                    )
+                    if record["last_operation_id"]:
+                        await connection.execute(
+                            "update runtime_operations set status=$3, result=$4::jsonb where run_id=$1 and operation_id=$2",
+                            run_id, record["last_operation_id"], status, json.dumps(safe_result),
+                        )
+                    return _event_row_to_dict(existing)
+                stored = await connection.fetchrow(
+                    """insert into runtime_events(
+                           run_id, sequence, attempt, event_id, kind, payload, occurred_at,
+                           trace_id, continuation, terminal, result
+                       ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb,false,$10::jsonb)
+                       returning *""",
+                    run_id, int(record["next_sequence"]), effective_attempt, event_id,
+                    item.get("kind", "run.paused"), json.dumps(_json_safe(item.get("payload") or {})),
+                    item.get("occurred_at"), item.get("trace_id"),
+                    json.dumps(safe_continuation) if safe_continuation else None,
+                    json.dumps(safe_result),
+                )
+                await connection.execute(
+                    """update runtime_executions
+                       set status=$2, result=$3::jsonb, continuation=$4::jsonb,
+                           next_sequence=next_sequence+1,
+                           owner_id=null, lease_expires_at=null, heartbeat_at=null, updated_at=now()
+                       where run_id=$1""",
+                    run_id, status, json.dumps(safe_result),
+                    json.dumps(safe_continuation) if safe_continuation else None,
                 )
                 if record["last_operation_id"]:
                     await connection.execute(

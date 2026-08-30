@@ -505,9 +505,10 @@ class RuntimeTransportConnector:
 class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     """LangGraph adapter composed with the neutral HTTP transport."""
 
-    # Generic HTTP execution has no product-controlled safe-boundary hook;
-    # task pause remains unavailable until the transport exposes one.
-    supports_task_pause = False
+    # The external runtime exposes a durable pause request protocol backed by
+    # its execution store and LangGraph checkpointer.
+    supports_task_pause = True
+    supports_external_task_pause = True
     framework = "langgraph"
     builder_id = "langgraph_graph"
     implemented_operations = frozenset({
@@ -561,6 +562,10 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json={"request": request.to_dict()})
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/pause", request=request, json={"request": request.to_dict()})
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:

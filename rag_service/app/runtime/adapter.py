@@ -48,6 +48,7 @@ class AgentRuntimeAdapter(ABC):
     framework: str
     builder_id: str
     supports_task_pause: bool = False
+    supports_external_task_pause: bool = False
     implemented_operations: frozenset[RuntimeOperationId] = frozenset()
 
     async def prepare_request(
@@ -158,6 +159,9 @@ class AgentRuntimeAdapter(ABC):
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.cancel", "This runtime does not expose run cancellation")
+
+    async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        self._unsupported("task.pause", "This runtime does not expose task pausing")
 
     async def respond_to_approval(
         self,

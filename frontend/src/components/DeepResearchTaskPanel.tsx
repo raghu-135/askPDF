@@ -634,6 +634,7 @@ export default function DeepResearchTaskPanel({
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
   const isApprovalInterrupt = pendingInterrupt?.kind === 'approval';
+  const isTaskPauseInterrupt = pendingInterrupt?.type === 'task_pause' || pendingInterrupt?.node_id === 'task_pause_gate';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
     : [];
@@ -769,7 +770,11 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isBudgetReview ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">Deep research paused</Typography>
+      <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume above to continue or Cancel to stop the task.</Typography>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && isBudgetReview ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Research budget reached'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
       {pendingInterrupt.provisional_answer ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', maxHeight: 280, overflow: 'auto', mb: 1 }}>{String(pendingInterrupt.provisional_answer)}</Typography> : <Alert severity="warning" sx={{ mb: 1 }}>No usable provisional answer was produced. Continue or steer the research.</Alert>}

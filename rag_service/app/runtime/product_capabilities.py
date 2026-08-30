@@ -73,7 +73,6 @@ def product_operation_descriptors() -> dict[RuntimeOperationId, RuntimeOperation
             terminal_states=(RuntimeTerminalState.INTERRUPTED,),
             preserves_run_id=True,
             preserves_session_id=True,
-            requires_runtime_binding=True,
         ),
         RuntimeOperationId.TASK_RESUME: conditional(
             owner=RuntimeOperationOwner.PRODUCT,

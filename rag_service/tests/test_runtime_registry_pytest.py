@@ -76,7 +76,7 @@ def test_explicit_in_process_initialization_imports_adapter_immediately(monkeypa
         raise ModuleNotFoundError("No module named 'langgraph'")
 
     monkeypatch.setattr(module, "_default_langgraph_adapter", missing_adapter)
-    with pytest.raises(ModuleNotFoundError, match="langgraph"):
+    with pytest.raises(RuntimeError, match="AGENT_RUNTIME_MODE=in_process.*external"):
         RuntimeRegistry().initialize()
 
 

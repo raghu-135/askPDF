@@ -24,6 +24,7 @@ from app.services.agent_task_runtime import (
     ensure_task_run,
 )
 from app.services.agent_run_cancellation import require_task_cancellation, request_task_cancellation
+from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
@@ -380,6 +381,12 @@ async def command_agent_task(
         if action in {"start", "retry"} and not duplicate:
             await ensure_task_run(task.id)
             task = await repository.get_task(task.id) or task
+        if action == "pause" and not duplicate and task.status == "pausing":
+            run = await repository.get_task_run(task.id)
+            try:
+                await request_task_pause(task, run)
+            except AgentRuntimeError as exc:
+                raise HTTPException(status_code=503 if exc.retryable else 409, detail=exc.to_dict()) from exc
         if action == "resume" and not duplicate:
             run = await repository.get_task_run(task.id)
             pending = dict(run.pending_interrupt_json or {}) if run is not None else {}

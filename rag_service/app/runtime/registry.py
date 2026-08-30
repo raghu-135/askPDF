@@ -16,7 +16,16 @@ def _default_langgraph_adapter() -> AgentRuntimeAdapter:
         from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 
         return HttpLangGraphRuntimeAdapter()
-    from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+    try:
+        from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+    except ModuleNotFoundError as exc:
+        if exc.name != "langgraph" and "langgraph" not in str(exc):
+            raise
+        raise RuntimeError(
+            "AGENT_RUNTIME_MODE=in_process requires the LangGraph runtime dependencies. "
+            "Use AGENT_RUNTIME_MODE=external for the separated langgraph-runtime service, "
+            "or install requirements-langgraph-runtime.txt in this image."
+        ) from exc
 
     return LangGraphRuntimeAdapter()
 

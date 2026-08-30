@@ -89,7 +89,7 @@ def _task_context(value: Any) -> RuntimeTaskContext | None:
     )
 
 
-def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: Any = None) -> RuntimeExecutionContext:
+def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: Any = None, pause_checker: Any = None) -> RuntimeExecutionContext:
     value = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
     run_context = dict(value.get("agent_run_context") or {})
     if isinstance(run_context.get("run"), Mapping):
@@ -117,6 +117,7 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         task_worker_id=value.get("task_worker_id"),
         task_context=_task_context(value.get("task_context")),
         cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
     )
 
 
@@ -364,6 +365,9 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         async def cancellation_probe() -> bool:
             return cancellation_event.is_set() or await execution_store.is_cancel_requested(run_id)
 
+        async def pause_probe() -> bool:
+            return await execution_store.is_pause_requested(run_id)
+
         class DurableSink:
             def __init__(self) -> None:
                 self.terminal_event_id: str | None = None
@@ -393,6 +397,26 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         durable_sink = DurableSink()
 
         async def finalize(result: AgentRuntimeResult, *, error: Mapping[str, Any] | None = None) -> None:
+            if result.status in {"awaiting_human", "paused"}:
+                checkpoint = create_runtime_event(
+                    event_id=f"{run_id}:checkpoint",
+                    run_id=run_id,
+                    sequence=1,
+                    kind="run.paused",
+                    payload={"status": result.status, "pending_interrupt": result.interruption},
+                    continuation=result.continuation,
+                )
+                await execution_store.checkpoint_execution(
+                    run_id,
+                    checkpoint.to_dict(),
+                    result.to_dict(),
+                    status=result.status,
+                    continuation=result.continuation.to_dict() if result.continuation else None,
+                    attempt=attempt,
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+                return
             terminal_kind = "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
             if durable_sink.terminal_event_id is None:
                 terminal = create_runtime_event(
@@ -436,7 +460,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
         runtime_adapter = get_adapter()
         try:
             context = await runtime_adapter.prepare_execution_context(
-                _context(payload, request, cancellation_checker=cancellation_probe)
+                _context(payload, request, cancellation_checker=cancellation_probe, pause_checker=pause_probe)
             )
             framework = str(getattr(request, "framework", None) or "").strip()
             if not framework:
@@ -538,13 +562,20 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
             task = runtime_state["active"].get(request.run_id)
             should_start = allow_start and not record.replay_only and (
                 record.status == "queued"
+                or operation == "resume" and record.status in {"awaiting_human", "paused"}
             )
             if should_start and (task is None or task.done()):
                 fencing_token = await execution_store.claim(request.run_id)
                 if fencing_token is None:
                     raise HTTPException(status_code=409, detail="runtime execution is owned by another worker")
                 task = asyncio.create_task(
-                    _execute_operation(payload, record.operation, request_from_dict(record.request), attempt=record.attempt, fencing_token=fencing_token),
+                    _execute_operation(
+                        payload,
+                        operation if operation == "resume" else record.operation,
+                        request_from_dict(record.request),
+                        attempt=record.attempt,
+                        fencing_token=fencing_token,
+                    ),
                     name=f"agent-runtime-{request.run_id}",
                 )
                 runtime_state["active"][request.run_id] = task
@@ -556,6 +587,11 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 task.add_done_callback(_remove_finished)
             attempt = record.attempt
         last_sequence = after_sequence
+        # A resume continues the same attempt after the previously delivered
+        # checkpoint event. Do not replay that event as the result of the new
+        # resume request before the resumed graph has a chance to run.
+        if operation == "resume":
+            last_sequence = max(last_sequence, int(record.next_sequence) - 1)
         terminal_seen = False
         while True:
             events = await execution_store.events_after(request.run_id, last_sequence, attempt=attempt)
@@ -576,6 +612,8 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 yield sse_encode(event, result=result)
                 last_sequence = max(last_sequence, event.sequence)
                 if event.terminal:
+                    return
+                if event.kind in {"approval.requested", "interrupt.requested", "run.paused"} and result is not None and result.status in {"awaiting_human", "paused"}:
                     return
             record = await execution_store.get(request.run_id)
             if record and record.status in {"completed", "failed", "cancelled", "no_continuation"}:
@@ -612,6 +650,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "resume")
+        await execution_store.clear_pause_request(run_id)
         _admit_dependencies(payload)
         return StreamingResponse(stream_operation(payload, "resume", run_id, operation_id=payload.get("operation_id")), media_type="text/event-stream")
 
@@ -672,6 +711,20 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
                 "cancellation_requested": True,
             }
         return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=result)
+
+    @app.post("/v1/runs/{run_id}/pause")
+    async def pause(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
+        runtime_request = request_from_dict(payload["request"])
+        if runtime_request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        outcome = await execution_store.request_pause(run_id)
+        if outcome["status"] == "unknown":
+            raise HTTPException(status_code=404, detail={"code": "runtime_run_not_found", "safe_message": "Runtime run not found", "retryable": False})
+        return json_envelope(
+            status="ok",
+            request_id=request_context.headers.get("x-request-id"),
+            result=outcome,
+        )
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:

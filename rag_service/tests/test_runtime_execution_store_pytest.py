@@ -63,6 +63,102 @@ async def test_request_cancel_active_run_is_visible_to_worker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_request_pause_is_durable_and_visible_to_worker() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("run-active-pause", "start", {"run_id": "run-active-pause"}, {})
+    await store.claim("run-active-pause")
+
+    outcome = await store.request_pause("run-active-pause")
+
+    assert outcome["status"] == "pause_requested"
+    assert await store.is_pause_requested("run-active-pause") is True
+    assert (await store.get("run-active-pause")).status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_request_pause_preserves_terminal_and_checkpointed_states() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("run-terminal-pause", "start", {"run_id": "run-terminal-pause"}, {})
+    await store.set_status("run-terminal-pause", "completed")
+    assert (await store.request_pause("run-terminal-pause"))["status"] == "terminal"
+
+    await store.create("run-checkpoint-pause", "start", {"run_id": "run-checkpoint-pause"}, {})
+    await store.set_status("run-checkpoint-pause", "awaiting_human")
+    assert (await store.request_pause("run-checkpoint-pause"))["status"] == "already_paused"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_execution_persists_resumable_result_and_releases_lease() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("run-checkpoint", "start", {"run_id": "run-checkpoint"}, {})
+    fencing_token = await store.claim("run-checkpoint")
+
+    event = await store.checkpoint_execution(
+        "run-checkpoint",
+        {"event_id": "run-checkpoint:paused", "kind": "run.paused", "payload": {}, "terminal": False},
+        {"status": "awaiting_human", "pending_interrupt": {"type": "task_pause"}},
+        status="awaiting_human",
+        continuation={"binding_type": "langgraph.checkpoint", "payload": {"checkpoint_thread_id": "cp-1"}},
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
+    )
+
+    record = await store.get("run-checkpoint")
+    assert event["kind"] == "run.paused"
+    assert record.status == "awaiting_human"
+    assert record.continuation["payload"]["checkpoint_thread_id"] == "cp-1"
+    assert record.owner_id is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_execution_is_idempotent_after_event_was_already_persisted() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("run-checkpoint-retry", "start", {"run_id": "run-checkpoint-retry"}, {})
+    first_token = await store.claim("run-checkpoint-retry")
+    event = {"event_id": "run-checkpoint-retry:paused", "kind": "run.paused", "payload": {}, "terminal": False}
+    result = {"status": "awaiting_human", "pending_interrupt": {"type": "task_pause"}}
+    await store.checkpoint_execution(
+        "run-checkpoint-retry", event, result, status="awaiting_human", continuation=None,
+        owner_id=store.owner_id, fencing_token=first_token,
+    )
+
+    # Simulate a retry after the checkpoint was committed and the lease was
+    # reacquired by recovery.
+    second_token = await store.claim("run-checkpoint-retry")
+    repeated = await store.checkpoint_execution(
+        "run-checkpoint-retry", event, result, status="awaiting_human", continuation=None,
+        owner_id=store.owner_id, fencing_token=second_token,
+    )
+
+    assert repeated["event_id"] == (await store.events_after("run-checkpoint-retry"))[0]["event_id"]
+    assert len(await store.events_after("run-checkpoint-retry")) == 1
+    assert (await store.get("run-checkpoint-retry")).next_sequence == 2
+
+
+@pytest.mark.asyncio
+async def test_terminal_finalization_advances_past_a_stale_checkpoint_sequence() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("run-stale-sequence", "start", {"run_id": "run-stale-sequence"}, {})
+    await store.append(
+        "run-stale-sequence",
+        {"event_id": "run-stale-sequence:checkpoint", "kind": "run.paused", "payload": {}, "terminal": False},
+    )
+    record = await store.get("run-stale-sequence")
+    record.next_sequence = 1
+    token = await store.claim("run-stale-sequence")
+
+    terminal = await store.finalize_execution(
+        "run-stale-sequence",
+        {"event_id": "run-stale-sequence:cancelled", "kind": "run.cancelled", "payload": {}, "terminal": True},
+        {"status": "cancelled"},
+        status="cancelled", owner_id=store.owner_id, fencing_token=token,
+    )
+
+    assert terminal["sequence"] == 2
+    assert (await store.get("run-stale-sequence")).next_sequence == 3
+
+
+@pytest.mark.asyncio
 async def test_terminal_continuation_probe_is_immutable_under_repeated_start() -> None:
     store = ExecutionStore()
 
