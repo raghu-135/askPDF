@@ -8,6 +8,7 @@
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
+#   ./run_tests.sh --runtime-contract       # Run the frozen runtime v1 compatibility gate
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
@@ -63,6 +64,9 @@ if [ "$#" -eq 0 ]; then
 else
     for arg in "${args[@]}"; do
         case "$arg" in
+            --runtime-contract)
+                backend_args+=("--runtime-contract")
+                ;;
             --frontend)
                 run_frontend=1
                 frontend_only=1

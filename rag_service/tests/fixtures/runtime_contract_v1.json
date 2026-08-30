@@ -1,0 +1,137 @@
+{
+  "contract_version": 1,
+  "capabilities": {
+    "cancellation": true,
+    "continuation_cleanup": true,
+    "contract_version": 1,
+    "inspection": true,
+    "native_checkpoints": true,
+    "resume": true,
+    "runtime_version": "fixture-runtime-1",
+    "streaming": true,
+    "task_execution": true
+  },
+  "definition": {
+    "builder_id": "langgraph_graph",
+    "capabilities": {
+      "supports_hitl": true
+    },
+    "category": "router",
+    "contract_version": 1,
+    "definition_id": "router_rag_agent",
+    "definition_version": "1",
+    "display_name": "Router RAG Agent",
+    "framework": "langgraph",
+    "runtime_version": null
+  },
+  "event": {
+    "attempt": 1,
+    "continuation": {
+      "binding_type": "langgraph_checkpoint",
+      "binding_version": 1,
+      "payload": {
+        "checkpoint_thread_id": "checkpoint-1"
+      },
+      "runtime_version": "fixture-runtime-1"
+    },
+    "contract_version": 1,
+    "event_id": "event-1",
+    "kind": "run.interrupted",
+    "occurred_at": "2026-01-01T00:00:00Z",
+    "payload": {
+      "interrupt_id": "interrupt-1"
+    },
+    "run_id": "run-1",
+    "runtime_version": "fixture-runtime-1",
+    "sequence": 1,
+    "terminal": false,
+    "trace_id": "trace-1"
+  },
+  "http_surface": {
+    "hermes": [
+      "DELETE /v1/continuations/{binding_id}",
+      "GET /healthz",
+      "GET /readyz",
+      "GET /v1/capabilities",
+      "GET /v1/runs/{run_id}/events",
+      "POST /v1/runs/start",
+      "POST /v1/runs/{run_id}/cancel",
+      "POST /v1/runs/{run_id}/continue",
+      "POST /v1/runs/{run_id}/inspect",
+      "POST /v1/runs/{run_id}/resume",
+      "POST /v1/validate"
+    ],
+    "langgraph": [
+      "DELETE /v1/continuations/{binding_id}",
+      "GET /healthz",
+      "GET /readyz",
+      "GET /startupz",
+      "GET /v1/capabilities",
+      "GET /v1/dependencies",
+      "GET /v1/runs/{run_id}/events",
+      "POST /v1/runs/start",
+      "POST /v1/runs/{run_id}/cancel",
+      "POST /v1/runs/{run_id}/continue",
+      "POST /v1/runs/{run_id}/inspect",
+      "POST /v1/runs/{run_id}/resume",
+      "POST /v1/runs/{run_id}/retry",
+      "POST /v1/validate"
+    ]
+  },
+  "request": {
+    "authentication": {},
+    "builder_id": "langgraph_graph",
+    "continuation": {
+      "binding_type": "langgraph_checkpoint",
+      "binding_version": 1,
+      "payload": {
+        "checkpoint_thread_id": "checkpoint-1"
+      },
+      "runtime_version": "fixture-runtime-1"
+    },
+    "contract_version": 1,
+    "definition_id": "router_rag_agent",
+    "framework": "langgraph",
+    "input": {
+      "question": "What is in the document?"
+    },
+    "options": {
+      "llm_model": "fixture-model"
+    },
+    "parent_run_id": null,
+    "permissions": {
+      "tool_ids": [
+        "document_evidence"
+      ]
+    },
+    "run_id": "run-1",
+    "task_id": null,
+    "thread_id": "thread-1",
+    "trace_id": "trace-1"
+  },
+  "result": {
+    "artifacts": [],
+    "clarification": null,
+    "continuation": {
+      "binding_type": "langgraph_checkpoint",
+      "binding_version": 1,
+      "payload": {
+        "checkpoint_thread_id": "checkpoint-1"
+      },
+      "runtime_version": "fixture-runtime-1"
+    },
+    "contract_version": 1,
+    "error": null,
+    "interruption": {
+      "interrupt_id": "interrupt-1",
+      "kind": "approval"
+    },
+    "output": null,
+    "runtime_metadata": {
+      "framework": "langgraph"
+    },
+    "status": "interrupted",
+    "usage": {}
+  },
+  "sse": "id: event-1\nevent: run.interrupted\ndata: {\"event\":{\"event_id\":\"event-1\",\"run_id\":\"run-1\",\"sequence\":1,\"kind\":\"run.interrupted\",\"attempt\":1,\"payload\":{\"interrupt_id\":\"interrupt-1\"},\"occurred_at\":\"2026-01-01T00:00:00Z\",\"terminal\":false,\"trace_id\":\"trace-1\",\"runtime_version\":\"fixture-runtime-1\",\"continuation\":{\"binding_type\":\"langgraph_checkpoint\",\"payload\":{\"checkpoint_thread_id\":\"checkpoint-1\"},\"binding_version\":1,\"runtime_version\":\"fixture-runtime-1\"},\"contract_version\":1},\"result\":{\"status\":\"interrupted\",\"output\":null,\"clarification\":null,\"interruption\":{\"interrupt_id\":\"interrupt-1\",\"kind\":\"approval\"},\"artifacts\":[],\"usage\":{},\"runtime_metadata\":{\"framework\":\"langgraph\"},\"continuation\":{\"binding_type\":\"langgraph_checkpoint\",\"payload\":{\"checkpoint_thread_id\":\"checkpoint-1\"},\"binding_version\":1,\"runtime_version\":\"fixture-runtime-1\"},\"error\":null,\"contract_version\":1}}\n\n"
+}
