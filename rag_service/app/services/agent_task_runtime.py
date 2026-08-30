@@ -516,6 +516,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             str(run.framework or "") == "hermes" and await tasks.budget_boundary(task.id) is not None
         )
 
+    async def pause_requested() -> bool:
+        latest = await tasks.get_task(task.id)
+        return bool(latest and latest.status == AgentTaskStatus.PAUSING.value)
+
     try:
         definition = definition_from_run(run)
         adapter = adapter_for_definition(definition)
@@ -585,6 +589,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             agent_run_context={**context, "run": run},
             trace_recorder=trace,
             cancellation_checker=cancellation_requested,
+            pause_checker=pause_requested,
             task_id=task.id,
             task_worker_id=worker_id,
             task_context=task_context,

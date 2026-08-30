@@ -505,6 +505,9 @@ class RuntimeTransportConnector:
 class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     """LangGraph adapter composed with the neutral HTTP transport."""
 
+    # Generic HTTP execution has no product-controlled safe-boundary hook;
+    # task pause remains unavailable until the transport exposes one.
+    supports_task_pause = False
     framework = "langgraph"
     builder_id = "langgraph_graph"
     implemented_operations = frozenset({

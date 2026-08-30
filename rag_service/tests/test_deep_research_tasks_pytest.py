@@ -92,6 +92,33 @@ def _deep_config(*, runtime: bool = False, **configurable) -> dict:
     }}
 
 
+@pytest.mark.asyncio
+async def test_langgraph_injects_pause_gate_at_control_node_boundary():
+    registry = NodeRegistry()
+    node_called = False
+
+    async def coordinator(_state, _config):
+        nonlocal node_called
+        node_called = True
+        return {}
+
+    async def pause_checker():
+        return True
+
+    registry._nodes[WorkflowNodeType.DEEP_COORDINATOR.value] = coordinator
+    registry.hitl_gate = AsyncMock(return_value={})
+    bound = registry.get_for_spec({
+        "id": WorkflowNodeType.DEEP_COORDINATOR.value,
+        "type": WorkflowNodeType.DEEP_COORDINATOR.value,
+    })
+
+    await bound({"node_events": []}, {"configurable": {"pause_checker": pause_checker}})
+
+    registry.hitl_gate.assert_awaited_once()
+    assert registry.hitl_gate.await_args.kwargs["node_id"] == "task_pause_gate"
+    assert node_called is True
+
+
 class TaskInvocationAdapter:
     framework = "hermes"
     builder_id = "hermes_agent"

@@ -76,6 +76,7 @@ def _runtime_config(
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    pause_checker: Any = None,
     max_concurrency: int | None = None,
     deep_research_services_factory: Any,
 ) -> Dict[str, Any]:
@@ -91,6 +92,8 @@ def _runtime_config(
         configurable["execution_event_sink"] = execution_event_sink
     if cancellation_checker is not None:
         configurable["cancellation_checker"] = cancellation_checker
+    if pause_checker is not None:
+        configurable["pause_checker"] = pause_checker
     if embedding_model is not None:
         configurable["embedding_model"] = embedding_model
     if context_window is not None:
@@ -229,6 +232,7 @@ async def execute_compiled_rag_chat(
     checkpointer: Any = None,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    pause_checker: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -242,6 +246,7 @@ async def execute_compiled_rag_chat(
         checkpointer=checkpointer,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -344,6 +349,7 @@ async def _handle_compiled_rag_chat(
     failure_context: str,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    pause_checker: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and return runtime-owned output."""
 
@@ -401,6 +407,7 @@ async def _handle_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
         max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
         deep_research_services_factory=_deep_research_services_factory(),
     )
@@ -748,6 +755,7 @@ async def continue_compiled_rag_chat(
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    pause_checker: Any = None,
 ) -> Dict[str, Any] | None:
     """Continue a nonterminal graph from its latest durable checkpoint."""
 
@@ -777,6 +785,7 @@ async def continue_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
         deep_research_services_factory=_deep_research_services_factory(),
     )
     agent_run_context = {
@@ -867,6 +876,7 @@ async def resume_compiled_rag_chat(
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
+    pause_checker: Any = None,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and return runtime output."""
 
@@ -897,6 +907,7 @@ async def resume_compiled_rag_chat(
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
         deep_research_services_factory=_deep_research_services_factory(),
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}

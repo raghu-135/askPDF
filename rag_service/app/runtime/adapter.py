@@ -32,6 +32,7 @@ class RuntimeExecutionContext:
     agent_run_context: Mapping[str, Any] = field(default_factory=dict)
     trace_recorder: Any = None
     cancellation_checker: Any = None
+    pause_checker: Any = None
     task_id: Optional[str] = None
     task_worker_id: Optional[str] = None
     task_context: Optional[RuntimeTaskContext] = None
@@ -46,6 +47,7 @@ class AgentRuntimeAdapter(ABC):
 
     framework: str
     builder_id: str
+    supports_task_pause: bool = False
     implemented_operations: frozenset[RuntimeOperationId] = frozenset()
 
     async def prepare_request(

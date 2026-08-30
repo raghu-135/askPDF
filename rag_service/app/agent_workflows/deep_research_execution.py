@@ -101,6 +101,7 @@ class DeepResearchExecutionServices:
     events: EventPort | None
     memory: MemoryReader | None
     state: Mapping[str, Any] = field(default_factory=dict)
+    pause_checker: Any = None
 
     async def consume_budget(self, task_id: str, **usage: int) -> Mapping[str, Any]:
         if self.budgets is None:
@@ -137,7 +138,14 @@ class DeepResearchExecutionServices:
         raise NotImplementedError
 
     async def pause_requested(self) -> bool:
-        return bool(self.state.get("task_pause_requested"))
+        if bool(self.state.get("task_pause_requested")):
+            return True
+        if self.pause_checker is None:
+            return False
+        value = self.pause_checker()
+        if hasattr(value, "__await__"):
+            value = await value
+        return bool(value)
 
     async def budget_boundary(self) -> Mapping[str, Any] | None:
         boundary = self.state.get("task_budget_boundary")
@@ -219,9 +227,11 @@ class ProductExecutionServices(DeepResearchExecutionServices):
         )
 
     async def pause_requested(self) -> bool:
+        if self.pause_checker is not None or self.state.get("task_pause_requested"):
+            return await super().pause_requested()
         from app.services.agent_task_repository import get_task
         task = await get_task(str(self.state.get("agent_task_id") or ""))
-        return bool(self.state.get("task_pause_requested")) or bool(task and task.status == "pausing")
+        return bool(task and task.status == "pausing")
 
     async def budget_boundary(self) -> Mapping[str, Any] | None:
         from app.services.agent_task_repository import budget_boundary
@@ -513,6 +523,7 @@ def _common_services(state: Mapping[str, Any], configurable: Mapping[str, Any]) 
         "cancellation": token,
         "events": configurable.get("execution_event_sink"),
         "state": state,
+        "pause_checker": configurable.get("pause_checker"),
     }
 
 

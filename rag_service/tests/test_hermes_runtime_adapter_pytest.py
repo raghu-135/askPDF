@@ -75,6 +75,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
         "hermes_rag_agent",
         "hermes",
         "hermes_agent",
+        capabilities={"supports_long_running_tasks": True},
         definition_metadata={
             "hermes_policy": {
                 "allowed_tool_ids": ["search_documents"],
@@ -90,7 +91,8 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
 
     assert "task.pause" not in deployment.operations
     assert definition.operations["task.pause"].enabled is False
-    assert definition.operations["task.pause"].disabled_reason == "definition_not_task_runtime"
+    assert definition.operations["task.pause"].support.value == "unsupported"
+    assert definition.operations["task.pause"].disabled_reason == "runtime_capability_unsupported"
     assert definition.features[RuntimeFeatureId.TOOLS].details["allowed_tool_ids"] == ["search_documents"]
     assert definition.features[RuntimeFeatureId.MEMORY].enabled is False
     assert definition.features[RuntimeFeatureId.DELEGATION].enabled is False

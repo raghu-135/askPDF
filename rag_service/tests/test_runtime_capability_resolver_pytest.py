@@ -32,6 +32,7 @@ from app.runtime.registry import RuntimeRegistry
 class CapabilityAdapter:
     framework = "fake"
     builder_id = "fake_builder"
+    supports_task_pause = True
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,
         RuntimeOperationId.RUN_CANCEL,
@@ -816,6 +817,7 @@ async def test_completed_run_with_stale_pending_payload_disables_all_active_cont
 
 
 class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
+    supports_task_pause = True
     framework = "inherited"
     builder_id = "unsupported"
 

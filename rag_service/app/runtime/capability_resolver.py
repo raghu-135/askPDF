@@ -264,6 +264,24 @@ async def _reconciled_capabilities(
     )
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
+    task_runtime_requested = definition is not None and bool(
+        definition.capabilities.get("supports_long_running_tasks")
+    )
+    checkpoint_unavailable = capabilities.deployment.get("checkpoint_available") is False
+    if task_runtime_requested and (
+        not bool(getattr(adapter, "supports_task_pause", False)) or checkpoint_unavailable
+    ):
+        operations = dict(capabilities.operations)
+        for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
+            descriptor = operations.get(operation_id)
+            if descriptor is not None:
+                operations[operation_id] = replace(
+                    descriptor,
+                    support=RuntimeSupportLevel.UNSUPPORTED,
+                    enabled=False,
+                    disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+                )
+        capabilities = replace(capabilities, operations=operations)
     if definition is not None:
         capabilities = apply_definition_policy(capabilities, definition)
     operations = dict(capabilities.operations)
@@ -493,7 +511,10 @@ async def resolve_run_capability_resolution(
     pending_type = str(pending.get("type") or "") if isinstance(pending, Mapping) else ""
     if RuntimeOperationId.TASK_RESUME in operations and task_status not in RESUMABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
-    elif RuntimeOperationId.TASK_RESUME in operations and task_status == AgentTaskStatus.AWAITING_APPROVAL.value and pending_type != "task_pause":
+    elif RuntimeOperationId.TASK_RESUME in operations and task_status in {
+        AgentTaskStatus.AWAITING_APPROVAL.value,
+        AgentTaskStatus.PAUSED.value,
+    } and pending_type != "task_pause":
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
     if RuntimeOperationId.TASK_RETRY in operations and task_status not in RETRYABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RETRY] = _disabled(operations[RuntimeOperationId.TASK_RETRY], RuntimeCapabilityDisabledReason.TASK_NOT_RETRYABLE)

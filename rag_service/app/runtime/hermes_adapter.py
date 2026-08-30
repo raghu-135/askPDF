@@ -32,6 +32,9 @@ from app.tools.context import ToolInvocationContext
 class HermesRuntimeAdapter(AgentRuntimeAdapter):
     framework = "hermes"
     builder_id = "hermes_agent"
+    # The pinned Hermes HTTP Runs API has no durable pause/checkpoint
+    # primitive. Keep task pause out of its effective capabilities.
+    supports_task_pause = False
     visualization_id = "hermes.session"
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,

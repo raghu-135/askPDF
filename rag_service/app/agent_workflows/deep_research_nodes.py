@@ -476,7 +476,12 @@ async def deep_task_scheduler(state: Dict[str, Any], config: RunnableConfig) -> 
     limits = state.get("task_limits") if isinstance(state.get("task_limits"), dict) else {}
     boundary = await services.budget_boundary()
     corrections = await services.pending_course_corrections()
-    if boundary or corrections:
+    # Direct graph callers may use the product service bundle without a task
+    # repository. Only the task runner supplies the authoritative live checker.
+    pause_requested = bool(state.get("task_pause_requested"))
+    if (config or {}).get("configurable", {}).get("pause_checker") is not None:
+        pause_requested = await services.pause_requested()
+    if boundary or corrections or pause_requested:
         return {
             "task_todos": [_todo_payload(todo) for todo in await services.list_todos(str(state.get("agent_task_id") or ""))],
             "task_work_items": [],

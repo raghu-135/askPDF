@@ -230,6 +230,7 @@ class NodeRegistry:
         async def _bound_node(state: RouterRagState, config: RunnableConfig, runtime: Runtime | None = None) -> Dict[str, Any]:
             cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
             await raise_if_chat_run_cancelled(cancellation_checker, state)
+            pause_checker = ((config or {}).get("configurable") or {}).get("pause_checker")
             parallel_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else None
             task_item = state.get("task_work_item") if isinstance(state.get("task_work_item"), dict) else None
             branch_item = parallel_item or task_item
@@ -249,6 +250,14 @@ class NodeRegistry:
             )
             if runtime is not None:
                 runtime_config.setdefault("configurable", {})["langgraph_runtime"] = runtime
+            if (
+                pause_checker is not None
+                and node_id != "task_pause_gate"
+                and parallel_item is None
+                and task_item is None
+                and await pause_checker()
+            ):
+                await self.hitl_gate(state, runtime_config, node_id="task_pause_gate")
             configurable = runtime_config.get("configurable") or {}
             queue = configurable.get("studio_event_queue")
             execution_event_sink = configurable.get("execution_event_sink")

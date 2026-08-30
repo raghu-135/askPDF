@@ -146,6 +146,7 @@ from app.runtime.langgraph import checkpointing
 class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     framework = "langgraph"
     builder_id = "langgraph_graph"
+    supports_task_pause = True
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,
         RuntimeOperationId.RUN_CANCEL,
@@ -281,6 +282,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     checkpointer=checkpointer,
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
+                    pause_checker=context.pause_checker,
                 )
             finally:
                 if bridge is not None:
@@ -306,6 +308,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         kwargs = {
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
+            "pause_checker": context.pause_checker,
         }
         bridge = _event_bridge(request.run_id, event_sink)
         if bridge is not None:
@@ -347,6 +350,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     trace_recorder=context.trace_recorder,
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
+                    pause_checker=context.pause_checker,
                 )
             finally:
                 if bridge is not None:
