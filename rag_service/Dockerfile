@@ -35,6 +35,7 @@ RUN mkdir -p /models/hf /static
 
 COPY alembic alembic
 COPY scripts scripts
+COPY runtime_protocol runtime_protocol
 COPY app app
 COPY alembic.ini main.py ./
 

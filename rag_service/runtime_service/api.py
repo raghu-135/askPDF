@@ -13,9 +13,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
-from app.runtime.errors import RuntimeError
-from app.runtime.transport import (
+from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeResult
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.serialization import (
     WIRE_VERSION,
     definition_from_dict,
     event_from_dict,
@@ -613,7 +613,7 @@ def create_app(*, execution_store: ExecutionStore | None = None) -> FastAPI:
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        from app.runtime.transport import _binding
+        from runtime_protocol.serialization import _binding
 
         continuation = _binding(payload.get("continuation"))
         result = await get_adapter().delete_continuation(continuation)

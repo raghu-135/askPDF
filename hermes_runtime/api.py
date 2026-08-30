@@ -23,21 +23,20 @@ from hermes_runtime.execution_store import (
     HermesExecutionConflictError,
     HermesExecutionStore,
 )
+from runtime_protocol.serialization import WIRE_VERSION, json_envelope, sse_encode_payload
 
 
-WIRE_VERSION = 1
 logger = logging.getLogger(__name__)
 
 
 def _envelope(*, status: str, result: Mapping[str, Any] | None = None, error: Mapping[str, Any] | None = None, request_id: str | None = None) -> dict[str, Any]:
-    return {
-        "contract_version": WIRE_VERSION,
-        "request_id": request_id,
-        "status": status,
-        "result": dict(result or {}),
-        "error": dict(error or {}),
-        "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent"},
-    }
+    return json_envelope(
+        status=status,
+        request_id=request_id,
+        result=result,
+        error=error,
+        runtime_metadata={"framework": "hermes", "builder_id": "hermes_agent"},
+    )
 
 
 def _error(code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
@@ -62,10 +61,7 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
 
 
 def _sse(event: Mapping[str, Any], result: Mapping[str, Any] | None = None) -> str:
-    payload = {"event": dict(event)}
-    if result is not None:
-        payload["result"] = dict(result)
-    return f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
+    return sse_encode_payload(event, result=result)
 
 
 def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY hermes_runtime/requirements.txt requirements.txt
 RUN pip install -r requirements.txt
+COPY rag_service/runtime_protocol runtime_protocol
 COPY hermes_runtime hermes_runtime
 
 EXPOSE 8200

@@ -9,6 +9,7 @@ COPY requirements-langgraph-runtime.txt requirements-langgraph-runtime.txt
 COPY requirements-runtime.txt requirements-runtime.txt
 RUN pip install -r requirements-runtime.txt
 
+COPY runtime_protocol runtime_protocol
 COPY app app
 COPY runtime_service runtime_service
 EXPOSE 8100

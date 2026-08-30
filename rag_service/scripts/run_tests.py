@@ -107,6 +107,7 @@ AGENT_CHECKPOINT_TEST_TARGETS = [
 
 RUNTIME_CONTRACT_TEST_FILES = [
     "test_runtime_contract_freeze_pytest.py",
+    "test_runtime_protocol_pytest.py",
     "test_runtime_contracts_pytest.py",
     "test_runtime_http_adapter_pytest.py",
     "test_runtime_registry_pytest.py",

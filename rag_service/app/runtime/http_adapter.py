@@ -16,7 +16,7 @@ from typing import Any, Mapping
 import httpx
 
 from app.runtime.adapter import AgentRuntimeEventSink, RuntimeExecutionContext
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
@@ -25,8 +25,8 @@ from app.runtime.contracts import (
     RuntimeCapabilities,
     RuntimeValidationResult,
 )
-from app.runtime.errors import RuntimeError
-from app.runtime.transport import (
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.serialization import (
     capabilities_from_dict,
     event_from_dict,
     result_from_dict,

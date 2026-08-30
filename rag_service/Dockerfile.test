@@ -16,6 +16,7 @@ RUN python -m spacy download en_core_web_sm
 
 COPY alembic alembic
 COPY scripts scripts
+COPY runtime_protocol runtime_protocol
 COPY app app
 COPY runtime_service runtime_service
 COPY tests tests
