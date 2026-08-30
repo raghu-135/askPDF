@@ -79,7 +79,7 @@ import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTas
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
-import { buildLiveTraceView, buildRunTraceView } from './agent-debug/agent-trace-projection';
+import { buildLiveTraceView, buildRunTraceView, mergeLiveAndRetainedTraceViews } from './agent-debug/agent-trace-projection';
 import type { TraceRunView } from './agent-debug/agent-trace-projection';
 import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
 import {
@@ -1791,7 +1791,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         routeReason: response.agent_route_reason,
                         traceRefs: response.agent_trace_refs,
                         runDetails: run,
-                        liveTraceView: buildRunTraceView(run),
+                        liveTraceView: mergeLiveAndRetainedTraceViews(
+                            buildLiveTraceView(traceStream.snapshot('run.completed', terminalStreamError, response.status).events),
+                            buildRunTraceView(run),
+                        ),
                         running: false,
                     });
                 } catch (error: any) {
@@ -1905,7 +1908,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
                             runDetails: run,
-                            liveTraceView: buildRunTraceView(run),
+                            liveTraceView: mergeLiveAndRetainedTraceViews(
+                                buildLiveTraceView(traceStream.snapshot('interrupt.created', terminalStreamError, response.status).events),
+                                buildRunTraceView(run),
+                            ),
                             running: false,
                         });
                     }

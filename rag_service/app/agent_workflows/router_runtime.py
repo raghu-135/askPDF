@@ -18,20 +18,48 @@ from app.agent_workflows.parallel_contracts import ParallelEventName
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
 from app.agent_workflows.state import merge_parallel_deltas, WorkflowBudgetExceeded
 from app.agent_workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
-from app.db import (
-    AgentRunStatus,
-    ChatTurnStatus,
-    ReasoningFormat,
-    create_chat_turn,
-    increment_qa_stats,
-    update_message_context_compact,
-)
-from app.rag.indexer import index_chat_memory_for_thread
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.agent_workflows.trace import compact_preview
 
 
 logger = logging.getLogger(__name__)
+
+
+class _Status:
+    RUNNING = type("Value", (), {"value": "running"})
+    AWAITING_HUMAN = type("Value", (), {"value": "awaiting_human"})
+    COMPLETED = type("Value", (), {"value": "completed"})
+    FAILED = type("Value", (), {"value": "failed"})
+    CANCELLED = type("Value", (), {"value": "cancelled"})
+    MARKDOWN = type("Value", (), {"value": "markdown"})
+    NONE = type("Value", (), {"value": "none"})
+
+
+AgentRunStatus = ChatTurnStatus = ReasoningFormat = _Status
+
+
+async def create_chat_turn(**kwargs: Any) -> Any:
+    from app.db import create_chat_turn as _create_chat_turn
+    return await _create_chat_turn(**kwargs)
+
+
+async def index_chat_memory_for_thread(**kwargs: Any) -> Any:
+    from app.rag.indexer import index_chat_memory_for_thread as _index_chat_memory_for_thread
+    return await _index_chat_memory_for_thread(**kwargs)
+
+
+async def increment_qa_stats(*args: Any, **kwargs: Any) -> Any:
+    from app.db import increment_qa_stats as _increment_qa_stats
+    return await _increment_qa_stats(*args, **kwargs)
+
+
+async def update_message_context_compact(*args: Any, **kwargs: Any) -> Any:
+    from app.db import update_message_context_compact as _update_message_context_compact
+    return await _update_message_context_compact(*args, **kwargs)
+
+
+def _product_chat():
+    return create_chat_turn, increment_qa_stats, update_message_context_compact
 
 
 def _corrective_metrics_state(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,6 +156,29 @@ def _without_runtime_keys(result: Dict[str, Any]) -> Dict[str, Any]:
     cleaned = dict(result)
     cleaned.pop("__interrupt__", None)
     return cleaned
+
+
+def _runtime_only_result(
+    result: Dict[str, Any],
+    *,
+    status: str,
+    duration_ms: float,
+    agent_run_context: Dict[str, Any],
+    answer: str | None = None,
+) -> Dict[str, Any]:
+    """Return JSON-compatible execution output without product persistence."""
+
+    return {
+        **result,
+        "answer": answer if answer is not None else result.get("final_answer") or result.get("answer") or "",
+        "status": status,
+        "duration_ms": duration_ms,
+        "chat_turn_id": None,
+        "user_message_id": None,
+        "assistant_message_id": None,
+        "agent_trace_refs": None,
+        **agent_run_context,
+    }
 
 
 def _as_resume_action(interrupt: Dict[str, Any]) -> Any:
@@ -279,6 +330,11 @@ async def _persist_success_turn(
     duration_ms: float,
     success_context: str,
 ) -> Dict[str, Any]:
+    # The runtime service uses persist_product_records=False. Keep the
+    # product-only PDF/indexing dependency out of the framework execution
+    # import graph; rag-service loads it only when projecting a legacy result.
+    create_chat_turn, increment_qa_stats, update_message_context_compact = _product_chat()
+
     answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
     status = ChatTurnStatus.COMPLETED.value
     embedding_model = result.get("embedding_model")
@@ -402,6 +458,7 @@ async def execute_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     result_projector: Any = None,
+    persist_product_records: bool = True,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -416,6 +473,7 @@ async def execute_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         result_projector=result_projector,
+        persist_product_records=persist_product_records,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -447,6 +505,8 @@ async def handle_router_rag_chat(
         checkpointer=checkpointer,
         execution_event_sink=_kwargs.get("execution_event_sink"),
         cancellation_checker=_kwargs.get("cancellation_checker"),
+        result_projector=_kwargs.get("result_projector"),
+        persist_product_records=_kwargs.get("persist_product_records", True),
     )
 
 
@@ -519,6 +579,7 @@ async def _handle_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     result_projector: Any = None,
+    persist_product_records: bool = True,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and persist a chat turn."""
 
@@ -662,6 +723,10 @@ async def _handle_compiled_rag_chat(
         "task_context_summary": {},
         "task_memory_snapshot": dict(getattr(req, "task_memory_snapshot", None) or {}),
         "task_budget_usage": dict(getattr(req, "task_budget_usage", None) or {}),
+        "runtime_execution_mode": bool(getattr(req, "runtime_execution_mode", False)),
+        "runtime_artifact_manifest": list(getattr(req, "runtime_artifact_manifest", None) or []),
+        "runtime_artifact_contents": dict(getattr(req, "runtime_artifact_contents", None) or {}),
+        "runtime_artifacts": [],
         "task_incomplete_reasons": [],
         "task_pause_requested": False,
         "task_cancel_requested": False,
@@ -733,15 +798,15 @@ async def _handle_compiled_rag_chat(
             }
 
         result = _without_runtime_keys(result)
-        payload = (
-            _clarification_response(
+        if result.get("clarification_options"):
+            payload = _clarification_response(
                 question=question,
                 result=result,
                 agent_run_context=agent_run_context,
                 duration_ms=duration_ms,
             )
-            if result.get("clarification_options")
-            else await (result_projector or _persist_success_turn)(
+        elif persist_product_records:
+            payload = await (result_projector or _persist_success_turn)(
                 thread_id=thread_id,
                 question=question,
                 result=result,
@@ -749,7 +814,13 @@ async def _handle_compiled_rag_chat(
                 duration_ms=duration_ms,
                 success_context=success_context,
             )
-        )
+        else:
+            payload = _runtime_only_result(
+                result,
+                status=AgentRunStatus.COMPLETED.value,
+                duration_ms=duration_ms,
+                agent_run_context=agent_run_context,
+            )
 
         logger.info(
             "%s run completed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f document_sources=%s web_sources=%s used_chat_ids=%s node_events=%s tool_events=%s",
@@ -892,12 +963,21 @@ async def _handle_compiled_rag_chat(
                 duration_ms=duration_ms,
                 success_context=failure_context,
             )
+        if not persist_product_records:
+            return {
+                **failure_result,
+                "answer": fallback_answer,
+                "status": AgentRunStatus.FAILED.value,
+                "duration_ms": duration_ms,
+                **agent_run_context,
+            }
         metadata = {
             "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
             "agent_route": route,
             "agent_route_reason": route_reason,
             "agent_error": error_payload,
         }
+        create_chat_turn, _, _ = _product_chat()
         turn = await create_chat_turn(
             thread_id=thread_id,
             question=req.question,
@@ -957,6 +1037,7 @@ async def continue_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     result_projector: Any = None,
+    persist_product_records: bool = True,
 ) -> Dict[str, Any] | None:
     """Continue a nonterminal graph from its latest durable checkpoint."""
 
@@ -1041,15 +1122,15 @@ async def continue_compiled_rag_chat(
         }
     result = _without_runtime_keys(result)
     question = str(result.get("question") or snapshot_values.get("question") or "")
-    payload = (
-        _clarification_response(
+    if result.get("clarification_options"):
+        payload = _clarification_response(
             question=question,
             result=result,
             agent_run_context=agent_run_context,
             duration_ms=duration_ms,
         )
-        if result.get("clarification_options")
-        else await (result_projector or _persist_success_turn)(
+    elif persist_product_records:
+        payload = await (result_projector or _persist_success_turn)(
             thread_id=run.thread_id,
             question=question,
             result=result,
@@ -1057,7 +1138,13 @@ async def continue_compiled_rag_chat(
             duration_ms=duration_ms,
             success_context="Context retrieved by continued compiled Agent workflow.",
         )
-    )
+    else:
+        payload = _runtime_only_result(
+            result,
+            status=AgentRunStatus.COMPLETED.value,
+            duration_ms=duration_ms,
+            agent_run_context=agent_run_context,
+        )
     logger.info(
         "Checkpointed agent run continued | run_id=%s thread_id=%s status=%s elapsed_ms=%.1f",
         run.id,
@@ -1077,6 +1164,7 @@ async def resume_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     result_projector: Any = None,
+    persist_product_records: bool = True,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and persist the final chat turn."""
 
@@ -1164,15 +1252,15 @@ async def resume_compiled_rag_chat(
 
     result = _without_runtime_keys(result)
     question = str(result.get("question") or snapshot_values.get("question") or "")
-    payload = (
-        _clarification_response(
+    if result.get("clarification_options"):
+        payload = _clarification_response(
             question=question,
             result=result,
             agent_run_context=agent_run_context,
             duration_ms=duration_ms,
         )
-        if result.get("clarification_options")
-        else await (result_projector or _persist_success_turn)(
+    elif persist_product_records:
+        payload = await (result_projector or _persist_success_turn)(
             thread_id=run.thread_id,
             question=question,
             result=result,
@@ -1180,7 +1268,13 @@ async def resume_compiled_rag_chat(
             duration_ms=duration_ms,
             success_context="Context retrieved by resumed compiled Agent workflow.",
         )
-    )
+    else:
+        payload = _runtime_only_result(
+            result,
+            status=AgentRunStatus.COMPLETED.value,
+            duration_ms=duration_ms,
+            agent_run_context=agent_run_context,
+        )
     logger.info(
         "Checkpointed agent run resumed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f",
         run.id,

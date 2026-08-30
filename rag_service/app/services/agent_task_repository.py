@@ -313,7 +313,7 @@ async def list_task_checkpoint_ids_for_threads(thread_ids: Iterable[str]) -> lis
     async with async_session_maker() as session:
         result = await session.execute(
             select(AgentRun.checkpoint_thread_id)
-            .where(AgentRun.thread_id.in_(ids), AgentRun.task_id.is_not(None), AgentRun.checkpoint_thread_id.is_not(None))
+            .where(AgentRun.thread_id.in_(ids), AgentRun.task_id.is_not(None), AgentRun.framework == "langgraph", AgentRun.checkpoint_thread_id.is_not(None))
         )
         return [str(value) for value in result.scalars().all() if value]
 
@@ -324,6 +324,7 @@ async def list_terminal_task_checkpoint_ids_before(cutoff: Any, *, limit: int = 
             select(AgentRun.checkpoint_thread_id)
             .where(
                 AgentRun.task_id.is_not(None),
+                AgentRun.framework == "langgraph",
                 AgentRun.completed_at.is_not(None),
                 AgentRun.completed_at <= cutoff,
                 AgentRun.status.in_(["completed", "failed", "expired", "cancelled", "rejected"]),

@@ -4,11 +4,12 @@ import asyncio
 import logging
 from datetime import timedelta
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.services import agent_task_repository as tasks
 from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import utc_now
+from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
+from app.runtime.mode import external_runtime_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,18 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
                 await store.delete(key)
                 orphaned_content += 1
 
-        checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
-            utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
-            limit=bounded,
-        )
-        deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
-        await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
-        deleted_checkpoints = len(deleted_checkpoint_ids)
+        deleted_checkpoints = 0
+        if not external_runtime_enabled():
+            checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
+                utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
+                limit=bounded,
+            )
+            from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
+
+            deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
+            await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
+            deleted_checkpoints = len(deleted_checkpoint_ids)
+        runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,
             "recovered_leases": recovered_leases,
@@ -70,4 +76,5 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
             "missing_artifacts": missing_artifacts,
             "orphaned_content": orphaned_content,
             "deleted_checkpoints": deleted_checkpoints,
+            **{f"runtime_{key}": value for key, value in runtime_reconciliation.items()},
         }

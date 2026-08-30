@@ -275,6 +275,10 @@ class RouterRagState(TypedDict, total=False):
     web_search_mode: str
     task_web_access: str
     task_web_access_decision: Dict[str, Any]
+    runtime_execution_mode: bool
+    runtime_artifact_manifest: List[Dict[str, Any]]
+    runtime_artifact_contents: Dict[str, str]
+    runtime_artifacts: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:

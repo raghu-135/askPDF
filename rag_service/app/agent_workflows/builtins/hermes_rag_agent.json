@@ -1,0 +1,27 @@
+{
+  "builtin_key": "hermes_rag_agent",
+  "description": "A bounded Hermes runtime proof agent using the shared MCP tool boundary.",
+  "is_builtin": true,
+  "visibility": "builtin",
+  "name": "Hermes RAG Agent",
+  "framework": "hermes",
+  "builder_id": "hermes_agent",
+  "category": "router",
+  "spec_json": {
+    "schema_version": 2,
+    "version": 1,
+    "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": false}},
+    "config": {
+      "system_prompt": "Answer the user's question concisely. Use only the enabled MCP tools when evidence is needed.",
+      "model": "",
+      "mcp_server": "askpdf",
+      "allowed_tool_ids": ["document_evidence", "thread_conversation_history", "clarify_intent"],
+      "max_output_chars": 12000,
+      "max_duration_seconds": 300,
+      "max_event_count": 200,
+      "allow_subagents": false,
+      "allow_persistent_memory": false,
+      "cancellation_mode": "upstream_stop"
+    }
+  }
+}

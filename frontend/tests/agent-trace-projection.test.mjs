@@ -527,6 +527,19 @@ test('live and retained projections merge repeated visits without duplicating id
   assert.equal(merged.nodes[1].status, 'completed');
 });
 
+test('runtime-neutral operation events project without graph semantics', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'operation.started', data: { operation_id: 'hermes_session', operation_type: 'agent_session', operation_label: 'Hermes Agent', visit_index: 1 } },
+    { id: 2, event: 'operation.completed', data: { operation_id: 'hermes_session', operation_type: 'agent_session', operation_label: 'Hermes Agent', visit_index: 1 } },
+  ]);
+
+  assert.equal(view.operations.length, 1);
+  assert.equal(view.operations[0].id, 'hermes_session');
+  assert.equal(view.operations[0].label, 'Hermes Agent');
+  assert.equal(view.operations[0].status, 'completed');
+  assert.equal(view.graph, undefined);
+});
+
 test('live trace projection correlates parallel worker progress by work id', () => {
   const view = buildLiveTraceView([
     { id: 1, event: 'dispatch.started', data: { dispatch_id: 'dispatch-1', planned: 2 } },

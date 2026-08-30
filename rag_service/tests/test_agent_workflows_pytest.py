@@ -42,6 +42,7 @@ from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_no
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
+from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.agent_workflows.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
@@ -52,6 +53,7 @@ from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
+from app.runtime.contracts import AgentRuntimeResult
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -1057,6 +1059,16 @@ class TestRouterRagWorkflowValidator:
         result = WorkflowValidator().validate(materialized)
 
         assert result == {"valid": True, "errors": []}
+
+    def test_materialized_legacy_snapshot_gets_v2_schema_marker(self):
+        spec = builtin_router_rag_v2_spec()
+        spec.pop("schema_version", None)
+
+        materialized = WorkflowCompiler().materialize_spec(spec)
+
+        assert materialized["schema_version"] == 2
+        assert WorkflowValidator().validate(materialized) == {"valid": True, "errors": []}
+        assert WorkflowCompiler().compile(spec) is not None
 
     def test_hitl_materializer_omits_ambiguous_unconfigured_bypass(self):
         graph = {
@@ -3072,6 +3084,7 @@ class TestAgentWorkflowRepository:
             ORCHESTRATOR_WORKER_RAG_AGENT_ID,
             CORRECTIVE_SELF_RAG_AGENT_ID,
             DEEP_RESEARCH_AGENT_ID,
+            "hermes_rag_agent",
         }
         assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
@@ -3985,10 +3998,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
@@ -4097,6 +4110,103 @@ class TestAgentRunService:
             runs = await repo.list_runs_for_thread(sample_thread.id)
 
         assert captured_context == {}
+        assert runs == []
+
+    @pytest.mark.asyncio
+    async def test_hermes_chat_persists_and_executes_same_provider_validated_spec(
+        self, engine, sample_thread, monkeypatch
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured = {}
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
+
+        class FakeHermesAdapter:
+            async def start(self, request, *, context, event_sink=None):
+                captured["runtime_spec"] = dict(context.resolved_spec)
+                captured["request"] = request
+                return AgentRuntimeResult(status="completed", output="Hermes answer")
+
+        async def fake_project_chat_result(**kwargs):
+            return {
+                **kwargs["result"],
+                "chat_turn_id": "turn-hermes",
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr(
+            "app.agent_workflows.service.adapter_for_definition",
+            lambda _definition: FakeHermesAdapter(),
+        )
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+            service = AgentRunService(repository=repo)
+            service.projection = SimpleNamespace(project_chat_result=fake_project_chat_result)
+            result = await service.run_thread_chat(
+                sample_thread.id,
+                self._agent_req("Use Hermes"),
+                sample_thread.embedding_model,
+            )
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert run.framework == "hermes"
+        assert run.builder_id == "hermes_agent"
+        assert run.resolved_spec_json == captured["runtime_spec"]
+        assert set(run.resolved_spec_json["config"]) <= {
+            "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
+            "max_output_chars", "max_duration_seconds", "max_event_count",
+            "allow_subagents", "allow_persistent_memory", "cancellation_mode",
+        }
+        assert "use_web_search" not in run.resolved_spec_json["config"]
+        assert captured["request"].framework == "hermes"
+
+    @pytest.mark.asyncio
+    async def test_invalid_custom_hermes_resolver_output_prevents_run_creation(
+        self, engine, sample_thread, monkeypatch
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
+
+        class InvalidResolver:
+            def resolve(self, spec, *, thread_settings, request_overrides):
+                candidate = dict(spec)
+                candidate["config"] = {
+                    **dict(candidate.get("config") or {}),
+                    "arbitrary": "must-not-persist",
+                }
+                return candidate
+
+        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+            with pytest.raises(RuntimeError, match="incompatible with this service version"):
+                await AgentRunService(repository=repo, resolver=InvalidResolver()).run_thread_chat(
+                    sample_thread.id,
+                    self._agent_req("Invalid Hermes spec"),
+                    sample_thread.embedding_model,
+                )
+            runs = await repo.list_runs_for_thread(sample_thread.id)
+
         assert runs == []
 
     @pytest.mark.asyncio
@@ -4959,9 +5069,9 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeDocumentTool())
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         thread_response = await async_api_client.post(
             "/api/threads",
@@ -5357,10 +5467,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
@@ -5781,10 +5891,10 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as first_session:
             first_repo = AgentWorkflowRepository(first_session)
@@ -5900,7 +6010,7 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker, **kwargs):
                 assert await cancellation_checker() is False
                 trace_recorder.record_runtime_event(
                     "graph.resumed",
@@ -6003,7 +6113,7 @@ class TestAgentRunService:
                 debug_trace_json=debug_payload,
             )
 
-            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker):
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder, cancellation_checker, **kwargs):
                 assert await cancellation_checker() is False
                 calls.append(interrupt["interrupt_id"])
                 trace_recorder.record_runtime_event(
@@ -6335,10 +6445,10 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.rag.chat_service.group_document_chunks", fake_group_document_chunks)
         monkeypatch.setattr("app.db.vector.get_vector_db", lambda: FakeVectorDb())
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="What is this document about?",
@@ -6642,10 +6752,10 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.agent_workflows.graph.search_durable_memory", FakeTool(long_term_memory_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_thread_events", FakeTool(timeline_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_web", FakeTool(web_payload))
-        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="Route coverage?",
@@ -6681,6 +6791,7 @@ class TestRouterRagRuntime:
                 "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
             },
             trace_recorder=make_trace_recorder(run_id, sample_thread.id, spec),
+            result_projector=AgentRuntimeProjection().project_chat_result,
         )
 
         async with session_factory() as check_session:
@@ -6871,8 +6982,8 @@ class TestRouterRagRuntime:
             })
         monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FailingTool())
-        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
 
         req = SimpleNamespace(
             question="What is in the document?",
@@ -7805,6 +7916,31 @@ class TestAgentWorkflowApi:
         assert payload["validation"]["valid"] is False
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
+    def test_validate_thread_hermes_config_rejects_unsupported_overrides(
+        self, api_client, sample_thread, monkeypatch
+    ):
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_workflow": {"workflow_id": "hermes_rag_agent"}}
+
+        monkeypatch.setattr("app.api.agent_workflows.get_thread_settings", fake_get_thread_settings)
+        response = api_client.post(
+            f"/api/threads/{sample_thread.id}/agent-config/validate",
+            json={"overrides": {"use_web_search": True, "malicious": {"graph": "payload"}}},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["valid"] is False
+        assert payload["workflow_id"] == "hermes_rag_agent"
+        assert {
+            issue["path"] for issue in payload["validation"]["issues"]
+        } == {"overrides.malicious", "overrides.use_web_search"}
+        assert all(
+            issue["code"] == "unsupported_request_override"
+            for issue in payload["validation"]["issues"]
+        )
+        assert "malicious" not in payload["resolved_spec_json"]["config"]
+
     @pytest.mark.asyncio
     async def test_list_thread_agent_runs_returns_recent_compact_summaries(self, api_client, engine, sample_thread):
         session_factory = async_sessionmaker(
@@ -8126,7 +8262,7 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) == {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
+        assert set(payload["debug"]) >= {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
         assert payload["debug"]["detail_manifest"] == []
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]

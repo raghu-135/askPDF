@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils tesseract-ocr libmagic-dev libgl1 libglib2.0-0 libgomp1 \
+    libsndfile1 espeak-ng curl g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-control-plane.txt requirements-control-plane.txt
+COPY requirements-langgraph-runtime.txt requirements-langgraph-runtime.txt
+COPY requirements-dev.txt requirements-dev.txt
+RUN pip install -r requirements-dev.txt
+RUN python -m spacy download en_core_web_sm
+
+COPY alembic alembic
+COPY scripts scripts
+COPY app app
+COPY runtime_service runtime_service
+COPY tests tests
+COPY alembic.ini main.py ./
+
+CMD ["python", "scripts/run_tests.py"]

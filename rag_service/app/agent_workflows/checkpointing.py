@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,6 +14,8 @@ from app.agent_workflows.enums import AgentCheckpointerMode
 logger = logging.getLogger(__name__)
 
 _MEMORY_CHECKPOINTER = InMemorySaver()
+_POSTGRES_SETUP_LOCK = asyncio.Lock()
+_POSTGRES_SETUP_COMPLETE: set[str] = set()
 
 
 def _truthy_env(name: str, default: str = "") -> bool:
@@ -32,7 +35,7 @@ def _memory_fallback_allowed() -> bool:
 
 
 @asynccontextmanager
-async def open_agent_checkpointer() -> AsyncIterator[Any]:
+async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     """Yield a LangGraph checkpointer.
 
     Production can opt into LangGraph's Postgres saver with
@@ -70,8 +73,12 @@ async def open_agent_checkpointer() -> AsyncIterator[Any]:
         raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL")
 
     async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
-        if _truthy_env("ASKPDF_AGENT_CHECKPOINTER_SETUP", "true"):
-            await checkpointer.setup()
+        if setup and _truthy_env("ASKPDF_AGENT_CHECKPOINTER_SETUP", "true"):
+            if checkpoint_url not in _POSTGRES_SETUP_COMPLETE:
+                async with _POSTGRES_SETUP_LOCK:
+                    if checkpoint_url not in _POSTGRES_SETUP_COMPLETE:
+                        await checkpointer.setup()
+                        _POSTGRES_SETUP_COMPLETE.add(checkpoint_url)
         yield checkpointer
 
 

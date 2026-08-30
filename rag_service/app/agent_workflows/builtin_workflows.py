@@ -11,6 +11,19 @@ from app.agent_workflows.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPPORTED_
 
 BUILTIN_WORKFLOW_DIR = Path(__file__).with_name("builtins")
 
+BUILTIN_DISCOVERY_CATEGORIES = {
+    "router_rag_agent": "router",
+    "plan_execute_rag_agent": "replanner",
+    "evaluator_replanner_rag_agent": "replanner",
+    "orchestrator_worker_rag_agent": "replanner",
+    "corrective_self_rag_agent": "replanner",
+    "deep_research_agent": "deep",
+}
+
+DEFAULT_FRAMEWORK = "langgraph"
+DEFAULT_BUILDER_ID = "langgraph_graph"
+HERMES_RUNTIME_KIND = "hermes_agent"
+
 
 @lru_cache(maxsize=1)
 def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
@@ -25,11 +38,21 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         if not isinstance(spec_json, dict) or spec_json.get("schema_version") != 2:
             raise ValueError(f"Builtin workflow file {path} must contain schema_version 2 spec_json")
         runtime = spec_json.get("runtime")
-        if not isinstance(runtime, dict) or runtime.get("kind") not in SUPPORTED_RUNTIME_KINDS:
-            raise ValueError(f"Builtin workflow file {path} must contain supported spec_json.runtime")
-        missing_runtime_fields = sorted(field for field in RUNTIME_TEXT_FIELDS if not isinstance(runtime.get(field), str) or not runtime.get(field))
-        if missing_runtime_fields:
-            raise ValueError(f"Builtin workflow file {path} runtime is missing: {', '.join(missing_runtime_fields)}")
+        framework = str(payload.get("framework") or DEFAULT_FRAMEWORK)
+        if framework == "langgraph":
+            if not isinstance(runtime, dict) or runtime.get("kind") not in SUPPORTED_RUNTIME_KINDS:
+                raise ValueError(f"Builtin workflow file {path} must contain supported spec_json.runtime")
+            missing_runtime_fields = sorted(field for field in RUNTIME_TEXT_FIELDS if not isinstance(runtime.get(field), str) or not runtime.get(field))
+            if missing_runtime_fields:
+                raise ValueError(f"Builtin workflow file {path} runtime is missing: {', '.join(missing_runtime_fields)}")
+        elif framework == "hermes":
+            if not isinstance(runtime, dict) or runtime.get("kind") != HERMES_RUNTIME_KIND:
+                raise ValueError(f"Builtin Hermes workflow file {path} must contain runtime.kind={HERMES_RUNTIME_KIND!r}")
+        else:
+            raise ValueError(f"Builtin workflow file {path} has unsupported framework {framework!r}")
+        payload["framework"] = framework
+        payload["builder_id"] = str(payload.get("builder_id") or DEFAULT_BUILDER_ID)
+        payload["category"] = str(payload.get("category") or BUILTIN_DISCOVERY_CATEGORIES.get(builtin_key) or "router")
         payloads.append(payload)
     return tuple(payloads)
 

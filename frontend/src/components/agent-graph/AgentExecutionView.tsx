@@ -13,7 +13,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { getAgentRunNodeDetails, type AgentRunNodeDetail } from '../../lib/api';
+import { getAgentRunOperationDetails, type AgentRunNodeDetail } from '../../lib/api';
 import type { TraceNodeView, TraceRunView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
@@ -63,6 +63,7 @@ function AgentExecutionView({
   runId,
   threadId,
   resolvedSpec,
+  framework,
   workflowId,
   traceView,
   status,
@@ -77,6 +78,7 @@ function AgentExecutionView({
   runId?: string | null;
   threadId?: string | null;
   resolvedSpec?: Record<string, any>;
+  framework?: string;
   workflowId?: string;
   traceView: TraceRunView;
   status?: string;
@@ -88,6 +90,7 @@ function AgentExecutionView({
   chatMode?: boolean;
   detailsAvailable?: boolean;
 }) {
+  const graphSupported = Boolean(traceView.graph && (traceView.graph.nodes.length > 0 || traceView.graph.edges.length > 0));
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunNodeDetail> = {};
     traceView.nodes.forEach((node) => {
@@ -98,6 +101,7 @@ function AgentExecutionView({
   const [details, setDetails] = useState<Record<string, AgentRunNodeDetail>>(initialDetails);
   const [expanded, setExpanded] = useState<string | false>(false);
   const [selectedVisit, setSelectedVisit] = useState<AgentNodeVisitRef | null>(null);
+  const [selectedTopologyNodeId, setSelectedTopologyNodeId] = useState<string | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
@@ -106,6 +110,7 @@ function AgentExecutionView({
   const [finalAnswerOpen, setFinalAnswerOpen] = useState(defaultFinalAnswerOpen);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
+  const timelineSummaries = useRef(new Map<string, HTMLElement>());
   const detailContextKey = `${runId || 'live'}:${threadId || ''}`;
   const detailContextRef = useRef(detailContextKey);
   const selectionContextRef = useRef(detailContextKey);
@@ -118,6 +123,7 @@ function AgentExecutionView({
       setDetails(initialDetails);
       setExpanded(false);
       setSelectedVisit(null);
+      setSelectedTopologyNodeId(null);
       setRevealRequest(null);
       setLoadingKey(null);
       setDetailErrors({});
@@ -140,7 +146,7 @@ function AgentExecutionView({
     setLoadingKey(key);
     setDetailErrors((current) => ({ ...current, [key]: '' }));
     try {
-      const detail = await getAgentRunNodeDetails(runId, threadId, node.id, node.visitIndex || 1);
+      const detail = await getAgentRunOperationDetails(runId, threadId, node.id, node.visitIndex || 1);
       if (detailContextRef.current === detailContextKey) {
         setDetails((current) => ({ ...current, [key]: detail }));
       }
@@ -161,6 +167,7 @@ function AgentExecutionView({
     selectionContextRef.current = detailContextKey;
     setExpanded(open ? key : false);
     setSelectedVisit(toAgentNodeVisitRef(node));
+    setSelectedTopologyNodeId(String(node.topologyRef?.id || node.id));
     if (open) {
       void loadDetail(node);
     }
@@ -170,6 +177,7 @@ function AgentExecutionView({
     const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
     if (!node) return;
     selectVisit(node, true);
+    setProgressOpen(true);
     setRevealRequest((current) => ({ key: agentNodeVisitKey(visit), token: (current?.token || 0) + 1 }));
   }, [selectVisit, traceView.nodes]);
 
@@ -179,6 +187,7 @@ function AgentExecutionView({
     const firstFrame = window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         timelineRows.current.get(revealRequest.key)?.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+        timelineSummaries.current.get(revealRequest.key)?.focus({ preventScroll: true });
       });
     });
     return () => window.cancelAnimationFrame(firstFrame);
@@ -187,9 +196,13 @@ function AgentExecutionView({
   const handleGraphSelection = useCallback((selection: AgentGraphSelection) => {
     if (!selection || selection.kind !== 'node') {
       setSelectedVisit(null);
+      setSelectedTopologyNodeId(null);
       return;
     }
-    const node = [...traceView.nodes].reverse().find((row) => row.id === selection.node.id);
+    setSelectedTopologyNodeId(selection.node.id);
+    const node = [...traceView.nodes].reverse().find((row) => (
+      String(row.topologyRef?.id || row.id) === selection.node.id
+    ));
     if (node) revealVisit(toAgentNodeVisitRef(node));
     else setSelectedVisit(null);
   }, [revealVisit, traceView.nodes]);
@@ -239,7 +252,7 @@ function AgentExecutionView({
               )}
               {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
               <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
-                <Chip aria-label={`${traceView.usedNodeCount} nodes, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}n${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
+                <Chip aria-label={`${traceView.usedNodeCount} operations, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}o${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
               </Tooltip>
               {traceView.tools.length > 0 && (
                 <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
@@ -284,7 +297,7 @@ function AgentExecutionView({
           </Paper>
         )}
         {traceView.nodes.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">Start a run to see each node invocation.</Typography>
+          <Typography variant="body2" color="text.secondary">Start a run to see each operation.</Typography>
         ) : traceView.nodes.map((node, index) => {
           const key = visitKey(node);
           const detail = details[key];
@@ -295,6 +308,7 @@ function AgentExecutionView({
           const nextVisit = getNextNodeVisit(traceView.nodes, visitRef);
           const route = getNodeVisitRoute(node);
           const summary = nodeSummary(node);
+          const formattedDuration = formatDurationMs(node.durationMs);
           const routeReason = compactExecutionText(node.routeReason, 480);
           const hasNodeError = Boolean(node.error && Object.keys(node.error).length > 0);
           const visitTools = traceView.tools.filter((tool) => (
@@ -323,6 +337,11 @@ function AgentExecutionView({
               }}
             >
               <AccordionSummary
+                ref={(element) => {
+                  if (element) timelineSummaries.current.set(key, element);
+                  else timelineSummaries.current.delete(key);
+                }}
+                tabIndex={-1}
                 expandIcon={<ExpandMoreIcon titleAccess="Expand or collapse invocation details" sx={{ fontSize: 19 }} />}
                 sx={{
                   width: '100%',
@@ -381,7 +400,7 @@ function AgentExecutionView({
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.6} alignItems={{ sm: 'center' }} justifyContent="space-between">
                     <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                       <Chip size="small" variant="outlined" label={node.type || node.id} sx={{ height: 21 }} />
-                      {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={formatDurationMs(node.durationMs)} sx={{ height: 21 }} />}
+                      {formattedDuration && <Chip size="small" variant="outlined" label={formattedDuration} sx={{ height: 21 }} />}
                       {route && <Chip size="small" color="primary" variant="outlined" label={route} aria-label={`Route: ${route}`} sx={{ height: 21 }} />}
                       {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21 }} />}
                       {node.warningCodes.length > 0 && <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={node.warningCodes.length} sx={{ height: 21 }} />}
@@ -427,25 +446,31 @@ function AgentExecutionView({
           )}
         </Box>
       </Paper>
-      <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-        <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
-          <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
-            Execution graph
-          </Box>
-          {graphOpen && (
-            <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
-              <AgentDebugCanvas
-                resolvedSpec={resolvedSpec}
-                workflowId={workflowId}
-                traceView={traceView}
-                focusedTraceRefs={focusedTraceRefs}
-                selectedVisitRef={selectedVisit}
-                onSelectionChange={handleGraphSelection}
-              />
+      {graphSupported ? (
+        <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
+          <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
+            <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
+              Execution graph
             </Box>
-          )}
-        </Box>
-      </Paper>
+            {graphOpen && (
+              <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
+                <AgentDebugCanvas
+                  resolvedSpec={resolvedSpec}
+                  workflowId={workflowId}
+                  traceView={traceView}
+                  focusedTraceRefs={focusedTraceRefs}
+                  selectedVisitRef={selectedTopologyNodeId ? { nodeId: selectedTopologyNodeId, visitIndex: selectedVisit?.visitIndex || 1 } : null}
+                  onSelectionChange={handleGraphSelection}
+                />
+              </Box>
+            )}
+          </Box>
+        </Paper>
+      ) : (
+        <Paper elevation={0} square sx={{ px: 1, py: 0.8, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
+          <Typography variant="caption" color="text.secondary">This runtime exposes execution operations without topology.</Typography>
+        </Paper>
+      )}
     </Stack>
   );
 }

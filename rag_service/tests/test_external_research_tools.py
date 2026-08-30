@@ -17,12 +17,15 @@ TOOL_PACKAGE_PINS = {
 
 def _requirements_lines() -> set[str]:
     requirements_path = external_research_tools.__file__.split("/app/agent/")[0]
-    with open(f"{requirements_path}/requirements.txt", encoding="utf-8") as req_file:
-        return {
-            line.strip()
-            for line in req_file
-            if line.strip() and not line.lstrip().startswith("#")
-        }
+    lines: set[str] = set()
+    for filename in ("requirements-control-plane.txt", "requirements-langgraph-runtime.txt"):
+        with open(f"{requirements_path}/{filename}", encoding="utf-8") as req_file:
+            lines.update(
+                line.strip()
+                for line in req_file
+                if line.strip() and not line.lstrip().startswith("#") and not line.startswith("-r ")
+            )
+    return lines
 
 
 def test_tool_dependencies_are_exactly_pinned():

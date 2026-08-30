@@ -123,6 +123,22 @@ async def test_internal_http_endpoint_preserves_mcp_protocol():
 
 
 @pytest.mark.asyncio
+async def test_internal_http_endpoint_can_restart_its_lifespan():
+    from app.mcp.server import get_http_app
+
+    mcp_app = get_http_app()
+    for _ in range(2):
+        async with mcp_app.router.lifespan_context(mcp_app):
+            async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as client:
+                response = await client.post(
+                    "/",
+                    headers={"accept": "application/json, text/event-stream"},
+                    json={"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {}},
+                )
+                assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_loopback_client_initializes_lists_and_calls_over_streamable_http():
     from main import app
     from app.mcp.server import get_http_app

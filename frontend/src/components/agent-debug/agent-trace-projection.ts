@@ -29,7 +29,10 @@ export interface TraceNodeView {
   error?: Record<string, any>;
   span?: Record<string, any>;
   raw: Record<string, any>;
+  topologyRef?: { kind?: string; id?: string; [key: string]: any };
 }
+
+export type TraceOperationView = TraceNodeView;
 
 export interface TraceToolView {
   name: string;
@@ -62,6 +65,7 @@ export interface TraceRunView {
   routeReason?: string;
   metrics: Record<string, any>;
   nodes: TraceNodeView[];
+  operations: TraceOperationView[];
   tools: TraceToolView[];
   usedNodeCount: number;
   availableNodeCount?: number;
@@ -244,6 +248,7 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
     error: row.error && typeof row.error === 'object' ? row.error : undefined,
     span: row.span && typeof row.span === 'object' ? row.span : undefined,
     raw,
+    topologyRef: asObject(row.topologyRef ?? row.topology_ref ?? raw.topology_ref),
   };
 };
 
@@ -314,7 +319,7 @@ export const buildRunTraceView = (
     if (!debug) return undefined;
     const summary = asObject(debug.summary);
     const metrics = getRunDebugMetrics(runDetails);
-    const summaryNodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
+    const summaryNodes = asArray(summary.operations ?? summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
     const manifest = Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [];
     const existingVisits = new Set(summaryNodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
     const manifestNodes = manifest
@@ -341,6 +346,7 @@ export const buildRunTraceView = (
       routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
       metrics,
       nodes,
+      operations: nodes,
       tools,
       usedNodeCount,
       availableNodeCount: asNumber(summary.availableNodeCount),
@@ -385,19 +391,20 @@ export const buildLiveTraceView = (
 
   events.forEach((envelope) => {
     const data = asObject(envelope.data);
-    if (envelope.event.startsWith('node.') && typeof data.node_id === 'string') {
+    if ((envelope.event.startsWith('node.') || envelope.event.startsWith('operation.')) && typeof (data.operation_id || data.node_id) === 'string') {
+      const operationId = String(data.operation_id || data.node_id);
       const visitIndex = asNumber(data.visit_index) || 1;
-      const key = `${data.node_id}:${visitIndex}`;
-      const status = envelope.event === 'node.started' ? 'active'
-        : envelope.event === 'node.failed' ? 'error'
-          : envelope.event === 'node.skipped' ? 'skipped'
+      const key = `${operationId}:${visitIndex}`;
+      const status = envelope.event.endsWith('.started') ? 'active'
+        : envelope.event.endsWith('.failed') ? 'error'
+          : envelope.event.endsWith('.skipped') ? 'skipped'
             : 'completed';
       const rawError = data.detail?.error ?? data.error;
       const row: TraceNodeView = {
-        id: data.node_id,
-        type: asNonEmptyString(data.node_type),
-        label: formatNodeLabel(data.node_id, asNonEmptyString(data.node_type)),
-        instanceLabel: formatNodeInstanceLabel(data.node_id, asNonEmptyString(data.node_type)),
+        id: operationId,
+        type: asNonEmptyString(data.operation_type || data.node_type),
+        label: asNonEmptyString(data.operation_label) || formatNodeLabel(operationId, asNonEmptyString(data.operation_type || data.node_type)),
+        instanceLabel: formatNodeInstanceLabel(operationId, asNonEmptyString(data.operation_type || data.node_type)),
         visitIndex,
         status,
         skipped: status === 'skipped',
@@ -408,6 +415,7 @@ export const buildLiveTraceView = (
           ? asObject(rawError)
           : rawError ? { raw_message: String(rawError) } : {},
         raw: data,
+        topologyRef: asObject(data.topology_ref),
       };
       const existing = nodeIndex.get(key);
       if (existing === undefined) {
@@ -441,6 +449,7 @@ export const buildLiveTraceView = (
     routeReason,
     metrics: {},
     nodes,
+    operations: nodes,
     tools,
     usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
     usedToolCount: tools.length,
@@ -489,6 +498,7 @@ export const mergeLiveAndRetainedTraceViews = (
     route: live.route || retained.route,
     routeReason: live.routeReason || retained.routeReason,
     nodes,
+    operations: nodes,
     tools,
     usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
     usedToolCount: tools.length,

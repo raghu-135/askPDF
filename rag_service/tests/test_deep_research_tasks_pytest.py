@@ -595,8 +595,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", AsyncMock())
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", lambda: workflow_repository)
     monkeypatch.setattr(
-        agent_task_runtime,
-        "continue_compiled_rag_chat",
+        "app.runtime.langgraph.router_runtime.continue_compiled_rag_chat",
         AsyncMock(return_value={"status": "completed", "final_answer": "Grounded report", "node_events": [], "tool_events": []}),
     )
     monkeypatch.setattr(
@@ -609,7 +608,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     async def checkpointer():
         yield object()
 
-    monkeypatch.setattr(agent_task_runtime, "open_agent_checkpointer", checkpointer)
+    monkeypatch.setattr("app.runtime.langgraph.checkpointing.open_agent_checkpointer", checkpointer)
 
     await agent_task_runtime.execute_claimed_task(task.id, "worker-trace")
 
@@ -1302,9 +1301,13 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_pending_task_deletions", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_expired_artifacts", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_live_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(agent_task_maintenance, "run_runtime_reconciliation", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_terminal_task_checkpoint_ids_before", AsyncMock(return_value=["checkpoint-1"]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "clear_task_checkpoint_ids", AsyncMock(return_value=1))
-    monkeypatch.setattr(agent_task_maintenance, "delete_agent_checkpoints", AsyncMock(return_value=["checkpoint-1"]))
+    monkeypatch.setattr(
+        "app.runtime.langgraph.checkpointing.delete_agent_checkpoints",
+        AsyncMock(return_value=["checkpoint-1"]),
+    )
 
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)
 

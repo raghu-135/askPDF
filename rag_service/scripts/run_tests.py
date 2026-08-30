@@ -25,11 +25,20 @@ APP_DIR = Path("/app")
 REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
+    "test_control_plane_import_boundary_pytest.py",
+    "test_builder_provider_pytest.py",
+    "test_hermes_builder_provider_pytest.py",
+    "test_hermes_compose_profile_pytest.py",
+    "test_hermes_execution_store_pytest.py",
+    "test_hermes_runtime_adapter_pytest.py",
+    "test_external_hermes_runtime_smoke_pytest.py",
     "test_agent_prompt_behavior.py",
     "test_agent_retry_behavior.py",
     "test_agent_tool_contract_pytest.py",
     "test_dimension_mismatch_scenarios.py",
     "test_external_research_tools.py",
+    "test_runtime_execution_store_pytest.py",
+    "test_runtime_http_adapter_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
@@ -50,6 +59,7 @@ UNIT_TEST_FILES = [
 ]
 
 MCP_TEST_FILES = [
+    "test_hermes_runtime_mcp_contract_pytest.py",
     "test_mcp_context.py",
     "test_mcp_transport.py",
     "test_mcp_contracts.py",
@@ -184,7 +194,9 @@ def _run(command: list[str], env: dict[str, str] | None = None) -> None:
 
 def _run_standalone(pdf_path: str | None = None) -> None:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(APP_DIR)
+    # Keep the backend import root and include the repository root for the
+    # root-level Hermes gateway used by the Phase 7 integration proof.
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
 
     if pdf_path:
         candidate = Path(pdf_path)
@@ -332,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     env["DATABASE_URL"] = test_db_url
     env["TEST_DATABASE_URL"] = test_db_url
     env["DATA_DIR"] = data_dir
-    env["PYTHONPATH"] = str(APP_DIR)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
     if agent_checkpoint_run:
         env["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
         env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url

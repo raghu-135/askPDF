@@ -37,6 +37,38 @@ collect_ignore = [
 ]
 
 
+_askpdf_completed_test_calls = 0
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Initialize the opt-in proof-suite execution counter."""
+    global _askpdf_completed_test_calls
+    _askpdf_completed_test_calls = 0
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Count tests that reached and completed their call phase."""
+    global _askpdf_completed_test_calls
+    if report.when == "call" and not report.skipped:
+        _askpdf_completed_test_calls += 1
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail an explicitly guarded proof suite when every collected test skipped."""
+    enabled = os.getenv("ASKPDF_FAIL_IF_ALL_SKIPPED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    completed = _askpdf_completed_test_calls
+    if enabled and session.testscollected > 0 and completed == 0 and exitstatus == 0:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_sep("=", "proof suite failed: every collected test was skipped")
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 # Faker instance for generating test data
 fake = Faker()
 

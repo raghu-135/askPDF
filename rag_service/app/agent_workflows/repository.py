@@ -32,12 +32,14 @@ from app.agent_workflows.run_cleanup import (
     prune_runs_before as cleanup_prune_runs_before,
 )
 from app.agent_workflows.run_store import (
+    append_run_event as run_store_append_run_event,
     complete_run as run_store_complete_run,
     create_run as run_store_create_run,
     delete_run as run_store_delete_run,
     get_run as run_store_get_run,
     list_chat_turns_for_run as run_store_list_chat_turns_for_run,
     list_runs_for_thread as run_store_list_runs_for_thread,
+    list_run_events as run_store_list_run_events,
     set_run_debug_trace as run_store_set_run_debug_trace,
 )
 from app.agent_workflows.workflow_store import (
@@ -144,6 +146,8 @@ class AgentWorkflowRepository:
         workflow_id: Optional[str],
         name: str,
         spec_json: Dict[str, Any],
+        framework: Optional[str] = None,
+        builder_id: Optional[str] = None,
         description: str = "",
         visibility: str = "internal",
         increment_version: bool = True,
@@ -154,6 +158,8 @@ class AgentWorkflowRepository:
             workflow_id=workflow_id,
             name=name,
             spec_json=spec_json,
+            framework=framework,
+            builder_id=builder_id,
             description=description,
             visibility=visibility,
             increment_version=increment_version,
@@ -165,6 +171,8 @@ class AgentWorkflowRepository:
         workflow_id: str,
         name: str,
         spec_json: Dict[str, Any],
+        framework: str = "langgraph",
+        builder_id: str = "langgraph_graph",
         description: str = "",
         visibility: str = "internal",
         changelog: str = "",
@@ -176,6 +184,8 @@ class AgentWorkflowRepository:
             workflow_id=workflow_id,
             name=name,
             spec_json=spec_json,
+            framework=framework,
+            builder_id=builder_id,
             description=description,
             visibility=visibility,
             changelog=changelog,
@@ -195,6 +205,45 @@ class AgentWorkflowRepository:
     ) -> list[AgentRun]:
         session = await self._get_session()
         return await run_store_list_runs_for_thread(session, thread_id, limit=limit, status=status)
+
+    async def list_runtime_reconciliation_candidates(self, *, limit: int = 100) -> list[AgentRun]:
+        """Return bounded runs whose runtime projection may need recovery.
+
+        JSON projection metadata is intentionally filtered in Python for
+        compatibility with PostgreSQL and the in-memory test session.
+        """
+        session = await self._get_session()
+        bounded = max(1, min(int(limit), 500))
+        async with session.begin():
+            result = await session.execute(
+                select(AgentRun)
+                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN, RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, AgentRunStatus.CANCELLED.value]))
+                .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
+                .limit(max(bounded * 4, bounded))
+            )
+            runs = list(result.scalars().all())
+        candidates: list[AgentRun] = []
+        for run in runs:
+            projection = dict((run.run_metadata_json or {}).get("projection") or {})
+            if projection.get("runtime_result") or projection.get("terminal_event_id") or projection.get("reconciliation_status") in {"pending", "deferred", "failed"}:
+                candidates.append(run)
+            if len(candidates) >= bounded:
+                break
+        return candidates
+
+    async def list_nonterminal_runtime_runs(self, *, limit: int = 500) -> list[AgentRun]:
+        """Return active runtime-backed runs before an intentional checkpoint reset."""
+        session = await self._get_session()
+        bounded = max(1, min(int(limit), 1000))
+        async with session.begin():
+            result = await session.execute(
+                select(AgentRun)
+                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN]))
+                .where(AgentRun.checkpoint_thread_id.is_not(None))
+                .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
+                .limit(bounded)
+            )
+            return list(result.scalars().all())
 
     async def prune_runs_before(
         self,
@@ -264,9 +313,14 @@ class AgentWorkflowRepository:
         workflow_id: str,
         workflow_version_id: Optional[str] = None,
         workflow_version: Optional[int] = None,
+        framework: str = "langgraph",
+        builder_id: str = "langgraph_graph",
+        definition_category: Optional[str] = None,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
+        runtime_binding_json: Optional[Dict[str, Any]] = None,
+        runtime_binding_version: int = 1,
         run_metadata_json: Optional[Dict[str, Any]] = None,
     ) -> AgentRun:
         session = await self._get_session()
@@ -276,9 +330,14 @@ class AgentWorkflowRepository:
             workflow_id=workflow_id,
             workflow_version_id=workflow_version_id,
             workflow_version=workflow_version,
+            framework=framework,
+            builder_id=builder_id,
+            definition_category=definition_category,
             resolved_spec_json=resolved_spec_json,
             user_id=user_id,
             checkpoint_thread_id=checkpoint_thread_id,
+            runtime_binding_json=runtime_binding_json,
+            runtime_binding_version=runtime_binding_version,
             running_status=RUN_STATUS_RUNNING,
             run_metadata_json=run_metadata_json,
         )
@@ -598,3 +657,81 @@ class AgentWorkflowRepository:
     ) -> Optional[AgentRun]:
         session = await self._get_session()
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
+
+    async def append_run_event(self, run_id: str, event: Any) -> bool:
+        # Event sinks may persist asynchronously while the control-plane
+        # request is completing. Never share the request session with those
+        # writes because concurrent transactions on one session can close or
+        # invalidate the transaction finalizing the run.
+        session = async_session_maker()
+        try:
+            return await run_store_append_run_event(
+                session,
+                run_id=run_id,
+                event_id=str(getattr(event, "event_id", None) or ""),
+                sequence=int(getattr(event, "sequence", 0) or 0),
+                attempt=int(getattr(event, "attempt", 1) or 1),
+                kind=str(getattr(event, "kind", None) or "runtime.event"),
+                payload_json=dict(getattr(event, "payload", None) or {}),
+                occurred_at=getattr(event, "occurred_at", None),
+                trace_id=getattr(event, "trace_id", None),
+            )
+        finally:
+            await session.close()
+
+    async def list_run_events(self, run_id: str) -> list[Any]:
+        session = await self._get_session()
+        return await run_store_list_run_events(session, run_id)
+
+    async def update_runtime_projection(
+        self,
+        run_id: str,
+        projection: Dict[str, Any],
+    ) -> Optional[AgentRun]:
+        """Persist bounded projection/reconciliation metadata without a new table."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                return None
+            metadata = dict(run.run_metadata_json or {})
+            metadata["projection"] = dict(projection)
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            return run
+
+    async def update_runtime_binding(
+        self,
+        run_id: str,
+        binding: Any,
+        *,
+        status: str = "active",
+    ) -> Optional[AgentRun]:
+        """Persist runtime-owned opaque continuation state idempotently."""
+
+        session = async_session_maker()
+        try:
+            async with session.begin():
+                run = await session.get(AgentRun, run_id)
+                if run is None:
+                    return None
+                value = binding.to_dict() if hasattr(binding, "to_dict") else dict(binding or {})
+                replace_jsonb_field(run, "runtime_binding_json", value)
+                run.runtime_binding_version = int(value.get("binding_version") or run.runtime_binding_version or 1)
+                run.runtime_binding_status = status
+                return run
+        finally:
+            await session.close()
+
+    async def mark_runtime_started(self, run_id: str) -> Optional[AgentRun]:
+        """Persist that the initial runtime start has been submitted."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None:
+                return None
+            metadata = dict(run.run_metadata_json or {})
+            metadata["runtime_started"] = True
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            return run

@@ -9,22 +9,18 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from app.agent_workflows.checkpointing import open_agent_checkpointer
-from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.router_runtime import (
-    continue_compiled_rag_chat,
-    execute_compiled_rag_chat,
-    project_agent_task_result,
-    resume_compiled_rag_chat,
-)
-from app.agent_workflows.validator import WorkflowResolver
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus, DEEP_RESEARCH_WORKFLOW_ID
 from app.services import agent_task_repository as tasks
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
+from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult
+from app.runtime.langgraph_compat import continuation_from_run, legacy_result_from_runtime
+from app.runtime.registry import adapter_for_definition
+from app.runtime.builder_registry import builder_for_definition
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +70,12 @@ async def ensure_task_run(task_id: str):
         raise ValueError("task_not_found")
     active = await tasks.get_task_run(task_id)
     if active is not None and active.status in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
+        # An existing active run may have a checkpoint to continue after a
+        # worker restart.  Mark it explicitly so a newly-created run is not
+        # mistaken for a continuation merely because LangGraph reserves its
+        # checkpoint thread ID at creation time.
+        metadata = dict(active.run_metadata_json or {})
+        setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
         return active
 
     repository = AgentWorkflowRepository()
@@ -85,7 +87,15 @@ async def ensure_task_run(task_id: str):
         raise RuntimeError("deep_research_workflow_unavailable")
 
     thread_settings = await get_thread_settings(task.thread_id)
-    resolved = WorkflowResolver().resolve(
+    definition = AgentDefinition(
+        definition_id=str(workflow.id),
+        framework=str(getattr(workflow, "framework", None) or "langgraph"),
+        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+        category=getattr(workflow, "category", None),
+    )
+    provider = builder_for_definition(definition)
+    resolved = await provider.resolve(
+        definition,
         workflow.spec_json,
         thread_settings=thread_settings,
         request_overrides={"use_web_search": bool((task.config_json or {}).get("use_web_search"))},
@@ -97,7 +107,7 @@ async def ensure_task_run(task_id: str):
     config["task_policy"] = task_policy
     config["use_web_search"] = bool((task.config_json or {}).get("use_web_search"))
     resolved["config"] = config
-    frozen_spec = WorkflowCompiler().materialize_spec(resolved)
+    frozen_spec = dict(await provider.normalize(definition, resolved))
     metadata = dict(getattr(workflow, "metadata_json", None) or {})
     version = int(metadata.get("version") or workflow.schema_version or 1)
     run = await repository.create_run(
@@ -105,10 +115,22 @@ async def ensure_task_run(task_id: str):
         workflow_id=workflow.id,
         workflow_version_id=str(metadata.get("version_id") or f"{workflow.id}:v{version}"),
         workflow_version=version,
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        definition_category=getattr(workflow, "category", None),
         resolved_spec_json=frozen_spec,
         user_id=task.user_id,
-        run_metadata_json={"executed_workflow_id": workflow.id, "run_kind": "agent_task", "agent_task_id": task.id},
+        run_metadata_json={
+            "executed_workflow_id": workflow.id,
+            "run_kind": "agent_task",
+            "agent_task_id": task.id,
+            "runtime_started": False,
+        },
     )
+    # create_run intentionally allocates the LangGraph checkpoint identity up
+    # front.  That identity is not evidence that a checkpoint exists yet.
+    # Keep this process-local marker until the first start operation completes.
+    setattr(run, "_fresh_runtime_run", True)
     await tasks.attach_run(task.id, run, parent_run_id=active.id if active is not None else None)
     return run
 
@@ -159,6 +181,57 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return
 
     config = dict(task.config_json or {})
+    existing_artifacts = await tasks.list_artifacts(task.id)
+    artifact_manifest: list[dict[str, Any]] = []
+    artifact_contents: dict[str, str] = {}
+    from app.services.content_store import get_content_store
+    content_store = get_content_store()
+    for artifact in existing_artifacts[: int(config.get("max_context_artifacts", 200))]:
+        manifest = {
+            "id": artifact.id, "kind": artifact.kind, "sha256": artifact.sha256,
+            "byte_size": artifact.byte_size, "summary": artifact.summary_json,
+            "todo_id": artifact.todo_id, "subagent_run_id": artifact.subagent_run_id,
+            "provenance": dict(artifact.provenance_json or {}),
+        }
+        artifact_manifest.append(manifest)
+        if artifact.kind in {"intermediate_report", "context_summary", "tool_output"} and artifact.byte_size <= 20_000:
+            try:
+                artifact_contents[artifact.id] = (await content_store.read(artifact.object_key)).decode("utf-8", errors="replace")
+            except (FileNotFoundError, OSError):
+                continue
+    # Some task runs were created before the run snapshot was populated. Do
+    # not create a replacement run: reconstruct the same concrete deep
+    # workflow definition and attach its materialized spec to this run before
+    # continuation is sent to the runtime.
+    if not isinstance(run.resolved_spec_json, dict) or not run.resolved_spec_json.get("config"):
+        workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        if workflow is None:
+            await AgentWorkflowRepository().seed_builtin_workflows()
+            workflow = await AgentWorkflowRepository().get_workflow(DEEP_RESEARCH_WORKFLOW_ID, include_custom=False)
+        if workflow is None:
+            raise RuntimeError("deep_research_workflow_unavailable")
+        thread_settings = await get_thread_settings(task.thread_id)
+        definition = AgentDefinition(
+            definition_id=str(workflow.id),
+            framework=str(getattr(workflow, "framework", None) or "langgraph"),
+            builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
+            category=getattr(workflow, "category", None),
+        )
+        provider = builder_for_definition(definition)
+        resolved = await provider.resolve(
+            definition,
+            workflow.spec_json,
+            thread_settings=thread_settings,
+            request_overrides={"use_web_search": bool(config.get("use_web_search"))},
+        )
+        resolved_config = dict(resolved.get("config") or {})
+        task_policy = dict(resolved_config.get("task_policy") or {})
+        task_policy["limits"] = dict(config.get("limits") or {})
+        task_policy["profiles"] = list(config.get("enabled_profiles") or [])
+        resolved_config["task_policy"] = task_policy
+        resolved_config["use_web_search"] = bool(config.get("use_web_search"))
+        resolved["config"] = resolved_config
+        run.resolved_spec_json = dict(await provider.normalize(definition, resolved))
     todos = await tasks.list_todos(task.id)
     task_web_access = await tasks.get_task_web_access(task.id)
     request = SimpleNamespace(
@@ -192,6 +265,9 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             "artifact_ids": list(todo.artifact_ids_json or []), "version": todo.version,
         } for todo in todos],
         task_budget_usage=dict(task.budgets_json or {}),
+        runtime_execution_mode=True,
+        runtime_artifact_manifest=artifact_manifest,
+        runtime_artifact_contents=artifact_contents,
     )
     repository = AgentWorkflowRepository()
     trace = AgentTraceRecorder(run)
@@ -207,37 +283,99 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return await tasks.task_cancel_requested(task.id) or await tasks.active_runtime_budget_exhausted(task.id)
 
     try:
-        async with open_agent_checkpointer() as checkpointer:
-            pending = dict(run.pending_interrupt_json or {})
-            if pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
-                result = await resume_compiled_rag_chat(
-                    run,
-                    interrupt=pending,
-                    checkpointer=checkpointer,
-                    trace_recorder=trace,
-                    cancellation_checker=cancellation_requested,
-                    result_projector=project_agent_task_result,
-                )
-            else:
-                result = await continue_compiled_rag_chat(
-                    run,
-                    checkpointer=checkpointer,
-                    trace_recorder=trace,
-                    cancellation_checker=cancellation_requested,
-                    result_projector=project_agent_task_result,
-                )
-                if result is None:
-                    result = await execute_compiled_rag_chat(
-                        task.thread_id,
-                        request,
-                        thread.embedding_model,
-                        resolved_spec=run.resolved_spec_json,
-                        agent_run_context=context,
-                        trace_recorder=trace,
-                        checkpointer=checkpointer,
-                        cancellation_checker=cancellation_requested,
-                        result_projector=project_agent_task_result,
-                    )
+        definition = AgentDefinition(
+            definition_id=str(run.workflow_id),
+            framework=str(getattr(run, "framework", None) or "langgraph"),
+            builder_id=str(getattr(run, "builder_id", None) or "langgraph_graph"),
+            category=getattr(run, "definition_category", None),
+        )
+        adapter = adapter_for_definition(definition)
+        # Task runs created before the external runtime was introduced may
+        # contain a materialized graph without the v2 envelope marker.  Keep
+        # the same run/continuation identity and normalize only the in-flight
+        # snapshot sent to the runtime so those paused runs remain resumable.
+        resolved_spec = dict(await builder_for_definition(definition).normalize(
+            definition, dict(run.resolved_spec_json or {})
+        ))
+        if resolved_spec != (run.resolved_spec_json or {}):
+            run.resolved_spec_json = resolved_spec
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"question": task.objective},
+            task_id=task.id,
+            continuation=continuation_from_run(run),
+        )
+        pending = dict(run.pending_interrupt_json or {})
+        runtime_context = RuntimeExecutionContext(
+            request=request,
+            embedding_model=thread.embedding_model,
+            resolved_spec=resolved_spec,
+            agent_run_context={**context, "run": run},
+            trace_recorder=trace,
+            cancellation_checker=cancellation_requested,
+            task_id=task.id,
+            task_worker_id=worker_id,
+        )
+        if getattr(run, "_fresh_runtime_run", False):
+            runtime_result = await adapter.start(runtime_request, context=runtime_context)
+            await repository.mark_runtime_started(run.id)
+        elif pending.get("status") in {"resumed", "resolved"} and isinstance(pending.get("decision"), dict):
+            runtime_result = await adapter.resume(
+                runtime_request,
+                interrupt=pending,
+                context=runtime_context,
+            )
+        else:
+            runtime_result = await adapter.continue_run(runtime_request, context=runtime_context)
+        if runtime_result is None:
+            # A continuation is optional at the runtime boundary.  A missing
+            # checkpoint is a terminal runtime outcome, not a legacy result
+            # object and must not reach legacy_result_from_runtime(None).
+            runtime_result = AgentRuntimeResult(
+                status="failed",
+                error={
+                    "code": "runtime_continuation_missing",
+                    "message": "The LangGraph run has no durable checkpoint to continue",
+                    "retryable": False,
+                },
+            )
+        result = legacy_result_from_runtime(runtime_result)
+        # Runtime artifacts are data, not product records. Project them in
+        # rag-service after the stream completes and translate deterministic
+        # runtime IDs to the persisted artifact IDs used by task APIs.
+        runtime_artifacts = [value for value in result.get("runtime_artifacts") or [] if isinstance(value, dict) and value.get("content") is not None]
+        artifact_id_map: dict[str, str] = {}
+        for artifact in runtime_artifacts:
+            projected = await persist_task_artifact(
+                task_id=task.id,
+                agent_run_id=run.id,
+                kind=str(artifact.get("kind") or "tool_output"),
+                content=str(artifact.get("content") or ""),
+                media_type=str(artifact.get("media_type") or "text/plain"),
+                todo_id=artifact.get("todo_id"),
+                # Runtime subagent IDs are intentionally opaque and are not
+                # product FK values; task ownership is retained in provenance.
+                provenance={**dict(artifact.get("provenance") or {}), "runtime_artifact_id": artifact.get("artifact_id"), "runtime_subagent_run_id": artifact.get("subagent_run_id")},
+                source_refs=dict(artifact.get("source_refs") or {}),
+            )
+            if artifact.get("artifact_id"):
+                artifact_id_map[str(artifact["artifact_id"])] = projected.id
+        if artifact_id_map:
+            def replace_ids(value: Any) -> Any:
+                if isinstance(value, str):
+                    return artifact_id_map.get(value, value)
+                if isinstance(value, list):
+                    return [replace_ids(item) for item in value]
+                if isinstance(value, dict):
+                    return {key: replace_ids(item) for key, item in value.items()}
+                return value
+            for key in ("task_todos", "task_artifact_manifest", "task_evidence_manifest", "task_result_packets"):
+                if key in result:
+                    result[key] = replace_ids(result[key])
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})

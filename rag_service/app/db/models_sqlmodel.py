@@ -320,6 +320,9 @@ class AgentWorkflow(SQLModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
     )
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    category: Optional[str] = Field(default=None, index=True)
     schema_version: int = Field(default=2)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
@@ -367,6 +370,15 @@ class AgentRun(SQLModel, table=True):
     workflow_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_workflows.id", ondelete="RESTRICT"), index=True)
     )
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    definition_category: Optional[str] = Field(default=None, index=True)
+    runtime_binding_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    runtime_binding_version: int = Field(default=1)
+    runtime_binding_status: str = Field(default="active", index=True)
     run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -450,6 +462,37 @@ class AgentRun(SQLModel, table=True):
         else:
             metadata["workflow_version"] = int(value)
         self.run_metadata_json = metadata
+
+
+class AgentRunEvent(SQLModel, table=True):
+    """Canonical, framework-neutral observability event for an agent run."""
+    __tablename__ = "agent_run_events"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    agent_run_id: str = Field(
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    )
+    event_id: str = Field(index=True)
+    sequence: int = Field(default=0)
+    attempt: int = Field(default=1)
+    kind: str = Field(index=True)
+    occurred_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    payload_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    trace_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now()),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("agent_run_id", "event_id", name="uq_agent_run_events_run_event"),
+        Index("idx_agent_run_events_run_sequence", "agent_run_id", "attempt", "sequence"),
+        CheckConstraint("attempt >= 1", name="ck_agent_run_events_attempt"),
+        CheckConstraint("sequence >= 0", name="ck_agent_run_events_sequence"),
+    )
 
 
 class AgentTask(SQLModel, table=True):

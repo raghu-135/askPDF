@@ -114,22 +114,47 @@ class MCPServer:
 def get_http_app() -> Any:
     """Return the SDK streamable-HTTP app backed by the low-level Server."""
     validate_mcp_configuration()
-    manager = StreamableHTTPSessionManager(
-        app=get_sdk_server(),
-        json_response=True,
-        stateless=True,
-        security_settings=TransportSecuritySettings(
-            allowed_hosts=["localhost", "127.0.0.1", "rag-service", "host.docker.internal"],
-        ),
-    )
+
+    def create_manager() -> StreamableHTTPSessionManager:
+        return StreamableHTTPSessionManager(
+            app=get_sdk_server(),
+            json_response=True,
+            stateless=True,
+            security_settings=TransportSecuritySettings(
+                allowed_hosts=[
+                    "localhost",
+                    "127.0.0.1",
+                    "rag-service",
+                    "rag-service:8000",
+                    "host.docker.internal",
+                ],
+            ),
+        )
+
+    # The SDK manager is single-use: its run() context cannot be entered a
+    # second time. Starlette applications may nevertheless be started and
+    # stopped repeatedly by tests, reloaders, and embedded service hosts.
+    # Keep the mounted ASGI endpoint stable while replacing the manager for
+    # each application lifespan.
+    manager: StreamableHTTPSessionManager | None = None
+
+    async def handle_request(scope: Any, receive: Any, send: Any) -> None:
+        if manager is None:
+            raise RuntimeError("MCP HTTP application is not running")
+        await manager.handle_request(scope, receive, send)
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):
-        async with manager.run():
-            yield
+        nonlocal manager
+        manager = create_manager()
+        try:
+            async with manager.run():
+                yield
+        finally:
+            manager = None
 
     return Starlette(
-        routes=[Mount("/", app=manager.handle_request)],
+        routes=[Mount("/", app=handle_request)],
         lifespan=lifespan,
     )
 
