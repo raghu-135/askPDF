@@ -573,7 +573,15 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         )
         return replace(
             request,
-            input={**dict(request.input), "mcp_execution_context_token": token},
+            input={
+                **dict(request.input),
+                "mcp_execution_context_token": token,
+                # Admission must check the canonical MCP grant, not every
+                # framework-neutral tool contract in the workflow. Some
+                # contracts (for example ``clarify_intent``) are implemented
+                # inside the graph and are intentionally absent from MCP.
+                "mcp_allowed_tool_ids": allowed_tools,
+            },
         )
 
     async def aclose(self) -> None:

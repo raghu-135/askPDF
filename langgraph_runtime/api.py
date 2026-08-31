@@ -28,7 +28,7 @@ from runtime_protocol.transport import (
 from langgraph_runtime.capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from langgraph_runtime.budgets import deep_agent_budgets
 from runtime_protocol.configuration import validate_runtime_environment
-from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, request_fingerprint
+from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, request_fingerprint
 from langgraph_runtime.dependencies import (
     DependencyMonitor,
     langgraph_dependency_requirements,
@@ -299,7 +299,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def _preflight_operation(run_id: str, payload: Mapping[str, Any], operation: str) -> None:
         """Return an HTTP conflict before opening an SSE response."""
         record = await execution_store.get(run_id)
-        if record is None or record.status not in {"completed", "failed", "cancelled", "no_continuation"}:
+        if record is None or record.status not in TERMINAL_STATUSES:
             return
         request = request_from_dict(payload["request"])
         fingerprint = request_fingerprint(operation, request.to_dict())
@@ -532,7 +532,15 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     fencing_token=fencing_token,
                 )
                 return
-            terminal_kind = "run.cancelled" if result.status == "cancelled" else "run.failed" if result.status == "failed" else "run.completed"
+            terminal_kind = (
+                "run.cancelled"
+                if result.status == "cancelled"
+                else "run.failed"
+                if result.status == "failed"
+                else "run.clarification"
+                if result.status == "clarification_required"
+                else "run.completed"
+            )
             if durable_sink.terminal_event_id is None:
                 terminal = create_runtime_event(
                     event_id=f"{run_id}:terminal",
@@ -731,7 +739,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 if event.kind in {"approval.requested", "interrupt.requested", "run.paused"} and result is not None and result.status in {"awaiting_human", "paused"}:
                     return
             record = await execution_store.get(request.run_id)
-            if record and record.status in {"completed", "failed", "cancelled", "no_continuation"}:
+            if record and record.status in TERMINAL_STATUSES:
                 return
             yield ": keep-alive\n\n"
             from langgraph_runtime.limits import required_positive_float
@@ -852,7 +860,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         # cancellation recovery of runs created before bindings were persisted.
         runtime_inspection = (
             {}
-            if durable is not None and durable.status in {"completed", "failed", "cancelled", "no_continuation"}
+            if durable is not None and durable.status in TERMINAL_STATUSES
             else dict(await get_adapter().inspect_state(request))
         )
         if durable is not None:

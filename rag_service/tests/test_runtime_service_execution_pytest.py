@@ -50,6 +50,9 @@ def _payload(run_id: str) -> dict:
 def test_langgraph_dependency_requirements_only_admit_chat_model_to_provider() -> None:
     requirements = langgraph_dependency_requirements({
         "request": {
+            "input": {
+                "mcp_allowed_tool_ids": ["search_documents"],
+            },
             "options": {
                 "llm_model": "chat-model",
                 "embedding_model": "BAAI/bge-m3",
@@ -68,7 +71,28 @@ def test_langgraph_dependency_requirements_only_admit_chat_model_to_provider() -
         },
     })
 
+    assert requirements["mcp"] == {"search_documents"}
     assert requirements["provider"] == {"chat-model"}
+
+
+def test_langgraph_dependency_requirements_excludes_graph_local_tool_contracts() -> None:
+    requirements = langgraph_dependency_requirements({
+        "request": {
+            "input": {
+                "mcp_allowed_tool_ids": ["search_documents"],
+            },
+            "options": {},
+        },
+        "context": {
+            "resolved_spec": {
+                "config": {
+                    "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                },
+            },
+        },
+    })
+
+    assert requirements["mcp"] == {"search_documents"}
 
 
 def test_langgraph_dependency_requirements_reads_neutral_task_model() -> None:

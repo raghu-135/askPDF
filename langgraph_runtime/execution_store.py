@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from langgraph_runtime.limits import required_positive_int
 
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "no_continuation"})
+TERMINAL_STATUSES = frozenset({"completed", "clarification_required", "failed", "cancelled", "no_continuation"})
 
 
 def _now() -> str:
@@ -212,7 +212,7 @@ class ExecutionStore:
                     prior = self._operations.get((run_id, operation_id))
                     if prior is not None:
                         return replace(existing, attempt=int(prior["attempt"]), replay_only=True)
-                    if existing.status not in {"completed", "failed", "cancelled", "no_continuation"}:
+                    if existing.status not in TERMINAL_STATUSES:
                         raise ExecutionConflictError("only terminal executions can be retried")
                     if source_attempt is None or source_attempt != existing.attempt:
                         raise ExecutionConflictError("retry source_attempt does not match the current terminal attempt")
@@ -233,7 +233,7 @@ class ExecutionStore:
                     existing.retry_source_attempt = source_attempt
                     self._operations[(run_id, operation_id)] = {"attempt": existing.attempt, "fingerprint": fingerprint}
                     return existing
-                if existing.status in {"completed", "failed", "cancelled", "no_continuation"}:
+                if existing.status in TERMINAL_STATUSES:
                     if existing.request_fingerprint in {None, fingerprint}:
                         return existing
                     raise ExecutionConflictError("terminal execution is immutable; use retry")
@@ -273,7 +273,7 @@ class ExecutionStore:
                     prior = await connection.fetchrow("select attempt from runtime_operations where run_id=$1 and operation_id=$2", run_id, operation_id)
                     if prior is not None:
                         replay_attempt = int(prior["attempt"])
-                    elif existing["status"] not in {"completed", "failed", "cancelled", "no_continuation"}:
+                    elif existing["status"] not in TERMINAL_STATUSES:
                         raise ExecutionConflictError("only terminal executions can be retried")
                     elif source_attempt is None or source_attempt != existing["attempt"]:
                         raise ExecutionConflictError("retry source_attempt does not match the current terminal attempt")
@@ -289,7 +289,7 @@ class ExecutionStore:
                             run_id, str(request.get("retry_operation") or "start"), json.dumps(_json_safe(dict(request.get("retry_request") or request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
                         )
                         await connection.execute("insert into runtime_operations(run_id, operation_id, operation, request_fingerprint, attempt) values($1,$2,$3,$4,(select attempt from runtime_executions where run_id=$1))", run_id, operation_id, operation, fingerprint)
-                elif existing is not None and existing["status"] in {"completed", "failed", "cancelled", "no_continuation"}:
+                elif existing is not None and existing["status"] in TERMINAL_STATUSES:
                     existing_fingerprint = existing["request_fingerprint"] or request_fingerprint(existing["operation"], _json_object(existing["request"]) or {})
                     if existing_fingerprint != fingerprint:
                         raise ExecutionConflictError("terminal execution is immutable; use retry")
@@ -350,7 +350,7 @@ class ExecutionStore:
         lease_seconds = lease_seconds or self.lease_seconds
         if self._pool is None:
             record = self._records.get(run_id)
-            if record is None or record.status in {"completed", "failed", "cancelled", "no_continuation"}:
+            if record is None or record.status in TERMINAL_STATUSES:
                 return None
             now = datetime.now(timezone.utc)
             if record.lease_expires_at:
@@ -368,7 +368,7 @@ class ExecutionStore:
                    set owner_id=$2, lease_expires_at=now() + ($3 * interval '1 second'),
                        heartbeat_at=now(), fencing_token=fencing_token+1, updated_at=now()
                    where run_id=$1
-                     and status not in ('completed','failed','cancelled','no_continuation')
+                     and status not in ('completed','clarification_required','failed','cancelled','no_continuation')
                      and (lease_expires_at is null or lease_expires_at < now() or owner_id=$2)
                    returning fencing_token""",
                 run_id, owner_id, lease_seconds,
@@ -387,7 +387,7 @@ class ExecutionStore:
             return True
         result = await self._pool.execute(
             """update runtime_executions set heartbeat_at=now(), lease_expires_at=now() + ($4 * interval '1 second'), updated_at=now()
-               where run_id=$1 and owner_id=$2 and fencing_token=$3 and status not in ('completed','failed','cancelled','no_continuation')""",
+               where run_id=$1 and owner_id=$2 and fencing_token=$3 and status not in ('completed','clarification_required','failed','cancelled','no_continuation')""",
             run_id, owner_id, fencing_token, lease_seconds,
         )
         return result.endswith("1")
@@ -409,7 +409,7 @@ class ExecutionStore:
         if owner_id is None or fencing_token is None:
             raise LeaseLostError(f"runtime status mutation requires a lease for {run_id}")
         result_status = await self._pool.execute(
-            """update runtime_executions set status=$2, cancel_requested=case when $2 in ('completed','failed','cancelled','no_continuation') then false else cancel_requested end,
+            """update runtime_executions set status=$2, cancel_requested=case when $2 in ('completed','clarification_required','failed','cancelled','no_continuation') then false else cancel_requested end,
                                                    result=coalesce($3::jsonb,result), error=coalesce($4::jsonb,error), updated_at=now()
                where run_id=$1 and owner_id=$5 and fencing_token=$6 and (lease_expires_at is null or lease_expires_at > now())""",
             run_id, status, json.dumps(_json_safe(dict(result))) if result else None, json.dumps(_json_safe(dict(error))) if error else None, owner_id, fencing_token,
@@ -456,7 +456,7 @@ class ExecutionStore:
                     )
                     return CancellationOutcome("terminal", "cancelled")
                 await connection.execute(
-                    "update runtime_executions set cancel_requested=true, updated_at=now() where run_id=$1 and status not in ('completed','failed','cancelled','no_continuation')",
+                    "update runtime_executions set cancel_requested=true, updated_at=now() where run_id=$1 and status not in ('completed','clarification_required','failed','cancelled','no_continuation')",
                     run_id,
                 )
                 return CancellationOutcome("requested", status)
@@ -911,7 +911,7 @@ class ExecutionStore:
             return sorted(records, key=recovery_key)[:limit]
         rows = await self._pool.fetch(
             """select executions.run_id from runtime_executions executions
-               where executions.status not in ('completed','failed','cancelled','no_continuation')
+               where executions.status not in ('completed','clarification_required','failed','cancelled','no_continuation')
                  and not exists (select 1 from runtime_events events where events.run_id=executions.run_id and events.terminal=true)
                order by case when lease_expires_at is not null and lease_expires_at < now() then 0 else 1 end,
                         executions.updated_at, executions.run_id
@@ -928,7 +928,7 @@ class ExecutionStore:
         rows = await self._pool.fetch(
             """select distinct executions.run_id from runtime_executions executions
                join runtime_events events on events.run_id=executions.run_id and events.terminal=true
-               where executions.status not in ('completed','failed','cancelled','no_continuation')
+               where executions.status not in ('completed','clarification_required','failed','cancelled','no_continuation')
                order by executions.run_id limit $1""",
             limit,
         )

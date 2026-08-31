@@ -431,6 +431,33 @@ async def test_atomic_finalization_commits_terminal_result_status_and_lease_rele
 
 
 @pytest.mark.asyncio
+async def test_clarification_result_is_terminal_and_replayable() -> None:
+    store = ExecutionStore()
+    await store.create("clarification", "start", {"run_id": "clarification"}, {"request": {"run_id": "clarification"}})
+    fencing_token = await store.claim("clarification")
+    assert fencing_token is not None
+
+    stored = await store.finalize_execution(
+        "clarification",
+        {
+            "event_id": "clarification:terminal",
+            "kind": "run.clarification",
+            "payload": {"status": "clarification_required"},
+            "terminal": True,
+        },
+        {"status": "clarification_required", "clarification": {"options": ["More detail"]}},
+        status="clarification_required",
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
+    )
+
+    record = await store.get("clarification")
+    assert stored["result"]["status"] == "clarification_required"
+    assert record.status == "clarification_required"
+    assert await store.list_recovery_candidates() == []
+
+
+@pytest.mark.asyncio
 async def test_terminal_event_is_reconciled_or_quarantined_without_recovery() -> None:
     store = ExecutionStore()
     await store.create("reconcile", "start", {"run_id": "reconcile"}, {"request": {"run_id": "reconcile"}})

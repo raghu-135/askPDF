@@ -176,12 +176,15 @@ class DependencyMonitor:
 
 def langgraph_dependency_requirements(payload: Mapping[str, Any]) -> dict[str, set[str]]:
     request = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
+    request_input = request.get("input") if isinstance(request.get("input"), Mapping) else {}
     context = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
-    spec = context.get("resolved_spec") if isinstance(context.get("resolved_spec"), Mapping) else {}
-    config = spec.get("config") if isinstance(spec.get("config"), Mapping) else {}
+    # The control plane expands neutral workflow contracts into the canonical
+    # MCP names authorized by the signed execution token. Do not admit against
+    # resolved_spec.allowed_tool_ids: that list can also contain graph-local
+    # capabilities which an MCP server must not advertise.
     tools = {
         str(item)
-        for item in config.get("allowed_tool_ids") or []
+        for item in request_input.get("mcp_allowed_tool_ids") or []
         if isinstance(item, str) and item
     }
     options = request.get("options") if isinstance(request.get("options"), Mapping) else {}
