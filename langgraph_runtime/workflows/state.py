@@ -252,6 +252,7 @@ class RouterRagState(TypedDict, total=False):
     task_version: int
     task_enabled_profiles: List[str]
     task_limits: Dict[str, Any]
+    task_observed_plan_revision: int
     task_plan_revision: int
     task_run_plan_count: int
     task_plan: Dict[str, Any]

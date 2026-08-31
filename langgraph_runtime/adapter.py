@@ -39,7 +39,11 @@ def _public_value(value: Any) -> Any:
     return value
 
 
-def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
+def _result_from_graph(
+    result: Mapping[str, Any],
+    *,
+    observed_plan_revision: int | None = None,
+) -> AgentRuntimeResult:
     status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
     interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None
     checkpoint_thread_id = interruption.get("checkpoint_thread_id") if interruption else result.get("checkpoint_thread_id")
@@ -64,8 +68,12 @@ def _result_from_graph(result: Mapping[str, Any]) -> AgentRuntimeResult:
             event_id=f"{run_id}:task-delta:{int(result.get('task_plan_revision') or 0)}",
             attempt_id=run_id,
             idempotency_key=f"task-delta:{run_id}",
-            observed_task_version=int(result.get("agent_task_version") or 0),
-            observed_plan_revision=int(result.get("task_plan_revision") or 0),
+            observed_task_version=int(result.get("task_version") or 0),
+            observed_plan_revision=int(
+                result.get("task_observed_plan_revision")
+                if result.get("task_observed_plan_revision") is not None
+                else observed_plan_revision or 0
+            ),
             plan=dict(result["task_plan"]) if isinstance(result.get("task_plan"), Mapping) else None,
             todo_changes=tuple(dict(value) for value in result.get("task_todos") or [] if isinstance(value, Mapping)),
             subagent_changes=tuple(dict(value) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)),
@@ -288,6 +296,11 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         }
 
     @staticmethod
+    def _observed_plan_revision(context: RuntimeExecutionContext) -> int:
+        task = context.task_context
+        return int((task.metadata or {}).get("plan_revision") or 0) if task is not None else 0
+
+    @staticmethod
     def _run_with_continuation(request: AgentRuntimeRequest, run: Any) -> Any:
         binding = request.continuation
         checkpoint_thread_id = (
@@ -328,7 +341,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             finally:
                 if bridge is not None:
                     await bridge.drain()
-        return _result_from_graph(result)
+        return _result_from_graph(
+            result,
+            observed_plan_revision=self._observed_plan_revision(context),
+        )
 
     async def resume(
         self,
@@ -366,7 +382,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             finally:
                 if bridge is not None:
                     await bridge.drain()
-        return _result_from_graph(result)
+        return _result_from_graph(
+            result,
+            observed_plan_revision=self._observed_plan_revision(context),
+        )
 
     async def continue_run(
         self,
@@ -404,7 +423,14 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             finally:
                 if bridge is not None:
                     await bridge.drain()
-        return _result_from_graph(result) if result is not None else None
+        return (
+            _result_from_graph(
+                result,
+                observed_plan_revision=self._observed_plan_revision(context),
+            )
+            if result is not None
+            else None
+        )
 
     async def cancel(self, request: AgentRuntimeRequest) -> Any:
         from langgraph_runtime.workflows import cancellation

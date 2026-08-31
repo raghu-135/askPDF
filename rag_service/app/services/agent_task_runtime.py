@@ -19,7 +19,7 @@ from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
-from app.services.agent_task_runtime_projection import apply_runtime_task_delta
+from app.services.agent_task_runtime_projection import apply_runtime_task_delta, runtime_delta_conflict_details
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
 from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
@@ -649,12 +649,20 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 == runtime_result.orchestration_delta.idempotency_key
                 for plan in prior_plans
             )
+            current_plan_revision = max((int(plan.revision) for plan in prior_plans), default=0)
+            conflict = (
+                None
+                if latest_task is None
+                else runtime_delta_conflict_details(
+                    task=latest_task,
+                    agent_run_id=run.id,
+                    delta=runtime_result.orchestration_delta,
+                    current_plan_revision=current_plan_revision,
+                )
+            )
             if (
                 latest_task is None
-                or (
-                    latest_task.version != runtime_result.orchestration_delta.observed_task_version
-                    and not delta_already_applied
-                )
+                or (conflict is not None and not delta_already_applied)
             ):
                 raise AgentRuntimeError(
                     "runtime_task_version_conflict",
@@ -663,6 +671,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     details={
                         "observed_task_version": runtime_result.orchestration_delta.observed_task_version,
                         "current_task_version": getattr(latest_task, "version", None),
+                        **(conflict or {}),
                     },
                 )
             delta_version_verified = True

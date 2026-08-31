@@ -43,6 +43,8 @@ from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.task_results import normalize_runtime_task_result, runtime_task_result_summary
+from app.services.agent_task_runtime_projection import runtime_delta_conflict_details
+from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():
@@ -101,6 +103,65 @@ def test_task_orchestration_delta_round_trips_with_idempotency_and_versions():
     restored = result_from_dict(AgentRuntimeResult(status="completed", orchestration_delta=delta).to_dict())
 
     assert restored.orchestration_delta == delta
+
+
+def test_runtime_delta_allows_version_advances_owned_by_the_active_run():
+    delta = TaskOrchestrationDelta(
+        event_id="event-1",
+        attempt_id="run-1",
+        idempotency_key="delta:run-1",
+        observed_task_version=4,
+        observed_plan_revision=2,
+    )
+
+    assert runtime_delta_conflict_details(
+        task=SimpleNamespace(version=35, active_run_id="run-1"),
+        agent_run_id="run-1",
+        delta=delta,
+        current_plan_revision=2,
+    ) is None
+    assert runtime_delta_conflict_details(
+        task=SimpleNamespace(version=35, active_run_id="replacement-run"),
+        agent_run_id="run-1",
+        delta=delta,
+        current_plan_revision=2,
+    )["reason"] == "active_run_changed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_execution_retries_empty_subagent_result_once():
+    state = {
+        "task_todos": [{
+            "id": "T1",
+            "status": "running",
+            "attempt": 1,
+            "max_attempts": 2,
+            "artifact_ids": [],
+        }],
+    }
+    services = RuntimeExecutionServices(
+        todos=None,
+        artifacts=None,
+        budgets=None,
+        cancellation=SimpleNamespace(requested=lambda: False),
+        events=None,
+        memory=None,
+        state=state,
+    )
+
+    todos = await services.record_result_packets([{
+        "todo_id": "T1",
+        "status": "failed",
+        "summary": "",
+        "retryable": True,
+        "error": {"code": "task_result_empty"},
+    }])
+    services.state = {"task_todos": todos}
+    scheduled = await services.schedule_ready("task-1", limit=1)
+
+    assert todos[0]["status"] == "ready"
+    assert scheduled[0].status == "running"
+    assert scheduled[0].attempt == 2
 
 
 def test_incompatible_runtime_protocol_is_rejected_before_execution():

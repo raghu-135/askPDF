@@ -13,6 +13,37 @@ class RuntimeTaskProjectionConflict(RuntimeError):
     """The runtime based its delta on stale product state."""
 
 
+def runtime_delta_conflict_details(
+    *,
+    task: Any,
+    agent_run_id: str,
+    delta: TaskOrchestrationDelta,
+    current_plan_revision: int,
+) -> dict[str, Any] | None:
+    """Reject semantic conflicts while allowing run-owned version advances.
+
+    The aggregate task version also advances for leases, heartbeats, budgets,
+    and task progress produced by the active run. Those writes do not make the
+    runtime's immutable launch snapshot stale.
+    """
+
+    active_run_id = str(getattr(task, "active_run_id", "") or "")
+    if delta.attempt_id != agent_run_id or active_run_id != agent_run_id:
+        return {
+            "reason": "active_run_changed",
+            "active_run_id": active_run_id or None,
+        }
+    if delta.observed_task_version > int(task.version):
+        return {"reason": "observed_version_is_ahead"}
+    if int(current_plan_revision) != delta.observed_plan_revision:
+        return {
+            "reason": "plan_revision_changed",
+            "current_plan_revision": int(current_plan_revision),
+            "observed_plan_revision": delta.observed_plan_revision,
+        }
+    return None
+
+
 async def apply_runtime_task_delta(
     *,
     task_id: str,
@@ -32,9 +63,16 @@ async def apply_runtime_task_delta(
     task = await tasks.get_task(task_id)
     if task is None:
         raise RuntimeTaskProjectionConflict("runtime delta targets a missing task")
-    if task.version != delta.observed_task_version and not already_applied and not observed_version_verified:
+    current_plan_revision = max((int(plan.revision) for plan in plans), default=0)
+    conflict = runtime_delta_conflict_details(
+        task=task,
+        agent_run_id=agent_run_id,
+        delta=delta,
+        current_plan_revision=current_plan_revision,
+    )
+    if conflict is not None and not already_applied and not observed_version_verified:
         raise RuntimeTaskProjectionConflict(
-            f"stale runtime delta: observed task version {delta.observed_task_version}, current version {task.version}"
+            f"stale runtime delta: {conflict}"
         )
 
     plan_revision = delta.observed_plan_revision

@@ -858,9 +858,10 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
         structured_requested = isinstance(requested_schema, Mapping)
         output_instruction = (
             "Return one neutral result JSON object with status, text, structured_output, warnings, and gaps. "
+            "The text field must contain a non-empty answer or evidence-grounded partial answer. "
             f"structured_output must match this requested schema: {json.dumps(requested_schema, ensure_ascii=True)}"
             if structured_requested
-            else "Return one neutral result JSON object with status, text, warnings, and gaps."
+            else "Return one neutral result JSON object with status, text, warnings, and gaps. The text field must contain a non-empty answer or evidence-grounded partial answer."
         )
         prompt = f"""Complete this work item.
 Parent objective: {state.get('question')}

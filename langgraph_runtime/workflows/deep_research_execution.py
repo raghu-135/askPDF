@@ -177,11 +177,20 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         return revision, todos
 
     async def schedule_ready(self, task_id: str, *, limit: int) -> list[TodoRecord]:
-        return [
-            TodoRecord.from_mapping(todo)
-            for todo in self.state.get("task_todos") or []
-            if isinstance(todo, Mapping) and todo.get("status") in {"pending", "ready"}
-        ][:limit]
+        ready: list[TodoRecord] = []
+        for todo in self.state.get("task_todos") or []:
+            if not isinstance(todo, Mapping) or todo.get("status") not in {"pending", "ready"}:
+                continue
+            value = dict(todo)
+            if value.get("status") == "ready":
+                value["attempt"] = int(value.get("attempt") or 0) + 1
+            else:
+                value["attempt"] = max(1, int(value.get("attempt") or 0))
+            value["status"] = "running"
+            ready.append(TodoRecord.from_mapping(value))
+            if len(ready) >= limit:
+                break
+        return ready
 
     async def list_todos(self, task_id: str) -> list[TodoRecord]:
         return [TodoRecord.from_mapping(todo) for todo in self.state.get("task_todos") or [] if isinstance(todo, Mapping)]
@@ -218,7 +227,12 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
             todo = by_id.get(str(packet.get("todo_id") or ""))
             if todo is None:
                 continue
-            todo["status"] = "completed" if packet.get("status") == "completed" else packet.get("status") or "failed"
+            if packet.get("status") == "completed":
+                todo["status"] = "completed"
+            elif bool(packet.get("retryable")) and int(todo.get("attempt") or 0) < int(todo.get("max_attempts") or 2):
+                todo["status"] = "ready"
+            else:
+                todo["status"] = packet.get("status") or "failed"
             todo["result_summary"] = str(packet.get("summary") or "")[:4000]
             todo["artifact_ids"] = list(dict.fromkeys([*(todo.get("artifact_ids") or []), *(packet.get("artifact_ids") or [])]))
             todo["progress"] = 100 if todo["status"] == "completed" else todo.get("progress", 0)

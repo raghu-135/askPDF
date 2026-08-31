@@ -486,6 +486,7 @@ async def _handle_compiled_rag_chat(
         "task_web_access": str(getattr(req, "task_web_access", "undecided")),
         "task_web_access_decision": {},
         "task_version": getattr(req, "agent_task_version", None),
+        "task_observed_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_enabled_profiles": list(getattr(req, "task_enabled_profiles", None) or []),
         "task_limits": dict(getattr(req, "task_limits", None) or {}),
         "task_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),

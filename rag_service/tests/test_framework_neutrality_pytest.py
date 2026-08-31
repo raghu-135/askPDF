@@ -37,6 +37,37 @@ def test_langgraph_result_reports_confirmed_checkpoint_boundary() -> None:
     assert _result_from_graph({"status": "completed"}).checkpoint_boundary_available is None
 
 
+def test_deep_agent_result_projects_observed_task_version_from_graph_state() -> None:
+    result = _result_from_graph({
+        "status": "completed",
+        "agent_run_id": "run-1",
+        "agent_task_id": "task-1",
+        "task_version": 13,
+        "task_observed_plan_revision": 2,
+        "task_plan_revision": 2,
+    })
+
+    assert result.orchestration_delta is not None
+    assert result.orchestration_delta.observed_task_version == 13
+    assert result.orchestration_delta.observed_plan_revision == 2
+
+
+def test_deep_agent_result_keeps_launch_revision_separate_from_runtime_plan() -> None:
+    result = _result_from_graph({
+        "status": "completed",
+        "agent_run_id": "run-1",
+        "agent_task_id": "task-1",
+        "task_version": 4,
+        "task_observed_plan_revision": 0,
+        "task_plan_revision": 1,
+        "task_plan": {"objective": "Research the document"},
+    })
+
+    assert result.orchestration_delta is not None
+    assert result.orchestration_delta.observed_plan_revision == 0
+    assert result.orchestration_delta.plan == {"objective": "Research the document"}
+
+
 def test_langgraph_interrupt_event_supplies_source_and_checkpoint_fact() -> None:
     event = _event_from_graph(
         {
