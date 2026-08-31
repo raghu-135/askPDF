@@ -3,10 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
-from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
+from langgraph_runtime.adapter import LangGraphRuntimeAdapter
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
-from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
 
 
 class FakeAdapter:
@@ -14,29 +13,7 @@ class FakeAdapter:
     builder_id = "fake_builder"
 
 
-def test_runtime_mode_requires_explicit_configuration(monkeypatch):
-    monkeypatch.delenv("AGENT_RUNTIME_MODE", raising=False)
-    with pytest.raises(RuntimeError, match="AGENT_RUNTIME_MODE"):
-        agent_runtime_mode()
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [("external", AgentRuntimeMode.EXTERNAL), ("in_process", AgentRuntimeMode.IN_PROCESS)],
-)
-def test_runtime_mode_accepts_explicit_values(monkeypatch, value, expected):
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", value)
-    assert agent_runtime_mode() is expected
-
-
-def test_runtime_mode_rejects_invalid_value(monkeypatch):
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "automatic")
-    with pytest.raises(RuntimeError, match="external.*in_process"):
-        agent_runtime_mode()
-
-
 def test_default_registry_uses_external_adapter_without_importing_in_process(monkeypatch):
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
     monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime.test")
     for name, value in {
         "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
@@ -65,19 +42,6 @@ def test_default_registry_uses_external_adapter_without_importing_in_process(mon
     adapter = registry.get(definition)
     assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter"
     assert adapter.framework == "langgraph"
-
-
-def test_explicit_in_process_initialization_imports_adapter_immediately(monkeypatch):
-    import app.runtime.registry as module
-
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "in_process")
-
-    def missing_adapter():
-        raise ModuleNotFoundError("No module named 'langgraph'")
-
-    monkeypatch.setattr(module, "_default_langgraph_adapter", missing_adapter)
-    with pytest.raises(RuntimeError, match="AGENT_RUNTIME_MODE=in_process.*external"):
-        RuntimeRegistry().initialize()
 
 
 def test_registry_requires_concrete_framework_and_builder_identity():
@@ -119,14 +83,15 @@ def test_neutral_runtime_modules_have_no_framework_imports():
 
     root = Path(__file__).parents[1] / "app" / "runtime"
     forbidden = ("langgraph", "langchain", "RunnableConfig", "StateGraph")
-    for name in ("contracts.py", "errors.py", "catalog.py", "adapter.py"):
-        source = (root / name).read_text()
+    paths = [root / "catalog.py", root / "adapter.py", Path(__file__).parents[1] / "runtime_protocol/contracts.py", Path(__file__).parents[1] / "runtime_protocol/errors.py"]
+    for path in paths:
+        source = path.read_text()
         import_lines = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
-        assert not any(token in line for line in import_lines for token in forbidden), name
+        assert not any(token in line for line in import_lines for token in forbidden), path.name
 @pytest.mark.asyncio
 async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
-    import app.runtime.langgraph_adapter as module
-    import app.runtime.langgraph.router_runtime as router_module
+    import langgraph_runtime.adapter as module
+    import langgraph_runtime.router_runtime as router_module
 
     class Checkpointer:
         pass
@@ -172,12 +137,11 @@ async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
     )
 
     assert result.status == "completed"
-    assert result.output == "adapter result"
+    assert result.output["answer"] == "adapter result"
     assert captured["args"][0] == "thread-1"
     assert captured["args"][2] == "embed-model"
     assert captured["kwargs"]["checkpointer"].__class__ is Checkpointer
     assert captured["kwargs"]["agent_run_context"]["agent_run_id"] == "run-1"
-    assert captured["kwargs"]["persist_product_records"] is False
 
 
 @pytest.mark.asyncio
@@ -203,8 +167,6 @@ async def test_langgraph_adapter_validates_and_projects_neutral_events():
 @pytest.mark.asyncio
 async def test_projection_is_idempotent_for_existing_chat_turn(monkeypatch):
     from app.services.agent_runtime_projection import AgentRuntimeProjection
-
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "in_process")
 
     class Turn:
         id = "turn-1"

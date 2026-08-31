@@ -33,7 +33,7 @@ from app.agent_workflows.trace_otel import (
     _warning_events,
     enrich_tool_event,
 )
-from app.runtime.contracts import AgentRuntimeEvent
+from runtime_protocol.contracts import AgentRuntimeEvent
 from app.agent_workflows.canonical_trace import build_canonical_trace_projection
 from app.agent_workflows.trace_payloads import (
     DEBUG_PAYLOAD_VERSION,

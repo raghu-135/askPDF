@@ -5,9 +5,9 @@ import pytest
 
 from app.agent_workflows.canonical_trace import TraceProjectionError, build_canonical_trace_projection, build_parallel_groups
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
-from app.runtime.contracts import AgentRuntimeEvent
-from app.runtime.langgraph_adapter import _event_from_graph
-from app.agent_workflows.runtime_invocation import invoke_llm_for_node
+from runtime_protocol.contracts import AgentRuntimeEvent
+from langgraph_runtime.adapter import _event_from_graph
+from langgraph_runtime.workflows.runtime_invocation import invoke_llm_for_node
 
 
 def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:

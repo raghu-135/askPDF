@@ -8,12 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
 from hermes_runtime.pinned_contract import HERMES_REVISION

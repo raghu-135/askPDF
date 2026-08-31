@@ -540,7 +540,6 @@ async def _clone_thread(
             run_metadata_json=run_metadata,
             resolved_spec_json=copy.deepcopy(run.resolved_spec_json or {}),
             status=run.status,
-            checkpoint_thread_id=None,
             runtime_binding_json=None,
             runtime_binding_status="unbound",
             pending_interrupt_json=None,

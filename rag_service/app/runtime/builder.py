@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from app.runtime.adapter import AgentRuntimeEventSink
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,

@@ -18,7 +18,7 @@ def test_runtime_result_hash_is_stable():
 
 @pytest.mark.asyncio
 async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monkeypatch):
-    from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
+    from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
 
     state = {"last_sequence": 0, "binding": None, "checkpoint": None}
 

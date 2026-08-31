@@ -12,7 +12,7 @@ import app.services.agent_task_repository as task_repository
 import app.services.task_artifact_service as task_artifact_service
 from app.agent_workflows.interrupts import InterruptResolutionResult
 from app.agent_workflows.service import AgentRunService
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeResult,
     RuntimeCapabilities,
@@ -24,7 +24,7 @@ from app.runtime.contracts import (
     native,
     unsupported,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
 from app.services.runtime_operation_repository import RuntimeOperationConflict
 

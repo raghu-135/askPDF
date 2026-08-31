@@ -95,7 +95,6 @@ async def create_run(
             run_metadata_json=run_metadata,
             resolved_spec_json=resolved_spec_json,
             status=running_status,
-            checkpoint_thread_id=None,
             runtime_binding_json=dict(runtime_binding_json) if runtime_binding_json else None,
             runtime_binding_status="active" if runtime_binding_json else "unbound",
             started_at=utc_now(),

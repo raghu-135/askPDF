@@ -26,9 +26,9 @@ from app.runtime.catalog import (
     definition_from_workflow,
     result_to_product_payload,
 )
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.capability_resolver import pending_interrupt_response_operation, require_capability
-from app.runtime.errors import RuntimeError as RuntimeContractError
+from runtime_protocol.errors import RuntimeError as RuntimeContractError
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.operational_limits import validate_bounded_json
 from app.runtime.builder_registry import builder_for_definition
@@ -424,7 +424,6 @@ class AgentRunService:
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
             "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
-            "checkpoint_thread_id": run.checkpoint_thread_id,
         }
         if execution_event_sink is not None:
             await execution_event_sink.emit(
@@ -456,16 +455,19 @@ class AgentRunService:
                     "hitl_web_approval": getattr(req, "hitl_web_approval", None),
                 },
             )
+            runtime_context = RuntimeExecutionContext(
+                request=req,
+                embedding_model=embedding_model,
+                resolved_spec=stored_resolved_spec,
+                agent_run_context=context,
+                trace_recorder=trace_recorder,
+                cancellation_checker=lambda: chat_run_cancel_requested(run.id),
+            )
+            runtime_context = await adapter.prepare_execution_context(runtime_context)
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
             runtime_result = await adapter.start(
                 runtime_request,
-                context=RuntimeExecutionContext(
-                    request=req,
-                    embedding_model=embedding_model,
-                    resolved_spec=stored_resolved_spec,
-                    agent_run_context=context,
-                    trace_recorder=trace_recorder,
-                    cancellation_checker=lambda: chat_run_cancel_requested(run.id),
-                ),
+                context=runtime_context,
                 event_sink=execution_event_sink,
             )
             if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
@@ -514,7 +516,6 @@ class AgentRunService:
                         "agent_run_id": run.id,
                         "user_message_id": None,
                         "assistant_message_id": None,
-                        "checkpoint_thread_id": None,
                         "agent_workflow_id": workflow.id,
                         "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
                     }
@@ -559,15 +560,13 @@ class AgentRunService:
                 except Exception:
                     logger.exception(
                         "Clarification cleanup failed; terminal run remains eligible for pruning | "
-                        "thread_id=%s run_id=%s checkpoint_thread_id=%s",
+                        "thread_id=%s run_id=%s",
                         thread_id,
                         run.id,
-                        run.checkpoint_thread_id,
                     )
                 result.update(
                     {
                         "agent_run_id": None,
-                        "checkpoint_thread_id": None,
                         "agent_trace_refs": None,
                         "agent_workflow_id": workflow.id,
                         "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
@@ -595,7 +594,6 @@ class AgentRunService:
                         attributes={
                             "askpdf.run.id": run.id,
                             "askpdf.thread.id": thread_id,
-                            "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
                             "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
                         },
                         output_data={
@@ -892,11 +890,17 @@ class AgentRunService:
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
                 execution_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
             runtime_context = RuntimeExecutionContext(
-                agent_run_context={"run": resolution.run},
+                resolved_spec=dict(resolution.run.resolved_spec_json or {}),
+                agent_run_context={
+                    "agent_run_id": resolution.run.id,
+                    "agent_workflow_id": resolution.run.workflow_id,
+                },
                 embedding_model=embedding_model,
                 trace_recorder=resume_trace_recorder,
                 cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
             )
+            runtime_context = await adapter.prepare_execution_context(runtime_context)
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
             if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
                 runtime_result = await adapter.continue_run(
                     runtime_request,
@@ -962,7 +966,6 @@ class AgentRunService:
                         attributes={
                             "askpdf.run.id": resolution.run.id,
                             "askpdf.thread.id": resolution.run.thread_id,
-                            "askpdf.checkpoint.thread_id": resolution.run.checkpoint_thread_id,
                             "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
                         },
                         output_data={

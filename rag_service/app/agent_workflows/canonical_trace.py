@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Mapping, Sequence, TypedDict
 
 from app.agent_workflows.trace_sanitization import _bounded_value
-from app.runtime.contracts import AgentRuntimeEvent
+from runtime_protocol.contracts import AgentRuntimeEvent
 
 
 class TraceVisualizationId(str, Enum):

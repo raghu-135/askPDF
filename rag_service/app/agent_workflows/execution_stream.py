@@ -12,8 +12,8 @@ from app.agent_workflows.canonical_trace import build_parallel_groups
 from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
-from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
-from app.runtime.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
+from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
+from runtime_protocol.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
 from app.runtime.observability import normalize_runtime_event
 
 

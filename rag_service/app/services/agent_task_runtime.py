@@ -19,11 +19,12 @@ from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
+from app.services.agent_task_runtime_projection import apply_runtime_task_delta
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
+from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
 from app.runtime.capability_resolver import require_capability
-from app.runtime.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from app.runtime.catalog import (
     continuation_from_run,
     definition_from_run,
@@ -493,7 +494,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         "agent_run_id": run.id,
         "agent_workflow_id": run.workflow_id,
         "agent_workflow_version": run.workflow_version,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
     }
     started = time.perf_counter()
     runtime_event_sink = AgentExecutionEventSink(include_details=False)
@@ -586,7 +586,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         runtime_context = RuntimeExecutionContext(
             embedding_model=thread.embedding_model,
             resolved_spec=resolved_spec,
-            agent_run_context={**context, "run": run},
+            agent_run_context=context,
             trace_recorder=trace,
             cancellation_checker=cancellation_requested,
             pause_checker=pause_requested,
@@ -640,6 +640,32 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         } and not controlled_hermes_budget_boundary and not dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {}).get("runtime_result"):
             await record_terminal_result(run, result)
         await runtime_event_sink.flush()
+        delta_version_verified = False
+        if runtime_result.orchestration_delta is not None:
+            latest_task = await tasks.get_task(task.id)
+            prior_plans = await tasks.list_plans(task.id)
+            delta_already_applied = any(
+                str((plan.provenance_json or {}).get("runtime_idempotency_key") or "")
+                == runtime_result.orchestration_delta.idempotency_key
+                for plan in prior_plans
+            )
+            if (
+                latest_task is None
+                or (
+                    latest_task.version != runtime_result.orchestration_delta.observed_task_version
+                    and not delta_already_applied
+                )
+            ):
+                raise AgentRuntimeError(
+                    "runtime_task_version_conflict",
+                    "The runtime result was computed from stale task state",
+                    retryable=True,
+                    details={
+                        "observed_task_version": runtime_result.orchestration_delta.observed_task_version,
+                        "current_task_version": getattr(latest_task, "version", None),
+                    },
+                )
+            delta_version_verified = True
         # Runtime artifacts are data, not product records. Project them in
         # rag-service after the stream completes and translate deterministic
         # runtime IDs to the persisted artifact IDs used by task APIs.
@@ -672,6 +698,14 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             for key in ("task_todos", "task_artifact_manifest", "task_evidence_manifest", "task_result_packets"):
                 if key in result:
                     result[key] = replace_ids(result[key])
+        if runtime_result.orchestration_delta is not None:
+            await apply_runtime_task_delta(
+                task_id=task.id,
+                agent_run_id=run.id,
+                delta=runtime_result.orchestration_delta,
+                artifact_id_map=artifact_id_map,
+                observed_version_verified=delta_version_verified,
+            )
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
@@ -702,7 +736,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 attributes={
                     "askpdf.run.id": run.id,
                     "askpdf.thread.id": task.thread_id,
-                    "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
                     "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
                 },
                 output_data={

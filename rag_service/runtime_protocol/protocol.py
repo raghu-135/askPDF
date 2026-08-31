@@ -10,23 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator, Mapping
 
-
-CANONICAL_RUNTIME_EVENT_KINDS = frozenset({
-    "run.queued", "run.started", "run.paused", "run.resumed", "run.completed",
-    "run.failed", "run.cancel_requested", "run.cancelled", "output.delta",
-    "output.completed", "llm.started", "llm.completed", "llm.failed",
-    "reasoning.available", "interrupt.requested", "interrupt.responded",
-    "approval.requested", "approval.responded", "tool.started", "tool.progress",
-    "tool.completed", "tool.failed", "subagent.started", "subagent.progress",
-    "subagent.completed", "subagent.failed", "subagent.cancelled", "artifact.created",
-    "artifact.updated", "artifact.completed", "runtime.event", "operation.started",
-    "operation.completed", "operation.failed", "operation.skipped", "dispatch.planned",
-    "dispatch.started", "dispatch.barrier_reached", "dispatch.cancelled", "worker.queued",
-    "worker.started", "worker.progress", "worker.retrying", "worker.completed",
-    "worker.skipped", "worker.failed", "worker.timed_out", "worker.cancelled",
-    "aggregation.completed", "aggregation.partial",
-})
-TERMINAL_RUNTIME_EVENT_KINDS = frozenset({"run.completed", "run.failed", "run.cancelled"})
+from runtime_protocol.contracts import (
+    CANONICAL_RUNTIME_EVENT_KINDS,
+    TERMINAL_RUNTIME_EVENT_KINDS,
+)
 
 
 def json_envelope(

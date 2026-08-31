@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.runtime.contracts import AgentRuntimeRequest
+from runtime_protocol.contracts import AgentRuntimeRequest
 
 
 def result_hash(result: Mapping[str, Any]) -> str:
@@ -116,9 +116,9 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         continuation=continuation_from_run(run),
     )
     context = RuntimeExecutionContext(
-        request=SimpleNamespace(question=request.input.get("question", ""), runtime_execution_mode=True),
+        request={"question": request.input.get("question", ""), "runtime_execution_mode": True},
         resolved_spec=dict(run.resolved_spec_json or {}),
-        agent_run_context={"run": run, "agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
+        agent_run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
         task_id=getattr(run, "task_id", None),
     )
     status = "preserved"

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
@@ -17,7 +17,7 @@ from app.runtime.contracts import (
     validated_disabled_operation_ids,
 )
 from app.runtime.adapter import AgentRuntimeAdapter
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.product_capabilities import product_operation_descriptors, project_public_capabilities
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 from app.db.enums import AgentRunStatus

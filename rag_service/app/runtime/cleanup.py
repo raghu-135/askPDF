@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from app.runtime.capability_resolver import resolve_run_capability_resolution
 from app.runtime.catalog import continuation_from_run, definition_from_run
-from app.runtime.contracts import RuntimeOperationId, RuntimeSupportLevel
+from runtime_protocol.contracts import RuntimeOperationId, RuntimeSupportLevel
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
 
 

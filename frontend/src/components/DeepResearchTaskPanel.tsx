@@ -294,7 +294,7 @@ export default function DeepResearchTaskPanel({
   const activeCapabilitiesState = useAgentRunCapabilities(
     task?.active_run_id,
     threadId,
-    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.checkpoint_thread_id}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
+    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
   );
   const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
   const activeTaskCapabilities = activeCapabilitiesState.capabilities;

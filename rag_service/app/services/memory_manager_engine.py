@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
-from app.agent_workflows.runtime_invocation import safe_json_object
+from app.json_utils import safe_json_object
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field

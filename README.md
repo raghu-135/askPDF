@@ -332,22 +332,17 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
-| `ASKPDF_AGENT_CHECKPOINTER` | `memory` (`postgres` in Docker/CI) | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
-| `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
-| `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
-| `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
-| `AGENT_RUNTIME_MODE` | `external` | LangGraph execution transport: `external` for the runtime service or explicit `in_process` for development images that install LangGraph |
-| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Internal URL used when `AGENT_RUNTIME_MODE=external` |
+| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Required internal URL for the external LangGraph runtime |
 | `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
 
 **Agent Runtime Operations**
-- Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
-- Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
+- Local development runs the control plane and `langgraph-runtime` together through Compose, or points `LANGGRAPH_RUNTIME_URL` at a separately launched runtime. The control plane has no in-process LangGraph mode.
+- Checkpoint configuration and credentials belong only to `langgraph-runtime`; the runtime fails closed when durable checkpoint storage is unavailable.
 - Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
 - The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
-- Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
+- Runtime checkpoint administration is performed from the `langgraph-runtime` image and never from the control plane.
 - The Hermes adapter implements the production API contract pinned to NousResearch/hermes-agent commit `bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894`. Definitions resolve deterministically into managed profiles; credentials remain environment-owned. The bundled gateway journal is still single-worker/single-replica and requires a shared transactional store before horizontal scaling.
 
 The default Compose stack builds the pinned Hermes API and its askPDF adapter.

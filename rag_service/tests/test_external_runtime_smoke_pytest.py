@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from app.runtime.adapter import RuntimeExecutionContext
 

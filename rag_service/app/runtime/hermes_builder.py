@@ -9,7 +9,7 @@ from app.runtime.builder import (
     BuilderCatalog,
     UnsupportedRequestOverrideError,
 )
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -17,7 +17,7 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
     validated_disabled_operation_ids,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_context_length, hermes_model_provider
 from app.runtime.hermes_profile import resolve_hermes_profile
 from app.runtime.budgets import apply_deep_agent_env_overrides

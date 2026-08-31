@@ -6,7 +6,7 @@ import os
 from dataclasses import replace
 from typing import Any, Mapping
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -20,7 +20,7 @@ from app.runtime.contracts import (
     RuntimeSupportLevel,
     RuntimeValidationResult,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.http_runtime_adapter import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -176,7 +176,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         self._ensure_enabled()
         value = await self.transport._json("GET", "/v1/capabilities")
-        from app.runtime.transport import capabilities_from_dict
+        from runtime_protocol.transport import capabilities_from_dict
         try:
             capabilities = value["capabilities"]
             if not isinstance(capabilities, Mapping):
@@ -201,7 +201,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 "options": dict(options or {}),
             },
         )
-        from app.runtime.transport import validation_from_dict
+        from runtime_protocol.transport import validation_from_dict
         return validation_from_dict(value["validation"])
 
     async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:

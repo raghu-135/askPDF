@@ -9,11 +9,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeResult
-from app.runtime.contracts import ContinuationBinding
-from runtime_service.api import create_app
-from runtime_service.dependencies import langgraph_dependency_requirements
-from runtime_service.execution_store import ExecutionStore
+from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeResult
+from runtime_protocol.contracts import ContinuationBinding
+from langgraph_runtime.api import create_app
+from langgraph_runtime.dependencies import langgraph_dependency_requirements
+from langgraph_runtime.execution_store import ExecutionStore
 
 
 class _FakeAdapter:
@@ -121,8 +121,8 @@ async def test_runtime_prepares_neutral_task_context_before_langgraph_start(
             assert context.request.llm_model == "task-model"
             return AgentRuntimeResult(status="completed", output={"answer": "ok"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    monkeypatch.setattr("runtime_service.api.langgraph_dependency_requirements", lambda payload: {})
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    monkeypatch.setattr("langgraph_runtime.api.langgraph_dependency_requirements", lambda payload: {})
     payload = _payload("run-task-context")
     payload["context"] = {
         "task_context": {
@@ -137,7 +137,7 @@ async def test_runtime_prepares_neutral_task_context_before_langgraph_start(
             "context_data": {},
         },
     }
-    app = create_app(execution_store=ExecutionStore())
+    app = create_app(execution_store=ExecutionStore(), require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         events = await _read_events(client, "POST", "/v1/runs/start", json=payload)
@@ -166,9 +166,9 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
                 )
             return AgentRuntimeResult(status="completed", output={"answer": "ok"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
     store = ExecutionStore()
-    app = create_app(execution_store=store)
+    app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-complete"))
@@ -176,7 +176,7 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
 
     # A new app instance represents a process restart while the durable store
     # and terminal event remain available.
-    restarted_app = create_app(execution_store=store)
+    restarted_app = create_app(execution_store=store, require_auth=False)
     restarted_transport = ASGITransport(app=restarted_app)
     async with httpx.AsyncClient(transport=restarted_transport, base_url="http://runtime") as client:
         replay = await _read_events(client, "GET", "/v1/runs/run-complete/events")
@@ -200,8 +200,8 @@ async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pyt
             await asyncio.sleep(0.03)
             return AgentRuntimeResult(status="completed", output={"answer": "ok"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    app = create_app()
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    app = create_app(require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         results = await asyncio.gather(
@@ -231,8 +231,8 @@ async def test_resume_after_a_terminal_start_requires_explicit_retry(monkeypatch
             calls.append("resume")
             return AgentRuntimeResult(status="completed", output={"answer": "resumed result"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    app = create_app(execution_store=ExecutionStore())
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    app = create_app(execution_store=ExecutionStore(), require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-hitl"))
@@ -256,8 +256,8 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
             calls += 1
             return AgentRuntimeResult(status="completed", output={"answer": f"attempt-{calls}"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    app = create_app(execution_store=ExecutionStore())
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    app = create_app(execution_store=ExecutionStore(), require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-explicit-retry"))
@@ -291,7 +291,7 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_cancel_unknown_run_returns_404_without_creating_state() -> None:
     store = ExecutionStore()
-    app = create_app(execution_store=store)
+    app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         response = await client.post("/v1/runs/missing/cancel", json={"request": _request("missing")})
@@ -305,7 +305,7 @@ async def test_cancel_unknown_run_returns_404_without_creating_state() -> None:
 async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
     store = ExecutionStore()
     await store.create("run-cancel", "start", _request("run-cancel"), _payload("run-cancel"))
-    app = create_app(execution_store=store)
+    app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await client.post("/v1/runs/run-cancel/cancel", json={"request": _request("run-cancel")})
@@ -329,7 +329,7 @@ async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
 async def test_pause_request_is_persisted_for_external_execution() -> None:
     store = ExecutionStore()
     await store.create("run-pause", "start", _request("run-pause"), _payload("run-pause"))
-    app = create_app(execution_store=store)
+    app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         response = await client.post("/v1/runs/run-pause/pause", json={"request": _request("run-pause")})
@@ -354,9 +354,9 @@ async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(m
             finally:
                 stopped.set()
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", BlockingAdapter)
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", BlockingAdapter)
     store = ExecutionStore()
-    app = create_app(execution_store=store)
+    app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         stream_task = asyncio.create_task(

@@ -11,6 +11,7 @@ import hashlib
 import json
 import asyncio
 import time
+from dataclasses import replace
 from typing import Any, Mapping
 
 import httpx
@@ -18,7 +19,7 @@ import httpx
 from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeExecutionContext
 from app.runtime.budgets import deep_agent_budgets
 from app.runtime.catalog import definition_metadata_from_spec
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
@@ -27,9 +28,9 @@ from app.runtime.contracts import (
     RuntimeOperationId,
     RuntimeValidationResult,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.operational_limits import required_positive_float, required_positive_int
-from app.runtime.transport import (
+from runtime_protocol.transport import (
     capabilities_from_dict,
     event_from_dict,
     result_from_dict,
@@ -48,9 +49,7 @@ def _safe_json(value: Any) -> Any:
         return [_safe_json(item) for item in value]
     if hasattr(value, "model_dump"):
         return _safe_json(value.model_dump(mode="json"))
-    if hasattr(value, "__dict__"):
-        return _safe_json(vars(value))
-    return str(value)
+    raise TypeError(f"runtime wire values must be JSON-compatible, got {type(value).__name__}")
 
 
 def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
@@ -529,6 +528,54 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             **kwargs,
         )
 
+    async def prepare_request(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: RuntimeExecutionContext,
+    ) -> AgentRuntimeRequest:
+        from app.mcp.execution_context_token import issue_execution_context_token
+        from app.mcp.registry import MCP_TOOL_DEFINITIONS
+        from app.tools.context import ToolInvocationContext
+
+        spec = dict(context.resolved_spec or {})
+        config = dict(spec.get("config") or {})
+        configured_tool_ids = {
+            str(value) for value in config.get("allowed_tool_ids") or [] if value
+        }
+        # Workflow specs expose stable, framework-neutral contract IDs, while
+        # the MCP authorization boundary validates canonical MCP tool names.
+        # Expand the grant here, where the control plane owns both registries,
+        # instead of teaching the external runtime about product policy.
+        allowed_tools = sorted(
+            name
+            for name, definition in MCP_TOOL_DEFINITIONS.items()
+            if name in configured_tool_ids
+            or definition.registry_contract_id in configured_tool_ids
+        )
+        task_context = context.task_context
+        task_id = str(request.task_id or request.run_id)
+        limits = dict(task_context.limits or {}) if task_context is not None else {}
+        ttl_seconds = max(3600, int(limits.get("max_active_runtime_ms", 3_600_000)) // 1000)
+        token = issue_execution_context_token(
+            ToolInvocationContext(
+                thread_id=request.thread_id,
+                run_id=request.run_id,
+                embedding_model=context.embedding_model,
+                context_window=int(config.get("context_window") or 32_768),
+                use_web_search=bool(config.get("use_web_search")),
+                use_reranker=True,
+                extensions={"task_id": task_id, "llm_model": config.get("llm_model")},
+            ),
+            task_id=task_id,
+            allowed_tools=allowed_tools,
+            ttl_seconds=ttl_seconds,
+        )
+        return replace(
+            request,
+            input={**dict(request.input), "mcp_execution_context_token": token},
+        )
+
     async def aclose(self) -> None:
         await self.transport.aclose()
 
@@ -543,6 +590,40 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self.transport._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
         return validation_from_dict(value["validation"])
+
+    async def resolve_definition(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+        *,
+        thread_settings: Mapping[str, Any],
+        request_overrides: Mapping[str, Any],
+        options: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        value = await self.transport._json(
+            "POST",
+            "/v1/resolve",
+            json={
+                "definition": definition.to_dict(),
+                "spec": _safe_json(spec),
+                "thread_settings": _safe_json(thread_settings),
+                "request_overrides": _safe_json(request_overrides),
+                "options": _safe_json(options or {}),
+            },
+        )
+        resolved = value.get("resolved_spec")
+        if not isinstance(resolved, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid resolved definition")
+        return dict(resolved)
+
+    async def builder_catalog(self, definition: AgentDefinition) -> Mapping[str, Any]:
+        value = await self.transport._json(
+            "POST", "/v1/catalog", json={"definition": definition.to_dict()}
+        )
+        catalog = value.get("catalog")
+        if not isinstance(catalog, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid builder catalog")
+        return dict(catalog)
 
     async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
         return await self.transport._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
@@ -585,5 +666,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return projected
 
     async def delete_continuation(self, continuation: Any) -> Any:
-        binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
+        binding_id = str(continuation.payload.get("binding_id") or "")
+        if not binding_id:
+            raise RuntimeError("runtime_binding_invalid", "Runtime continuation is missing its opaque binding ID")
         return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json={"continuation": continuation.to_dict()})

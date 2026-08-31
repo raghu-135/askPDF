@@ -9,12 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.runtime.langgraph.validator import WorkflowValidationError
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentWorkflow, WorkflowVisibility
 from app.time_utils import utc_now
+
+
+class WorkflowValidationError(ValueError):
+    """Product-level rejection of an invalid remotely validated definition."""
 
 
 @dataclass

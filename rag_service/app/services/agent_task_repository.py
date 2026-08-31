@@ -28,8 +28,8 @@ from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import parse_datetime_utc, utc_now
 from app.agent_workflows.trace_details import sanitize_trace_detail
 from app.agent_workflows.trace_payloads import append_runtime_event_to_debug_payload
-from app.runtime.contracts import TERMINAL_RUNTIME_EVENT_KINDS
-from app.runtime.events import normalize_product_event_kind
+from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
+from runtime_protocol.events import normalize_product_event_kind
 from app.services.agent_task_budgets import (
     exhausted_dimensions,
     initial_budget_state,
@@ -1079,10 +1079,27 @@ async def persist_plan(
     agent_run_id: str,
     reason: str,
     planner_visit: int,
+    idempotency_key: Optional[str] = None,
 ) -> tuple[AgentTaskPlanRevision, list[AgentTaskTodo]]:
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            if idempotency_key:
+                revisions = list((await session.execute(
+                    select(AgentTaskPlanRevision).where(AgentTaskPlanRevision.task_id == task_id)
+                )).scalars().all())
+                existing_revision = next(
+                    (
+                        value for value in revisions
+                        if str((value.provenance_json or {}).get("runtime_idempotency_key") or "") == idempotency_key
+                    ),
+                    None,
+                )
+                if existing_revision is not None:
+                    existing_todos = list((await session.execute(
+                        select(AgentTaskTodo).where(AgentTaskTodo.task_id == task_id)
+                    )).scalars().all())
+                    return existing_revision, existing_todos
             latest = int((await session.execute(select(func.coalesce(func.max(AgentTaskPlanRevision.revision), 0)).where(AgentTaskPlanRevision.task_id == task_id))).scalar_one())
             revision_number = latest + 1
             limits = (task.config_json or {}).get("limits") or {}
@@ -1110,7 +1127,10 @@ async def persist_plan(
                 completion_criteria_json=proposal.success_criteria,
                 ordered_todo_ids_json=[todo.id for todo in proposal.todos],
                 plan_json=proposal.model_dump(mode="json"),
-                provenance_json={"config_hash": canonical_hash(task.config_json)},
+                provenance_json={
+                    "config_hash": canonical_hash(task.config_json),
+                    **({"runtime_idempotency_key": idempotency_key} if idempotency_key else {}),
+                },
                 content_hash=proposal.content_hash(),
             )
             session.add(revision)

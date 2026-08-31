@@ -354,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     # tests, while remaining isolated from application Alembic revisions.
     env["AGENT_RUNTIME_EXECUTION_DATABASE_URL"] = test_db_url
     env["RUN_RUNTIME_DB_MIGRATIONS"] = "true"
-    _run(["python", "-m", "app.db.migrate_runtime"], env=env)
+    _run(["python", "-m", "langgraph_runtime.migrate"], env=env)
 
     try:
         if targets:

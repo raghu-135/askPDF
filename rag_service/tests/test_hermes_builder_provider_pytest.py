@@ -3,9 +3,9 @@ import pytest
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.builder_registry import get_builder_registry
 from app.runtime.builder import UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition
 from app.runtime.hermes_builder import HermesBuilderProvider
-from app.runtime.langgraph_builder import LangGraphBuilderProvider
+from langgraph_runtime_builder import LangGraphBuilderProvider
 
 
 def _definition() -> AgentDefinition:

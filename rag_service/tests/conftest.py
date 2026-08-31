@@ -25,6 +25,9 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from httpx import ASGITransport, AsyncClient
 
+os.environ.setdefault("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
+os.environ.setdefault("LANGGRAPH_RUNTIME_BINDING_SECRET", "test-langgraph-binding-secret-32-characters")
+
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
     ChatTurn, ProcessStatus, MessageRole, AgentRuntimeOperation
@@ -230,7 +233,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         chat_cancellation,
         repository as agent_workflow_repository,
     )
-    from app.runtime.langgraph import studio_runtime
+    from langgraph_runtime import studio_runtime
 
     for module in (
         connection_sqlmodel,

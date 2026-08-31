@@ -4,11 +4,11 @@ from fastapi.testclient import TestClient
 import httpx
 import time
 import pytest
-from app.runtime.contracts import AgentRuntimeResult
-from runtime_service.execution_store import ExecutionStore
+from runtime_protocol.contracts import AgentRuntimeResult
+from langgraph_runtime.execution_store import ExecutionStore
 
-from runtime_service.api import create_app
-from runtime_service.dependencies import probe_mcp, probe_provider
+from langgraph_runtime.api import create_app
+from langgraph_runtime.dependencies import probe_mcp, probe_provider
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ def test_runtime_healthz_is_liveness_only(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "langgraph-runtime"}
@@ -68,7 +68,7 @@ def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monk
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         response = client.get("/readyz")
     assert response.status_code == 200
     payload = response.json()
@@ -84,7 +84,7 @@ def test_runtime_startup_and_dependency_endpoints_are_separate(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         assert client.get("/startupz").json() == {"status": "ok"}
         dependency_response = client.get("/v1/dependencies")
     dependencies = dependency_response.json()["result"]["dependencies"]
@@ -100,7 +100,7 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
     async def unavailable_probe(*_args, **_kwargs):
         return {"ok": False, "reason": "ConnectError"}
 
-    monkeypatch.setattr("runtime_service.dependencies.probe_mcp", unavailable_probe)
+    monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", unavailable_probe)
     payload = {
         "request": {
             "run_id": "dependency-blocked",
@@ -113,7 +113,7 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
         },
         "context": {"resolved_spec": {"config": {"allowed_tool_ids": ["document_evidence"]}}},
     }
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         assert client.get("/readyz").status_code == 200
         response = client.post("/v1/runs/start", json=payload)
         cancel_response = client.post("/v1/runs/dependency-blocked/cancel", json={"request": payload["request"]})
@@ -135,10 +135,13 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS", "1")
 
     class FakeAdapter:
+        async def prepare_execution_context(self, context):
+            return context
+
         async def start(self, request, *, context, event_sink=None):
             return AgentRuntimeResult(status="completed", output={"answer": "recovered"})
 
-    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
     store = ExecutionStore()
     request = {
         "run_id": "restart-recovery",
@@ -156,7 +159,7 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
 
     import asyncio
     asyncio.run(seed())
-    with TestClient(create_app(execution_store=store)):
+    with TestClient(create_app(execution_store=store, require_auth=False)):
         time.sleep(2.2)
         record = store._records["restart-recovery"]
         assert record.status == "completed"

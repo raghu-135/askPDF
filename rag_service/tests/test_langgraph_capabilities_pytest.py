@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     ContinuationBinding,
@@ -9,14 +9,14 @@ from app.runtime.contracts import (
     RuntimeFeatureId,
     RuntimeSupportLevel,
 )
-from app.runtime.langgraph_capabilities import (
+from langgraph_runtime.capabilities import (
     LangGraphDeploymentProfile,
     langgraph_capabilities,
 )
-from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
+from langgraph_runtime.adapter import LangGraphRuntimeAdapter
 from app.runtime.capability_resolver import capabilities_for_definition, resolve_capabilities
 from app.runtime.registry import RuntimeRegistry
-from runtime_service.api import create_app
+from langgraph_runtime.api import create_app
 
 
 def _definition(**kwargs):
@@ -49,11 +49,10 @@ def test_deployment_profile_derives_checkpoint_support_without_fallback(
     durable,
 ):
     monkeypatch.setattr(
-        "app.runtime.langgraph_capabilities._module_available",
+        "langgraph_runtime.capabilities._module_available",
         lambda name: saver if name == "langgraph.checkpoint.postgres.aio" else True,
     )
     values = {
-        "AGENT_RUNTIME_MODE": "in_process",
         "ASKPDF_AGENT_CHECKPOINTER": backend,
     }
     if url:
@@ -78,7 +77,7 @@ async def test_langgraph_adapter_uses_profile_for_memory_and_postgres(monkeypatc
     unavailable = LangGraphDeploymentProfile("in_process", "postgres", False, False, False, "missing")
 
     monkeypatch.setattr(
-        "app.runtime.langgraph_capabilities.LangGraphDeploymentProfile.from_environment",
+        "langgraph_runtime.capabilities.LangGraphDeploymentProfile.from_environment",
         classmethod(lambda cls: memory),
     )
     memory_caps = await adapter.capabilities(definition)
@@ -86,14 +85,14 @@ async def test_langgraph_adapter_uses_profile_for_memory_and_postgres(monkeypatc
     assert memory_caps.operations[RuntimeOperationId.RUN_RESUME.value].enabled is True
 
     monkeypatch.setattr(
-        "app.runtime.langgraph_capabilities.LangGraphDeploymentProfile.from_environment",
+        "langgraph_runtime.capabilities.LangGraphDeploymentProfile.from_environment",
         classmethod(lambda cls: postgres),
     )
     postgres_caps = await adapter.capabilities(definition)
     assert postgres_caps.deployment["durable_persistence"] is True
 
     monkeypatch.setattr(
-        "app.runtime.langgraph_capabilities.LangGraphDeploymentProfile.from_environment",
+        "langgraph_runtime.capabilities.LangGraphDeploymentProfile.from_environment",
         classmethod(lambda cls: unavailable),
     )
     unavailable_caps = await adapter.capabilities(definition)
@@ -147,7 +146,7 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
         },
     )
     monkeypatch.setattr(
-        "app.runtime.langgraph_capabilities.LangGraphDeploymentProfile.from_environment",
+        "langgraph_runtime.capabilities.LangGraphDeploymentProfile.from_environment",
         classmethod(lambda cls: LangGraphDeploymentProfile("in_process", "memory", True, False, True)),
     )
 
@@ -171,10 +170,9 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("AGENT_RUNTIME_MODE", "external")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         response = client.post("/v1/capabilities", json={"definition": _definition().to_dict()})
 
     assert response.status_code == 200
@@ -219,7 +217,7 @@ async def test_state_update_is_absent_at_run_level():
 
 @pytest.mark.asyncio
 async def test_langgraph_inspect_state_reads_checkpoint_snapshot(monkeypatch):
-    import app.runtime.langgraph_adapter as module
+    import langgraph_runtime.adapter as module
 
     class Snapshot:
         values = {"messages": ["hello"]}
@@ -247,13 +245,17 @@ async def test_langgraph_inspect_state_reads_checkpoint_snapshot(monkeypatch):
     monkeypatch.setattr(module, "checkpointing", type("Checkpointing", (), {
         "open_agent_checkpointer": lambda: CheckpointerContext(),
     }))
-    monkeypatch.setattr("app.runtime.langgraph.compiler.WorkflowCompiler", Compiler)
+    monkeypatch.setattr("langgraph_runtime.compiler.WorkflowCompiler", Compiler)
 
     request = AgentRuntimeRequest(
         run_id="run-1", thread_id="thread-1", definition_id="router_rag_agent",
         framework="langgraph", builder_id="langgraph_graph",
         options={"resolved_spec": {"workflow_id": "router_rag_agent"}},
-        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "checkpoint-1"}),
+        continuation=ContinuationBinding("langgraph.checkpoint", {
+            "binding_id": __import__("langgraph_runtime.bindings", fromlist=["issue_binding"]).issue_binding(
+                checkpoint_thread_id="checkpoint-1", run_id="run-1"
+            )
+        }),
     )
     state = await LangGraphRuntimeAdapter().inspect_state(request)
 

@@ -12,7 +12,7 @@ from app.runtime.capability_resolver import (
     require_capability,
     resolve_capabilities,
 )
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
@@ -24,7 +24,7 @@ from app.runtime.contracts import (
     native,
     unsupported,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.registry import RuntimeRegistry
 

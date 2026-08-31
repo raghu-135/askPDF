@@ -9,7 +9,7 @@ import uuid
 import pytest
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentRuntimeRequest
+from runtime_protocol.contracts import AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 
 

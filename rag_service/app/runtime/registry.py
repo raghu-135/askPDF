@@ -5,29 +5,15 @@ from __future__ import annotations
 from typing import Dict
 
 from app.runtime.adapter import AgentRuntimeAdapter
-from app.runtime.contracts import AgentDefinition
-from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
+from runtime_protocol.contracts import AgentDefinition
 
 
 def _default_langgraph_adapter() -> AgentRuntimeAdapter:
-    """Select the configured transport at process startup."""
+    """Return the only supported LangGraph execution transport."""
 
-    if agent_runtime_mode() is AgentRuntimeMode.EXTERNAL:
-        from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 
-        return HttpLangGraphRuntimeAdapter()
-    try:
-        from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
-    except ModuleNotFoundError as exc:
-        if exc.name != "langgraph" and "langgraph" not in str(exc):
-            raise
-        raise RuntimeError(
-            "AGENT_RUNTIME_MODE=in_process requires the LangGraph runtime dependencies. "
-            "Use AGENT_RUNTIME_MODE=external for the separated langgraph-runtime service, "
-            "or install requirements-langgraph-runtime.txt in this image."
-        ) from exc
-
-    return LangGraphRuntimeAdapter()
+    return HttpLangGraphRuntimeAdapter()
 
 
 def _default_hermes_adapter() -> AgentRuntimeAdapter:

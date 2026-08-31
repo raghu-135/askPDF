@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import (
     continuation_from_run,
     definition_from_run,
@@ -12,7 +12,7 @@ from app.runtime.catalog import (
     request_from_run,
     result_to_product_payload,
 )
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -34,8 +34,11 @@ from app.runtime.contracts import (
     RuntimeTaskContext,
     RuntimeTaskResult,
     RuntimeTaskResultStatus,
+    TaskOrchestrationDelta,
+    ensure_protocol_compatible,
     validated_disabled_operation_ids,
 )
+from runtime_protocol.transport import result_from_dict
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 from app.runtime.product_capabilities import project_public_capabilities
@@ -45,7 +48,7 @@ from app.runtime.task_results import normalize_runtime_task_result, runtime_task
 def test_neutral_contracts_are_frozen_and_json_compatible():
     binding = ContinuationBinding(
         binding_type="langgraph_checkpoint",
-        payload={"checkpoint_thread_id": "checkpoint-1"},
+        payload={"binding_id": "opaque-binding-1"},
     )
     request = AgentRuntimeRequest(
         run_id="run-1",
@@ -77,12 +80,32 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
         ),
     })
 
-    assert request.to_dict()["continuation"]["payload"]["checkpoint_thread_id"] == "checkpoint-1"
+    assert request.to_dict()["continuation"]["payload"]["binding_id"] == "opaque-binding-1"
     assert result.to_dict()["status"] == "completed"
     assert event.to_dict()["terminal"] is True
     assert capabilities.to_dict()["operations"]["run.resume"]["support"] == "conditional"
     assert capabilities.to_dict()["operations"]["run.resume"]["owner"] == "runtime"
     assert list(capabilities.to_dict()["operations"]) == ["run.events", "run.resume"]
+
+
+def test_task_orchestration_delta_round_trips_with_idempotency_and_versions():
+    delta = TaskOrchestrationDelta(
+        event_id="evt-1",
+        attempt_id="run-1",
+        idempotency_key="delta:run-1:1",
+        observed_task_version=4,
+        observed_plan_revision=2,
+        todo_changes=({"id": "todo-1", "status": "completed"},),
+        artifacts=({"artifact_id": "runtime:a1", "sha256": "abc"},),
+    )
+    restored = result_from_dict(AgentRuntimeResult(status="completed", orchestration_delta=delta).to_dict())
+
+    assert restored.orchestration_delta == delta
+
+
+def test_incompatible_runtime_protocol_is_rejected_before_execution():
+    with pytest.raises(ValueError, match="protocol"):
+        ensure_protocol_compatible("2.0", "2.0")
 
 
 def test_runtime_operation_descriptor_rejects_invalid_enabled_states():
@@ -126,7 +149,7 @@ def test_public_capability_projection_preserves_approval_response():
 
 
 def test_continuation_requires_authoritative_runtime_binding():
-    run = SimpleNamespace(id="run-1", checkpoint_thread_id="checkpoint-1", runtime_binding_json={})
+    run = SimpleNamespace(id="run-1", runtime_binding_json={})
 
     assert continuation_from_run(run) is None
 
@@ -241,10 +264,9 @@ def test_run_identity_and_typed_projection_round_trip():
         builder_id="langgraph_graph",
         task_id=None,
         parent_run_id=None,
-        checkpoint_thread_id="checkpoint-1",
         runtime_binding_json={
             "binding_type": "langgraph_checkpoint",
-            "payload": {"checkpoint_thread_id": "checkpoint-1"},
+            "payload": {"binding_id": "opaque-binding-1"},
         },
         run_metadata_json={},
     )
@@ -259,7 +281,7 @@ def test_run_identity_and_typed_projection_round_trip():
     )
 
     assert binding is not None
-    assert binding.payload["checkpoint_thread_id"] == "checkpoint-1"
+    assert binding.payload["binding_id"] == "opaque-binding-1"
     assert request.continuation == binding
     assert request.input == {"question": "hello"}
     assert result.status == "clarification"

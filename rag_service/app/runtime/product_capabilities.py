@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,

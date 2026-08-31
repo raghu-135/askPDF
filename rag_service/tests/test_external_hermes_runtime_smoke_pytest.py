@@ -14,7 +14,7 @@ import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.hermes_builder import HermesBuilderProvider
 from app.mcp.execution_context_token import issue_execution_context_token

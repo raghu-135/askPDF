@@ -3,7 +3,7 @@ from langchain_core.tools import tool
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import normalize_tool_result
-from app.agent.tool_node import RecoverableToolNode
+from langgraph_runtime.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 

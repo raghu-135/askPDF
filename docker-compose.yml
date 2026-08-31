@@ -27,8 +27,8 @@ services:
 
   rag-service:
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rag_service/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -40,6 +40,9 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
+      - AGENT_CHECKPOINT_DATABASE_URL=
+      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=
     env_file:
       - path: .env
         required: true
@@ -49,6 +52,8 @@ services:
       db-migrate:
         condition: service_completed_successfully
       weaviate:
+        condition: service_healthy
+      langgraph-runtime:
         condition: service_healthy
     volumes:
       - ./rag_service:/app
@@ -64,15 +69,18 @@ services:
       retries: 3
 
   langgraph-runtime:
+    image: askpdf-langgraph-runtime
     build:
-      context: ./rag_service
-      dockerfile: runtime_service/Dockerfile
+      context: .
+      dockerfile: langgraph_runtime/Dockerfile
     environment:
       - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - MCP_TRANSPORT=loopback_http
       - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
+      - DATABASE_URL=
+      - TEST_DATABASE_URL=
     env_file:
       - path: .env
         required: true
@@ -81,8 +89,6 @@ services:
         condition: service_completed_successfully
       runtime-db-migrate:
         condition: service_completed_successfully
-      rag-service:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
       interval: 10s
@@ -185,10 +191,11 @@ services:
         fi
 
   runtime-db-migrate:
+    image: askpdf-langgraph-runtime
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
-    command: ["python", "-m", "app.db.migrate_runtime"]
+      context: .
+      dockerfile: langgraph_runtime/Dockerfile
+    command: ["python", "-m", "langgraph_runtime.migrate"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
@@ -199,13 +206,10 @@ services:
     depends_on:
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
-    volumes:
-      - ./rag_service:/app
-
   db-migrate:
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rag_service/Dockerfile
     command: ["python", "-m", "app.db.migrate"]
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf

@@ -13,18 +13,18 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.runtime.langgraph.compiler import WorkflowCompiler
+from langgraph_runtime.compiler import WorkflowCompiler
 from app.agent_workflows import deep_research_nodes
-from app.runtime.langgraph import router_runtime
+from langgraph_runtime import router_runtime
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import builder_for_definition
-from app.agent_workflows.deep_research_execution import (
+from langgraph_runtime.workflows.deep_research_execution import (
     product_execution_services_factory,
     runtime_execution_services_factory,
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder
 from app.agent_workflows.enums import WorkflowNodeType
-from app.runtime.langgraph.graph import NodeRegistry
+from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api
@@ -40,11 +40,11 @@ from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.services.content_store import SharedVolumeContentStore, set_content_store
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
-from app.runtime.errors import RuntimeError as AgentRuntimeError
-from app.runtime.events import create_runtime_event
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.events import create_runtime_event
 from app.runtime.evidence import evidence_event_fields, inherited_evidence_packets, tool_result_evidence
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -1439,7 +1439,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime, "record_terminal_result", AsyncMock())
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", lambda: workflow_repository)
     monkeypatch.setattr(
-        "app.runtime.langgraph.router_runtime.continue_compiled_rag_chat",
+        "langgraph_runtime.router_runtime.continue_compiled_rag_chat",
         AsyncMock(return_value={"status": "completed", "answer": "Grounded report", "node_events": [], "tool_events": []}),
     )
     monkeypatch.setattr(
@@ -1452,7 +1452,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     async def checkpointer():
         yield object()
 
-    monkeypatch.setattr("app.runtime.langgraph.checkpointing.open_agent_checkpointer", checkpointer)
+    monkeypatch.setattr("langgraph_runtime.checkpointing.open_agent_checkpointer", checkpointer)
 
     await agent_task_runtime.execute_claimed_task(task.id, "worker-trace")
 

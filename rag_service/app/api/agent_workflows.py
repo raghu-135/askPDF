@@ -42,7 +42,7 @@ from app.agent_workflows.chat_cancellation import (
 from app.agent_workflows.trace_details import detail_manifest
 from app.agent_workflows.trace_payloads import is_current_debug_payload
 from app.agent_workflows.canonical_trace import build_parallel_groups
-from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeRequest
+from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +77,7 @@ def _normalized_visit_index(value: Any) -> Optional[int]:
 from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
+from runtime_protocol.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
     capability_envelope,
     capability_discovery_error,
@@ -86,7 +86,7 @@ from app.runtime.capability_resolver import (
     resolve_definition_capability_resolution,
     resolve_run_capability_resolution,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
 from app.runtime.operational_limits import required_positive_float
 from app.runtime.operational_limits import validate_bounded_json
@@ -357,7 +357,6 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "turns": [_turn_summary_payload(turn) for turn in turns],
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
         "runtime_binding_status": getattr(run, "runtime_binding_status", "active"),
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,

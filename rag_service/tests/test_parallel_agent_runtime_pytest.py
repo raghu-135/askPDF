@@ -12,9 +12,9 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import NodeError
 
-from app.runtime.langgraph.compiler import WorkflowCompiler
+from langgraph_runtime.compiler import WorkflowCompiler
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.runtime.langgraph.graph import NodeRegistry
+from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,
@@ -29,7 +29,7 @@ from app.agent_workflows.planning import (
     worker_decision_contract_errors,
     worker_decisions_need_coverage_review,
 )
-from app.agent_workflows.parallel_runtime import (
+from langgraph_runtime.workflows.parallel_runtime import (
     ParallelWorkerError,
     ParallelDispatchDeadlineExceeded,
     aggregate_parallel_results,
@@ -40,7 +40,7 @@ from app.agent_workflows.parallel_runtime import (
     parallel_runtime_authorized,
     work_item_proposals,
 )
-from app.agent_workflows.state import merge_parallel_deltas
+from langgraph_runtime.workflows.state import merge_parallel_deltas
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from app.agent_workflows.validator import WorkflowValidator
 from app.api.agent_workflows import get_internal_agent_workflow_catalog

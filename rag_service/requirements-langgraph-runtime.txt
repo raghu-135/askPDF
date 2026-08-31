@@ -1,7 +1,3 @@
-# Framework execution dependencies. This file is installed only by the
-# LangGraph runtime image and the framework-enabled test image.
--r requirements-control-plane.txt
-langgraph==1.2.6
-langgraph-checkpoint-postgres
-psycopg[binary,pool]
-langchain-core==1.4.8
+# Compatibility entrypoint for developer tooling. Production runtime images
+# install the standalone manifest directly.
+-r ../langgraph_runtime/requirements.txt

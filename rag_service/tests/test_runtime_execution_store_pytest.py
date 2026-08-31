@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from runtime_service.execution_store import ExecutionConflictError, ExecutionStore, LeaseLostError, _json_safe
+from langgraph_runtime.execution_store import ExecutionConflictError, ExecutionStore, LeaseLostError, _json_safe
 
 
 @pytest.mark.asyncio

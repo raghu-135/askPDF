@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     ContinuationBinding,
     RuntimeCapabilities,
     RuntimeOperationId,
     native,
 )
-from app.runtime.langgraph_adapter import _event_from_graph, _result_from_graph
+from langgraph_runtime.adapter import _event_from_graph, _result_from_graph
 from app.runtime.operational_limits import (
     MAX_RUNTIME_JSON_COLLECTION_ITEMS,
     MAX_RUNTIME_JSON_DEPTH,

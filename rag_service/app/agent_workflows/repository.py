@@ -524,7 +524,6 @@ class AgentWorkflowRepository:
                             "askpdf.interrupt.id": interrupt_id,
                             "askpdf.resume.action": action,
                             "askpdf.interrupt.resume_version": resume_version or interrupt.get("resume_version"),
-                            "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
                         },
                     ),
                 )
@@ -596,7 +595,6 @@ class AgentWorkflowRepository:
                             "askpdf.interrupt.id": interrupt_id,
                             "askpdf.resume.action": action,
                             "askpdf.interrupt.resume_version": resume_version or interrupt.get("resume_version"),
-                            "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
                         },
                         run_status=run.status,
                         completed_at=run.completed_at,

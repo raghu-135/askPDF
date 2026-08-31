@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.agent_workflows.deep_research_execution import run_cancellable
+from langgraph_runtime.workflows.deep_research_execution import run_cancellable
 
 
 class Token:

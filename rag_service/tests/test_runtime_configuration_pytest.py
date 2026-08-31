@@ -9,7 +9,6 @@ from runtime_protocol.configuration import RuntimeConfigurationError, validate_r
 
 def _environment() -> dict[str, str]:
     values = {
-        "AGENT_RUNTIME_MODE": "external",
         "AGENT_RUNTIME_LEASE_SECONDS": "120",
         "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
         "AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS": "300",
@@ -41,6 +40,8 @@ def _environment() -> dict[str, str]:
         "AGENT_CHECKPOINT_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "AGENT_RUNTIME_EXECUTION_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "LANGGRAPH_RUNTIME_URL": "http://langgraph-runtime:8100",
+        "LANGGRAPH_RUNTIME_TOKEN": "r" * 32,
+        "LANGGRAPH_RUNTIME_BINDING_SECRET": "b" * 32,
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "HERMES_MCP_CONTEXT_SECRET": "x" * 32,

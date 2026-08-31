@@ -105,14 +105,9 @@ if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
     echo "Verifying the immutable production control-plane image..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
-        'import importlib.util, os; from app.runtime.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert os.getenv("AGENT_RUNTIME_MODE") is None; assert os.getenv("AGENT_RUNTIME_EXTERNAL_ENABLED") is None; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
+        'import importlib.util; from runtime_protocol.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
         'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)); assert health["status"] == "ok"'
-    if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm --no-deps -e AGENT_RUNTIME_MODE=in_process rag-service python -c \
-        'from app.runtime.registry import RuntimeRegistry; RuntimeRegistry().initialize()'; then
-        echo "Production control plane accepted AGENT_RUNTIME_MODE=in_process despite missing LangGraph; the mode may have been ignored or the production image contains an unexpected runtime dependency" >&2
-        exit 1
-    fi
     external_runtime_test test-runner --file test_runtime_contracts_pytest.py
     external_runtime_test test-runner --file test_runtime_http_adapter_pytest.py
     if [ "${RUN_EXTERNAL_RUNTIME_REAL:-0}" = "1" ]; then

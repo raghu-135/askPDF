@@ -8,9 +8,9 @@ import httpx
 import pytest
 
 from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeTaskContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeTaskContext
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import result_to_product_payload
 
 
@@ -43,14 +43,9 @@ def test_typed_projection_keeps_absent_interaction_fields_null():
 
 
 def test_http_context_preserves_task_request_fields_as_json():
-    from types import SimpleNamespace
-
     payload = context_to_dict(
         RuntimeExecutionContext(
-            request=SimpleNamespace(
-                objective="find the authors",
-                task_limits={"max_sources": 3},
-            ),
+            request={"objective": "find the authors", "task_limits": {"max_sources": 3}},
             task_context=RuntimeTaskContext(
                 task_id="task-1",
                 objective="find the authors",
@@ -77,6 +72,32 @@ def test_http_context_preserves_task_request_fields_as_json():
         "metadata": {"llm_model": "test-model", "context_window": 8192},
         "context_data": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch):
+    from app.mcp.execution_context_token import decode_execution_context_token
+
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+    prepared = await adapter.prepare_request(
+        _request(),
+        context=RuntimeExecutionContext(
+            embedding_model="embed",
+            resolved_spec={
+                "config": {
+                    "context_window": 8192,
+                    "allowed_tool_ids": ["thread_shape", "document_evidence"],
+                }
+            },
+        ),
+    )
+
+    token = prepared.input["mcp_execution_context_token"]
+    assert decode_execution_context_token(token, tool_name="get_thread_shape").run_id == "run-1"
+    assert decode_execution_context_token(token, tool_name="search_documents").run_id == "run-1"
+    await adapter.aclose()
 
 
 @pytest.mark.asyncio
@@ -132,14 +153,14 @@ async def test_http_adapter_rejects_bare_success_responses_at_the_wire_boundary(
 
 
 def test_event_parser_rejects_alias_kinds_and_bare_event_shapes():
-    from app.runtime.transport import event_from_dict
+    from runtime_protocol.transport import event_from_dict
 
     with pytest.raises(ValueError):
         event_from_dict({"event_id": "evt", "run_id": "run", "sequence": 1, "kind": "node.started"})
 
 
 def test_capability_parser_rejects_flat_or_malformed_payloads():
-    from app.runtime.transport import capabilities_from_dict
+    from runtime_protocol.transport import capabilities_from_dict
 
     import pytest
 

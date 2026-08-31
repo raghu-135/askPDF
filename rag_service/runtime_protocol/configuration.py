@@ -224,10 +224,6 @@ def validate_runtime_environment(
     values = dict(os.environ if environ is None else environ)
     errors: list[str] = []
 
-    mode = _required("AGENT_RUNTIME_MODE", values, errors)
-    if mode is not None and mode not in {"external", "in_process"}:
-        errors.append("AGENT_RUNTIME_MODE must be 'external' or 'in_process'")
-
     for name in _RUNTIME_FLOATS:
         if name == "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO":
             _jitter_ratio(name, values, errors)
@@ -277,6 +273,12 @@ def validate_runtime_environment(
         _deep_agent_budgets("hermes", values, errors)
 
     if service == "langgraph":
+        binding_secret = _required("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
+        if binding_secret is not None and len(binding_secret) < 32:
+            errors.append("LANGGRAPH_RUNTIME_BINDING_SECRET must contain at least 32 characters")
+        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        if runtime_token is not None and len(runtime_token) < 32:
+            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
         checkpoint = _required("ASKPDF_AGENT_CHECKPOINTER", values, errors)
         if checkpoint is not None and checkpoint not in {"memory", "postgres"}:
             errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'memory' or 'postgres'")
@@ -288,8 +290,8 @@ def validate_runtime_environment(
                 checkpoint_values["AGENT_CHECKPOINT_DATABASE_URL"] = checkpoint_values["DATABASE_URL"]
             _database_url("AGENT_CHECKPOINT_DATABASE_URL", checkpoint_values, errors)
         _database_url("AGENT_RUNTIME_EXECUTION_DATABASE_URL", values, errors)
-        if mode == "external":
-            _url("LANGGRAPH_RUNTIME_URL", values, errors)
+    if service == "control_plane":
+        _url("LANGGRAPH_RUNTIME_URL", values, errors)
 
     if hermes_enabled:
         if service == "hermes":

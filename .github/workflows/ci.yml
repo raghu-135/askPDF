@@ -39,6 +39,13 @@ jobs:
       - name: Build Docker images
         run: docker compose build
 
+      - name: Verify framework image boundaries
+        run: |
+          docker build --build-arg DOWNLOAD_LOCAL_MODELS=false -f rag_service/Dockerfile -t askpdf-control-plane .
+          docker build -f langgraph_runtime/Dockerfile -t askpdf-langgraph-runtime .
+          docker run --rm askpdf-control-plane python -c 'import importlib.util; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
+          docker run --rm askpdf-langgraph-runtime python -c 'import importlib.util, langgraph, runtime_protocol, langgraph_runtime; assert importlib.util.find_spec("app") is None'
+
       - name: Check diff hygiene
         run: git diff --check
 

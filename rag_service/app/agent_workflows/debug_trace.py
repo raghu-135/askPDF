@@ -12,7 +12,7 @@ from app.agent_workflows.trace_payloads import (
     merge_debug_payloads,
 )
 from app.agent_workflows.trace_recorder import AgentTraceRecorder, TRACE_SCHEMA_VERSION
-from app.runtime.events import create_runtime_event
+from runtime_protocol.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
 
 

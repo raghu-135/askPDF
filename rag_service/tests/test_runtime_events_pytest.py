@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     RuntimeEventKind,
     TERMINAL_RUNTIME_EVENT_KINDS,
 )
-from app.runtime.events import (
+from runtime_protocol.events import (
     create_runtime_event,
     normalize_product_event_kind,
     validate_runtime_event,

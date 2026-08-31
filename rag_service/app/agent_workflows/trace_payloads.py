@@ -468,7 +468,7 @@ def merge_debug_payloads(
         build_parallel_groups,
         build_trace_diagnostics,
     )
-    from app.runtime.contracts import AgentRuntimeEvent
+    from runtime_protocol.contracts import AgentRuntimeEvent
     diagnostic_events = [
         AgentRuntimeEvent(
             event_id=str(row.get("event_id") or f"merged:{index + 1}"),

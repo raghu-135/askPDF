@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-control-plane.txt requirements-control-plane.txt
+COPY rag_service/requirements-control-plane.txt requirements-control-plane.txt
 RUN pip install -r requirements-control-plane.txt
 
 ARG DOWNLOAD_LOCAL_MODELS=true
@@ -33,12 +33,11 @@ RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
 
 RUN mkdir -p /models/hf /static
 
-COPY alembic alembic
-COPY runtime_alembic runtime_alembic
-COPY scripts scripts
-COPY app app
-COPY runtime_protocol runtime_protocol
-COPY alembic.ini runtime_alembic.ini main.py ./
+COPY rag_service/alembic alembic
+COPY rag_service/scripts scripts
+COPY rag_service/app app
+COPY rag_service/runtime_protocol runtime_protocol
+COPY rag_service/alembic.ini rag_service/main.py ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

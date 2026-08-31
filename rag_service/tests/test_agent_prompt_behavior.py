@@ -10,7 +10,7 @@ from app.agent_workflows.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
-from app.agent_workflows.deep_research_nodes import DEEP_RESEARCH_POLICY, _deep_system
+from langgraph_runtime.workflows.deep_research_nodes import DEEP_RESEARCH_POLICY, _deep_system
 from app.prompts.loaders import get_deep_research_policy
 
 

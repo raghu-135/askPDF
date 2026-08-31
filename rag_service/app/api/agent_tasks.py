@@ -31,8 +31,8 @@ from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
 from app.runtime.capability_resolver import resolve_definition_capability_resolution, require_capability
 from app.runtime.catalog import definition_from_run, definition_from_workflow
-from app.runtime.contracts import RuntimeOperationId
-from app.runtime.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.contracts import RuntimeOperationId
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from app.runtime.registry import get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.operational_limits import required_positive_float
@@ -184,7 +184,6 @@ def _run_payload(run: Any) -> dict[str, Any]:
         "attempt": run.task_attempt,
         "parent_run_id": run.parent_run_id,
         "status": run.status,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
         "runtime_binding_status": run.runtime_binding_status,
         "pending_interrupt": dict(run.pending_interrupt_json or {}) or None,
         "metrics": dict(run.metrics_json or {}),
@@ -334,7 +333,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
     payload = _task_payload(task)
     payload["web_access"] = await repository.get_task_web_access(task.id)
     payload["active_run"] = None if run is None else {
-        "id": run.id, "status": run.status, "checkpoint_thread_id": run.checkpoint_thread_id,
+        "id": run.id, "status": run.status,
         "runtime_binding_status": run.runtime_binding_status,
         "pending_interrupt": dict(run.pending_interrupt_json or {}) or None,
     }

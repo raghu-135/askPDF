@@ -1,6 +1,6 @@
 import pytest
 
-from app.agent_workflows.state import WorkflowBudgetExceeded, check_visit_budget
+from langgraph_runtime.workflows.state import WorkflowBudgetExceeded, check_visit_budget
 
 
 def test_total_visit_budget_raises_typed_exception_with_diagnostics():

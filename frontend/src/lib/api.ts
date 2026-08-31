@@ -2365,7 +2365,7 @@ export interface AgentTaskSummary {
   configuration: Record<string, any>;
   created_at: string;
   updated_at: string;
-  active_run?: { id: string; status: string; checkpoint_thread_id?: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
+  active_run?: { id: string; status: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
   plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
 }
 
@@ -2406,7 +2406,6 @@ export interface AgentTaskRun {
   attempt: number;
   parent_run_id?: string | null;
   status: string;
-  checkpoint_thread_id?: string | null;
   runtime_binding_status?: string;
   pending_interrupt?: AgentRunPendingInterrupt | null;
   metrics: Record<string, any>;

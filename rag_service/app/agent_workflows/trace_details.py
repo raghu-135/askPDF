@@ -12,7 +12,6 @@ TRACE_DETAIL_RUN_LIMIT = 5 * 1024 * 1024
 TRACE_DETAIL_OMITTED_VALUE = "[omitted from trace]"
 TRACE_DETAIL_STATE_OMIT_KEYS = {
     "agent_run_id",
-    "checkpoint_thread_id",
     "node_events",
     "tool_events",
 }

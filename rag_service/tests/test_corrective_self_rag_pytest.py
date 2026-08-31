@@ -4,13 +4,13 @@ from pathlib import Path
 import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.answer_nodes import finalizer_node
+from langgraph_runtime.workflows.answer_nodes import finalizer_node
 from app.agent_workflows.corrective_contracts import (
     DEFAULT_CORRECTIVE_POLICY,
     collect_corrective_policy_errors,
     normalized_corrective_policy,
 )
-from app.agent_workflows.corrective_nodes import (
+from langgraph_runtime.workflows.corrective_nodes import (
     corrective_route_for_report,
     grounded_route_for_report,
     normalize_grounding_report,
@@ -26,16 +26,16 @@ from app.agent_workflows.evidence import (
     normalized_source_url,
 )
 from app.agent_workflows.prompting import build_grounded_answer_verifier_prompt
-from app.agent_workflows.parallel_runtime import aggregate_parallel_results, dispatch_started_epoch_ms, normalize_work_items
-from app.agent_workflows.parallel_runtime import worker_terminal_delta
-from app.runtime.langgraph.compiler import WorkflowCompiler
-from app.runtime.langgraph.graph import NodeRegistry
+from langgraph_runtime.workflows.parallel_runtime import aggregate_parallel_results, dispatch_started_epoch_ms, normalize_work_items
+from langgraph_runtime.workflows.parallel_runtime import worker_terminal_delta
+from langgraph_runtime.compiler import WorkflowCompiler
+from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.runtime.contracts import AgentRuntimeEvent
+from runtime_protocol.contracts import AgentRuntimeEvent
 from app.agent_workflows.metrics import build_run_metrics
-from app.agent_workflows.state import merge_corrective_wave_records
+from langgraph_runtime.workflows.state import merge_corrective_wave_records
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
-from app.agent_workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
+from langgraph_runtime.workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
 from app.agent_workflows.validator import WorkflowValidator
 
 

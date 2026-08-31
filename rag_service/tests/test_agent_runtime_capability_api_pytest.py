@@ -11,7 +11,7 @@ pytest.importorskip("opentelemetry.sdk.trace")
 
 import app.api.agent_workflows as agent_workflows_api
 from app.runtime.capability_resolver import CapabilityResolution
-from app.runtime.contracts import AgentDefinition, RuntimeCapabilities, RuntimeOperationId, native
+from runtime_protocol.contracts import AgentDefinition, RuntimeCapabilities, RuntimeOperationId, native
 from app.runtime.registry import RuntimeRegistry
 
 

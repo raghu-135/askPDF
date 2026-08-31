@@ -4,8 +4,8 @@ import pytest
 
 from app.runtime.builder import BuilderCapabilities, BuilderCatalog
 from app.runtime.builder_registry import BuilderRegistry, BuilderSelectionError
-from app.runtime.contracts import AgentDefinition
-from app.runtime.langgraph_builder import LangGraphBuilderProvider
+from runtime_protocol.contracts import AgentDefinition
+from langgraph_runtime_builder import LangGraphBuilderProvider
 
 
 class FakeBuilder:

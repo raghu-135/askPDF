@@ -6,8 +6,8 @@ from typing import Any, Mapping
 
 from app.runtime.capability_resolver import require_capability
 from app.runtime.catalog import continuation_from_run, definition_from_run
-from app.runtime.contracts import AgentRuntimeRequest, RuntimeOperationId
-from app.runtime.errors import RuntimeError
+from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeOperationId
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
 
 
