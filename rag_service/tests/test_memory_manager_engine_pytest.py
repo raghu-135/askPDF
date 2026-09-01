@@ -828,7 +828,7 @@ async def test_curator_memory_prefetch_domain_error_returns_retry_clarification(
 
     monkeypatch.setattr(
         memory_manager_engine,
-        "create_mcp_langchain_tool",
+        "create_mcp_tool",
         lambda name: FakeTool(name),
     )
     response = await memory_manager_engine.respond_to_memory_manager(

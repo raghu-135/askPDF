@@ -15,7 +15,7 @@ import pytest
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 
 
 _external_runtime_enabled = os.getenv("EXTERNAL_RUNTIME_SMOKE", "").lower() in {"1", "true", "yes", "on"}
@@ -75,15 +75,15 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
             "use_reranker": False,
         },
     )
-    context = RuntimeExecutionContext(
-        request=SimpleNamespace(
-            question="Summarize the available evidence.",
-            llm_model=os.environ["EXTERNAL_RUNTIME_LLM_MODEL"],
-            use_web_search=False,
-            use_reranker=False,
-            context_window=8192,
-            runtime_execution_mode=True,
-        ),
+    context = RuntimeInvocationContext(
+        request_payload={
+            "question": "Summarize the available evidence.",
+            "llm_model": os.environ["EXTERNAL_RUNTIME_LLM_MODEL"],
+            "use_web_search": False,
+            "use_reranker": False,
+            "context_window": 8192,
+            "runtime_execution_mode": True,
+        },
         embedding_model=request.options["embedding_model"],
         resolved_spec=spec,
         agent_run_context={"agent_run_id": run_id, "agent_workflow_id": workflow_id},

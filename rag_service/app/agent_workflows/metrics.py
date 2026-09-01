@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping
 
-from app.agent_workflows.parallel_contracts import (
+from app.agent_workflows.parallel_projection_contracts import (
     PARALLEL_EVENT_JOURNAL_LIMIT,
     PARALLEL_SUMMARY_COUNT_FIELDS,
     PARALLEL_SUMMARY_METRIC_FIELDS,

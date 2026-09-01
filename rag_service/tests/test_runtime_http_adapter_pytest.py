@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeTaskContext
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
 from runtime_protocol.errors import RuntimeError
@@ -44,8 +44,8 @@ def test_typed_projection_keeps_absent_interaction_fields_null():
 
 def test_http_context_preserves_task_request_fields_as_json():
     payload = context_to_dict(
-        RuntimeExecutionContext(
-            request={"objective": "find the authors", "task_limits": {"max_sources": 3}},
+        RuntimeInvocationContext(
+            request_payload={"objective": "find the authors", "task_limits": {"max_sources": 3}},
             task_context=RuntimeTaskContext(
                 task_id="task-1",
                 objective="find the authors",
@@ -83,7 +83,7 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
     adapter = HttpLangGraphRuntimeAdapter("http://runtime")
     prepared = await adapter.prepare_request(
         _request(),
-        context=RuntimeExecutionContext(
+        context=RuntimeInvocationContext(
             embedding_model="embed",
             resolved_spec={
                 "config": {
@@ -204,7 +204,7 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
         async def emit_runtime_event(self, value):
             received.append(value)
 
-    result = await adapter.start(request, context=RuntimeExecutionContext(resolved_spec={"nodes": []}), event_sink=Sink())
+    result = await adapter.start(request, context=RuntimeInvocationContext(resolved_spec={"nodes": []}), event_sink=Sink())
     assert result.status == "completed"
     assert result.output == "ok"
     assert [item.event_id for item in received] == ["evt-1"]
@@ -233,7 +233,7 @@ async def test_http_adapter_coalesces_output_deltas_before_product_delivery():
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    await adapter.start(request, context=RuntimeExecutionContext(), event_sink=Sink())
+    await adapter.start(request, context=RuntimeInvocationContext(), event_sink=Sink())
     assert len(received) == 1
     assert received[0].payload == {"delta": "one two three", "chunk_count": 3}
     assert received[0].source_metadata["first_source_sequence"] == 1
@@ -265,7 +265,7 @@ async def test_http_adapter_flushes_output_delta_on_time_while_stream_is_open(mo
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    result = await adapter.start(request, context=RuntimeExecutionContext(), event_sink=Sink())
+    result = await adapter.start(request, context=RuntimeInvocationContext(), event_sink=Sink())
     assert result.status == "completed"
     assert flushed.is_set()
     await client.aclose()
@@ -291,7 +291,7 @@ async def test_recovery_deadline_starts_after_long_initial_stream(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    result = await adapter.start(request, context=RuntimeExecutionContext())
+    result = await adapter.start(request, context=RuntimeInvocationContext())
     assert result.output == "recovered"
     assert calls == ["POST", "GET"]
     await client.aclose()
@@ -318,7 +318,7 @@ async def test_healthy_replay_may_run_longer_than_recovery_deadline(monkeypatch)
     monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    result = await adapter.start(request, context=RuntimeExecutionContext())
+    result = await adapter.start(request, context=RuntimeInvocationContext())
     assert result.output == "recovered"
     assert calls == ["POST", "GET"]
     await client.aclose()
@@ -354,7 +354,7 @@ async def test_identical_runtime_binding_is_persisted_once():
     sink = Sink()
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    await adapter.start(request, context=RuntimeExecutionContext(), event_sink=sink)
+    await adapter.start(request, context=RuntimeInvocationContext(), event_sink=sink)
     assert len(sink.bindings) == 1
     await client.aclose()
 
@@ -378,7 +378,7 @@ async def test_http_adapter_preserves_dependency_admission_error():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError) as caught:
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
     assert caught.value.code == "runtime_dependency_unavailable"
     assert caught.value.retryable is True
     assert caught.value.details["dependency"] == "mcp"
@@ -426,7 +426,7 @@ async def test_http_adapter_preserves_structured_stream_http_errors(status, payl
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError) as caught:
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
     assert caught.value.code == expected_code
     assert caught.value.retryable is expected_retryable
     await client.aclose()
@@ -476,7 +476,7 @@ async def test_http_adapter_does_not_retry_structured_stream_conflict():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError) as caught:
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
     assert caught.value.code == "runtime_operation_conflict"
     assert calls == ["POST /v1/runs/start"]
     await client.aclose()
@@ -500,7 +500,7 @@ async def test_http_adapter_maps_no_continuation_to_none():
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    assert await adapter.continue_run(request, context=RuntimeExecutionContext()) is None
+    assert await adapter.continue_run(request, context=RuntimeInvocationContext()) is None
     await client.aclose()
 
 
@@ -520,7 +520,7 @@ async def test_http_adapter_rejects_conflicting_duplicate_event_ids():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError, match="conflicting duplicate event IDs"):
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
     await client.aclose()
 
 
@@ -536,7 +536,7 @@ async def test_http_adapter_rejects_result_on_nonterminal_event():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError, match="nonterminal event"):
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
     await client.aclose()
 
 
@@ -561,7 +561,7 @@ async def test_http_adapter_replays_after_transport_disconnect_before_terminal()
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    result = await adapter.start(request, context=RuntimeExecutionContext())
+    result = await adapter.start(request, context=RuntimeInvocationContext())
     assert result.output == "recovered"
     assert calls == ["POST /v1/runs/start", "GET /v1/runs/run-1/events"]
     await client.aclose()
@@ -580,7 +580,7 @@ async def test_http_adapter_does_not_replay_unstructured_http_status_failures(st
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
     with pytest.raises(RuntimeError) as caught:
-        await adapter.start(request, context=RuntimeExecutionContext())
+        await adapter.start(request, context=RuntimeInvocationContext())
 
     assert caught.value.code == "runtime_transport_error"
     assert caught.value.retryable is False

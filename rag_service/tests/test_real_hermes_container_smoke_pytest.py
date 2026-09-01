@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 
@@ -47,8 +47,8 @@ def _request(prompt: str) -> AgentRuntimeRequest:
     )
 
 
-def _context() -> RuntimeExecutionContext:
-    return RuntimeExecutionContext(resolved_spec={"definition_version": 1, "config": {"system_prompt": "Respond concisely.", "model": _LEGACY_PROFILE_MODEL, "provider": "lmstudio", "mcp_server": "askpdf", "allowed_tool_ids": [], "max_duration_seconds": 120}})
+def _context() -> RuntimeInvocationContext:
+    return RuntimeInvocationContext(resolved_spec={"definition_version": 1, "config": {"system_prompt": "Respond concisely.", "model": _LEGACY_PROFILE_MODEL, "provider": "lmstudio", "mcp_server": "askpdf", "allowed_tool_ids": [], "max_duration_seconds": 120}})
 
 
 @pytest.mark.asyncio

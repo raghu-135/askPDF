@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.adapter import AgentRuntimeAdapter, RuntimeExecutionContext
+from app.runtime.adapter import AgentRuntimeAdapter, RuntimeInvocationContext
 from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import (
     continuation_from_run,
@@ -237,16 +237,16 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
         ("run.list", lambda: adapter.list_runs(thread_id="thread-1")),
         ("run.wait", lambda: adapter.wait(request)),
         ("run.events", lambda: adapter.stream_events(request)),
-        ("run.resume", lambda: adapter.resume(request, interrupt={}, context=RuntimeExecutionContext())),
-        ("runtime_continuation_unavailable", lambda: adapter.continue_run(request, context=RuntimeExecutionContext())),
+        ("run.resume", lambda: adapter.resume(request, interrupt={}, context=RuntimeInvocationContext())),
+        ("runtime_continuation_unavailable", lambda: adapter.continue_run(request, context=RuntimeInvocationContext())),
         ("run.cancel", lambda: adapter.cancel(request)),
         ("run.approval.respond", lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="once"))),
         ("run.send_followup", lambda: adapter.send_followup(request, {})),
         ("run.interrupt_with_input", lambda: adapter.interrupt_with_input(request, {})),
         ("run.steer_live", lambda: adapter.steer_live(request, RuntimeSteeringInput("focus"))),
         ("run.inspect_state", lambda: adapter.inspect_state(request)),
-        ("run.replay", lambda: adapter.replay(request, "checkpoint-1")),
-        ("run.fork", lambda: adapter.fork(request, "checkpoint-1")),
+        ("run.replay", lambda: adapter.replay(request)),
+        ("run.fork", lambda: adapter.fork(request)),
         ("subagent.list", lambda: adapter.list_subagents(request)),
         ("subagent.send", lambda: adapter.send_to_subagent(request, "subagent-1", {})),
         ("subagent.cancel", lambda: adapter.cancel_subagent(request, "subagent-1")),

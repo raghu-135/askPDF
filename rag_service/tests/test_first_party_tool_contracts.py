@@ -252,7 +252,7 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
 
 @pytest.mark.asyncio
 async def test_search_web_returns_web_source_contract(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class FakeClient:
         async def request(self, method, params):
@@ -277,7 +277,7 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
                 "isError": False,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
 
     raw = await external_research_tools.search_web.ainvoke(
         {"query": "latest diffusion"},

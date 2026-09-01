@@ -90,7 +90,7 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     from app.agent_workflows.repository import AgentWorkflowRepository
     from app.runtime.catalog import continuation_from_run, definition_from_run
     from app.runtime.registry import get_runtime_registry
-    from app.runtime.adapter import RuntimeExecutionContext
+    from app.runtime.adapter import RuntimeInvocationContext
     from app.services.agent_runtime_projection import AgentRuntimeProjection
     from app.services import agent_task_repository as tasks
     from app.services.agent_run_cancellation import confirm_task_cancellation, request_task_cancellation
@@ -115,8 +115,8 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         task_id=getattr(run, "task_id", None),
         continuation=continuation_from_run(run),
     )
-    context = RuntimeExecutionContext(
-        request={"question": request.input.get("question", ""), "runtime_execution_mode": True},
+    context = RuntimeInvocationContext(
+        request_payload={"question": request.input.get("question", ""), "runtime_execution_mode": True},
         resolved_spec=dict(run.resolved_spec_json or {}),
         agent_run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
         task_id=getattr(run, "task_id", None),

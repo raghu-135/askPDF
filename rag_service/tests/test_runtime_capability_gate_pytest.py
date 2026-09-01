@@ -65,6 +65,9 @@ class RecordingAdapter:
     async def deployment_capabilities(self):
         return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
 
+    async def prepare_request(self, request, *, context):
+        return request
+
     async def cancel(self, request):
         self.calls["cancel"] += 1
         return {"status": "cancel_requested"}

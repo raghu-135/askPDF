@@ -9,7 +9,7 @@ def test_mcp_mode_replaces_thread_shape_without_changing_tool_name(monkeypatch):
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
     monkeypatch.setenv("MCP_TOOLS", "get_thread_shape")
 
-    from app.mcp.langchain_adapter import create_thread_shape_tool
+    from app.mcp.tool_adapter import create_thread_shape_tool
 
     thread_shape = create_thread_shape_tool()
     assert thread_shape.name == "get_thread_shape"
@@ -18,10 +18,10 @@ def test_mcp_mode_replaces_thread_shape_without_changing_tool_name(monkeypatch):
 
 def test_mcp_wrapper_uses_authoritative_description():
     from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-    from app.mcp.langchain_adapter import create_mcp_langchain_tool
+    from app.mcp.tool_adapter import create_mcp_tool
 
     for name in ("get_thread_shape", "search_documents", "search_web", "wikipedia", "wikidata"):
-        tool = create_mcp_langchain_tool(name)
+        tool = create_mcp_tool(name)
         assert tool.description == TOOL_FRIENDLY_CONFIG[name]["description"]
 
 
@@ -30,7 +30,7 @@ async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
     monkeypatch.setenv("MCP_TOOLS", "get_thread_shape")
 
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     calls = []
 
@@ -41,8 +41,8 @@ async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
                 return {"tools": [{"name": "get_thread_shape", "description": "Thread shape", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "thread_shape", "com.askpdf/contract-version": "1"}}]}
             return {"content": [{"type": "text", "text": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages"}], "structuredContent": {"ok": True, "content": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}}, "isError": False}
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
-    thread_shape = langchain_adapter.create_thread_shape_tool()
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
+    thread_shape = tool_adapter.create_thread_shape_tool()
     result = await thread_shape.ainvoke(
         {},
         config={"configurable": {"app_thread_id": "thread-123", "run_id": "run-456"}},
@@ -56,7 +56,7 @@ async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
 
 
 async def test_mcp_request_id_is_unique_per_call(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     request_ids = []
 
@@ -74,9 +74,9 @@ async def test_mcp_request_id_is_unique_per_call(monkeypatch):
                 "isError": False,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
-    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "one"})
-    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "two"})
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
+    await tool_adapter.call_mcp_tool("wikipedia", {"query": "one"})
+    await tool_adapter.call_mcp_tool("wikipedia", {"query": "two"})
 
     assert len(request_ids) == 2
     assert request_ids[0].startswith("mcp-")
@@ -85,7 +85,7 @@ async def test_mcp_request_id_is_unique_per_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mcp_descriptor_is_cached_per_transport_client(monkeypatch):
-    from app.mcp import discovery, langchain_adapter
+    from app.mcp import discovery, tool_adapter
 
     discovery.clear_discovery_cache()
     calls = []
@@ -104,9 +104,9 @@ async def test_mcp_descriptor_is_cached_per_transport_client(monkeypatch):
             }
 
     client = FakeClient()
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: client)
-    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "one"})
-    await langchain_adapter.call_mcp_tool("wikipedia", {"query": "two"})
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: client)
+    await tool_adapter.call_mcp_tool("wikipedia", {"query": "one"})
+    await tool_adapter.call_mcp_tool("wikipedia", {"query": "two"})
 
     assert calls.count("tools/list") == 1
     assert calls.count("tools/call") == 2
@@ -117,7 +117,7 @@ async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
     monkeypatch.setenv("MCP_TOOLS", "wikipedia")
 
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class FakeClient:
         async def request(self, method, params):
@@ -139,8 +139,8 @@ async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
                 "isError": True,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
-    result = await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ayurveda"})
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
+    result = await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ayurveda"})
 
     payload = json.loads(result)
     assert payload["ok"] is False
@@ -149,7 +149,7 @@ async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
 
 
 async def test_mcp_adapter_never_invokes_legacy_tool(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class FakeClient:
         async def request(self, method, params):
@@ -163,14 +163,14 @@ async def test_mcp_adapter_never_invokes_legacy_tool(monkeypatch):
                 "isError": False,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
-    tool = langchain_adapter.create_mcp_langchain_tool("wikipedia")
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
+    tool = tool_adapter.create_mcp_tool("wikipedia")
     assert await tool.ainvoke({"query": "Ada Lovelace"})
 
 
 @pytest.mark.asyncio
 async def test_cancellation_checker_cancels_in_flight_mcp_call(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     cancelled = False
 
@@ -185,7 +185,7 @@ async def test_cancellation_checker_cancels_in_flight_mcp_call(monkeypatch):
                 cancelled = True
                 raise
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: SlowClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: SlowClient())
     checks = 0
 
     async def checker():
@@ -194,23 +194,23 @@ async def test_cancellation_checker_cancels_in_flight_mcp_call(monkeypatch):
         return checks > 1
 
     with pytest.raises(asyncio.CancelledError):
-        await langchain_adapter.call_mcp_tool("wikipedia", {"query": "cancel"}, {"configurable": {"cancellation_checker": checker}})
+        await tool_adapter.call_mcp_tool("wikipedia", {"query": "cancel"}, {"configurable": {"cancellation_checker": checker}})
     assert cancelled is True
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [ConnectionError("offline"), TimeoutError("slow")])
 async def test_mcp_transport_failures_raise_typed_error(monkeypatch, failure):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.errors import MCPUnavailableError
 
     class BrokenClient:
         async def request(self, method, params):
             raise failure
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: BrokenClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: BrokenClient())
     with pytest.raises(MCPUnavailableError) as caught:
-        await langchain_adapter.call_mcp_tool(
+        await tool_adapter.call_mcp_tool(
             "wikipedia",
             {"query": "Ada"},
             {"configurable": {"run_id": "run-1", "tool_call_id": "call-1", "thread_id": "thread-1"}},
@@ -223,7 +223,7 @@ async def test_mcp_transport_failures_raise_typed_error(monkeypatch, failure):
 
 @pytest.mark.asyncio
 async def test_mcp_domain_error_result_remains_structured(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class DomainFailureClient:
         async def request(self, method, params):
@@ -231,8 +231,8 @@ async def test_mcp_domain_error_result_remains_structured(monkeypatch):
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             return {"content": [{"type": "text", "text": "provider failed"}], "structuredContent": {"ok": False, "content": "provider failed", "warnings": ["provider_failed"], "error": {"code": "provider_failed", "message": "provider failed", "type": "ProviderError", "retryable": True}, "sources": [], "artifacts": {}, "metrics": {}, "trace": {}}, "isError": True}
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: DomainFailureClient())
-    result = json.loads(await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"}))
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: DomainFailureClient())
+    result = json.loads(await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"}))
     assert result["ok"] is False
     assert result["error"]["code"] == "provider_failed"
 
@@ -247,7 +247,7 @@ async def test_mcp_rejects_contradictory_success_error_envelopes(
     structured_ok,
     is_error,
 ):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.errors import MCPUnavailableError
 
     class ContradictoryClient:
@@ -268,16 +268,16 @@ async def test_mcp_rejects_contradictory_success_error_envelopes(
                 "isError": is_error,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: ContradictoryClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: ContradictoryClient())
     with pytest.raises(MCPUnavailableError) as caught:
-        await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
+        await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
     assert caught.value.category == "protocol"
     assert caught.value.retryable is False
 
 
 @pytest.mark.asyncio
 async def test_mcp_call_stage_protocol_failure_raises_typed_error(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.errors import MCPUnavailableError
 
     class CallFailureClient:
@@ -286,15 +286,15 @@ async def test_mcp_call_stage_protocol_failure_raises_typed_error(monkeypatch):
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             raise RuntimeError("malformed MCP call response")
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: CallFailureClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: CallFailureClient())
     with pytest.raises(MCPUnavailableError) as caught:
-        await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
+        await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
     assert caught.value.category == "protocol"
 
 
 @pytest.mark.asyncio
 async def test_mcp_error_without_structured_content_remains_failure(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class ErrorTextClient:
         async def request(self, method, params):
@@ -302,15 +302,15 @@ async def test_mcp_error_without_structured_content_remains_failure(monkeypatch)
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             return {"content": [{"type": "text", "text": "protocol failure"}], "isError": True}
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: ErrorTextClient())
-    payload = json.loads(await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"}))
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: ErrorTextClient())
+    payload = json.loads(await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"}))
     assert payload["ok"] is False
     assert payload["error"]["code"] == "mcp_protocol_error"
 
 
 @pytest.mark.asyncio
 async def test_mcp_success_without_structured_content_raises_protocol_error(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.errors import MCPUnavailableError
 
     class TextOnlyClient:
@@ -319,16 +319,16 @@ async def test_mcp_success_without_structured_content_raises_protocol_error(monk
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             return {"content": [{"type": "text", "text": "looks successful"}], "isError": False}
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: TextOnlyClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: TextOnlyClient())
     with pytest.raises(MCPUnavailableError) as caught:
-        await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
+        await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
     assert caught.value.category == "protocol"
     assert caught.value.retryable is False
 
 
 @pytest.mark.asyncio
 async def test_malformed_structured_content_raises_protocol_error(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.errors import MCPUnavailableError
 
     class MalformedClient:
@@ -337,9 +337,9 @@ async def test_malformed_structured_content_raises_protocol_error(monkeypatch):
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             return {"content": [{"type": "text", "text": "bad envelope"}], "structuredContent": {"ok": True, "content": "bad"}, "isError": False}
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: MalformedClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: MalformedClient())
     with pytest.raises(MCPUnavailableError) as caught:
-        await langchain_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
+        await tool_adapter.call_mcp_tool("wikipedia", {"query": "Ada"})
     assert caught.value.category == "protocol"
     assert caught.value.retryable is False
 import asyncio

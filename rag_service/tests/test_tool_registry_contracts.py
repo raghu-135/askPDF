@@ -7,7 +7,7 @@ from app.agent.tool_registry import (
     validate_tool_call_allowed,
 )
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.validator import WorkflowValidator
+from langgraph_runtime.workflows.validator import WorkflowValidator
 
 
 def _builtin_spec(builtin_key: str):

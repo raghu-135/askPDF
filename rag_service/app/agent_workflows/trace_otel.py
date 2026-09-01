@@ -11,7 +11,6 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from app.agent.tool_registry import get_tool_contract_metadata
 from app.agent_workflows.corrective_contracts import CorrectiveEventName
 from app.agent_workflows.enums import NodeEventStatus, TraceSpanKind, TraceStatus
-from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.trace_sanitization import (
     _as_dict,
     _as_list,
@@ -82,7 +81,9 @@ def _otel_status(status: str) -> Status:
 
 
 def _node_metadata(node_type: Optional[str]) -> Dict[str, Any]:
-    return get_node_type_metadata(node_type) if isinstance(node_type, str) and node_type else {}
+    # Framework runtimes emit observability attributes on canonical events.
+    # The product trace layer does not load a framework node catalog.
+    return {}
 
 
 def _observability_metadata(node_type: Optional[str]) -> Dict[str, Any]:

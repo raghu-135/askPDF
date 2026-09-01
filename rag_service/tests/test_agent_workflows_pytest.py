@@ -33,14 +33,14 @@ from langgraph_runtime.graph import (
     normalize_execution_plan,
     normalize_evaluator_report,
 )
-from app.agent_workflows.planning import normalize_replanner_execution_plan
+from langgraph_runtime.workflows.planning import normalize_replanner_execution_plan
 from app.agent_workflows.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_workflows.trace_details import TRACE_DETAIL_SCALAR_LIMIT, sanitize_trace_detail
 from app.agent_workflows.trace_payloads import merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
-from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_node_catalog
+from langgraph_runtime.workflows.node_catalog import collect_node_catalog_errors, get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
-from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
+from langgraph_runtime.workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from runtime_protocol.events import create_runtime_event
@@ -48,9 +48,9 @@ from app.runtime.observability import normalize_runtime_event
 from langgraph_runtime.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.hitl_materializer import materialize_hitl_gates
+from langgraph_runtime.workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows import hitl_runtime
-from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
+from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
@@ -2018,7 +2018,7 @@ class TestRouterRagGraphToolConsumers:
             **catalog["retrieval_worker"],
             "allowed_parent_types": ["router"],
         }
-        monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.get_node_catalog", lambda: catalog)
         spec = {
             "schema_version": 1,
             "workflow_id": "custom_rag_agent",
@@ -2086,7 +2086,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v1_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
         catalog["router"].pop("context_policy")
-        monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.get_node_catalog", lambda: catalog)
 
         spec = builtin_router_rag_v1_spec()
 
@@ -2096,7 +2096,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v1_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["route_labels"] = ["document", ""]
-        monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.get_route_function_registry", lambda: registry)
 
         spec = builtin_router_rag_v1_spec()
 
@@ -2106,7 +2106,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v1_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["allowed_source_types"] = ["planner"]
-        monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.get_route_function_registry", lambda: registry)
 
         spec = builtin_router_rag_v1_spec()
 
@@ -2117,7 +2117,7 @@ class TestRouterRagGraphToolConsumers:
         contracts = tool_contracts_by_id()
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["artifact_keys"] = ["document_sources", ""]
-        monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.tool_contracts_by_id", lambda: contracts)
 
         spec = builtin_router_rag_v1_spec()
 
@@ -2129,7 +2129,7 @@ class TestRouterRagGraphToolConsumers:
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["allowed_node_types"] = ["thread_conversation_history_worker"]
         contracts["document_evidence"][0]["required_node_capabilities"] = ["retrieval.memory"]
-        monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
+        monkeypatch.setattr("langgraph_runtime.workflows.validator.tool_contracts_by_id", lambda: contracts)
 
         spec = builtin_router_rag_v1_spec()
 
@@ -2766,7 +2766,7 @@ class TestRouterRagGraphToolConsumers:
             payload = payloads[name]
             return json.dumps({"ok": True, "content": json.dumps(payload), "sources": [], "artifacts": payload.get("artifacts", {}), "warnings": [], "metrics": {}, "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"}})
 
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
 
         monkeypatch.setattr(
             "langgraph_runtime.graph.search_documents",
@@ -4068,7 +4068,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("langgraph_runtime.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("langgraph_runtime.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
@@ -5441,7 +5441,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("langgraph_runtime.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("langgraph_runtime.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
@@ -5870,7 +5870,7 @@ class TestAgentRunService:
         monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("langgraph_runtime.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("langgraph_runtime.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
@@ -6725,7 +6725,7 @@ class TestRouterRagRuntime:
                     "mcp_request_id": f"mcp-test:{name}",
                 },
             })
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
 
         monkeypatch.setattr("langgraph_runtime.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("langgraph_runtime.graph.get_llm", lambda _name: fake_llm)
@@ -6962,7 +6962,7 @@ class TestRouterRagRuntime:
                 "metrics": {},
                 "trace": {"tool_name": name},
             })
-        monkeypatch.setattr("app.mcp.langchain_adapter.call_mcp_tool", fake_mcp_call)
+        monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
         monkeypatch.setattr("langgraph_runtime.graph.search_documents", FailingTool())
         monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)

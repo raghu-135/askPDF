@@ -71,7 +71,7 @@ MCP_TEST_FILES = [
     "test_mcp_transport.py",
     "test_mcp_contracts.py",
     "test_mcp_compatibility.py",
-    "test_mcp_langchain_adapter.py",
+    "test_mcp_tool_adapter.py",
     "test_mcp_framework_neutral.py",
 ]
 

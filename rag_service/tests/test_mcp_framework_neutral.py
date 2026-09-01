@@ -46,7 +46,7 @@ def test_mcp_runner_includes_all_framework_neutral_tests():
         "test_mcp_transport.py",
         "test_mcp_contracts.py",
         "test_mcp_compatibility.py",
-        "test_mcp_langchain_adapter.py",
+        "test_mcp_tool_adapter.py",
         "test_mcp_framework_neutral.py",
     }
 

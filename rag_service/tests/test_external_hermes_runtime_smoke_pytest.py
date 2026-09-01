@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.hermes_builder import HermesBuilderProvider
@@ -94,8 +94,8 @@ async def test_external_hermes_runtime_contract_and_execution():
         )
         result = await adapter.start(
             request,
-            context=RuntimeExecutionContext(
-                request=SimpleNamespace(question=request.input["question"], runtime_execution_mode=True),
+            context=RuntimeInvocationContext(
+                request_payload={"question": request.input["question"], "runtime_execution_mode": True},
                 resolved_spec=resolved_spec,
                 agent_run_context={"agent_run_id": request.run_id, "agent_workflow_id": definition.definition_id},
             ),

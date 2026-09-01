@@ -1,4 +1,4 @@
-"""Neutral runtime adapter base class and invocation context."""
+"""Neutral runtime adapter base class and JSON-only invocation context."""
 
 from __future__ import annotations
 
@@ -23,16 +23,13 @@ from runtime_protocol.errors import RuntimeError
 
 
 @dataclass(frozen=True)
-class RuntimeExecutionContext:
-    """In-process execution inputs kept outside the wire contract."""
+class RuntimeInvocationContext:
+    """Product-owned values that may be serialized onto the runtime wire."""
 
-    request: Any = None
+    request_payload: Mapping[str, Any] = field(default_factory=dict)
     embedding_model: Optional[str] = None
     resolved_spec: Mapping[str, Any] = field(default_factory=dict)
     agent_run_context: Mapping[str, Any] = field(default_factory=dict)
-    trace_recorder: Any = None
-    cancellation_checker: Any = None
-    pause_checker: Any = None
     task_id: Optional[str] = None
     task_worker_id: Optional[str] = None
     task_context: Optional[RuntimeTaskContext] = None
@@ -55,17 +52,10 @@ class AgentRuntimeAdapter(ABC):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
     ) -> AgentRuntimeRequest:
         """Let a concrete adapter encode neutral context for its transport."""
         return request
-
-    async def prepare_execution_context(
-        self,
-        context: RuntimeExecutionContext,
-    ) -> RuntimeExecutionContext:
-        """Materialize runtime-native in-process inputs from neutral context."""
-        return context
 
     def _unsupported(self, operation_id: str, explanation: str) -> NoReturn:
         raise RuntimeError.capability_unsupported(
@@ -102,7 +92,7 @@ class AgentRuntimeAdapter(ABC):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult: ...
 
@@ -140,7 +130,7 @@ class AgentRuntimeAdapter(ABC):
         request: AgentRuntimeRequest,
         *,
         interrupt: Mapping[str, Any],
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult:
         self._unsupported("run.resume", "This runtime does not expose run resumption")
@@ -149,7 +139,7 @@ class AgentRuntimeAdapter(ABC):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> Optional[AgentRuntimeResult]:
         raise RuntimeError(
@@ -190,11 +180,11 @@ class AgentRuntimeAdapter(ABC):
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.inspect_state", "This runtime does not expose durable state inspection")
 
-    async def replay(self, request: AgentRuntimeRequest, checkpoint_id: str) -> AgentRuntimeResult:
-        self._unsupported("run.replay", "This runtime does not expose checkpoint replay")
+    async def replay(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
+        self._unsupported("run.replay", "This runtime does not expose continuation replay")
 
-    async def fork(self, request: AgentRuntimeRequest, checkpoint_id: str) -> AgentRuntimeResult:
-        self._unsupported("run.fork", "This runtime does not expose checkpoint forks")
+    async def fork(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
+        self._unsupported("run.fork", "This runtime does not expose continuation forks")
 
     async def list_subagents(self, request: AgentRuntimeRequest) -> list[Mapping[str, Any]]:
         self._unsupported("subagent.list", "This runtime does not expose subagent listing")
@@ -221,6 +211,6 @@ class AgentRuntimeAdapter(ABC):
         events: list[Mapping[str, Any]],
         *,
         run_id: str,
-        context: RuntimeExecutionContext | None = None,
+        context: RuntimeInvocationContext | None = None,
     ) -> list[Any]:
         self._unsupported("trace.project", "This runtime does not project runtime events into product traces")

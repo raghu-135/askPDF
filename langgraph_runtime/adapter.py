@@ -32,11 +32,23 @@ def _public_value(value: Any) -> Any:
         return {
             str(key): _public_value(item)
             for key, item in value.items()
-            if str(key) != "checkpoint_thread_id"
+            if "checkpoint" not in str(key).lower()
         }
     if isinstance(value, list):
         return [_public_value(item) for item in value]
     return value
+
+
+def _visualization_descriptor(data: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Expose bounded graph topology without leaking compiler/checkpoint state."""
+
+    source = data.get("visualization") if isinstance(data.get("visualization"), Mapping) else data
+    descriptor = {
+        key: _public_value(source[key])
+        for key in ("nodes", "edges", "execution_plan", "selected_route")
+        if key in source
+    }
+    return descriptor or None
 
 
 def _result_from_graph(
@@ -129,12 +141,16 @@ def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -
         if checkpoint_thread_id and kind == "interrupt.requested"
         else None
     )
+    public_payload = dict(_public_value(data))
+    visualization = _visualization_descriptor(data)
+    if visualization is not None:
+        public_payload["visualization"] = visualization
     return create_runtime_event(
         event_id=str(data.get("event_id") or f"{run_id}:{sequence}"),
         run_id=run_id,
         sequence=sequence,
         kind=kind,
-        payload=dict(_public_value(data)),
+        payload=public_payload,
         occurred_at=data.get("occurred_at") or data.get("timestamp"),
         trace_id=data.get("trace_id"),
         source_metadata={

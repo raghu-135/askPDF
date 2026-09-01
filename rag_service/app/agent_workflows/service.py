@@ -19,7 +19,7 @@ from app.agent_workflows.workflow_runtime import (
     default_agent_workflow_key,
     workflow_is_chat_eligible,
 )
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from app.runtime.catalog import (
     continuation_from_run,
     definition_from_run,
@@ -455,15 +455,12 @@ class AgentRunService:
                     "hitl_web_approval": getattr(req, "hitl_web_approval", None),
                 },
             )
-            runtime_context = RuntimeExecutionContext(
-                request=req,
+            runtime_context = RuntimeInvocationContext(
+                request_payload=req.model_dump(mode="json") if hasattr(req, "model_dump") else {},
                 embedding_model=embedding_model,
                 resolved_spec=stored_resolved_spec,
                 agent_run_context=context,
-                trace_recorder=trace_recorder,
-                cancellation_checker=lambda: chat_run_cancel_requested(run.id),
             )
-            runtime_context = await adapter.prepare_execution_context(runtime_context)
             runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
             runtime_result = await adapter.start(
                 runtime_request,
@@ -889,17 +886,14 @@ class AgentRunService:
                 execution_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
             if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
                 execution_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
-            runtime_context = RuntimeExecutionContext(
+            runtime_context = RuntimeInvocationContext(
                 resolved_spec=dict(resolution.run.resolved_spec_json or {}),
                 agent_run_context={
                     "agent_run_id": resolution.run.id,
                     "agent_workflow_id": resolution.run.workflow_id,
                 },
                 embedding_model=embedding_model,
-                trace_recorder=resume_trace_recorder,
-                cancellation_checker=lambda: chat_run_cancel_requested(resolution.run.id),
             )
-            runtime_context = await adapter.prepare_execution_context(runtime_context)
             runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
             if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
                 runtime_result = await adapter.continue_run(

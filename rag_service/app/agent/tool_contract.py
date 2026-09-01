@@ -5,9 +5,7 @@ import logging
 import time
 from datetime import date, datetime, time as datetime_time, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol
-
-from langchain_core.runnables import RunnableConfig
+from typing import Any, Dict, List, Mapping, Optional, Protocol
 from pydantic import BaseModel, Field, model_validator
 
 from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
@@ -25,12 +23,15 @@ def _compat_json_default(value: Any) -> str:
     return str(value)
 
 
+RuntimeToolConfig = Mapping[str, Any] | None
+
+
 class AskPdfTool(Protocol):
-    """Protocol for LangChain-compatible askPDF tools."""
+    """Framework-neutral protocol for async askPDF tools."""
 
     name: str
 
-    async def ainvoke(self, input: Any, config: RunnableConfig = None) -> Any:
+    async def ainvoke(self, input: Any, config: RuntimeToolConfig = None) -> Any:
         ...
 
 
@@ -177,7 +178,7 @@ def tool_started() -> float:
 
 def tool_trace(
     tool_name: str,
-    config: RunnableConfig = None,
+    config: RuntimeToolConfig = None,
     *,
     context: Any = None,
 ) -> ToolTrace:
@@ -215,7 +216,7 @@ def make_tool_result(
     *,
     tool_name: str,
     content: str,
-    config: RunnableConfig = None,
+    config: RuntimeToolConfig = None,
     context: Any = None,
     started: Optional[float] = None,
     ok: bool = True,
@@ -273,7 +274,7 @@ def make_tool_error_result(
     *,
     tool_name: str,
     error: Exception,
-    config: RunnableConfig = None,
+    config: RuntimeToolConfig = None,
     context: Any = None,
     started: Optional[float] = None,
     user_message: Optional[str] = None,
@@ -324,7 +325,7 @@ def _safe_json_object(raw: str) -> Dict[str, Any]:
     return {}
 
 
-def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: RunnableConfig = None) -> Dict[str, Any]:
+def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: RuntimeToolConfig = None) -> Dict[str, Any]:
     """Normalize legacy tool strings/dicts and new ToolResult envelopes."""
 
     if isinstance(raw, ToolResult):

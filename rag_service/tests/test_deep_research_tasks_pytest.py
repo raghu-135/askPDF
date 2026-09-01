@@ -26,7 +26,7 @@ from app.agent_workflows.debug_trace import AgentTraceRecorder
 from app.agent_workflows.enums import WorkflowNodeType
 from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.validator import WorkflowResolver, WorkflowValidator
+from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api
 from app.api import agent_workflows as agent_workflows_api
 from app.db.models_sqlmodel import AgentRun, AgentTaskTodo, AgentWorkflow
@@ -43,7 +43,7 @@ from app.time_utils import utc_now
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from runtime_protocol.events import create_runtime_event
 from app.runtime.evidence import evidence_event_fields, inherited_evidence_packets, tool_result_evidence
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
@@ -189,7 +189,7 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
             definition=definition,
             run=run,
             runtime_request=request,
-            runtime_context=RuntimeExecutionContext(),
+            runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=repository,
         registry=RuntimeRegistry(adapters=[]),
@@ -229,7 +229,7 @@ async def test_task_worker_replays_persisted_terminal_result_without_hermes_cont
         runtime_request=AgentRuntimeRequest(
             "run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id,
         ),
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=repository,
         registry=RuntimeRegistry(adapters=[]),
@@ -270,7 +270,7 @@ async def test_hermes_resolved_approval_continues_without_runtime_resume():
         definition=definition,
         run=run,
         runtime_request=request,
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=SimpleNamespace(),
         registry=registry,
@@ -306,7 +306,7 @@ async def test_task_runtime_resume_is_rejected_by_real_registry_before_adapter_c
             definition=definition,
             run=run,
             runtime_request=request,
-            runtime_context=RuntimeExecutionContext(),
+            runtime_context=RuntimeInvocationContext(),
             runtime_event_sink=None,
             repository=SimpleNamespace(),
             registry=registry,
@@ -386,7 +386,7 @@ async def test_interrupted_hermes_prestart_gets_new_product_run(monkeypatch):
             result.id, task.thread_id, definition.definition_id,
             definition.framework, definition.builder_id,
         ),
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=start_repository,
         registry=RuntimeRegistry(adapters=[adapter]),

@@ -27,6 +27,8 @@ from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
 os.environ.setdefault("LANGGRAPH_RUNTIME_BINDING_SECRET", "test-langgraph-binding-secret-32-characters")
+os.environ.setdefault("ASKPDF_AGENT_CHECKPOINTER_SETUP", "memory")
+os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
@@ -233,7 +235,6 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         chat_cancellation,
         repository as agent_workflow_repository,
     )
-    from langgraph_runtime import studio_runtime
 
     for module in (
         connection_sqlmodel,
@@ -256,7 +257,6 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         project_lifecycle_service,
         embedding_materialization_service,
         agent_workflow_repository,
-        studio_runtime,
         chat_cancellation,
         agent_task_repository,
     ):

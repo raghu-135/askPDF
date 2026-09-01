@@ -22,7 +22,7 @@ def _imports(path: Path) -> set[str]:
 
 
 def test_control_plane_has_no_langgraph_or_runtime_imports():
-    forbidden = ("langgraph", "langgraph_runtime")
+    forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
     for path in (ROOT / "app").rglob("*.py"):
         assert not any(
             name == prefix or name.startswith(prefix + ".")
@@ -52,6 +52,26 @@ def test_control_plane_manifest_and_legacy_paths_are_clean():
     assert not (ROOT / "app/runtime/langgraph_adapter.py").exists()
     assert not (ROOT / "app/runtime/langgraph").exists()
     assert not (ROOT / "runtime_service").exists()
+    for legacy in (
+        "agent_workflows/evidence.py",
+        "agent_workflows/parallel_contracts.py",
+        "agent_workflows/graph_validation.py",
+        "agent_workflows/node_catalog.py",
+        "agent_workflows/validator.py",
+        "mcp/langchain_adapter.py",
+    ):
+        assert not (ROOT / "app" / legacy).exists()
+
+
+def test_control_plane_has_no_framework_execution_symbols():
+    forbidden = ("StateGraph", "RunnableConfig", "GraphInterrupt", "RuntimeExecutionContext")
+    offenders = {
+        str(path.relative_to(ROOT)): token
+        for path in (ROOT / "app").rglob("*.py")
+        for token in forbidden
+        if token in path.read_text()
+    }
+    assert offenders == {}
 
 
 def test_frontend_and_product_api_do_not_expose_checkpoint_identity():

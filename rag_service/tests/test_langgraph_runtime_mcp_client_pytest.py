@@ -29,4 +29,3 @@ def test_runtime_mcp_wrapper_advertises_required_query_schema():
 
     schema = create_mcp_langchain_tool("search_web").args_schema.model_json_schema()
     assert schema["required"] == ["query"]
-

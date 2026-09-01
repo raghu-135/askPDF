@@ -134,7 +134,6 @@ def _root_event_key(event: Mapping[str, Any]) -> tuple[Any, ...]:
     return (
         event.get("name"),
         attrs.get("askpdf.interrupt.id") or output.get("interrupt_id"),
-        attrs.get("askpdf.checkpoint.thread_id"),
         attrs.get("askpdf.resume.action") or attrs.get("askpdf.status"),
     )
 

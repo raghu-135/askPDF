@@ -8,7 +8,7 @@ from opentelemetry.trace import SpanKind, StatusCode, set_span_in_context
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent_workflows.enums import NodeEventStatus, TraceStatus
-from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
+from app.agent_workflows.parallel_projection_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
 from app.agent_workflows.parallel_observability import parallel_span_refs
 from app.agent_workflows.trace_otel import (
     _BufferedSpanExporter,

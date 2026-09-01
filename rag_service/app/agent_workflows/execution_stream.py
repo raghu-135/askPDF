@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.agent_workflows.canonical_trace import build_parallel_groups
-from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
+from app.agent_workflows.parallel_projection_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
 from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
@@ -262,9 +262,13 @@ class AgentExecutionEventSink:
             source_metadata.setdefault("source_sequence", source_sequence)
         if normalized_kind != event:
             source_metadata.setdefault("source_event", event)
+        hash_payload = {
+            key: value for key, value in normalized_payload.items()
+            if key not in {"occurred_at", "timestamp"}
+        }
         candidate_hash = hashlib.sha256(
             json.dumps(
-                {"kind": normalized_kind, "payload": normalized_payload, "source_metadata": source_metadata},
+                {"kind": normalized_kind, "payload": hash_payload, "source_metadata": source_metadata},
                 sort_keys=True,
                 default=str,
             ).encode()

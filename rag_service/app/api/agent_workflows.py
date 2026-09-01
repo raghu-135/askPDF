@@ -12,22 +12,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
     BUILDER_TEST_RUN_KIND,
 )
-from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.parallel_contracts import parallel_policy_catalog
-from app.agent_workflows.corrective_contracts import corrective_policy_catalog
-from app.agent_workflows.workflow_requirements import (
-    workflow_node_tool_requirements,
-    workflow_required_tool_ids,
-)
 from app.agent_workflows.workflow_runtime import (
     ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
@@ -467,8 +459,8 @@ def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
     features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
     config = spec_json.get("config") if isinstance(spec_json.get("config"), dict) else {}
     return {
-        "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
-        "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
+        "required_tool_ids": sorted({str(value) for value in config.get("allowed_tool_ids") or [] if value}),
+        "node_tool_requirements": {},
         "supports_parallel_dispatch": bool(features.get("supports_parallel_dispatch")),
         "supports_corrective_retrieval": bool(features.get("supports_corrective_retrieval")),
         "parallel_policy": config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else None,

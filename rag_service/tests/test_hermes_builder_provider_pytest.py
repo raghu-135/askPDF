@@ -5,7 +5,7 @@ from app.runtime.builder_registry import get_builder_registry
 from app.runtime.builder import UnsupportedRequestOverrideError
 from runtime_protocol.contracts import AgentDefinition
 from app.runtime.hermes_builder import HermesBuilderProvider
-from langgraph_runtime_builder import LangGraphBuilderProvider
+from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
 
 def _definition() -> AgentDefinition:

@@ -16,7 +16,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     normalize_grounding_report,
     normalize_retrieval_quality_report,
 )
-from app.agent_workflows.evidence import (
+from langgraph_runtime.workflows.evidence import (
     append_corrective_evidence_packets,
     canonical_source_id,
     corrective_evidence_context,
@@ -34,9 +34,9 @@ from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from runtime_protocol.contracts import AgentRuntimeEvent
 from app.agent_workflows.metrics import build_run_metrics
 from langgraph_runtime.workflows.state import merge_corrective_wave_records
-from app.agent_workflows.hitl_materializer import materialize_hitl_gates
+from langgraph_runtime.workflows.hitl_materializer import materialize_hitl_gates
 from langgraph_runtime.workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
-from app.agent_workflows.validator import WorkflowValidator
+from langgraph_runtime.workflows.validator import WorkflowValidator
 
 
 def _packet(packet_id="p1", source_id="doc:file:1"):

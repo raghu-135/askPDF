@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from langgraph_runtime.adapter import LangGraphRuntimeAdapter
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
@@ -128,11 +128,11 @@ async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
     )
     result = await adapter.start(
         request,
-        context=RuntimeExecutionContext(
-            request=SimpleNamespace(question="hello"),
+        context=RuntimeInvocationContext(
+            request_payload={"question": "hello"},
             embedding_model="embed-model",
             resolved_spec={"workflow_id": "router_rag_agent"},
-            agent_run_context={"checkpoint_thread_id": "checkpoint-1"},
+            agent_run_context={"agent_run_id": "run-1"},
         ),
     )
 

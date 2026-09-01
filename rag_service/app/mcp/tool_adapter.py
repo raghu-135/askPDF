@@ -1,13 +1,11 @@
-"""Generic LangChain-to-MCP compatibility adapters."""
+"""Framework-neutral asynchronous MCP tool adapters."""
 
 import json
 import logging
 import asyncio
+from dataclasses import dataclass
 from uuid import uuid4
-from typing import Any
-
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, StructuredTool
+from typing import Any, Mapping
 
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from app.mcp.context_codec import RUNTIME_CONTEXT_KEY, encode_context
@@ -45,7 +43,7 @@ async def _await_mcp_call(awaitable, cancellation_checker=None, cancellation_sco
         raise
 
 
-def context_from_config(config: RunnableConfig | None, tool_call_id: str | None = None) -> ToolInvocationContext:
+def context_from_config(config: Mapping[str, Any] | None, tool_call_id: str | None = None) -> ToolInvocationContext:
     configurable = config.get("configurable", {}) if config else {}
     metadata = config.get("metadata", {}) if config else {}
     return ToolInvocationContext.from_mapping({
@@ -97,7 +95,7 @@ def _serialized_tool_result(result: dict[str, Any], text: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def call_mcp_tool(name: str, arguments: dict[str, Any], config: RunnableConfig | None = None) -> str:
+async def call_mcp_tool(name: str, arguments: dict[str, Any], config: Mapping[str, Any] | None = None) -> str:
     context = context_from_config(config)
     # The SDK owns the JSON-RPC counter for a ClientSession.  In-process
     # calls may intentionally use short-lived sessions, so do not allow the
@@ -211,32 +209,41 @@ def _arguments_from_input(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
-def create_mcp_langchain_tool(
-    tool_name: str,
-    request_model: type[Any] | None = None,
-) -> BaseTool:
-    """Create a caller-compatibility wrapper backed exclusively by MCP."""
-    if request_model is None:
-        request_model = request_model_for_tool(tool_name)
+@dataclass(frozen=True)
+class MCPToolAdapter:
+    """Small async tool surface used by product-owned non-framework callers."""
 
-    async def invoke(*args: Any, config: RunnableConfig = None, **kwargs: Any) -> str:
-        arguments = dict(kwargs)
-        if args:
-            arguments.update(_arguments_from_input(args[0]))
-        mcp_result = await call_mcp_tool(tool_name, arguments, config)
-        return mcp_result
+    name: str
+    description: str
+    args_schema: type[Any]
 
-    return StructuredTool.from_function(
-        coroutine=invoke,
+    async def ainvoke(
+        self,
+        value: Any = None,
+        config: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        arguments = _arguments_from_input(value)
+        arguments.update(kwargs)
+        if hasattr(self.args_schema, "model_validate"):
+            validated = self.args_schema.model_validate(arguments)
+            arguments = validated.model_dump(mode="json", exclude_none=True)
+        return await call_mcp_tool(self.name, arguments, config)
+
+
+def create_mcp_tool(tool_name: str, request_model: type[Any] | None = None) -> MCPToolAdapter:
+    """Create a framework-neutral caller backed exclusively by MCP."""
+
+    return MCPToolAdapter(
         name=tool_name,
         description=TOOL_FRIENDLY_CONFIG[tool_name]["description"],
-        args_schema=request_model,
+        args_schema=request_model or request_model_for_tool(tool_name),
     )
 
 
-def create_wikipedia_tool() -> BaseTool:
-    return create_mcp_langchain_tool("wikipedia")
+def create_wikipedia_tool() -> MCPToolAdapter:
+    return create_mcp_tool("wikipedia")
 
 
-def create_thread_shape_tool() -> BaseTool:
-    return create_mcp_langchain_tool("get_thread_shape")
+def create_thread_shape_tool() -> MCPToolAdapter:
+    return create_mcp_tool("get_thread_shape")

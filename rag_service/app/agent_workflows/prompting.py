@@ -13,8 +13,6 @@ from app.agent.prompting import (
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from app.agent_workflows.enums import PromptProfile, ToolName
 from app.agent_workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
-from app.agent_workflows.evidence import corrective_evidence_context, corrective_evidence_packets
-from app.agent_workflows.planning import WORKER_NODE_ORDER
 from app.prompts.loaders import get_web_search_mandate, load_prompt
 
 
@@ -33,10 +31,50 @@ GRAPH_TOOL_NAMES.extend(
     if config.get("mcp_server") and name not in GRAPH_TOOL_NAMES
 )
 
+WORKER_NODE_ORDER = [
+    "retrieval_worker",
+    "thread_conversation_history_worker",
+    "durable_memory_worker",
+    "thread_events_worker",
+    "web_worker",
+]
+
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
 CONTEXT_PLACEHOLDER = "{{EVIDENCE_CONTEXT}}"
 EVALUATOR_REPORT_PLACEHOLDER = "{{EVALUATOR_REPORT}}"
+
+
+def _preview_evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return a bounded product-side preview of runtime-supplied evidence."""
+
+    assessments = {
+        str(item.get("packet_id")): item
+        for item in state.get("evidence_assessments") or []
+        if isinstance(item, dict) and item.get("packet_id")
+    }
+    return [
+        dict(item)
+        for item in (state.get("evidence_packets") or [])[-12:]
+        if isinstance(item, dict)
+        and (
+            not assessments
+            or (
+                bool(assessments.get(str(item.get("id")), {}).get("relevant"))
+                and bool(assessments.get(str(item.get("id")), {}).get("provenance_complete"))
+                and not bool(assessments.get(str(item.get("id")), {}).get("instruction_injection_risk"))
+                and float(assessments.get(str(item.get("id")), {}).get("confidence") or 0) >= 0.5
+            )
+        )
+    ]
+
+
+def _preview_evidence_context(state: Dict[str, Any]) -> str:
+    return "\n\n".join(
+        str(packet.get("content") or "")[:2_000]
+        for packet in _preview_evidence_packets(state)
+        if packet.get("content")
+    )[:25_536]
 
 
 WORKER_TYPE_DESCRIPTIONS = {
@@ -245,7 +283,7 @@ def build_retrieval_quality_prompt(state: Dict[str, Any]) -> str:
 
 
 def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
-    selected_packets = corrective_evidence_packets(state)
+    selected_packets = _preview_evidence_packets(state)
     source_ids = sorted({
         str(source_id)
         for packet in selected_packets
@@ -257,7 +295,7 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
         **_prompt_context(state),
         "DRAFT_ANSWER": str(state.get("final_answer") or "")[:12_000],
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
-        "EVIDENCE_CONTEXT": corrective_evidence_context(state),
+        "EVIDENCE_CONTEXT": _preview_evidence_context(state),
         "RETRIEVAL_CONTRADICTIONS": _json_preview(
             (state.get("retrieval_quality_report") or {}).get("material_contradictions") or [],
             limit=5_000,

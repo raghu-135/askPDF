@@ -24,15 +24,6 @@ class GenericParallelVisualization(TypedDict):
     group_ids: list[str]
 
 
-class LangGraphVisualization(TypedDict):
-    id: str
-    nodes: list[Any]
-    edges: list[Any]
-    execution_plan: list[Any]
-    selected_route: Any
-    visits: list[Any]
-
-
 class HermesSessionVisualization(TypedDict):
     id: str
     session_id: Any
@@ -650,7 +641,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         "primary_failure_event_id": (primary or {}).get("event_id"),
         "primary_basis": primary_basis if primary is not None else None,
         "location": (primary or {}).get("location") or {},
-        "failure_count": max(len(groups), 1 if terminal and terminal.get("kind") == "run.failed" else 0),
+        "failure_count": len(rows),
         "cancellation_count": len([row for row in rows if row.get("classification") == "cancellation"]),
     }
     return {
@@ -662,13 +653,24 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
     }
 
 
-def _graph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[Mapping[str, Any]]) -> LangGraphVisualization | None:
-    config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), Mapping) else {}
-    graph = config.get("graph") if isinstance(config.get("graph"), Mapping) else {}
-    nodes = list(graph.get("nodes") or [])
-    edges = list(graph.get("edges") or [])
-    if not nodes and not edges:
-        return None
+def _runtime_visualization(
+    events: Sequence[AgentRuntimeEvent],
+    operations: Sequence[Mapping[str, Any]],
+    visualization_id: str,
+) -> dict[str, Any] | None:
+    """Project a bounded visualization descriptor emitted by a runtime.
+
+    The control plane deliberately does not inspect resolved framework specs.
+    Runtimes may emit a neutral ``visualization`` object in an event payload;
+    operation topology remains useful when no static descriptor is available.
+    """
+
+    descriptors = [
+        event.payload.get("visualization")
+        for event in events
+        if event.source_metadata.get("visualization_id") == visualization_id
+        and isinstance(event.payload.get("visualization"), Mapping)
+    ]
     visits = [
         {
             "operation_id": row.get("operation_id"),
@@ -680,22 +682,19 @@ def _graph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[
         for row in operations
         if isinstance(row.get("topology_ref"), Mapping)
     ]
-    execution_plan = next((row.get("execution_plan") for row in reversed(operations) if row.get("execution_plan")), graph.get("execution_plan") or graph.get("executionPlan") or [])
-    selected_route = next((row.get("route") for row in reversed(operations) if row.get("route")), graph.get("selected_route") or graph.get("selectedRoute"))
-    return {
-        "id": TRACE_VISUALIZATION_LANGGRAPH,
-        "nodes": _bounded_value(nodes),
-        "edges": _bounded_value(edges),
-        "execution_plan": _bounded_value(execution_plan),
-        "selected_route": selected_route,
-        "visits": _bounded_value(visits),
-    }
+    if not descriptors and not visits:
+        return None
+    descriptor = dict(descriptors[-1]) if descriptors else {}
+    descriptor["id"] = visualization_id
+    descriptor["visits"] = visits
+    return _bounded_value(descriptor)
 
 
 def _hermes_visualization(events: Sequence[AgentRuntimeEvent], failures: Sequence[Mapping[str, Any]]) -> HermesSessionVisualization | None:
     hermes_events = [
         event for event in events
         if event.source_metadata.get("visualization_id") == TRACE_VISUALIZATION_HERMES
+        or event.source_metadata.get("framework") == "hermes"
     ]
     if not hermes_events:
         return None
@@ -744,9 +743,9 @@ def build_canonical_trace_projection(
             "id": TRACE_VISUALIZATION_PARALLEL,
             "group_ids": [group["group_id"] for group in parallel_groups],
         }
-    langgraph = _graph_visualization(resolved_spec, operations)
-    if langgraph is not None:
-        visualizations[TRACE_VISUALIZATION_LANGGRAPH] = langgraph
+    runtime_graph = _runtime_visualization(ordered, operations, TRACE_VISUALIZATION_LANGGRAPH)
+    if runtime_graph is not None:
+        visualizations[TRACE_VISUALIZATION_LANGGRAPH] = runtime_graph
     hermes = _hermes_visualization(ordered, failures)
     if hermes is not None:
         visualizations[TRACE_VISUALIZATION_HERMES] = hermes

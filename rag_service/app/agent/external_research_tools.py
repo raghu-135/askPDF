@@ -7,14 +7,12 @@ the historical module; every returned tool is an MCP client adapter.
 
 from typing import Any
 
-from langchain_core.tools import BaseTool
-
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.tool_adapter import MCPToolAdapter, create_mcp_tool
 from app.rag.enums import TimelineEventType
 
 
-search_web = create_mcp_langchain_tool("search_web")
+search_web = create_mcp_tool("search_web")
 
 
 def _format_web_context(
@@ -49,7 +47,7 @@ def _format_web_context(
     return {"content": "\n\n".join(content), "__web_sources__": web_sources}
 
 
-def get_external_research_tools() -> list[BaseTool]:
+def get_external_research_tools() -> list[MCPToolAdapter]:
     """Return MCP adapters for all registry-authorized external tools."""
     names = (
         "wikipedia",
@@ -62,4 +60,4 @@ def get_external_research_tools() -> list[BaseTool]:
         "stack_exchange",
         "yahoo_finance_news",
     )
-    return [create_mcp_langchain_tool(name) for name in names if name in TOOL_FRIENDLY_CONFIG]
+    return [create_mcp_tool(name) for name in names if name in TOOL_FRIENDLY_CONFIG]

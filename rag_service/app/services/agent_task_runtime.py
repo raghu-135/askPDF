@@ -21,7 +21,7 @@ from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
 from app.services.agent_task_runtime_projection import apply_runtime_task_delta, runtime_delta_conflict_details
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
 from app.runtime.capability_resolver import require_capability
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
@@ -50,7 +50,7 @@ async def _invoke_task_runtime(
     definition: Any,
     run: Any,
     runtime_request: AgentRuntimeRequest,
-    runtime_context: RuntimeExecutionContext,
+    runtime_context: RuntimeInvocationContext,
     runtime_event_sink: Any,
     repository: AgentWorkflowRepository,
     registry: RuntimeRegistry,
@@ -583,18 +583,14 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_id=task.id,
             continuation=continuation_from_run(run),
         )
-        runtime_context = RuntimeExecutionContext(
+        runtime_context = RuntimeInvocationContext(
             embedding_model=thread.embedding_model,
             resolved_spec=resolved_spec,
             agent_run_context=context,
-            trace_recorder=trace,
-            cancellation_checker=cancellation_requested,
-            pause_checker=pause_requested,
             task_id=task.id,
             task_worker_id=worker_id,
             task_context=task_context,
         )
-        runtime_context = await adapter.prepare_execution_context(runtime_context)
         runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
         runtime_result = await _invoke_task_runtime(
             adapter=adapter,

@@ -314,7 +314,6 @@ class AgentWorkflowRepository:
         statuses: Optional[list[str]] = None,
         thread_id: Optional[str] = None,
         limit: int = 1000,
-        checkpointer: Any = None,
     ) -> list[str]:
         """Delete runtime-owned continuations for old terminal runs only."""
 
@@ -325,7 +324,6 @@ class AgentWorkflowRepository:
             statuses=statuses,
             thread_id=thread_id,
             limit=limit,
-            checkpointer=checkpointer,
         )
 
     async def fail_stale_running_runs(

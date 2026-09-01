@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 import httpx
 
-from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeExecutionContext
+from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeInvocationContext
 from app.runtime.budgets import deep_agent_budgets
 from app.runtime.catalog import definition_metadata_from_spec
 from runtime_protocol.contracts import (
@@ -52,10 +52,10 @@ def _safe_json(value: Any) -> Any:
     raise TypeError(f"runtime wire values must be JSON-compatible, got {type(value).__name__}")
 
 
-def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
+def context_to_dict(context: RuntimeInvocationContext) -> dict[str, Any]:
     """Serialize only execution inputs; repositories and writers never cross the wire."""
 
-    request_payload = _safe_json(context.request)
+    request_payload = _safe_json(context.request_payload)
     if isinstance(request_payload, Mapping):
         request_payload = dict(request_payload)
         # The external runtime must select its MCP-backed, persistence-free
@@ -218,7 +218,7 @@ class RuntimeTransportConnector:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response envelope")
         return payload["result"]
 
-    async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
+    async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
         resolved_spec = context.resolved_spec if isinstance(context.resolved_spec, Mapping) else {}
         runtime = resolved_spec.get("runtime") if isinstance(resolved_spec.get("runtime"), Mapping) else {}
         features = runtime.get("features") if isinstance(runtime.get("features"), Mapping) else {}
@@ -532,7 +532,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
     ) -> AgentRuntimeRequest:
         from app.mcp.execution_context_token import issue_execution_context_token
         from app.mcp.registry import MCP_TOOL_DEFINITIONS
@@ -633,13 +633,13 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid builder catalog")
         return dict(catalog)
 
-    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
         return await self.transport._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
 
-    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
         return await self.transport._stream(f"/v1/runs/{request.run_id}/resume", request, context=context, payload={"interrupt": _safe_json(interrupt)}, event_sink=event_sink)
 
-    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
+    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
         result = await self.transport._stream(
             f"/v1/runs/{request.run_id}/continue",
             request,
@@ -661,7 +661,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json={"request": request.to_dict()})
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
-    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
+    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeInvocationContext | None = None) -> list[AgentRuntimeEvent]:
         projected = []
         for event in events:
             value = dict(event)

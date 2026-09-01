@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
@@ -606,7 +606,7 @@ async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
     result = await adapter.start(
         request,
-        context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
+        context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
     )
 
     assert result.output == "recovered"
@@ -628,7 +628,7 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
     with pytest.raises(RuntimeError) as error:
         await adapter.start(
             request,
-            context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
+            context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
         )
 
     assert error.value.code == "runtime_model_tool_calling_unsupported"

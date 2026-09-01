@@ -2,10 +2,15 @@
 
 import os
 import subprocess
+from pathlib import Path
+
+
+RUNTIME_ROOT = Path(__file__).resolve().parent
+REPOSITORY_ROOT = RUNTIME_ROOT.parent
 
 
 def _run_alembic(*args: str) -> None:
-    subprocess.run(["alembic", *args], check=True)
+    subprocess.run(["alembic", *args], check=True, cwd=REPOSITORY_ROOT)
 
 
 def main() -> None:
@@ -18,7 +23,7 @@ def main() -> None:
         raise RuntimeError("AGENT_RUNTIME_EXECUTION_DATABASE_URL is required")
 
     os.environ["DATABASE_URL"] = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    _run_alembic("-c", "langgraph_runtime/alembic.ini", "upgrade", "head")
+    _run_alembic("-c", str(RUNTIME_ROOT / "alembic.ini"), "upgrade", "head")
 
 
 if __name__ == "__main__":

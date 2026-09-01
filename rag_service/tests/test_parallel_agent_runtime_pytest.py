@@ -15,16 +15,18 @@ from langgraph.errors import NodeError
 from langgraph_runtime.compiler import WorkflowCompiler
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from langgraph_runtime.graph import NodeRegistry
-from app.agent_workflows.node_catalog import get_node_catalog
-from app.agent_workflows.parallel_contracts import (
+from langgraph_runtime.workflows.node_catalog import get_node_catalog
+from langgraph_runtime.workflows.parallel_contracts import (
     DEFAULT_PARALLEL_POLICY,
     PARALLEL_EVENT_NAMES,
     PARALLEL_REDUCER_CHANNELS,
     PARALLEL_RETRIEVAL_WORKER_TYPES,
     PARALLEL_REFERENCE_WORKFLOW_ID,
+    parallel_policy_catalog,
 )
+from app.runtime.builder import BuilderCatalog
 from app.agent_workflows.parallel_observability import project_parallel_events
-from app.agent_workflows.planning import (
+from langgraph_runtime.workflows.planning import (
     normalize_execution_plan,
     worker_decision_contract_errors,
     worker_decisions_need_coverage_review,
@@ -42,7 +44,7 @@ from langgraph_runtime.workflows.parallel_runtime import (
 )
 from langgraph_runtime.workflows.state import merge_parallel_deltas
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
-from app.agent_workflows.validator import WorkflowValidator
+from langgraph_runtime.workflows.validator import WorkflowValidator
 from app.api.agent_workflows import get_internal_agent_workflow_catalog
 
 
@@ -318,7 +320,16 @@ def test_parallel_contracts_are_canonical_and_builtin_policy_does_not_drift():
 
 
 @pytest.mark.asyncio
-async def test_catalog_api_exposes_canonical_parallel_policy_descriptors():
+async def test_catalog_api_exposes_canonical_parallel_policy_descriptors(monkeypatch):
+    class RemoteBuilder:
+        async def catalog(self, definition):
+            return BuilderCatalog(
+                framework="langgraph",
+                builder_id="langgraph_graph",
+                payload={"defaults": {"parallel_policy": parallel_policy_catalog()}},
+            )
+
+    monkeypatch.setattr("app.api.agent_workflows.builder_for_definition", lambda _definition: RemoteBuilder())
     catalog = await get_internal_agent_workflow_catalog(
         framework="langgraph",
         builder_id="langgraph_graph",

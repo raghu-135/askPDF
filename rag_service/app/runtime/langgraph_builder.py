@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from app.runtime.adapter import RuntimeExecutionContext
+from app.runtime.adapter import RuntimeInvocationContext
 from app.runtime.builder import BuilderCapabilities, BuilderCatalog, BuilderTestContext, UnsupportedRequestOverrideError
 from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
@@ -116,10 +116,16 @@ class LangGraphBuilderProvider:
         }
 
     @staticmethod
-    def _execution_context(context: BuilderTestContext) -> RuntimeExecutionContext:
+    def _execution_context(context: BuilderTestContext) -> RuntimeInvocationContext:
         run = context.run
-        return RuntimeExecutionContext(
-            request=context.test_request,
+        return RuntimeInvocationContext(
+            request_payload=(
+                context.test_request.model_dump(mode="json")
+                if hasattr(context.test_request, "model_dump")
+                else dict(context.test_request or {})
+                if isinstance(context.test_request, Mapping)
+                else {}
+            ),
             embedding_model=context.embedding_model,
             resolved_spec=dict(getattr(run, "resolved_spec_json", None) or {}),
             agent_run_context={
