@@ -25,6 +25,7 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
     async with _maintenance_lock:
         bounded = max(1, min(int(batch_size), 500))
         expired_tasks = await tasks.expire_stale_tasks()
+        migrated_course_corrections = await tasks.backfill_legacy_course_corrections(limit=bounded)
         recovered_leases = await tasks.release_stale_task_leases(limit=bounded)
         deleted_tasks = 0
         for task_id in await tasks.list_pending_task_deletions(limit=bounded):
@@ -70,6 +71,7 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
         runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,
+            "migrated_course_corrections": migrated_course_corrections,
             "recovered_leases": recovered_leases,
             "deleted_tasks": deleted_tasks,
             "expired_artifacts": expired_artifacts,

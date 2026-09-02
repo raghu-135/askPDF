@@ -77,6 +77,8 @@ def _runtime_config(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
     max_concurrency: int | None = None,
     deep_research_services_factory: Any,
 ) -> Dict[str, Any]:
@@ -94,6 +96,10 @@ def _runtime_config(
         configurable["cancellation_checker"] = cancellation_checker
     if pause_checker is not None:
         configurable["pause_checker"] = pause_checker
+    if course_correction_reader is not None:
+        configurable["course_correction_reader"] = course_correction_reader
+    if course_correction_acknowledger is not None:
+        configurable["course_correction_acknowledger"] = course_correction_acknowledger
     if embedding_model is not None:
         configurable["embedding_model"] = embedding_model
     if context_window is not None:
@@ -233,6 +239,8 @@ async def execute_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -247,6 +255,8 @@ async def execute_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -350,6 +360,8 @@ async def _handle_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and return runtime-owned output."""
 
@@ -408,6 +420,8 @@ async def _handle_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
         max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
         deep_research_services_factory=_deep_research_services_factory(),
     )
@@ -503,6 +517,7 @@ async def _handle_compiled_rag_chat(
         "task_memory_snapshot": dict(getattr(req, "task_memory_snapshot", None) or {}),
         "task_budget_usage": dict(getattr(req, "task_budget_usage", None) or {}),
         "task_orchestration": dict(getattr(req, "task_orchestration", None) or {}),
+        "task_course_corrections": list(getattr(req, "task_course_corrections", None) or []),
         "runtime_execution_mode": bool(getattr(req, "runtime_execution_mode", False)),
         "runtime_artifact_manifest": list(getattr(req, "runtime_artifact_manifest", None) or []),
         "runtime_artifact_contents": dict(getattr(req, "runtime_artifact_contents", None) or {}),
@@ -761,6 +776,8 @@ async def continue_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
 ) -> Dict[str, Any] | None:
     """Continue a nonterminal graph from its latest durable checkpoint."""
 
@@ -791,6 +808,8 @@ async def continue_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
     )
     agent_run_context = {
@@ -882,6 +901,8 @@ async def resume_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and return runtime output."""
 
@@ -913,6 +934,8 @@ async def resume_compiled_rag_chat(
         execution_event_sink=execution_event_sink,
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}

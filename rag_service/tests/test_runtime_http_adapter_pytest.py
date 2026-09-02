@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeTaskContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeCourseCorrection, RuntimeTaskContext
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
 from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import result_to_product_payload
@@ -132,6 +132,38 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
     assert "run.events" not in capabilities.operations
     assert capabilities.operations["run.resume"].support.value == "conditional"
     assert validation.valid
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_submits_typed_course_correction():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/runs/run-1/course-corrections"
+        body = json.loads(request.content)
+        assert body["correction"]["operation_id"] == "operation-1"
+        return httpx.Response(200, json={"result": {
+            "correction_id": "correction-1",
+            "operation_id": "operation-1",
+            "status": "accepted",
+            "run_id": "run-1",
+            "run_status": "running",
+        }})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    receipt = await adapter.submit_course_correction(
+        _request(),
+        RuntimeCourseCorrection(
+            correction_id="correction-1",
+            operation_id="operation-1",
+            instruction="Revise remaining work.",
+            observed_task_version=2,
+        ),
+    )
+
+    assert receipt.status == "accepted"
+    assert receipt.run_id == "run-1"
     await client.aclose()
 
 

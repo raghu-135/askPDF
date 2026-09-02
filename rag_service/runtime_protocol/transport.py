@@ -30,6 +30,8 @@ from runtime_protocol.contracts import (
     RuntimeTaskResult,
     RuntimeArtifact,
     RuntimeApprovalResponse,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
     RuntimeSteeringInput,
     RuntimeValidationIssue,
     RuntimeValidationResult,
@@ -72,6 +74,37 @@ def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
         permissions=dict(value.get("permissions") or {}),
         protocol_version=protocol_version,
         minimum_compatible_version=minimum_compatible_version,
+    )
+
+
+def course_correction_from_dict(value: Mapping[str, Any]) -> RuntimeCourseCorrection:
+    return RuntimeCourseCorrection(
+        correction_id=str(value["correction_id"]),
+        operation_id=str(value["operation_id"]),
+        instruction=str(value["instruction"]),
+        scope=str(value.get("scope") or "remaining_work"),
+        observed_task_version=int(value.get("observed_task_version") or 0),
+        observed_plan_revision=int(value.get("observed_plan_revision") or 0),
+        submitted_at=value.get("submitted_at"),
+        protocol_version=str(value.get("protocol_version") or RUNTIME_PROTOCOL_VERSION),
+        minimum_compatible_version=str(
+            value.get("minimum_compatible_version") or RUNTIME_MINIMUM_COMPATIBLE_VERSION
+        ),
+    )
+
+
+def course_correction_receipt_from_dict(
+    value: Mapping[str, Any],
+) -> RuntimeCourseCorrectionReceipt:
+    return RuntimeCourseCorrectionReceipt(
+        correction_id=str(value["correction_id"]),
+        operation_id=str(value["operation_id"]),
+        status=str(value["status"]),
+        run_id=str(value["run_id"]),
+        run_status=value.get("run_status"),
+        plan_revision=(
+            int(value["plan_revision"]) if value.get("plan_revision") is not None else None
+        ),
     )
 
 

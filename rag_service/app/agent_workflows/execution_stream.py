@@ -50,6 +50,7 @@ class AgentExecutionEventSink:
         self._runtime_binding_persister: Any = None
         self._runtime_fact_persister: Any = None
         self._runtime_event_persister: Any = None
+        self._runtime_event_projector: Any = None
         self._run_id: str | None = None
         self._sequence = 0
         self._canonical_events: list[AgentRuntimeEvent] = []
@@ -75,6 +76,9 @@ class AgentExecutionEventSink:
         self._run_id = run_id
         self._runtime_event_persister = persister
         self._sequence = max(0, int(initial_sequence))
+
+    def bind_runtime_event_projector(self, projector: Any) -> None:
+        self._runtime_event_projector = projector
 
     def canonical_events(self) -> list[AgentRuntimeEvent]:
         return list(self._canonical_events)
@@ -316,6 +320,8 @@ class AgentExecutionEventSink:
         else:
             if self._runtime_event_persister is not None and canonical.run_id:
                 await self._runtime_event_persister(canonical.run_id, canonical)
+            if self._runtime_event_projector is not None:
+                await self._runtime_event_projector(canonical)
             self._canonical_events.append(canonical)
             if event_id:
                 self._runtime_event_ids[event_id] = candidate_hash

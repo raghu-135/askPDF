@@ -18,6 +18,8 @@ from runtime_protocol.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeApprovalResponse,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
     RuntimeSteeringInput,
     RuntimeCapabilities,
     RuntimeCapabilitySemantics,
@@ -45,6 +47,35 @@ from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.task_results import normalize_runtime_task_result, runtime_task_result_summary
 from app.services.agent_task_runtime_projection import runtime_delta_conflict_details
 from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices
+
+
+def test_course_correction_contract_is_json_only_and_versioned():
+    correction = RuntimeCourseCorrection(
+        correction_id="correction-1",
+        operation_id="operation-1",
+        instruction="Revise only the remaining work.",
+        scope="remaining_work",
+        observed_task_version=4,
+        observed_plan_revision=2,
+    )
+    receipt = RuntimeCourseCorrectionReceipt(
+        correction_id=correction.correction_id,
+        operation_id=correction.operation_id,
+        status="accepted",
+        run_id="run-1",
+        run_status="running",
+    )
+
+    assert correction.to_dict()["protocol_version"]
+    assert receipt.to_dict()["status"] == "accepted"
+    with pytest.raises(ValueError, match="scope"):
+        RuntimeCourseCorrection(
+            correction_id="correction-2",
+            operation_id="operation-2",
+            instruction="Rewrite completed work.",
+            scope="all_work",
+            observed_task_version=4,
+        )
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():

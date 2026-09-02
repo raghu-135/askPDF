@@ -480,13 +480,23 @@ async def resolve_run_capability_resolution(
             preserves_session_id=True,
         )
     course_correction = operations.get(RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT)
-    if course_correction is not None and task_status not in {
-        AgentTaskStatus.RUNNING.value, AgentTaskStatus.QUEUED.value,
-    }:
-        operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT] = _disabled(
-            course_correction, RuntimeCapabilityDisabledReason.TASK_TERMINAL
-            if task_status in TERMINAL_TASK_STATES else RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE,
+    if course_correction is not None:
+        course_correction = replace(
+            course_correction,
+            preserves_run_id=definition.framework == "langgraph" and status not in TERMINAL_RUN_STATES,
+            preserves_session_id=True,
         )
+        if task_status not in {
+            AgentTaskStatus.RUNNING.value,
+            AgentTaskStatus.QUEUED.value,
+            AgentTaskStatus.PAUSED.value,
+            AgentTaskStatus.AWAITING_APPROVAL.value,
+        }:
+            course_correction = _disabled(
+                course_correction, RuntimeCapabilityDisabledReason.TASK_TERMINAL
+                if task_status in TERMINAL_TASK_STATES else RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE,
+            )
+        operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT] = course_correction
     run_metadata = getattr(run, "run_metadata_json", None)
     cancellation_pending = (
         status not in TERMINAL_RUN_STATES

@@ -2069,7 +2069,7 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     )
     assert missing.status_code == 404
     started = api_client.post(
-        f"/api/agent-tasks/{task['id']}/start",
+        f"/api/agent-tasks/{task['id']}/commands/start",
         params={"thread_id": sample_thread.id},
         json={"expected_version": task["version"]},
         headers={"Idempotency-Key": "builtin-start"},
@@ -2278,6 +2278,7 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     )
     monkeypatch.setattr(agent_task_maintenance, "get_content_store", lambda: store)
     monkeypatch.setattr(agent_task_maintenance.tasks, "expire_stale_tasks", AsyncMock(return_value=2))
+    monkeypatch.setattr(agent_task_maintenance.tasks, "backfill_legacy_course_corrections", AsyncMock(return_value=1))
     monkeypatch.setattr(agent_task_maintenance.tasks, "release_stale_task_leases", AsyncMock(return_value=1))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_pending_task_deletions", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_expired_artifacts", AsyncMock(return_value=[]))
@@ -2295,6 +2296,7 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)
 
     assert result["expired_tasks"] == 2
+    assert result["migrated_course_corrections"] == 1
     assert result["recovered_leases"] == 1
     assert result["orphaned_content"] == 1
     assert result["deleted_checkpoints"] == 1

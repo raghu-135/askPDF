@@ -245,6 +245,7 @@ async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
         "preserved": 1,
         "failed": 0,
         "deferred": 1,
+        "corrections": 0,
     }
 
 

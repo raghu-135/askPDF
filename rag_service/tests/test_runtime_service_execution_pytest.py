@@ -364,6 +364,46 @@ async def test_pause_request_is_persisted_for_external_execution() -> None:
 
 
 @pytest.mark.asyncio
+async def test_course_correction_endpoint_is_idempotent_and_terminal_aware(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
+    store = ExecutionStore()
+    await store.create("run-correction", "start", _request("run-correction"), _payload("run-correction"))
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    payload = {
+        "request": _request("run-correction"),
+        "correction": {
+            "correction_id": "correction-1",
+            "operation_id": "operation-1",
+            "instruction": "Replan the remaining security work.",
+            "scope": "remaining_work",
+            "observed_task_version": 2,
+            "observed_plan_revision": 1,
+        },
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        accepted = await client.post("/v1/runs/run-correction/course-corrections", json=payload)
+        duplicate = await client.post("/v1/runs/run-correction/course-corrections", json=payload)
+        mismatched = {**payload, "request": {**payload["request"], "task_id": "another-task"}}
+        identity_error = await client.post(
+            "/v1/runs/run-correction/course-corrections", json=mismatched,
+        )
+        await store.set_status("run-correction", "completed")
+        terminal_payload = {
+            **payload,
+            "correction": {**payload["correction"], "correction_id": "correction-2", "operation_id": "operation-2"},
+        }
+        terminal = await client.post("/v1/runs/run-correction/course-corrections", json=terminal_payload)
+
+    assert accepted.status_code == 200
+    assert accepted.json()["result"]["status"] == "accepted"
+    assert duplicate.json()["result"]["status"] == "already_accepted"
+    assert identity_error.status_code == 409
+    assert identity_error.json()["detail"]["code"] == "runtime_run_identity_mismatch"
+    assert terminal.json()["result"]["status"] == "terminal"
+
+
+@pytest.mark.asyncio
 async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(monkeypatch: pytest.MonkeyPatch) -> None:
     started = asyncio.Event()
     stopped = asyncio.Event()

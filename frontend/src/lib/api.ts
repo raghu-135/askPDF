@@ -2527,7 +2527,7 @@ export async function getAgentTask(taskId: string, threadId: string): Promise<Ag
 }
 
 export async function commandAgentTask(taskId: string, threadId: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry', version: number): Promise<AgentTaskSummary> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/${action}?${taskQuery(threadId)}`, {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/commands/${action}?${taskQuery(threadId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({ expected_version: version }),
@@ -2566,7 +2566,12 @@ export async function respondToAgentTaskBudgetReview(
     decision: 'continue' | 'accept_partial' | 'steer';
     guidance?: string;
   },
-): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean }> {
+): Promise<{
+  task: AgentTaskSummary;
+  linked_run?: AgentTaskRun | null;
+  correction_delivery?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/budget-review/responses?${taskQuery(threadId)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload),
   });
@@ -2578,7 +2583,16 @@ export async function submitAgentTaskCourseCorrection(
   taskId: string,
   threadId: string,
   payload: { run_id: string; expected_version: number; instruction: string; scope?: 'remaining_work' },
-): Promise<{ task: AgentTaskSummary; correction: Record<string, unknown>; duplicate: boolean }> {
+): Promise<{
+  task: AgentTaskSummary;
+  command_id: string;
+  correction_id: string;
+  correction: Record<string, unknown>;
+  delivery_mode: 'same_run_safe_boundary' | 'linked_run';
+  delivery_state: 'accepted' | 'delivered' | 'applied' | 'linked' | 'rejected';
+  runtime_receipt?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/course-corrections?${taskQuery(threadId)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ scope: 'remaining_work', ...payload }),
   });

@@ -272,6 +272,7 @@ export default function DeepResearchTaskPanel({
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [reviewGuidance, setReviewGuidance] = useState('');
   const [courseCorrection, setCourseCorrection] = useState('');
+  const [courseCorrectionStatus, setCourseCorrectionStatus] = useState('');
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
@@ -815,15 +816,26 @@ export default function DeepResearchTaskPanel({
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
     </Box> : interactionDescriptors.length > 0 || courseCorrectionAvailability.visible ? <Box sx={{ pb: 1 }}>
-      {courseCorrectionAvailability.visible && task.status === 'running' ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
+      {courseCorrectionAvailability.visible && ['queued', 'running', 'paused', 'awaiting_approval'].includes(task.status) ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
         <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
         <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
           if (!selectedRun || !task) return;
           void submitAgentTaskCourseCorrection(task.id, threadId, { run_id: selectedRun.id, expected_version: task.version, instruction: courseCorrection.trim() })
-            .then(() => { setCourseCorrection(''); return refresh(); })
+            .then((response) => {
+              setCourseCorrection('');
+              setCourseCorrectionStatus(
+                response.delivery_state === 'linked'
+                  ? 'Correction linked to a follow-up run.'
+                  : response.delivery_state === 'delivered'
+                    ? 'Correction delivered and waiting for the next safe planning boundary.'
+                    : 'Correction accepted and queued for delivery.',
+              );
+              return refresh();
+            })
             .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
         }}>Redirect research</Button>
       </Stack> : null}
+      {courseCorrectionStatus ? <Alert severity="info" sx={{ mb: 1 }}>{courseCorrectionStatus}</Alert> : null}
       <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
         {interactionDescriptors.map((operation) => <Button
           key={operation.id}

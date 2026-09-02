@@ -381,6 +381,35 @@ async def test_postgres_request_cancel_matches_in_memory_outcomes() -> None:
         await store.close()
 
 
+@pytest.mark.asyncio
+async def test_postgres_course_correction_matches_in_memory_outcomes() -> None:
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+
+    store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    await store.initialize()
+    run_id = f"runtime-correction-{uuid.uuid4().hex}"
+    correction = {
+        "correction_id": "correction-1", "operation_id": "operation-1",
+        "instruction": "Change remaining work.", "scope": "remaining_work",
+        "observed_task_version": 2, "observed_plan_revision": 1,
+    }
+    try:
+        await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}})
+        assert (await store.request_course_correction(run_id, correction))["status"] == "accepted"
+        assert (await store.request_course_correction(run_id, correction))["status"] == "already_accepted"
+        assert await store.mark_course_corrections_applied(run_id, ["correction-1"], plan_revision=2) == ["correction-1"]
+        assert await store.pending_course_corrections(run_id) == []
+        assert [value["kind"] for value in await store.events_after(run_id)] == [
+            "course_correction.accepted", "course_correction.applied",
+        ]
+    finally:
+        if store._pool is not None:
+            await store._pool.execute("delete from runtime_executions where run_id=$1", run_id)
+        await store.close()
+
+
 def test_json_safe_converts_legacy_runtime_objects() -> None:
     value = _json_safe(
         {
@@ -482,3 +511,50 @@ async def test_terminal_event_is_reconciled_or_quarantined_without_recovery() ->
         "quarantine", "start", {"run_id": "quarantine"}, {"request": {"run_id": "quarantine"}},
     )
     assert replay.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_course_correction_is_ordered_idempotent_and_applied_after_ack() -> None:
+    store = ExecutionStore()
+    await store.create("corrected", "start", {"run_id": "corrected"}, {"request": {"run_id": "corrected"}})
+    correction = {
+        "correction_id": "correction-1",
+        "operation_id": "operation-1",
+        "instruction": "Focus on the remaining security analysis.",
+        "scope": "remaining_work",
+        "observed_task_version": 3,
+        "observed_plan_revision": 1,
+    }
+
+    accepted = await store.request_course_correction("corrected", correction)
+    duplicate = await store.request_course_correction("corrected", correction)
+
+    assert accepted["status"] == "accepted"
+    assert duplicate["status"] == "already_accepted"
+    assert [value["correction_id"] for value in await store.pending_course_corrections("corrected")] == ["correction-1"]
+    assert await store.mark_course_corrections_applied("corrected", ["correction-1"], plan_revision=2) == ["correction-1"]
+    assert await store.pending_course_corrections("corrected") == []
+    assert [value["kind"] for value in await store.events_after("corrected")] == [
+        "course_correction.accepted",
+        "course_correction.applied",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_course_correction_rejects_conflicting_operation_and_reports_terminal_race() -> None:
+    store = ExecutionStore()
+    await store.create("corrected", "start", {"run_id": "corrected"}, {"request": {"run_id": "corrected"}})
+    correction = {
+        "correction_id": "correction-1", "operation_id": "operation-1",
+        "instruction": "First instruction", "scope": "remaining_work",
+        "observed_task_version": 1, "observed_plan_revision": 0,
+    }
+    await store.request_course_correction("corrected", correction)
+    with pytest.raises(ExecutionConflictError):
+        await store.request_course_correction("corrected", {**correction, "instruction": "Different instruction"})
+
+    terminal = await store.get("corrected")
+    terminal.status = "completed"
+    receipt = await store.request_course_correction("corrected", {**correction, "operation_id": "operation-2"})
+    assert receipt["status"] == "terminal"
+    assert receipt["run_status"] == "completed"

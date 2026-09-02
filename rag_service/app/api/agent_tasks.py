@@ -31,9 +31,9 @@ from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
 from app.runtime.capability_resolver import resolve_definition_capability_resolution, require_capability
 from app.runtime.catalog import definition_from_run, definition_from_workflow
-from runtime_protocol.contracts import RuntimeOperationId
+from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection, RuntimeOperationId
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
-from app.runtime.registry import get_runtime_registry
+from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
 from app.runtime.operational_limits import required_positive_float
 
@@ -345,7 +345,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
     return {"task": payload}
 
 
-@router.post("/agent-tasks/{task_id}/{action}")
+@router.post("/agent-tasks/{task_id}/commands/{action}")
 async def command_agent_task(
     task_id: str,
     action: str,
@@ -497,16 +497,78 @@ async def respond_to_agent_task_budget_review(
             expected_version=req.expected_version, decision=req.decision,
             guidance=req.guidance, idempotency_key=idempotency_key,
         )
+        correction_delivery = None
+        if req.decision == "steer" and not linked:
+            command = await repository.get_course_correction_command(
+                task.id,
+                idempotency_key=f"budget-review:{idempotency_key}",
+            )
+            if command is None:
+                raise AgentRuntimeError(
+                    "course_correction_command_missing",
+                    "The durable budget steering command could not be loaded",
+                    retryable=True,
+                )
+            command_result = dict(command.result_json or {})
+            correction = dict(command_result.get("correction") or {})
+            if command.status == "accepted" and command_result.get("delivery_state") != "delivered":
+                definition = definition_from_run(run)
+                try:
+                    receipt = await adapter_for_definition(definition).submit_course_correction(
+                        AgentRuntimeRequest(
+                            run_id=run.id,
+                            thread_id=run.thread_id,
+                            definition_id=definition.definition_id,
+                            framework=definition.framework,
+                            builder_id=definition.builder_id,
+                            task_id=task.id,
+                        ),
+                        RuntimeCourseCorrection(
+                            correction_id=str(correction.get("correction_id") or correction.get("id")),
+                            operation_id=command.id,
+                            instruction=str(correction.get("instruction") or ""),
+                            scope=str(correction.get("scope") or "remaining_work"),
+                            observed_task_version=int(correction.get("observed_task_version") or task.version),
+                            observed_plan_revision=int(correction.get("observed_plan_revision") or 0),
+                            submitted_at=correction.get("submitted_at"),
+                        ),
+                    )
+                except AgentRuntimeError as exc:
+                    if not exc.retryable:
+                        await repository.reject_course_correction(command.id, error=exc.to_dict())
+                        task = await repository.get_task(task.id) or task
+                    raise
+                correction_delivery = receipt.to_dict()
+                if receipt.status == "terminal":
+                    await repository.set_course_correction_delivery_mode(
+                        command.id, delivery_mode="linked_run", receipt=correction_delivery,
+                    )
+                elif receipt.status == "applied":
+                    await repository.mark_course_corrections_applied(
+                        task.id, [receipt.correction_id],
+                        plan_revision=int(receipt.plan_revision or 0),
+                    )
+                else:
+                    await repository.mark_course_correction_delivered(
+                        command.id, receipt=correction_delivery,
+                    )
+            else:
+                correction_delivery = command_result.get("runtime_receipt")
         linked_run = await ensure_task_run(task.id) if linked and not duplicate else None
         task = await repository.get_task(task.id) or task
-        return {"task": _task_payload(task), "linked_run": _run_payload(linked_run) if linked_run else None, "duplicate": duplicate}
+        return {
+            "task": _task_payload(task),
+            "linked_run": _run_payload(linked_run) if linked_run else None,
+            "correction_delivery": correction_delivery,
+            "duplicate": duplicate,
+        }
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc
     except AgentRuntimeError as exc:
-        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+        raise HTTPException(status_code=503 if exc.retryable else 409, detail=exc.to_dict()) from exc
 
 
-@router.post("/agent-tasks/{task_id}/course-corrections")
+@router.post("/agent-tasks/{task_id}/course-corrections", status_code=202)
 async def submit_agent_task_course_correction(
     task_id: str,
     req: AgentTaskCourseCorrectionRequest,
@@ -514,16 +576,112 @@ async def submit_agent_task_course_correction(
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
 ):
     task = await _owned_task(task_id, thread_id)
-    run = await repository.get_task_run(task.id)
-    if run is None or run.id != req.run_id:
-        raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
     try:
+        existing = await repository.get_course_correction_command(
+            task.id, idempotency_key=idempotency_key,
+        )
+        if existing is not None:
+            result = dict(existing.result_json or {})
+            correction = dict(result.get("correction") or {})
+            return {
+                "task": _task_payload(task),
+                "command_id": existing.id,
+                "correction_id": correction.get("correction_id") or correction.get("id"),
+                "correction": correction,
+                "delivery_mode": result.get("delivery_mode") or "linked_run",
+                "delivery_state": result.get("delivery_state") or existing.status,
+                "runtime_receipt": result.get("runtime_receipt"),
+                "duplicate": True,
+            }
+        if bool((getattr(task, "config_json", None) or {}).get("workflow_contract_invalidated")):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "workflow_contract_invalidated", "retryable": False},
+            )
+        run = await repository.get_task_run(task.id)
+        if run is None or run.id != req.run_id:
+            raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
         await require_capability(definition_from_run(run), RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT, registry=get_runtime_registry(), run=run, task=task)
-        task, duplicate, correction = await repository.submit_course_correction(
+        task, command, duplicate, correction = await repository.submit_course_correction(
             task_id, run_id=req.run_id, expected_version=req.expected_version,
             instruction=req.instruction, scope=req.scope, idempotency_key=idempotency_key,
         )
-        return {"task": _task_payload(task), "correction": correction, "duplicate": duplicate}
+        command_result = dict(command.result_json or {})
+        delivery_mode = str(command_result.get("delivery_mode") or "linked_run")
+        receipt = command_result.get("runtime_receipt")
+        delivery_state = str(command_result.get("delivery_state") or "accepted")
+        runtime_started = (run.run_metadata_json or {}).get("runtime_started") is True
+        if (
+            not duplicate
+            and delivery_mode == "same_run_safe_boundary"
+            and runtime_started
+        ):
+            definition = definition_from_run(run)
+            runtime_request = AgentRuntimeRequest(
+                run_id=run.id,
+                thread_id=run.thread_id,
+                definition_id=definition.definition_id,
+                framework=definition.framework,
+                builder_id=definition.builder_id,
+                task_id=task.id,
+                continuation=None,
+            )
+            try:
+                runtime_receipt = await adapter_for_definition(definition).submit_course_correction(
+                    runtime_request,
+                    RuntimeCourseCorrection(
+                        correction_id=str(correction.get("correction_id") or correction.get("id")),
+                        operation_id=command.id,
+                        instruction=str(correction.get("instruction") or ""),
+                        scope=str(correction.get("scope") or "remaining_work"),
+                        observed_task_version=int(correction.get("observed_task_version") or req.expected_version),
+                        observed_plan_revision=int(correction.get("observed_plan_revision") or 0),
+                        submitted_at=correction.get("submitted_at"),
+                    ),
+                )
+            except AgentRuntimeError as exc:
+                if not exc.retryable:
+                    await repository.reject_course_correction(command.id, error=exc.to_dict())
+                    raise
+                logger.warning(
+                    "Course correction remains pending for runtime reconciliation | task_id=%s run_id=%s code=%s",
+                    task.id,
+                    run.id,
+                    exc.code,
+                )
+                delivery_state = "accepted"
+            else:
+                receipt = runtime_receipt.to_dict()
+                if runtime_receipt.status == "terminal":
+                    delivery_mode = "linked_run"
+                    delivery_state = "accepted"
+                    await repository.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run", receipt=receipt)
+                    latest_run = await repository.get_task_run(task.id)
+                    if latest_run is not None and latest_run.status in repository.TERMINAL_TASK_RUN_STATUSES:
+                        await repository.queue_linked_course_correction(task.id, run_id=latest_run.id)
+                        await ensure_task_run(task.id)
+                        delivery_state = "linked"
+                elif runtime_receipt.status == "applied":
+                    await repository.mark_course_corrections_applied(
+                        task.id,
+                        [runtime_receipt.correction_id],
+                        plan_revision=int(runtime_receipt.plan_revision or 0),
+                    )
+                    delivery_state = "applied"
+                else:
+                    await repository.mark_course_correction_delivered(command.id, receipt=receipt)
+                    delivery_state = "delivered"
+        refreshed = await repository.get_task(task.id)
+        return {
+            "task": _task_payload(refreshed or task),
+            "command_id": command.id,
+            "correction_id": correction.get("correction_id") or correction.get("id"),
+            "correction": correction,
+            "delivery_mode": delivery_mode,
+            "delivery_state": delivery_state,
+            "runtime_receipt": receipt,
+            "duplicate": duplicate,
+        }
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc
     except AgentRuntimeError as exc:

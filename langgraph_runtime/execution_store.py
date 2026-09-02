@@ -513,6 +513,213 @@ class ExecutionStore:
             run_id,
         )
 
+    @staticmethod
+    def _correction_fingerprint(correction: Mapping[str, Any]) -> str:
+        encoded = json.dumps(_json_safe(dict(correction)), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    async def request_course_correction(
+        self,
+        run_id: str,
+        correction: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically queue one correction and its replayable acceptance event."""
+
+        value = dict(correction)
+        operation_id = str(value["operation_id"])
+        correction_id = str(value["correction_id"])
+        fingerprint = self._correction_fingerprint(value)
+
+        if self._pool is None:
+            async with self._lock:
+                record = self._records.get(run_id)
+                if record is None:
+                    return {"status": "unknown", "run_id": run_id}
+                if record.status in TERMINAL_STATUSES:
+                    return {
+                        "status": "terminal", "run_id": run_id,
+                        "run_status": record.status, "correction_id": correction_id,
+                        "operation_id": operation_id,
+                    }
+                prior = self._operations.get((run_id, operation_id))
+                if prior is not None:
+                    if prior.get("fingerprint") != fingerprint:
+                        raise ExecutionConflictError("operation_id was reused with different correction input")
+                    receipt = dict(prior["result"])
+                    if receipt.get("status") == "accepted":
+                        receipt["status"] = "already_accepted"
+                    return receipt
+                queued = {**value, "status": "accepted"}
+                corrections = list(record.payload.get("course_corrections") or [])
+                corrections.append(queued)
+                record.payload["course_corrections"] = corrections
+                receipt = {
+                    "status": "accepted", "run_id": run_id,
+                    "run_status": record.status, "correction_id": correction_id,
+                    "operation_id": operation_id,
+                }
+                self._operations[(run_id, operation_id)] = {
+                    "attempt": record.attempt, "fingerprint": fingerprint,
+                    "status": "accepted", "result": receipt,
+                }
+                event = {
+                    "run_id": run_id, "sequence": record.next_sequence,
+                    "attempt": record.attempt,
+                    "event_id": _event_id(run_id, record.attempt, f"course-correction:{correction_id}:accepted"),
+                    "kind": "course_correction.accepted", "occurred_at": _now(),
+                    "payload": {"correction_id": correction_id, "operation_id": operation_id},
+                    "terminal": False, "result": None,
+                }
+                record.next_sequence += 1
+                record.updated_at = _now()
+                self._events.setdefault(run_id, []).append(event)
+                return receipt
+
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    "select status, payload, next_sequence, attempt from runtime_executions where run_id=$1 for update",
+                    run_id,
+                )
+                if row is None:
+                    return {"status": "unknown", "run_id": run_id}
+                status = str(row["status"])
+                if status in TERMINAL_STATUSES:
+                    return {
+                        "status": "terminal", "run_id": run_id,
+                        "run_status": status, "correction_id": correction_id,
+                        "operation_id": operation_id,
+                    }
+                prior = await connection.fetchrow(
+                    "select request_fingerprint, result from runtime_operations where run_id=$1 and operation_id=$2",
+                    run_id, operation_id,
+                )
+                if prior is not None:
+                    if str(prior["request_fingerprint"]) != fingerprint:
+                        raise ExecutionConflictError("operation_id was reused with different correction input")
+                    receipt = _json_object(prior["result"]) or {}
+                    receipt["status"] = "already_accepted" if receipt.get("status") == "accepted" else receipt.get("status")
+                    return receipt
+                payload = _json_object(row["payload"]) or {}
+                corrections = list(payload.get("course_corrections") or [])
+                corrections.append({**value, "status": "accepted"})
+                payload["course_corrections"] = corrections
+                receipt = {
+                    "status": "accepted", "run_id": run_id, "run_status": status,
+                    "correction_id": correction_id, "operation_id": operation_id,
+                }
+                sequence = int(row["next_sequence"])
+                attempt = int(row["attempt"])
+                await connection.execute(
+                    "update runtime_executions set payload=$2::jsonb, next_sequence=$3, updated_at=now() where run_id=$1",
+                    run_id, json.dumps(payload), sequence + 1,
+                )
+                await connection.execute(
+                    "insert into runtime_operations(run_id, operation_id, operation, request_fingerprint, attempt, status, result) values($1,$2,'course_correction',$3,$4,'accepted',$5::jsonb)",
+                    run_id, operation_id, fingerprint, attempt, json.dumps(receipt),
+                )
+                await connection.execute(
+                    """insert into runtime_events(run_id, sequence, attempt, event_id, kind, payload, occurred_at, terminal)
+                       values($1,$2,$3,$4,'course_correction.accepted',$5::jsonb,$6,false)""",
+                    run_id, sequence, attempt,
+                    _event_id(run_id, attempt, f"course-correction:{correction_id}:accepted"),
+                    json.dumps({"correction_id": correction_id, "operation_id": operation_id}), _now(),
+                )
+                return receipt
+
+    async def pending_course_corrections(self, run_id: str) -> list[dict[str, Any]]:
+        record = await self.get(run_id)
+        if record is None:
+            return []
+        return [
+            dict(value) for value in record.payload.get("course_corrections") or []
+            if isinstance(value, Mapping) and value.get("status") == "accepted"
+        ]
+
+    async def mark_course_corrections_applied(
+        self,
+        run_id: str,
+        correction_ids: list[str],
+        *,
+        plan_revision: int,
+    ) -> list[str]:
+        """Atomically acknowledge applied corrections and append one replay event."""
+
+        selected = {str(value) for value in correction_ids if value}
+        if not selected:
+            return []
+        if self._pool is None:
+            async with self._lock:
+                record = self._records.get(run_id)
+                if record is None:
+                    return []
+                applied: list[str] = []
+                corrections = list(record.payload.get("course_corrections") or [])
+                for value in corrections:
+                    if isinstance(value, dict) and value.get("status") == "accepted" and str(value.get("correction_id")) in selected:
+                        value.update({"status": "applied", "plan_revision": int(plan_revision)})
+                        applied.append(str(value["correction_id"]))
+                        operation = self._operations.get((run_id, str(value.get("operation_id"))))
+                        if operation is not None:
+                            operation.update({"status": "completed", "result": {
+                                **dict(operation.get("result") or {}), "status": "applied",
+                                "plan_revision": int(plan_revision),
+                            }})
+                if not applied:
+                    return []
+                record.payload["course_corrections"] = corrections
+                self._events.setdefault(run_id, []).append({
+                    "run_id": run_id, "sequence": record.next_sequence, "attempt": record.attempt,
+                    "event_id": _event_id(run_id, record.attempt, f"course-correction:{'-'.join(sorted(applied))}:applied"),
+                    "kind": "course_correction.applied", "occurred_at": _now(),
+                    "payload": {"correction_ids": sorted(applied), "plan_revision": int(plan_revision)},
+                    "terminal": False, "result": None,
+                })
+                record.next_sequence += 1
+                record.updated_at = _now()
+                return sorted(applied)
+
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    "select payload, next_sequence, attempt from runtime_executions where run_id=$1 for update",
+                    run_id,
+                )
+                if row is None:
+                    return []
+                payload = _json_object(row["payload"]) or {}
+                corrections = list(payload.get("course_corrections") or [])
+                applied: list[str] = []
+                operation_ids: list[str] = []
+                for value in corrections:
+                    if isinstance(value, dict) and value.get("status") == "accepted" and str(value.get("correction_id")) in selected:
+                        value.update({"status": "applied", "plan_revision": int(plan_revision)})
+                        applied.append(str(value["correction_id"]))
+                        operation_ids.append(str(value.get("operation_id") or ""))
+                if not applied:
+                    return []
+                payload["course_corrections"] = corrections
+                sequence, attempt = int(row["next_sequence"]), int(row["attempt"])
+                await connection.execute(
+                    "update runtime_executions set payload=$2::jsonb, next_sequence=$3, updated_at=now() where run_id=$1",
+                    run_id, json.dumps(payload), sequence + 1,
+                )
+                for operation_id in operation_ids:
+                    if operation_id:
+                        await connection.execute(
+                            "update runtime_operations set status='completed', result=coalesce(result,'{}'::jsonb) || $3::jsonb where run_id=$1 and operation_id=$2",
+                            run_id, operation_id,
+                            json.dumps({"status": "applied", "plan_revision": int(plan_revision)}),
+                        )
+                await connection.execute(
+                    """insert into runtime_events(run_id, sequence, attempt, event_id, kind, payload, occurred_at, terminal)
+                       values($1,$2,$3,$4,'course_correction.applied',$5::jsonb,$6,false)""",
+                    run_id, sequence, attempt,
+                    _event_id(run_id, attempt, f"course-correction:{'-'.join(sorted(applied))}:applied"),
+                    json.dumps({"correction_ids": sorted(applied), "plan_revision": int(plan_revision)}), _now(),
+                )
+                return sorted(applied)
+
     async def append(self, run_id: str, event: Mapping[str, Any], result: Mapping[str, Any] | None = None, *, attempt: int | None = None, owner_id: str | None = None, fencing_token: int | None = None) -> dict[str, Any]:
         item = dict(event)
         if self._pool is None:

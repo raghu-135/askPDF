@@ -753,6 +753,32 @@ async def apply_command(
                 task.terminal_reason = "cancelled_by_user"
                 task.lease_owner = None
                 task.lease_expires_at = None
+            if action == "cancel":
+                pending_corrections = list((await session.execute(select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task.id,
+                    AgentTaskCommand.action == "steer",
+                    AgentTaskCommand.status == "accepted",
+                ).with_for_update())).scalars().all())
+                for pending_command in pending_corrections:
+                    pending_result = dict(pending_command.result_json or {})
+                    pending_result.update({
+                        "delivery_state": "rejected",
+                        "error": {"code": "course_correction_cancelled"},
+                    })
+                    replace_jsonb_field(pending_command, "result_json", pending_result)
+                    pending_command.status = "rejected"
+                    pending_command.completed_at = now
+                if pending_corrections:
+                    await _append_event(
+                        session,
+                        task,
+                        "task.course_correction_rejected",
+                        agent_run_id=task.active_run_id,
+                        payload={
+                            "reason": "task_cancelled",
+                            "command_ids": [value.id for value in pending_corrections],
+                        },
+                    )
             command.status = "accepted" if action == "cancel" and target == AgentTaskStatus.CANCELLING.value else "completed"
             command.result_version = task.version
             replace_jsonb_field(command, "result_json", {"task_id": task.id, "status": task.status, "version": task.version})
@@ -837,9 +863,33 @@ async def request_task_deletion(
             )
             session.add(command)
             task.deletion_requested_at = task.deletion_requested_at or now
+            pending_corrections = list((await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task.id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).with_for_update())).scalars().all())
+            for pending_command in pending_corrections:
+                pending_result = dict(pending_command.result_json or {})
+                pending_result.update({
+                    "delivery_state": "rejected",
+                    "error": {"code": "course_correction_task_deleted"},
+                })
+                replace_jsonb_field(pending_command, "result_json", pending_result)
+                pending_command.status = "rejected"
+                pending_command.completed_at = now
             task.version += 1
             task.updated_at = now
             await _append_event(session, task, "task.deletion_requested", actor_type="user", actor_id=actor_id)
+            if pending_corrections:
+                await _append_event(
+                    session,
+                    task,
+                    "task.course_correction_rejected",
+                    actor_type="user",
+                    actor_id=actor_id,
+                    agent_run_id=task.active_run_id,
+                    payload={"reason": "task_deleted", "command_ids": [value.id for value in pending_corrections]},
+                )
         await session.refresh(task)
         await session.refresh(command)
         return task, command, False
@@ -880,6 +930,11 @@ async def claim_next_task(worker_id: str, *, lease_seconds: int = 60) -> Optiona
                         AgentTaskStatus.RUNNING.value,
                         AgentTaskStatus.CANCELLING.value,
                     ]),
+                    or_(
+                        AgentTask.status != AgentTaskStatus.QUEUED.value,
+                        AgentTask.current_phase.is_(None),
+                        AgentTask.current_phase != "budget_correction_delivery_pending",
+                    ),
                     or_(AgentTask.lease_expires_at.is_(None), AgentTask.lease_expires_at < now),
                 )
                 # Cancellation recovery must never starve runnable work. A
@@ -1764,9 +1819,13 @@ async def respond_to_budget_review(
             now = utc_now()
             pending["status"] = "resolved"
             pending["resolved_at"] = now.isoformat()
-            pending["decision"] = {"action": decision, "guidance": guidance, "idempotency_key": idempotency_key}
-            replace_jsonb_field(run, "pending_interrupt_json", pending)
             linked_run = str(run.framework or "") == "hermes"
+            pending["decision"] = {
+                "action": decision,
+                "idempotency_key": idempotency_key,
+                "guidance_delivery": "course_correction_command" if decision == "steer" else None,
+            }
+            replace_jsonb_field(run, "pending_interrupt_json", pending)
             if decision == "accept_partial":
                 if not str(pending.get("provisional_answer") or "").strip():
                     raise AgentTaskConflict("budget_partial_answer_unavailable", "No provisional answer is available to accept")
@@ -1782,17 +1841,47 @@ async def respond_to_budget_review(
                 budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
                 replace_jsonb_field(task, "budgets_json", reset_tranche(budget))
                 if guidance:
-                    config = dict(task.config_json or {})
-                    corrections = list(config.get("course_corrections") or [])
-                    corrections.append({
-                        "id": str(uuid.uuid4()), "instruction": guidance, "scope": "remaining_work",
-                        "status": "pending", "source": "budget_review", "source_run_id": run.id,
+                    correction_id = str(uuid.uuid4())
+                    observed_plan_revision = int((await session.execute(
+                        select(func.coalesce(func.max(AgentTaskPlanRevision.revision), 0)).where(
+                            AgentTaskPlanRevision.task_id == task.id
+                        )
+                    )).scalar_one())
+                    correction_command = AgentTaskCommand(
+                        task_id=task.id,
+                        action="steer",
+                        idempotency_key=f"budget-review:{idempotency_key}",
+                        expected_version=expected_version,
+                        status="accepted",
+                    )
+                    session.add(correction_command)
+                    await session.flush()
+                    correction = {
+                        "id": correction_id,
+                        "correction_id": correction_id,
+                        "command_id": correction_command.id,
+                        "operation_id": correction_command.id,
+                        "instruction": " ".join(guidance.split()).strip(),
+                        "scope": "remaining_work",
+                        "status": "pending",
+                        "source": "budget_review",
+                        "source_run_id": run.id,
+                        "observed_task_version": expected_version + 1,
+                        "observed_plan_revision": observed_plan_revision,
                         "submitted_at": now.isoformat(),
+                    }
+                    replace_jsonb_field(correction_command, "result_json", {
+                        "correction": correction,
+                        "delivery_mode": "linked_run" if linked_run else "same_run_safe_boundary",
+                        "delivery_state": "accepted",
+                        "source_run_id": run.id,
                     })
-                    config["course_corrections"] = corrections
-                    replace_jsonb_field(task, "config_json", config)
                 task.status = AgentTaskStatus.QUEUED.value
-                task.current_phase = "budget_continuation_queued"
+                task.current_phase = (
+                    "budget_correction_delivery_pending"
+                    if decision == "steer" and not linked_run
+                    else "budget_continuation_queued"
+                )
                 task.terminal_reason = None
                 task.queued_at = now
                 task.completed_at = None
@@ -1927,41 +2016,196 @@ async def submit_course_correction(
     instruction: str,
     scope: str,
     idempotency_key: str,
-) -> tuple[AgentTask, bool, Dict[str, Any]]:
+) -> tuple[AgentTask, AgentTaskCommand, bool, Dict[str, Any]]:
     """Persist user-authored steering for the next safe orchestration boundary."""
 
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one_or_none()
-            run = await session.get(AgentRun, run_id)
+            run = (await session.execute(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )).scalar_one_or_none()
             if task is None or run is None or run.task_id != task_id:
                 raise AgentTaskConflict("task_run_missing", "Agent task run not found")
+            duplicate = (await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.idempotency_key == idempotency_key,
+            ))).scalar_one_or_none()
+            if duplicate is not None:
+                result = dict(duplicate.result_json or {})
+                return task, duplicate, True, dict(result.get("correction") or {})
             if task.version != expected_version:
                 raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
-            if task.status not in {AgentTaskStatus.RUNNING.value, AgentTaskStatus.QUEUED.value, AgentTaskStatus.AWAITING_APPROVAL.value}:
+            if task.deletion_requested_at is not None or task.status not in {
+                AgentTaskStatus.RUNNING.value,
+                AgentTaskStatus.QUEUED.value,
+                AgentTaskStatus.PAUSED.value,
+                AgentTaskStatus.AWAITING_APPROVAL.value,
+            }:
                 raise AgentTaskConflict("course_correction_unavailable", "Course correction is unavailable for this task state", current_version=task.version)
-            config = dict(task.config_json or {})
-            corrections = list(config.get("course_corrections") or [])
-            duplicate = next((value for value in corrections if isinstance(value, dict) and value.get("idempotency_key") == idempotency_key), None)
-            if duplicate is not None:
-                return task, True, dict(duplicate)
+            normalized_instruction = " ".join(instruction.split()).strip()
+            if not normalized_instruction:
+                raise AgentTaskConflict("course_correction_instruction_required", "Course correction instruction is required")
+            observed_plan_revision = int((await session.execute(
+                select(func.coalesce(func.max(AgentTaskPlanRevision.revision), 0)).where(
+                    AgentTaskPlanRevision.task_id == task.id
+                )
+            )).scalar_one())
+            delivery_mode = (
+                "same_run_safe_boundary"
+                if str(run.framework or "") == "langgraph" and run.status not in TERMINAL_TASK_RUN_STATUSES
+                else "linked_run"
+            )
+            correction_id = str(uuid.uuid4())
+            command = AgentTaskCommand(
+                task_id=task.id,
+                action="steer",
+                idempotency_key=idempotency_key,
+                expected_version=expected_version,
+                status="accepted",
+            )
+            session.add(command)
+            await session.flush()
             correction = {
-                "id": str(uuid.uuid4()), "instruction": " ".join(instruction.split()).strip(),
-                "scope": scope, "status": "pending", "source": "user", "source_run_id": run.id,
-                "idempotency_key": idempotency_key, "submitted_at": utc_now().isoformat(),
+                "id": correction_id,
+                "correction_id": correction_id,
+                "command_id": command.id,
+                "operation_id": command.id,
+                "instruction": normalized_instruction,
+                "scope": scope,
+                "status": "pending",
+                "source": "user",
+                "source_run_id": run.id,
+                "observed_task_version": expected_version + 1,
+                "observed_plan_revision": observed_plan_revision,
+                "idempotency_key": idempotency_key,
+                "submitted_at": utc_now().isoformat(),
             }
-            corrections.append(correction)
-            config["course_corrections"] = corrections
-            replace_jsonb_field(task, "config_json", config)
+            replace_jsonb_field(command, "result_json", {
+                "correction": correction,
+                "delivery_mode": delivery_mode,
+                "delivery_state": "accepted",
+                "source_run_id": run.id,
+            })
             task.version += 1
-            await _append_event(session, task, "task.course_correction_submitted", agent_run_id=run.id, payload={**correction, "version": task.version})
+            command.result_version = task.version
+            await _append_event(session, task, "task.course_correction_submitted", agent_run_id=run.id, payload={
+                **correction,
+                "delivery_mode": delivery_mode,
+                "delivery_state": "accepted",
+                "version": task.version,
+            })
         await session.refresh(task)
-        return task, False, correction
+        await session.refresh(command)
+        return task, command, False, correction
 
 
-async def pending_course_corrections(task_id: str) -> list[Dict[str, Any]]:
-    task = await get_task(task_id)
-    return [dict(value) for value in ((task.config_json or {}).get("course_corrections") or []) if isinstance(value, dict) and value.get("status") == "pending"] if task else []
+async def get_course_correction_command(
+    task_id: str,
+    *,
+    idempotency_key: str,
+) -> Optional[AgentTaskCommand]:
+    async with async_session_maker() as session:
+        return (await session.execute(select(AgentTaskCommand).where(
+            AgentTaskCommand.task_id == task_id,
+            AgentTaskCommand.action == "steer",
+            AgentTaskCommand.idempotency_key == idempotency_key,
+        ))).scalar_one_or_none()
+
+
+async def pending_course_corrections(
+    task_id: str,
+    *,
+    delivery_mode: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
+            )).scalar_one_or_none()
+            legacy = [
+                dict(value) for value in ((task.config_json or {}).get("course_corrections") or [])
+                if isinstance(value, dict) and value.get("status") == "pending"
+            ] if task is not None else []
+            legacy_run = await session.get(AgentRun, task.active_run_id) if task is not None and task.active_run_id else None
+            legacy_delivery_mode = (
+                "same_run_safe_boundary"
+                if legacy_run is not None
+                and str(legacy_run.framework or "") == "langgraph"
+                and legacy_run.status not in TERMINAL_TASK_RUN_STATUSES
+                else "linked_run"
+            )
+            for correction in legacy:
+                correction_id = str(correction.get("correction_id") or correction.get("id") or uuid.uuid4())
+                key = str(correction.get("idempotency_key") or f"legacy:{correction_id}")
+                existing = (await session.execute(select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task_id,
+                    AgentTaskCommand.action == "steer",
+                    AgentTaskCommand.idempotency_key == key,
+                ))).scalar_one_or_none()
+                if existing is not None:
+                    continue
+                correction.update({
+                    "id": correction_id,
+                    "correction_id": correction_id,
+                    "operation_id": correction_id,
+                    "scope": correction.get("scope") or "remaining_work",
+                    "source_run_id": correction.get("source_run_id") or task.active_run_id,
+                })
+                command = AgentTaskCommand(
+                    task_id=task_id,
+                    action="steer",
+                    idempotency_key=key,
+                    expected_version=max(1, int(task.version or 1)),
+                    status="accepted",
+                )
+                session.add(command)
+                await session.flush()
+                correction.update({"command_id": command.id, "operation_id": command.id})
+                replace_jsonb_field(command, "result_json", {
+                    "correction": correction,
+                    "delivery_mode": legacy_delivery_mode,
+                    "delivery_state": "accepted",
+                    "source_run_id": correction.get("source_run_id"),
+                    "migrated_from_config": True,
+                })
+            if task is not None and "course_corrections" in (task.config_json or {}):
+                config = dict(task.config_json or {})
+                config.pop("course_corrections", None)
+                replace_jsonb_field(task, "config_json", config)
+        commands = list((await session.execute(
+            select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).order_by(AgentTaskCommand.created_at, AgentTaskCommand.id)
+        )).scalars().all())
+        values = [
+            {
+                **dict((command.result_json or {}).get("correction") or {}),
+                "command_id": command.id,
+                "operation_id": command.id,
+                "delivery_mode": (command.result_json or {}).get("delivery_mode"),
+                "delivery_state": (command.result_json or {}).get("delivery_state") or "accepted",
+            }
+            for command in commands
+        ]
+        return [value for value in values if delivery_mode is None or value.get("delivery_mode") == delivery_mode]
+
+
+async def backfill_legacy_course_corrections(*, limit: int = 100) -> int:
+    """Move bounded legacy config queues into the durable command outbox."""
+
+    async with async_session_maker() as session:
+        task_ids = list((await session.execute(
+            select(AgentTask.id).where(
+                AgentTask.config_json.op("?")("course_corrections")
+            ).order_by(AgentTask.updated_at, AgentTask.id).limit(max(1, min(limit, 500)))
+        )).scalars().all())
+    for task_id in task_ids:
+        await pending_course_corrections(str(task_id))
+    return len(task_ids)
 
 
 async def mark_course_corrections_applied(task_id: str, correction_ids: Iterable[str], *, plan_revision: int) -> None:
@@ -1971,39 +2215,185 @@ async def mark_course_corrections_applied(task_id: str, correction_ids: Iterable
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
-            config = dict(task.config_json or {})
-            corrections = list(config.get("course_corrections") or [])
             now = utc_now().isoformat()
-            for value in corrections:
-                if isinstance(value, dict) and str(value.get("id")) in selected:
-                    value.update({"status": "applied", "applied_at": now, "plan_revision": plan_revision})
-            config["course_corrections"] = corrections
-            replace_jsonb_field(task, "config_json", config)
-            await _append_event(session, task, "task.course_correction_applied", agent_run_id=task.active_run_id, payload={"correction_ids": sorted(selected), "plan_revision": plan_revision})
+            commands = list((await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).with_for_update())).scalars().all())
+            applied: list[str] = []
+            for command in commands:
+                result = dict(command.result_json or {})
+                correction = dict(result.get("correction") or {})
+                correction_id = str(correction.get("correction_id") or correction.get("id") or "")
+                if correction_id not in selected:
+                    continue
+                correction.update({"status": "applied", "applied_at": now, "plan_revision": plan_revision})
+                result.update({"correction": correction, "delivery_state": "applied", "plan_revision": plan_revision})
+                replace_jsonb_field(command, "result_json", result)
+                command.status = "completed"
+                command.result_version = task.version
+                command.completed_at = utc_now()
+                applied.append(correction_id)
+            if applied:
+                if task.current_phase == "budget_correction_delivery_pending":
+                    task.current_phase = "budget_continuation_queued"
+                await _append_event(session, task, "task.course_correction_applied", agent_run_id=task.active_run_id, payload={"correction_ids": sorted(applied), "plan_revision": plan_revision})
 
 
-async def queue_hermes_course_correction(task_id: str, *, run_id: str) -> AgentTask:
-    """Close a Hermes execution at its terminal boundary and queue its linked correction run."""
+async def mark_course_correction_delivered(command_id: str, *, receipt: Dict[str, Any]) -> None:
+    async with async_session_maker() as session:
+        async with session.begin():
+            command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
+            if command is None or command.action != "steer" or command.status != "accepted":
+                return
+            result = dict(command.result_json or {})
+            result.update({"delivery_state": "delivered", "runtime_receipt": dict(receipt)})
+            replace_jsonb_field(command, "result_json", result)
+            correction = dict(result.get("correction") or {})
+            if correction.get("source") == "budget_review":
+                task = await session.get(AgentTask, command.task_id, with_for_update=True)
+                if task is not None and task.current_phase == "budget_correction_delivery_pending":
+                    task.current_phase = "budget_continuation_queued"
+
+
+async def reject_course_correction(command_id: str, *, error: Dict[str, Any]) -> None:
+    async with async_session_maker() as session:
+        async with session.begin():
+            command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
+            if command is None or command.action != "steer" or command.status != "accepted":
+                return
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == command.task_id).with_for_update()
+            )).scalar_one_or_none()
+            result = dict(command.result_json or {})
+            result.update({"delivery_state": "rejected", "error": dict(error)})
+            replace_jsonb_field(command, "result_json", result)
+            command.status = "rejected"
+            command.completed_at = utc_now()
+            if task is not None:
+                correction = dict(result.get("correction") or {})
+                if (
+                    correction.get("source") == "budget_review"
+                    and task.current_phase == "budget_correction_delivery_pending"
+                ):
+                    source_run = await session.get(
+                        AgentRun,
+                        str(result.get("source_run_id") or correction.get("source_run_id") or ""),
+                        with_for_update=True,
+                    )
+                    pending = dict(source_run.pending_interrupt_json or {}) if source_run is not None else {}
+                    if source_run is not None and pending.get("type") == "budget_review":
+                        pending.update({"status": "pending", "delivery_error": dict(error)})
+                        pending.pop("decision", None)
+                        replace_jsonb_field(source_run, "pending_interrupt_json", pending)
+                        source_run.status = AgentRunStatus.AWAITING_HUMAN.value
+                    task.status = AgentTaskStatus.AWAITING_APPROVAL.value
+                    task.current_phase = "budget_review"
+                    task.version += 1
+                await _append_event(
+                    session,
+                    task,
+                    "task.course_correction_rejected",
+                    agent_run_id=result.get("source_run_id"),
+                    payload={
+                        "command_id": command.id,
+                        "correction_id": correction.get("correction_id") or correction.get("id"),
+                        "error": dict(error),
+                    },
+                )
+
+
+async def set_course_correction_delivery_mode(
+    command_id: str,
+    *,
+    delivery_mode: str,
+    receipt: Optional[Dict[str, Any]] = None,
+) -> None:
+    async with async_session_maker() as session:
+        async with session.begin():
+            command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
+            if command is None or command.action != "steer" or command.status != "accepted":
+                return
+            result = dict(command.result_json or {})
+            result.update({"delivery_mode": delivery_mode, "delivery_state": "accepted"})
+            if receipt is not None:
+                result["runtime_receipt"] = dict(receipt)
+            replace_jsonb_field(command, "result_json", result)
+
+
+async def list_pending_course_correction_commands(*, limit: int = 100) -> list[AgentTaskCommand]:
+    async with async_session_maker() as session:
+        return list((await session.execute(
+            select(AgentTaskCommand).where(
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).order_by(AgentTaskCommand.created_at, AgentTaskCommand.id).limit(max(1, min(limit, 500)))
+        )).scalars().all())
+
+
+async def complete_linked_course_corrections(
+    task_id: str,
+    *,
+    source_run_id: str,
+    linked_run_id: str,
+) -> None:
+    async with async_session_maker() as session:
+        async with session.begin():
+            commands = list((await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).with_for_update())).scalars().all())
+            now = utc_now()
+            for command in commands:
+                result = dict(command.result_json or {})
+                if str(result.get("source_run_id") or "") != source_run_id:
+                    continue
+                result.update({"delivery_mode": "linked_run", "delivery_state": "linked", "linked_run_id": linked_run_id})
+                replace_jsonb_field(command, "result_json", result)
+                command.status = "completed"
+                command.completed_at = now
+
+
+async def queue_linked_course_correction(task_id: str, *, run_id: str) -> AgentTask:
+    """Queue exactly one linked run after preserving the source run's terminal outcome."""
 
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
             run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update())).scalar_one()
-            corrections = [
-                dict(value) for value in (task.config_json or {}).get("course_corrections") or []
-                if isinstance(value, dict) and value.get("status") == "pending"
-            ]
+            commands = list((await session.execute(select(AgentTaskCommand).where(
+                AgentTaskCommand.task_id == task_id,
+                AgentTaskCommand.action == "steer",
+                AgentTaskCommand.status == "accepted",
+            ).with_for_update())).scalars().all())
+            corrections = [dict((value.result_json or {}).get("correction") or {}) for value in commands]
             if not corrections:
                 return task
+            if task.deletion_requested_at is not None or task.status in {AgentTaskStatus.CANCELLING.value, AgentTaskStatus.CANCELLED.value}:
+                for command in commands:
+                    result = dict(command.result_json or {})
+                    result.update({"delivery_state": "rejected", "error": {"code": "course_correction_cancelled"}})
+                    replace_jsonb_field(command, "result_json", result)
+                    command.status = "rejected"
+                    command.completed_at = utc_now()
+                return task
+            if run.status not in TERMINAL_TASK_RUN_STATUSES:
+                raise AgentTaskConflict("course_correction_source_run_active", "Linked correction requires a terminal source run")
+            if (
+                task.active_run_id == run.id
+                and task.status == AgentTaskStatus.QUEUED.value
+                and task.current_phase == "course_correction_queued"
+            ):
+                return task
             now = utc_now()
-            run.status = AgentRunStatus.COMPLETED.value
-            run.completed_at = now
             if isinstance(run.debug_trace_json, dict):
                 replace_jsonb_field(run, "debug_trace_json", append_runtime_event_to_debug_payload(
                     run.debug_trace_json, "linked_run.created",
                     attributes={"askpdf.task.id": task.id, "askpdf.run.id": run.id},
                     output_data={"parent_run_id": run.id, "correction_ids": [value.get("id") for value in corrections]},
-                    run_status=AgentRunStatus.COMPLETED.value, completed_at=now,
+                    run_status=run.status, completed_at=run.completed_at,
                 ))
             task.status = AgentTaskStatus.QUEUED.value
             task.current_phase = "course_correction_queued"
@@ -2011,19 +2401,6 @@ async def queue_hermes_course_correction(task_id: str, *, run_id: str) -> AgentT
             task.lease_owner = None
             task.lease_expires_at = None
             task.version += 1
-            latest_sequence = int((await session.execute(
-                select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(AgentRunEvent.agent_run_id == run.id)
-            )).scalar_one())
-            if (await session.execute(select(AgentRunEvent.id).where(
-                AgentRunEvent.agent_run_id == run.id, AgentRunEvent.terminal.is_(True),
-            ))).scalar_one_or_none() is None:
-                session.add(AgentRunEvent(
-                    agent_run_id=run.id, event_id=f"course-correction:{run.id}:completed",
-                    sequence=latest_sequence + 1, attempt=max(1, int(run.task_attempt or 1)),
-                    kind="run.completed", occurred_at=now, terminal=True,
-                    payload_json={"status": "completed", "linked_continuation": True, "correction_ids": [value.get("id") for value in corrections]},
-                    source_metadata_json={"framework": "product", "source_event": "task.course_correction.submit"},
-                ))
             await _append_event(session, task, "linked_run.created", agent_run_id=run.id, payload={
                 "parent_run_id": run.id, "correction_ids": [value.get("id") for value in corrections], "version": task.version,
             })

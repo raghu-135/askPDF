@@ -279,6 +279,11 @@ async def _finalize_task_run(
         },
         terminal_committer=commit,
     )
+    if run_status != AgentRunStatus.CANCELLED.value and await tasks.pending_course_corrections(
+        task.id, delivery_mode="linked_run"
+    ):
+        await tasks.queue_linked_course_correction(task.id, run_id=run.id)
+        await ensure_task_run(task.id)
 
 
 async def ensure_task_run(task_id: str):
@@ -361,6 +366,7 @@ async def ensure_task_run(task_id: str):
     frozen_spec = dict(await provider.normalize(definition, resolved))
     metadata = dict(getattr(workflow, "metadata_json", None) or {})
     version = int(metadata.get("version") or workflow.schema_version or 1)
+    linked_corrections = await tasks.pending_course_corrections(task.id) if active is not None else []
     run = await repository.create_run(
         thread_id=task.thread_id,
         workflow_id=workflow.id,
@@ -376,6 +382,7 @@ async def ensure_task_run(task_id: str):
             "run_kind": "agent_task",
             "agent_task_id": task.id,
             "runtime_started": False,
+            "course_corrections": linked_corrections,
         },
     )
     # attach_run reloads the winning row in its own session, so apply the
@@ -389,6 +396,12 @@ async def ensure_task_run(task_id: str):
     )
     attached_metadata = dict(attached.run_metadata_json or {})
     setattr(attached, "_fresh_runtime_run", attached_metadata.get("runtime_started") is False)
+    if active is not None and attached.id == run.id and linked_corrections:
+        await tasks.complete_linked_course_corrections(
+            task.id,
+            source_run_id=active.id,
+            linked_run_id=attached.id,
+        )
     return attached
 
 
@@ -455,11 +468,24 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     runtime_question = task.objective
     if followup_input:
         runtime_question = f"{task.objective}\n\nResult review follow-up: {followup_input}"
-    hermes_corrections = (
-        await tasks.pending_course_corrections(task.id)
+    linked_run_corrections = [
+        dict(value) for value in (run.run_metadata_json or {}).get("course_corrections") or []
+        if isinstance(value, Mapping)
+    ]
+    outbox_corrections = await tasks.pending_course_corrections(task.id)
+    pending_corrections = (
+        linked_run_corrections
         if str(run.framework or "") == "hermes"
-        else []
+        else [*linked_run_corrections, *outbox_corrections]
     )
+    seen_correction_ids: set[str] = set()
+    pending_corrections = [
+        value for value in pending_corrections
+        if (correction_id := str(value.get("correction_id") or value.get("id") or ""))
+        and correction_id not in seen_correction_ids
+        and not seen_correction_ids.add(correction_id)
+    ]
+    hermes_corrections = pending_corrections if str(run.framework or "") == "hermes" else []
     if hermes_corrections:
         guidance = "\n".join(
             f"- {value.get('instruction')}" for value in hermes_corrections if value.get("instruction")
@@ -510,6 +536,29 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             default=0,
         ),
     )
+    async def project_runtime_control_event(event: Any) -> None:
+        payload = dict(event.payload or {})
+        if event.kind == "course_correction.accepted" and payload.get("operation_id"):
+            await tasks.mark_course_correction_delivered(
+                str(payload["operation_id"]),
+                receipt={
+                    "status": "accepted",
+                    "run_id": run.id,
+                    "correction_id": payload.get("correction_id"),
+                    "operation_id": payload.get("operation_id"),
+                },
+            )
+            return
+        if event.kind != "course_correction.applied":
+            return
+        correction_ids = payload.get("correction_ids") or [payload.get("correction_id")]
+        await tasks.mark_course_corrections_applied(
+            task.id,
+            [str(value) for value in correction_ids if value],
+            plan_revision=int(payload.get("plan_revision") or 0),
+        )
+
+    runtime_event_sink.bind_runtime_event_projector(project_runtime_control_event)
     heartbeat = asyncio.create_task(_heartbeat(task.id, worker_id))
     async def cancellation_requested() -> bool:
         return await tasks.task_cancel_requested(task.id) or (
@@ -566,6 +615,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "enabled_profiles": list(config.get("enabled_profiles") or []),
                 "plan_revision": max((todo.updated_revision for todo in todos), default=0),
                 "budget_usage": dict(task.budgets_json or {}),
+                "course_corrections": pending_corrections,
                 "orchestration": dict(
                     (dict((resolved_spec.get("config") or {}).get("task_policy") or {})).get("orchestration")
                     or {}
@@ -602,12 +652,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             repository=repository,
             registry=get_runtime_registry(),
         )
-        if hermes_corrections:
-            await tasks.mark_course_corrections_applied(
-                task.id,
-                [str(value.get("id")) for value in hermes_corrections if value.get("id")],
-                plan_revision=max(1, int(run.task_attempt or 1)),
-            )
         if runtime_result is None:
             # A continuation is optional at the runtime boundary. A missing
             # checkpoint is a terminal runtime outcome.
@@ -726,11 +770,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 ],
                 gaps=[str(value) for value in result.get("task_incomplete_reasons") or []],
             )
-            await runtime_event_sink.finish_boundary()
-            return
-        if str(run.framework or "") == "hermes" and await tasks.pending_course_corrections(task.id):
-            await tasks.queue_hermes_course_correction(task.id, run_id=run.id)
-            await ensure_task_run(task.id)
             await runtime_event_sink.finish_boundary()
             return
         if status == AgentRunStatus.AWAITING_HUMAN.value:

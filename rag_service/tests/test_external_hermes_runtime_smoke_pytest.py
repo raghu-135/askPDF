@@ -141,7 +141,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
         created.raise_for_status()
         task = created.json()["task"]
         started = await client.post(
-            f"/api/agent-tasks/{task['id']}/start",
+            f"/api/agent-tasks/{task['id']}/commands/start",
             params={"thread_id": thread_id},
             headers={"Idempotency-Key": f"hermes-runtime-hermes-start-{unique}"},
             json={"expected_version": task["version"]},

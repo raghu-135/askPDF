@@ -19,6 +19,7 @@ from runtime_protocol.events import create_runtime_event
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.transport import (
     definition_from_dict,
+    course_correction_from_dict,
     event_from_dict,
     request_from_dict,
     result_from_dict,
@@ -90,7 +91,15 @@ def _task_context(value: Any) -> RuntimeTaskContext | None:
     )
 
 
-def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: Any = None, pause_checker: Any = None) -> RuntimeExecutionContext:
+def _context(
+    payload: Mapping[str, Any],
+    request: Any,
+    *,
+    cancellation_checker: Any = None,
+    pause_checker: Any = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
+) -> RuntimeExecutionContext:
     value = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
     run_context = dict(value.get("agent_run_context") or {})
     if isinstance(run_context.get("run"), Mapping):
@@ -122,6 +131,8 @@ def _context(payload: Mapping[str, Any], request: Any, *, cancellation_checker: 
         task_context=_task_context(value.get("task_context")),
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
     )
 
 
@@ -483,6 +494,16 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         async def pause_probe() -> bool:
             return await execution_store.is_pause_requested(run_id)
 
+        async def correction_reader() -> list[dict[str, Any]]:
+            return await execution_store.pending_course_corrections(run_id)
+
+        async def correction_acknowledger(
+            correction_ids: list[str], *, plan_revision: int
+        ) -> list[str]:
+            return await execution_store.mark_course_corrections_applied(
+                run_id, correction_ids, plan_revision=plan_revision
+            )
+
         class DurableSink:
             def __init__(self) -> None:
                 self.terminal_event_id: str | None = None
@@ -583,7 +604,14 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         runtime_adapter = get_adapter()
         try:
             context = await runtime_adapter.prepare_execution_context(
-                _context(payload, request, cancellation_checker=cancellation_probe, pause_checker=pause_probe)
+                _context(
+                    payload,
+                    request,
+                    cancellation_checker=cancellation_probe,
+                    pause_checker=pause_probe,
+                    course_correction_reader=correction_reader,
+                    course_correction_acknowledger=correction_acknowledger,
+                )
             )
             framework = str(getattr(request, "framework", None) or "").strip()
             if not framework:
@@ -677,6 +705,18 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     )
                 except ExecutionConflictError as exc:
                     raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": str(exc), "retryable": False}) from exc
+                if operation == "start":
+                    context_payload = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
+                    task_context = context_payload.get("task_context") if isinstance(context_payload.get("task_context"), Mapping) else {}
+                    task_metadata = task_context.get("metadata") if isinstance(task_context.get("metadata"), Mapping) else {}
+                    for value in task_metadata.get("course_corrections") or []:
+                        if not isinstance(value, Mapping):
+                            continue
+                        correction = dict(value)
+                        correction["correction_id"] = str(correction.get("correction_id") or correction.get("id") or "")
+                        correction["operation_id"] = str(correction.get("operation_id") or correction.get("command_id") or correction["correction_id"])
+                        if correction["correction_id"] and correction["operation_id"]:
+                            await execution_store.request_course_correction(request.run_id, correction)
             else:
                 record = await execution_store.get(request.run_id)
                 if record is None:
@@ -843,6 +883,68 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         outcome = await execution_store.request_pause(run_id)
         if outcome["status"] == "unknown":
             raise HTTPException(status_code=404, detail={"code": "runtime_run_not_found", "safe_message": "Runtime run not found", "retryable": False})
+        return json_envelope(
+            status="ok",
+            request_id=request_context.headers.get("x-request-id"),
+            result=outcome,
+        )
+
+    @app.post("/v1/runs/{run_id}/course-corrections")
+    async def submit_course_correction(
+        run_id: str,
+        payload: Mapping[str, Any],
+        request_context: Request,
+    ) -> dict[str, Any]:
+        runtime_request = request_from_dict(payload["request"])
+        if runtime_request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        correction = course_correction_from_dict(payload.get("correction") or {})
+        durable = await execution_store.get(run_id)
+        if durable is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "runtime_run_not_found",
+                    "safe_message": "Runtime run not found",
+                    "retryable": True,
+                },
+            )
+        expected_identity = {
+            "thread_id": durable.request.get("thread_id"),
+            "definition_id": durable.request.get("definition_id"),
+            "framework": durable.request.get("framework"),
+            "builder_id": durable.request.get("builder_id"),
+            "task_id": durable.request.get("task_id"),
+        }
+        supplied_identity = {
+            "thread_id": runtime_request.thread_id,
+            "definition_id": runtime_request.definition_id,
+            "framework": runtime_request.framework,
+            "builder_id": runtime_request.builder_id,
+            "task_id": runtime_request.task_id,
+        }
+        if supplied_identity != expected_identity:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_run_identity_mismatch",
+                    "safe_message": "Runtime run identity does not match the correction request",
+                    "retryable": False,
+                },
+            )
+        try:
+            outcome = await execution_store.request_course_correction(
+                run_id, correction.to_dict()
+            )
+        except ExecutionConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_operation_conflict",
+                    "safe_message": str(exc),
+                    "retryable": True,
+                },
+            ) from exc
         return json_envelope(
             status="ok",
             request_id=request_context.headers.get("x-request-id"),

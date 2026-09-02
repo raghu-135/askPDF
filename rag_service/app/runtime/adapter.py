@@ -13,6 +13,8 @@ from runtime_protocol.contracts import (
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeApprovalResponse,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
     RuntimeCapabilities,
     RuntimeSteeringInput,
     RuntimeValidationResult,
@@ -176,6 +178,16 @@ class AgentRuntimeAdapter(ABC):
 
     async def steer_live(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Mapping[str, Any]:
         self._unsupported("run.steer_live", "This runtime does not provide live steering")
+
+    async def submit_course_correction(
+        self,
+        request: AgentRuntimeRequest,
+        correction: RuntimeCourseCorrection,
+    ) -> RuntimeCourseCorrectionReceipt:
+        self._unsupported(
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT.value,
+            "This runtime does not accept corrections inside an active run",
+        )
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.inspect_state", "This runtime does not expose durable state inspection")

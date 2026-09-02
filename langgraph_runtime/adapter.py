@@ -254,6 +254,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             task_todos=[dict(todo) for todo in task.todos],
             task_budget_usage=dict(metadata.get("budget_usage") or {}),
             task_orchestration=dict(metadata.get("orchestration") or {}),
+            task_course_corrections=[
+                dict(value) for value in metadata.get("course_corrections") or []
+                if isinstance(value, Mapping)
+            ],
             runtime_execution_mode=True,
             runtime_artifact_manifest=[dict(value) for value in task.artifact_manifests],
             runtime_artifact_contents=dict(task.artifact_contents),
@@ -353,6 +357,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
                     pause_checker=context.pause_checker,
+                    course_correction_reader=context.course_correction_reader,
+                    course_correction_acknowledger=context.course_correction_acknowledger,
                 )
             finally:
                 if bridge is not None:
@@ -386,6 +392,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
             "pause_checker": context.pause_checker,
+            "course_correction_reader": context.course_correction_reader,
+            "course_correction_acknowledger": context.course_correction_acknowledger,
         }
         bridge = _event_bridge(request.run_id, event_sink)
         if bridge is not None:
@@ -435,6 +443,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     execution_event_sink=bridge,
                     cancellation_checker=context.cancellation_checker,
                     pause_checker=context.pause_checker,
+                    course_correction_reader=context.course_correction_reader,
+                    course_correction_acknowledger=context.course_correction_acknowledger,
                 )
             finally:
                 if bridge is not None:

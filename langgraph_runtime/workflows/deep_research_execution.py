@@ -102,6 +102,8 @@ class DeepResearchExecutionServices:
     memory: MemoryReader | None
     state: Mapping[str, Any] = field(default_factory=dict)
     pause_checker: Any = None
+    course_correction_reader: Any = None
+    course_correction_acknowledger: Any = None
 
     async def consume_budget(self, task_id: str, **usage: int) -> Mapping[str, Any]:
         if self.budgets is None:
@@ -152,10 +154,29 @@ class DeepResearchExecutionServices:
         return dict(boundary) if isinstance(boundary, Mapping) else None
 
     async def pending_course_corrections(self) -> list[dict[str, Any]]:
-        return [dict(value) for value in self.state.get("task_course_corrections") or [] if isinstance(value, Mapping)]
+        current = [
+            {**dict(value), "id": value.get("id") or value.get("correction_id")}
+            for value in self.state.get("task_course_corrections") or []
+            if isinstance(value, Mapping) and value.get("status", "accepted") in {"pending", "accepted"}
+        ]
+        if self.course_correction_reader is not None:
+            value = self.course_correction_reader()
+            if hasattr(value, "__await__"):
+                value = await value
+            current.extend(
+                {**dict(item), "id": item.get("id") or item.get("correction_id")}
+                for item in value or [] if isinstance(item, Mapping)
+            )
+        return list({str(item.get("correction_id") or item.get("id")): item for item in current}.values())
 
     async def mark_course_corrections_applied(self, correction_ids: list[str], *, plan_revision: int) -> None:
-        return None
+        if self.course_correction_acknowledger is None:
+            return None
+        value = self.course_correction_acknowledger(
+            correction_ids, plan_revision=plan_revision
+        )
+        if hasattr(value, "__await__"):
+            await value
 
     async def assemble_artifact_context(self, compact: Compactor) -> dict[str, Any]:
         raise NotImplementedError
@@ -168,12 +189,30 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
     async def persist_plan(self, task_id: str, proposal: Any, **kwargs: Any) -> tuple[Any, list[Any]]:
         revision = PlanRevisionRecord(revision=int(self.state.get("task_plan_revision") or 0) + 1)
         limits = self.state.get("task_limits") if isinstance(self.state.get("task_limits"), Mapping) else {}
-        todos = [TodoRecord.from_mapping(
-            todo.model_dump(mode="json"), status="pending", attempt=1,
-            max_attempts=int(limits.get("max_attempts", 2)), progress=0,
-            result_summary=None, artifact_ids_json=[], version=1,
-            dependency_ids_json=list(todo.dependency_ids),
-        ) for todo in proposal.todos]
+        prior_todos = [dict(value) for value in self.state.get("task_todos") or [] if isinstance(value, Mapping)]
+        completed_by_id = {
+            str(value.get("id")): value for value in prior_todos
+            if value.get("status") == "completed" and value.get("id")
+        }
+        todos: list[TodoRecord] = []
+        proposed_ids: set[str] = set()
+        for todo in proposal.todos:
+            todo_id = str(todo.id)
+            proposed_ids.add(todo_id)
+            if todo_id in completed_by_id:
+                todos.append(TodoRecord.from_mapping(completed_by_id[todo_id]))
+                continue
+            todos.append(TodoRecord.from_mapping(
+                todo.model_dump(mode="json"), status="pending", attempt=1,
+                max_attempts=int(limits.get("max_attempts", 2)), progress=0,
+                result_summary=None, artifact_ids_json=[], version=1,
+                dependency_ids_json=list(todo.dependency_ids),
+            ))
+        todos.extend(
+            TodoRecord.from_mapping(value)
+            for todo_id, value in completed_by_id.items()
+            if todo_id not in proposed_ids
+        )
         return revision, todos
 
     async def schedule_ready(self, task_id: str, *, limit: int) -> list[TodoRecord]:
@@ -336,6 +375,8 @@ def _common_services(state: Mapping[str, Any], configurable: Mapping[str, Any]) 
         "events": configurable.get("execution_event_sink"),
         "state": state,
         "pause_checker": configurable.get("pause_checker"),
+        "course_correction_reader": configurable.get("course_correction_reader"),
+        "course_correction_acknowledger": configurable.get("course_correction_acknowledger"),
     }
 
 

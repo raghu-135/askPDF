@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from app.agent_workflows.repository import AgentWorkflowRepository
-from runtime_protocol.contracts import AgentRuntimeRequest
+from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 def result_hash(result: Mapping[str, Any]) -> str:
@@ -192,14 +193,89 @@ async def reconcile_task_attempt(task_id: str, run_id: str, *, dry_run: bool = F
 
 async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = False) -> dict[str, int]:
     from app.agent_workflows.repository import AgentWorkflowRepository
+    from app.runtime.catalog import definition_from_run
+    from app.runtime.registry import adapter_for_definition
+    from app.services import agent_task_repository as tasks
+    from app.services.agent_task_runtime import ensure_task_run
 
     candidates = await AgentWorkflowRepository().list_runtime_reconciliation_candidates(limit=batch_size)
-    counts = {"inspected": 0, "projected": 0, "preserved": 0, "failed": 0, "deferred": 0}
+    counts = {"inspected": 0, "projected": 0, "preserved": 0, "failed": 0, "deferred": 0, "corrections": 0}
     for run in candidates:
         counts["inspected"] += 1
         try:
             status = await reconcile_run_by_id(run.id, dry_run=dry_run)
             counts[status] = counts.get(status, 0) + 1
+        except Exception:
+            counts["failed"] += 1
+    for command in await tasks.list_pending_course_correction_commands(limit=batch_size):
+        if dry_run:
+            counts["corrections"] += 1
+            continue
+        try:
+            result = dict(command.result_json or {})
+            correction = dict(result.get("correction") or {})
+            task = await tasks.get_task(command.task_id)
+            if task is None:
+                continue
+            if task.status in {"cancelling", "cancelled"} or task.deletion_requested_at is not None:
+                await tasks.reject_course_correction(
+                    command.id,
+                    error={"code": "course_correction_cancelled", "retryable": False},
+                )
+                counts["corrections"] += 1
+                continue
+            run = await AgentWorkflowRepository().get_run(
+                str(result.get("source_run_id") or correction.get("source_run_id") or "")
+            )
+            if run is None:
+                await tasks.reject_course_correction(
+                    command.id,
+                    error={"code": "course_correction_source_run_missing", "retryable": False},
+                )
+                counts["corrections"] += 1
+                continue
+            if str(result.get("delivery_mode") or "") == "linked_run" or str(run.status) in {"completed", "failed", "cancelled", "expired", "rejected"}:
+                await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run")
+                if str(run.status) in tasks.TERMINAL_TASK_RUN_STATUSES:
+                    await tasks.queue_linked_course_correction(task.id, run_id=run.id)
+                    await ensure_task_run(task.id)
+                    counts["corrections"] += 1
+                continue
+            definition = definition_from_run(run)
+            receipt = await adapter_for_definition(definition).submit_course_correction(
+                AgentRuntimeRequest(
+                    run_id=run.id,
+                    thread_id=run.thread_id,
+                    definition_id=definition.definition_id,
+                    framework=definition.framework,
+                    builder_id=definition.builder_id,
+                    task_id=task.id,
+                ),
+                RuntimeCourseCorrection(
+                    correction_id=str(correction.get("correction_id") or correction.get("id")),
+                    operation_id=command.id,
+                    instruction=str(correction.get("instruction") or ""),
+                    scope=str(correction.get("scope") or "remaining_work"),
+                    observed_task_version=int(correction.get("observed_task_version") or command.expected_version),
+                    observed_plan_revision=int(correction.get("observed_plan_revision") or 0),
+                    submitted_at=correction.get("submitted_at"),
+                ),
+            )
+            if receipt.status == "terminal":
+                await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run", receipt=receipt.to_dict())
+            elif receipt.status == "applied":
+                await tasks.mark_course_corrections_applied(
+                    task.id,
+                    [receipt.correction_id],
+                    plan_revision=int(receipt.plan_revision or 0),
+                )
+            else:
+                await tasks.mark_course_correction_delivered(command.id, receipt=receipt.to_dict())
+            counts["corrections"] += 1
+        except AgentRuntimeError as exc:
+            if not exc.retryable:
+                await tasks.reject_course_correction(command.id, error=exc.to_dict())
+            counts["failed"] += 1
         except Exception:
             counts["failed"] += 1
     return counts

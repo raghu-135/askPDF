@@ -25,6 +25,8 @@ from runtime_protocol.contracts import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
     RuntimeCapabilities,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
     RuntimeOperationId,
     RuntimeValidationResult,
 )
@@ -32,6 +34,7 @@ from runtime_protocol.errors import RuntimeError
 from app.runtime.operational_limits import required_positive_float, required_positive_int
 from runtime_protocol.transport import (
     capabilities_from_dict,
+    course_correction_receipt_from_dict,
     event_from_dict,
     result_from_dict,
     sse_encode,
@@ -516,6 +519,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_INSPECT_STATE,
         RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
         RuntimeOperationId.TRACE_PROJECT,
     })
 
@@ -656,6 +660,21 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/pause", request=request, json={"request": request.to_dict()})
         return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def submit_course_correction(
+        self,
+        request: AgentRuntimeRequest,
+        correction: RuntimeCourseCorrection,
+    ) -> RuntimeCourseCorrectionReceipt:
+        value = await self.transport._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/course-corrections",
+            request=request,
+            json={"request": request.to_dict(), "correction": correction.to_dict()},
+        )
+        if not isinstance(value, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Runtime returned an invalid correction receipt")
+        return course_correction_receipt_from_dict(value)
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json={"request": request.to_dict()})

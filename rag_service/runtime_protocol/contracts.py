@@ -102,6 +102,7 @@ class RuntimeEventKind(str, Enum):
     PROVISIONAL_SYNTHESIS_FAILED = "provisional_synthesis.failed"
     INTERVENTION_RESPONDED = "intervention.responded"
     PLAN_SUPERSEDED = "plan.superseded"
+    COURSE_CORRECTION_ACCEPTED = "course_correction.accepted"
     COURSE_CORRECTION_APPLIED = "course_correction.applied"
     CHECKPOINT_CONTINUED = "checkpoint.continued"
     LINKED_RUN_CREATED = "linked_run.created"
@@ -588,6 +589,54 @@ class RuntimeApprovalResponse:
 @dataclass(frozen=True)
 class RuntimeSteeringInput:
     text: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeCourseCorrection:
+    """Durable user guidance delivered to a running task runtime."""
+
+    correction_id: str
+    operation_id: str
+    instruction: str
+    observed_task_version: int
+    observed_plan_revision: int = 0
+    scope: str = "remaining_work"
+    submitted_at: Optional[str] = None
+    protocol_version: str = RUNTIME_PROTOCOL_VERSION
+    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.correction_id.strip() or not self.operation_id.strip():
+            raise ValueError("course correction identities must not be empty")
+        if not self.instruction.strip():
+            raise ValueError("course correction instruction must not be empty")
+        if len(self.instruction) > 20_000:
+            raise ValueError("course correction instruction exceeds the runtime limit")
+        if self.scope != "remaining_work":
+            raise ValueError("unsupported course correction scope")
+        if self.observed_task_version < 0 or self.observed_plan_revision < 0:
+            raise ValueError("course correction versions must not be negative")
+        ensure_protocol_compatible(self.protocol_version, self.minimum_compatible_version)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RuntimeCourseCorrectionReceipt:
+    correction_id: str
+    operation_id: str
+    status: str
+    run_id: str
+    run_status: Optional[str] = None
+    plan_revision: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"accepted", "already_accepted", "applied", "terminal"}:
+            raise ValueError("invalid course correction receipt status")
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 // The module exports a resolved build-time constant, so seed the environment
@@ -30,4 +31,10 @@ test('workflow catalog URL includes the selected persisted runtime identity', ()
     buildAgentWorkflowCatalogUrl(API_BASE, 'langgraph', 'langgraph_graph'),
     'http://test-api.example/api/internal/agent-workflows/catalog?framework=langgraph&builder_id=langgraph_graph',
   );
+});
+
+test('task lifecycle commands use the unambiguous commands route', async () => {
+  const source = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  assert.match(source, /agent-tasks\/\$\{encodeURIComponent\(taskId\)\}\/commands\/\$\{action\}/);
+  assert.doesNotMatch(source, /agent-tasks\/\$\{encodeURIComponent\(taskId\)\}\/\$\{action\}/);
 });
