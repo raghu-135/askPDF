@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from hermes_runtime.api import (
     _error,
     _HermesEventBudget,
+    _runtime_usage_snapshot,
     _upstream_timeout,
     create_app,
 )
@@ -89,6 +90,25 @@ def test_empty_delta_flood_still_consumes_lifecycle_budget():
     budget.observe("output.delta", "")
     with pytest.raises(HTTPException, match="lifecycle"):
         budget.observe("output.delta", "")
+
+
+def test_terminal_usage_counts_unique_tools_and_preserves_measurement_completeness():
+    usage = _runtime_usage_snapshot(
+        {"input_tokens": 12, "output_tokens": 8},
+        operation_id="operation-1",
+        started_tool_calls={"call-1", "call-2"},
+        active_runtime_ms=345,
+    )
+
+    assert usage == {
+        "operation_id": "operation-1",
+        "model_tokens": 20,
+        "model_calls": None,
+        "tool_calls": 2,
+        "active_runtime_ms": 345,
+        "measured_dimensions": ("tool_calls", "active_runtime_ms", "model_tokens"),
+        "cumulative": True,
+    }
 
 
 def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_command():

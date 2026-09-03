@@ -38,6 +38,7 @@ from runtime_protocol.contracts import (
     RuntimeTaskContext,
     RuntimeTaskResult,
     RuntimeTaskResultStatus,
+    RuntimeUsageSnapshot,
     TaskOrchestrationDelta,
     ensure_protocol_compatible,
     validated_disabled_operation_ids,
@@ -633,6 +634,40 @@ def test_runtime_task_context_and_artifact_are_json_compatible():
 
     assert artifact.to_dict()["kind"] == "intermediate_report"
     assert context.to_dict()["todos"][0]["id"] == "todo-1"
+
+
+def test_runtime_usage_snapshot_distinguishes_measured_from_unknown_counters():
+    usage = RuntimeUsageSnapshot.from_mapping(
+        {"input_tokens": 90, "output_tokens": 10, "tool_calls": 3},
+        operation_id="operation-1",
+    )
+
+    assert usage.model_tokens == 100
+    assert usage.model_calls is None
+    assert set(usage.measured_dimensions) == {"model_tokens", "tool_calls"}
+
+
+def test_langgraph_result_quality_is_identical_in_result_and_delta():
+    result = _result_from_graph({
+        "status": "completed",
+        "agent_task_id": "task-1",
+        "agent_run_id": "run-1",
+        "task_version": 1,
+        "final_answer": "A useful answer with disclosed limitations.",
+        "task_result_warnings": [{
+            "code": "evidence_critic_issues",
+            "details": {"issues": ["One source could not be corroborated."]},
+        }],
+        "task_result_gaps": ["Primary-source confirmation is missing."],
+    }, operation_id="operation-1")
+
+    assert result.task_result is not None
+    assert result.task_result.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS
+    assert result.orchestration_delta is not None
+    delta_result = result.orchestration_delta.result or {}
+    assert delta_result["warnings"] == list(result.task_result.warnings)
+    assert delta_result["incomplete_reasons"] == list(result.task_result.gaps)
+    assert delta_result["task_result"] == result.task_result.to_dict()
 
 
 def test_runtime_task_result_preserves_text_when_optional_structure_is_invalid():

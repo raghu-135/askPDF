@@ -16,12 +16,12 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
-    AgentRun, AgentTask, AgentTaskArtifact, AgentTaskCommand, AgentTaskPlanRevision,
+    AgentRun, AgentRuntimeOperation, AgentTask, AgentTaskArtifact, AgentTaskCommand, AgentTaskPlanRevision,
     AgentTaskRuntimeDelta, AgentTaskSubagentRun, AgentTaskTodo,
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.services import agent_task_repository as tasks
-from app.services.agent_task_budgets import normalize_budget_state
+from app.services.agent_task_budgets import exhausted_dimensions, normalize_budget_state
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
 from runtime_protocol.contracts import TaskOrchestrationDelta
@@ -92,6 +92,27 @@ async def _stage_artifacts(
     return staged
 
 
+async def _stage_final_report(
+    *, task_id: str, agent_run_id: str, operation_id: str, text: str
+) -> dict[str, Any] | None:
+    body = text.strip().encode("utf-8")
+    if not body:
+        return None
+    digest = hashlib.sha256(body).hexdigest()
+    artifact_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"askpdf:{task_id}:{agent_run_id}:final:{operation_id}:{digest}",
+    ))
+    object_key = task_artifact_content_key(task_id, agent_run_id, artifact_id)
+    await get_content_store().put(object_key, body, expected_sha256=digest)
+    return {
+        "id": artifact_id,
+        "object_key": object_key,
+        "sha256": digest,
+        "byte_size": len(body),
+    }
+
+
 def _merge_budget(
     current: Mapping[str, Any],
     incoming: Mapping[str, Any],
@@ -117,6 +138,253 @@ def _merge_budget(
     return candidate
 
 
+def _incomplete_disposition(run: AgentRun, task_result: Mapping[str, Any]) -> tuple[str, int, int]:
+    orchestration = dict(
+        (dict((run.resolved_spec_json or {}).get("config") or {}).get("task_policy") or {}).get("orchestration")
+        or {}
+    )
+    policy = str(orchestration.get("incomplete_result_policy") or "review")
+    max_rounds = min(5, max(0, int(orchestration.get("max_incomplete_review_rounds") or 3)))
+    return policy, max_rounds, max(1, int(run.task_attempt or 1))
+
+
+async def apply_neutral_task_completion(
+    *,
+    task_id: str,
+    agent_run_id: str,
+    operation_id: str,
+    runtime_status: str,
+    task_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Atomically project a non-delta runtime's usage and product disposition."""
+
+    usage = dict(task_result.get("usage") or {})
+    canonical_usage = {
+        "operation_id": str(usage.get("operation_id") or operation_id),
+        "model_tokens": max(0, int(usage.get("model_tokens") or 0)),
+        "model_calls": max(0, int(usage.get("model_calls") or 0)) if usage.get("model_calls") is not None else None,
+        "tool_calls": max(0, int(usage.get("tool_calls") or 0)) if usage.get("tool_calls") is not None else None,
+        "active_runtime_ms": max(0, int(usage.get("active_runtime_ms") or 0)) if usage.get("active_runtime_ms") is not None else None,
+        "measured_dimensions": sorted(set(str(value) for value in usage.get("measured_dimensions") or [])),
+        "cumulative": True,
+    }
+    if canonical_usage["operation_id"] != operation_id:
+        raise RuntimeTaskProjectionConflict("runtime usage targets a different operation")
+    fingerprint = hashlib.sha256(json.dumps(
+        {"status": runtime_status, "task_result": dict(task_result), "usage": canonical_usage},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
+    ).encode()).hexdigest()
+    final_stage = await _stage_final_report(
+        task_id=task_id, agent_run_id=agent_run_id, operation_id=operation_id,
+        text=str(task_result.get("text") or ""),
+    ) if runtime_status == "completed" else None
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(
+                AgentTask.id == task_id,
+            ).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(
+                AgentRun.id == agent_run_id, AgentRun.task_id == task_id,
+            ).with_for_update())).scalar_one()
+            operation = (await session.execute(select(AgentRuntimeOperation).where(
+                AgentRuntimeOperation.run_id == agent_run_id,
+                AgentRuntimeOperation.operation == "task.completion.project",
+                AgentRuntimeOperation.idempotency_key == operation_id,
+            ).with_for_update())).scalar_one_or_none()
+            if operation is not None and operation.status == "completed":
+                if operation.request_fingerprint != fingerprint:
+                    raise RuntimeTaskProjectionConflict("runtime completion identity was replayed with different content")
+                return dict(operation.result_json or {})
+            now = utc_now()
+            if operation is None:
+                operation = AgentRuntimeOperation(
+                    run_id=agent_run_id,
+                    operation="task.completion.project",
+                    idempotency_key=operation_id,
+                    request_fingerprint=fingerprint,
+                    status="in_progress",
+                    claimed_at=now,
+                    claim_expires_at=now + timedelta(minutes=5),
+                )
+                session.add(operation)
+            elif operation.request_fingerprint != fingerprint:
+                raise RuntimeTaskProjectionConflict("runtime completion identity was replayed with different content")
+
+            limits = dict((task.config_json or {}).get("limits") or {})
+            budget = normalize_budget_state(task.budgets_json, limits)
+            dimension_map = {
+                "model_tokens": "model_tokens", "model_calls": "model_calls",
+                "tool_calls": "tool_calls", "active_runtime_ms": "elapsed_active_ms",
+            }
+            for source_key in canonical_usage["measured_dimensions"]:
+                target_key = dimension_map.get(source_key)
+                value = canonical_usage.get(source_key)
+                if target_key is None or value is None:
+                    continue
+                budget["tranche_usage"][target_key] = int(budget["tranche_usage"].get(target_key) or 0) + int(value)
+                budget["lifetime_usage"][target_key] = int(budget["lifetime_usage"].get(target_key) or 0) + int(value)
+
+            final_artifact_id: str | None = None
+            if final_stage is not None:
+                existing_final = (await session.execute(select(AgentTaskArtifact).where(
+                    AgentTaskArtifact.agent_run_id == agent_run_id,
+                    AgentTaskArtifact.kind == "final_report",
+                    AgentTaskArtifact.validity == "valid",
+                    AgentTaskArtifact.deleted_at.is_(None),
+                ).with_for_update())).scalar_one_or_none()
+                if existing_final is not None:
+                    if existing_final.sha256 != final_stage["sha256"]:
+                        raise RuntimeTaskProjectionConflict("runtime completion returned conflicting final reports")
+                    final_artifact_id = existing_final.id
+                else:
+                    artifact_count = int((await session.execute(select(func.count(AgentTaskArtifact.id)).where(
+                        AgentTaskArtifact.task_id == task_id,
+                        AgentTaskArtifact.validity != "deleted",
+                    ))).scalar_one())
+                    if artifact_count >= int(limits.get("max_artifacts", 200)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact count limit")
+                    if final_stage["byte_size"] > int(limits.get("max_single_artifact_bytes", 10_485_760)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product per-object limit")
+                    if int(budget["lifetime_usage"].get("artifact_bytes") or 0) + final_stage["byte_size"] > int(limits.get("max_artifact_bytes", 104_857_600)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact byte limit")
+                    budget["lifetime_usage"]["artifact_bytes"] = int(
+                        budget["lifetime_usage"].get("artifact_bytes") or 0
+                    ) + final_stage["byte_size"]
+                    artifact = AgentTaskArtifact(
+                        id=final_stage["id"], task_id=task_id, agent_run_id=agent_run_id,
+                        ownership_key=f"runtime-final:{operation_id}", kind="final_report",
+                        object_key=final_stage["object_key"], media_type="text/plain",
+                        byte_size=final_stage["byte_size"], sha256=final_stage["sha256"],
+                        provenance_json={
+                            "runtime_operation_id": operation_id,
+                            "warnings": list(task_result.get("warnings") or []),
+                            "gaps": list(task_result.get("gaps") or []),
+                            "outcome": task_result.get("status"),
+                        },
+                        source_refs_json={}, retention_until=now + timedelta(days=30),
+                    )
+                    session.add(artifact)
+                    final_artifact_id = artifact.id
+                    await tasks._append_event(
+                        session, task, "artifact.created", agent_run_id=agent_run_id,
+                        artifact_id=artifact.id,
+                        payload={"kind": "final_report", "byte_size": artifact.byte_size, "sha256": artifact.sha256},
+                    )
+
+            dimensions = exhausted_dimensions(budget)
+            budget["boundary"] = {
+                "dimensions": dimensions, "operation_id": operation_id, "observed_at": now.isoformat(),
+            } if dimensions else None
+            replace_jsonb_field(task, "budgets_json", budget)
+            await tasks._append_event(
+                session, task, "task.budget_updated", agent_run_id=agent_run_id,
+                payload={
+                    "operation_id": operation_id, "tranche_index": budget["tranche_index"],
+                    "tranche_usage": budget["tranche_usage"], "lifetime_usage": budget["lifetime_usage"],
+                    "measured_dimensions": canonical_usage["measured_dimensions"],
+                },
+            )
+
+            warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
+            gaps = list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip()))
+            disposition = runtime_status
+            pending: dict[str, Any] | None = None
+            if runtime_status == "completed" and dimensions:
+                disposition = "budget_review"
+                pending = {
+                    "interrupt_id": f"budget-review:{agent_run_id}:{budget['tranche_index']}",
+                    "type": "budget_review", "response_operation": "task.budget_review.respond",
+                    "status": "pending", "title": "Research budget reached",
+                    "allowed_actions": ["continue", "accept_partial", "steer"],
+                    "continuation_semantics": "linked_run", "preserves_run_id": False,
+                    "provisional_artifact_id": final_artifact_id,
+                    "provisional_answer": str(task_result.get("text") or ""),
+                    "warnings": warnings, "gaps": gaps,
+                    "usage": {**budget, "exhausted_dimensions": dimensions},
+                }
+                event_type = "task.budget_review_requested"
+                phase = "budget_review"
+            elif runtime_status == "completed":
+                policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
+                needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
+                if needs_review and policy == "review" and review_round <= max_rounds:
+                    disposition = "result_review"
+                    pending = {
+                        "interrupt_id": f"result-review:{agent_run_id}:{operation_id}",
+                        "type": "incomplete_result_review", "kind": "approval", "status": "pending",
+                        "response_operation": "task.result_review.respond",
+                        "title": "Review incomplete result",
+                        "allowed_actions": ["accept", "retry_with_input"],
+                        "provisional_artifact_id": final_artifact_id,
+                        "provisional_answer": str(task_result.get("text") or ""),
+                        "warnings": warnings, "gaps": gaps,
+                        "review_round": review_round, "max_review_rounds": max_rounds,
+                    }
+                    event_type = "task.result_review_requested"
+                    phase = "awaiting_result_review"
+                elif needs_review and policy == "fail":
+                    disposition = "failed"
+
+            if pending is not None:
+                replace_jsonb_field(run, "pending_interrupt_json", pending)
+                run.status = AgentRunStatus.AWAITING_HUMAN.value
+                task.status = AgentTaskStatus.AWAITING_APPROVAL.value
+                task.current_phase = phase
+                task.terminal_reason = "budget_exhausted" if disposition == "budget_review" else "incomplete_result"
+                task.completed_at = None
+                task.expires_at = now + timedelta(days=7)
+                task.lease_owner = None
+                task.lease_expires_at = None
+                await tasks._append_event(
+                    session, task, event_type, agent_run_id=agent_run_id,
+                    artifact_id=final_artifact_id,
+                    causal_key=f"run:{agent_run_id}:{disposition}:{budget['tranche_index'] if disposition == 'budget_review' else operation_id}",
+                    payload={
+                        "interrupt_id": pending["interrupt_id"], "warnings": warnings,
+                        "gaps": gaps, "exhausted_dimensions": dimensions,
+                    },
+                )
+            else:
+                cancelled = runtime_status in {"cancelled", "canceled"}
+                failed = runtime_status == "failed" or disposition == "failed"
+                run.status = AgentRunStatus.CANCELLED.value if cancelled else AgentRunStatus.FAILED.value if failed else AgentRunStatus.COMPLETED.value
+                run.completed_at = now
+                task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value if failed else AgentTaskStatus.COMPLETED.value
+                task.current_phase = task.status
+                task.terminal_reason = "incomplete_result_rejected" if disposition == "failed" and runtime_status == "completed" else runtime_status
+                task.completed_at = now
+                task.expires_at = None
+                task.lease_owner = None
+                task.lease_expires_at = None
+                await tasks._append_event(
+                    session, task, f"task.{task.status}", agent_run_id=agent_run_id,
+                    artifact_id=final_artifact_id,
+                    payload={"reason": task.terminal_reason, "operation_id": operation_id},
+                )
+
+            metadata = dict(run.run_metadata_json or {})
+            projection = dict(metadata.get("projection") or {})
+            projection.update({
+                "status": "applied", "reconciliation_status": "projected",
+                "operation_id": operation_id, "usage_fingerprint": fingerprint,
+                "final_artifact_id": final_artifact_id, "product_disposition": disposition,
+            })
+            projection.pop("projection_error", None)
+            metadata["projection"] = projection
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            task.version += 1
+            result = {
+                "usage_fingerprint": fingerprint, "usage": canonical_usage,
+                "final_artifact_id": final_artifact_id, "product_disposition": disposition,
+                "exhausted_dimensions": dimensions,
+            }
+            operation.status = "completed"
+            replace_jsonb_field(operation, "result_json", result)
+            operation.completed_at = now
+            return result
+
+
 async def apply_runtime_task_delta(
     *, task_id: str, agent_run_id: str, delta: TaskOrchestrationDelta,
     artifact_id_map: Mapping[str, str] | None = None,
@@ -124,6 +392,23 @@ async def apply_runtime_task_delta(
     """Apply one runtime boundary exactly once in one product DB transaction."""
 
     staged = await _stage_artifacts(task_id=task_id, agent_run_id=agent_run_id, artifacts=delta.artifacts) if delta.artifacts else []
+    result_envelope = dict(delta.result or {})
+    task_result = dict(result_envelope.get("task_result") or {}) if isinstance(result_envelope.get("task_result"), Mapping) else {}
+    if task_result:
+        outer_warnings = [dict(value) for value in result_envelope.get("warnings") or [] if isinstance(value, Mapping)]
+        outer_gaps = [str(value) for value in result_envelope.get("incomplete_reasons") or []]
+        if outer_warnings != [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]:
+            raise RuntimeTaskProjectionConflict("runtime result warnings disagree with the canonical task result")
+        if outer_gaps != [str(value) for value in task_result.get("gaps") or []]:
+            raise RuntimeTaskProjectionConflict("runtime result gaps disagree with the canonical task result")
+        if result_envelope.get("result_outcome") != task_result.get("status"):
+            raise RuntimeTaskProjectionConflict("runtime result outcome disagrees with the canonical task result")
+    final_stage = await _stage_final_report(
+        task_id=task_id,
+        agent_run_id=agent_run_id,
+        operation_id=delta.operation_id,
+        text=str(task_result.get("text") or ""),
+    ) if str(result_envelope.get("status") or "") == "completed" else None
     artifact_ids = {str(value["runtime_id"]): str(value["id"]) for value in staged}
     artifact_ids.update({str(key): str(value) for key, value in (artifact_id_map or {}).items()})
     payload_sha256 = _payload_hash(delta)
@@ -397,6 +682,51 @@ async def apply_runtime_task_delta(
                 )
                 replace_jsonb_field(task, "budgets_json", budget)
                 await tasks._append_event(session, task, "task.budget_updated", agent_run_id=agent_run_id, payload={"tranche_index": budget["tranche_index"], "tranche_usage": budget["tranche_usage"], "lifetime_usage": budget["lifetime_usage"]})
+            final_artifact_id: str | None = None
+            if final_stage is not None:
+                existing_final = (await session.execute(select(AgentTaskArtifact).where(
+                    AgentTaskArtifact.agent_run_id == agent_run_id,
+                    AgentTaskArtifact.kind == "final_report",
+                    AgentTaskArtifact.validity == "valid",
+                    AgentTaskArtifact.deleted_at.is_(None),
+                ).with_for_update())).scalar_one_or_none()
+                if existing_final is not None:
+                    if existing_final.sha256 != final_stage["sha256"]:
+                        raise RuntimeTaskProjectionConflict("runtime operation returned conflicting final reports")
+                    final_artifact_id = existing_final.id
+                else:
+                    if artifact_count >= int(limits.get("max_artifacts", 200)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact count limit")
+                    if final_stage["byte_size"] > int(limits.get("max_single_artifact_bytes", 10_485_760)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product per-object limit")
+                    budget = normalize_budget_state(task.budgets_json, limits)
+                    if int(budget["lifetime_usage"].get("artifact_bytes") or 0) + final_stage["byte_size"] > int(limits.get("max_artifact_bytes", 104_857_600)):
+                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact byte limit")
+                    budget["lifetime_usage"]["artifact_bytes"] = int(
+                        budget["lifetime_usage"].get("artifact_bytes") or 0
+                    ) + final_stage["byte_size"]
+                    replace_jsonb_field(task, "budgets_json", budget)
+                    final_artifact = AgentTaskArtifact(
+                        id=final_stage["id"], task_id=task_id, agent_run_id=agent_run_id,
+                        ownership_key=f"runtime-final:{delta.operation_id}", kind="final_report",
+                        object_key=final_stage["object_key"], media_type="text/plain",
+                        byte_size=final_stage["byte_size"], sha256=final_stage["sha256"],
+                        provenance_json={
+                            "runtime_operation_id": delta.operation_id,
+                            "warnings": list(task_result.get("warnings") or []),
+                            "gaps": list(task_result.get("gaps") or []),
+                            "outcome": task_result.get("status"),
+                        },
+                        source_refs_json={}, retention_until=utc_now() + timedelta(days=30),
+                    )
+                    session.add(final_artifact)
+                    final_artifact_id = final_artifact.id
+                    artifact_count += 1
+                    await tasks._append_event(
+                        session, task, "artifact.created", agent_run_id=agent_run_id,
+                        artifact_id=final_artifact.id,
+                        payload={"kind": "final_report", "byte_size": final_artifact.byte_size, "sha256": final_artifact.sha256},
+                    )
             if delta.web_access is not None:
                 status, interrupt_id = str(delta.web_access.get("status") or ""), str(delta.web_access.get("interrupt_id") or "")
                 pending, decision = dict(run.pending_interrupt_json or {}), dict((run.pending_interrupt_json or {}).get("decision") or {})
@@ -431,13 +761,91 @@ async def apply_runtime_task_delta(
                 projection = dict(metadata.get("projection") or {})
                 projection.update({
                     "status": "applied",
+                    "reconciliation_status": "projected",
                     "delta_event_id": delta.event_id,
                     "operation_id": delta.operation_id,
                     "applied_runtime_plan_revision": applied_runtime_plan_revision,
+                    "final_artifact_id": final_artifact_id,
                 })
                 projection.pop("projection_error", None)
                 metadata["projection"] = projection
                 replace_jsonb_field(run, "run_metadata_json", metadata)
+
+                result_status = str(delta.result.get("status") or "")
+                if result_status == "completed" and task_result:
+                    warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
+                    gaps = list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip()))
+                    policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
+                    needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
+                    if needs_review and policy == "review" and review_round <= max_rounds:
+                        pending = {
+                            "interrupt_id": f"result-review:{run.id}:{delta.operation_id}",
+                            "type": "incomplete_result_review",
+                            "kind": "approval",
+                            "status": "pending",
+                            "title": "Review incomplete result",
+                            "body": "The agent returned usable output with warnings or unresolved gaps.",
+                            "response_operation": "task.result_review.respond",
+                            "allowed_actions": ["accept", "retry_with_input"],
+                            "response_schema": {"type": "object", "properties": {"followup_input": {"type": "string", "maxLength": 20000}}},
+                            "review_round": review_round,
+                            "max_review_rounds": max_rounds,
+                            "provisional_artifact_id": final_artifact_id,
+                            "provisional_answer": str(task_result.get("text") or ""),
+                            "warnings": warnings,
+                            "gaps": gaps,
+                        }
+                        replace_jsonb_field(run, "pending_interrupt_json", pending)
+                        run.status = AgentRunStatus.AWAITING_HUMAN.value
+                        task.status = AgentTaskStatus.AWAITING_APPROVAL.value
+                        task.current_phase = "awaiting_result_review"
+                        task.terminal_reason = "incomplete_result"
+                        task.completed_at = None
+                        task.expires_at = utc_now() + timedelta(days=7)
+                        task.lease_owner = None
+                        task.lease_expires_at = None
+                        await tasks._append_event(
+                            session, task, "task.result_review_requested", agent_run_id=agent_run_id,
+                            artifact_id=final_artifact_id,
+                            causal_key=f"run:{agent_run_id}:result-review:{review_round}",
+                            payload={
+                                "interrupt_id": pending["interrupt_id"], "result_outcome": "completed_with_warnings",
+                                "warnings": warnings, "gaps": gaps, "review_round": review_round,
+                            },
+                        )
+                    else:
+                        now = utc_now()
+                        rejected = needs_review and policy == "fail"
+                        run.status = AgentRunStatus.FAILED.value if rejected else AgentRunStatus.COMPLETED.value
+                        run.completed_at = now
+                        task.status = AgentTaskStatus.FAILED.value if rejected else AgentTaskStatus.COMPLETED.value
+                        task.current_phase = task.status
+                        task.terminal_reason = "incomplete_result_rejected" if rejected else "completed_with_warnings" if needs_review else "completed"
+                        task.completed_at = now
+                        task.expires_at = None
+                        task.lease_owner = None
+                        task.lease_expires_at = None
+                        await tasks._append_event(
+                            session, task, f"task.{task.status}", agent_run_id=agent_run_id,
+                            artifact_id=final_artifact_id,
+                            payload={"reason": task.terminal_reason, "runtime_event_id": delta.event_id},
+                        )
+                elif result_status in {"failed", "cancelled", "canceled"}:
+                    now = utc_now()
+                    cancelled = result_status in {"cancelled", "canceled"}
+                    run.status = AgentRunStatus.CANCELLED.value if cancelled else AgentRunStatus.FAILED.value
+                    run.completed_at = now
+                    task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value
+                    task.current_phase = task.status
+                    task.terminal_reason = str((delta.result.get("error") or {}).get("code") or result_status)
+                    task.completed_at = now
+                    task.expires_at = None
+                    task.lease_owner = None
+                    task.lease_expires_at = None
+                    await tasks._append_event(
+                        session, task, f"task.{task.status}", agent_run_id=agent_run_id,
+                        payload={"reason": task.terminal_reason, "runtime_event_id": delta.event_id},
+                    )
 
             if applied_correction_ids:
                 now = utc_now()

@@ -131,7 +131,12 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         from app.services.agent_task_runtime_projection import apply_runtime_task_delta
         from runtime_protocol.transport import result_from_dict
 
-        runtime_result = result_from_dict(result)
+        wire_result = dict(result)
+        if not isinstance(wire_result.get("task_result"), Mapping) and isinstance(
+            wire_result.get("runtime_task_result"), Mapping
+        ):
+            wire_result["task_result"] = dict(wire_result["runtime_task_result"])
+        runtime_result = result_from_dict(wire_result)
         delta = runtime_result.orchestration_delta
         if delta is None:
             return "deferred"
@@ -147,6 +152,44 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
             payload_sha256=delta_sha256, runtime_status=runtime_result.status,
             result=dict(result),
             final_artifact_id=artifact_ids.get(final_runtime_artifact, final_runtime_artifact or None),
+        )
+        return "projected"
+    if (
+        task is not None
+        and definition.framework == "hermes"
+        and isinstance(result, Mapping)
+    ):
+        from app.services.agent_task_runtime_projection import apply_neutral_task_completion
+        from runtime_protocol.transport import result_from_dict
+
+        wire_result = dict(result)
+        if not isinstance(wire_result.get("task_result"), Mapping) and isinstance(
+            wire_result.get("runtime_task_result"), Mapping
+        ):
+            wire_result["task_result"] = dict(wire_result["runtime_task_result"])
+        runtime_result = result_from_dict(wire_result)
+        if runtime_result.task_result is None:
+            projection.update({
+                "reconciliation_status": "manual_required",
+                "projection_error": {
+                    "code": "runtime_task_result_missing",
+                    "message": "A task-backed Hermes result has no neutral task result",
+                    "retryable": False,
+                },
+            })
+            await repository.update_runtime_projection(run.id, projection)
+            return "deferred"
+        task_result = runtime_result.task_result.to_dict()
+        usage = dict(task_result.get("usage") or {})
+        operation_id = str(
+            usage.get("operation_id")
+            or projection.get("operation_id")
+            or f"task:{task.id}:run:{run.id}:reconcile"
+        )
+        await apply_neutral_task_completion(
+            task_id=str(task.id), agent_run_id=str(run.id),
+            operation_id=operation_id, runtime_status=runtime_result.status,
+            task_result=task_result,
         )
         return "projected"
     if (

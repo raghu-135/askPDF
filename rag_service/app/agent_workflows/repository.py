@@ -234,6 +234,8 @@ class AgentWorkflowRepository:
         candidates: list[AgentRun] = []
         for run in runs:
             projection = dict((run.run_metadata_json or {}).get("projection") or {})
+            if projection.get("status") == "applied" and projection.get("reconciliation_status") == "projected":
+                continue
             if projection.get("reconciliation_status") == "manual_required":
                 continue
             next_retry_at = projection.get("next_retry_at")

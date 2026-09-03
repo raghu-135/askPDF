@@ -103,6 +103,11 @@ async def test_external_hermes_runtime_contract_and_execution():
         )
         assert result.status == "completed", result
         assert result.output
+        assert result.task_result is not None
+        assert result.task_result.usage["active_runtime_ms"] > 0
+        assert {"tool_calls", "active_runtime_ms"}.issubset(
+            result.task_result.usage["measured_dimensions"]
+        )
         assert result.continuation is not None
         assert result.continuation.binding_type == "hermes_session"
         assert result.continuation.payload["session_id"]
@@ -161,6 +166,7 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
         # accepting the provider's ungrounded prose as a completed task.
         assert task["status"] == "awaiting_approval", json.dumps(task, indent=2, default=str)
         assert task["current_phase"] == "awaiting_result_review"
+        assert task["budgets"]["lifetime_usage"]["elapsed_active_ms"] > 0
         assert task["active_run"]["pending_interrupt"]["type"] == "incomplete_result_review"
         run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})

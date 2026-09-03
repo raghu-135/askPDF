@@ -555,17 +555,28 @@ async def _append_event(
     payload: Optional[Dict[str, Any]] = None,
     policy_hash: Optional[str] = None,
     config_hash: Optional[str] = None,
+    causal_key: Optional[str] = None,
 ) -> AgentTaskEvent:
+    normalized_type, source_metadata = normalize_product_event_kind(event_type)
+    if causal_key is None and agent_run_id and normalized_type in TERMINAL_RUNTIME_EVENT_KINDS:
+        causal_key = f"run:{agent_run_id}:terminal"
+    if causal_key:
+        existing = (await session.execute(select(AgentTaskEvent).where(
+            AgentTaskEvent.task_id == task.id,
+            AgentTaskEvent.causal_key == causal_key,
+        ).with_for_update())).scalar_one_or_none()
+        if existing is not None:
+            return existing
     latest = await session.execute(
         select(func.coalesce(func.max(AgentTaskEvent.sequence), 0))
         .where(AgentTaskEvent.task_id == task.id)
     )
-    normalized_type, source_metadata = normalize_product_event_kind(event_type)
     event_sequence = int(latest.scalar_one()) + 1
     event = AgentTaskEvent(
         task_id=task.id,
         sequence=event_sequence,
         event_id=f"{task.id}:{event_sequence}",
+        causal_key=causal_key,
         event_type=normalized_type,
         actor_type=actor_type,
         actor_id=actor_id,
@@ -1738,6 +1749,13 @@ async def finalize_reconciled_runtime_task(
                 raise AgentTaskConflict("runtime_delta_not_applied", "Runtime delta ledger does not match reconciliation")
             metadata = dict(run.run_metadata_json or {})
             projection = dict(metadata.get("projection") or {})
+            if (
+                projection.get("status") == "applied"
+                and projection.get("reconciliation_status") == "projected"
+                and task.status in TERMINAL_TASK_STATUSES
+                and run.status in TERMINAL_TASK_RUN_STATUSES
+            ):
+                return task
             projection.update({
                 "status": "applied",
                 "reconciliation_status": "projected",
@@ -2163,10 +2181,13 @@ async def create_budget_review(
             task.lease_owner = None
             task.lease_expires_at = None
             task.version += 1
-            await _append_event(session, task, "task.budget_review_requested", agent_run_id=run.id, payload={
+            await _append_event(
+                session, task, "task.budget_review_requested", agent_run_id=run.id,
+                causal_key=f"run:{run.id}:budget-review:{budget.get('tranche_index')}", payload={
                 "interrupt_id": interrupt_id, "usage": pending["usage"],
                 "accept_partial_enabled": bool(pending["provisional_answer"]), "version": task.version,
-            })
+                },
+            )
         await session.refresh(task)
         return task, pending
 

@@ -22,6 +22,7 @@ from runtime_protocol.contracts import (
     RuntimeValidationResult,
     RuntimeOperationId,
     RuntimePlanChange,
+    RuntimeUsageSnapshot,
     TaskOrchestrationDelta,
 )
 from runtime_protocol.events import create_runtime_event
@@ -52,6 +53,46 @@ def _visualization_descriptor(data: Mapping[str, Any]) -> dict[str, Any] | None:
         if key in source
     }
     return descriptor or None
+
+
+def _canonical_task_quality(result: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    warnings: list[dict[str, Any]] = []
+    seen_warnings: set[str] = set()
+    for source in (result.get("task_result_warnings") or [], result.get("warnings") or []):
+        for value in source:
+            if not isinstance(value, Mapping):
+                continue
+            item = _public_value(dict(value))
+            identity = json.dumps(item, sort_keys=True, separators=(",", ":"), default=str)
+            if identity not in seen_warnings:
+                seen_warnings.add(identity)
+                warnings.append(item)
+    gaps = list(dict.fromkeys(
+        str(value).strip()
+        for value in [
+            *(result.get("task_incomplete_reasons") or []),
+            *(result.get("task_result_gaps") or []),
+        ]
+        if str(value).strip()
+    ))
+    return warnings[:100], gaps[:100]
+
+
+def _canonical_usage(result: Mapping[str, Any], *, operation_id: str) -> dict[str, Any]:
+    budget = result.get("task_budget_usage") if isinstance(result.get("task_budget_usage"), Mapping) else {}
+    lifetime = budget.get("lifetime_usage") if isinstance(budget.get("lifetime_usage"), Mapping) else {}
+    raw = dict(result.get("usage") or result.get("metrics") or {})
+    if lifetime:
+        raw.update({
+            "model_tokens": lifetime.get("model_tokens"),
+            "model_calls": lifetime.get("model_calls"),
+            "tool_calls": lifetime.get("tool_calls"),
+            "active_runtime_ms": lifetime.get("elapsed_active_ms"),
+            "measured_dimensions": [
+                "model_tokens", "model_calls", "tool_calls", "active_runtime_ms"
+            ],
+        })
+    return RuntimeUsageSnapshot.from_mapping(raw, operation_id=operation_id).to_dict()
 
 
 def _result_from_graph(
@@ -86,6 +127,24 @@ def _result_from_graph(
         operation_id = operation_id or f"{run_id}:direct"
         attempt_id = attempt_id or f"{run_id}:attempt:1"
         boundary_event_id = boundary_event_id or f"{attempt_id}:operation:{operation_id}:result"
+    warnings, gaps = _canonical_task_quality(result)
+    final_text = result.get("final_answer") or result.get("answer")
+    task_result = None
+    if status == "completed" and (final_text or result.get("runtime_artifacts")):
+        usage = _canonical_usage(
+            result,
+            operation_id=operation_id or str(result.get("agent_run_id") or "langgraph-operation"),
+        )
+        task_result = normalize_runtime_task_result({
+            "status": "completed_with_warnings" if warnings or gaps else "completed",
+            "text": final_text,
+            "structured_output": result.get("structured_output"),
+            "warnings": warnings,
+            "gaps": gaps,
+            "usage": usage,
+            "framework_details": {"framework": "langgraph"},
+        })
+    if task_id:
         web_access_decision = result.get("task_web_access_decision") if isinstance(result.get("task_web_access_decision"), Mapping) else None
         plan_changes = [
             RuntimePlanChange(
@@ -115,13 +174,10 @@ def _result_from_graph(
             ),
             "result": {
                 "status": status,
-                "incomplete_reasons": list(result.get("task_incomplete_reasons") or [])[:50],
-                "warnings": [
-                    _public_value(dict(value))
-                    for value in result.get("warnings") or []
-                    if isinstance(value, Mapping)
-                ][:50],
-                "result_outcome": str(result.get("result_outcome") or "") or None,
+                "incomplete_reasons": gaps[:50],
+                "warnings": warnings[:50],
+                "result_outcome": task_result.status.value if task_result is not None else str(result.get("result_outcome") or "") or None,
+                "task_result": task_result.to_dict() if task_result is not None else None,
                 "final_artifact_id": str(result.get("final_artifact_id") or "") or None,
             },
         }
@@ -155,18 +211,6 @@ def _result_from_graph(
             pending_interrupt=changes["pending_interrupt"],
             result=changes["result"],
         )
-    final_text = result.get("final_answer") or result.get("answer")
-    task_result = None
-    if status == "completed" and (final_text or result.get("runtime_artifacts")):
-        task_result = normalize_runtime_task_result({
-            "status": "completed_with_warnings" if result.get("warnings") or result.get("task_incomplete_reasons") or result.get("task_result_gaps") else "completed",
-            "text": final_text,
-            "structured_output": result.get("structured_output"),
-            "warnings": result.get("warnings") or [],
-            "gaps": list(dict.fromkeys([*(result.get("task_incomplete_reasons") or []), *(result.get("task_result_gaps") or [])])),
-            "usage": result.get("usage") or result.get("metrics") or {},
-            "framework_details": {"framework": "langgraph"},
-        })
     return AgentRuntimeResult(
         status=status,
         output=dict(public_result),

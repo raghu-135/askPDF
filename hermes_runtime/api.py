@@ -36,9 +36,34 @@ from hermes_runtime.profile_manager import (
 )
 from runtime_protocol import json_envelope, sse_encode, structured_error, validate_event_mapping
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.contracts import RuntimeUsageSnapshot
 
 
 logger = logging.getLogger(__name__)
+
+
+def _runtime_usage_snapshot(
+    native_usage: Mapping[str, Any] | None,
+    *,
+    operation_id: str,
+    started_tool_calls: set[str],
+    active_runtime_ms: int,
+) -> dict[str, Any]:
+    """Normalize only usage dimensions Hermes measured for this operation."""
+
+    usage = dict(native_usage or {})
+    usage["tool_calls"] = len(started_tool_calls)
+    usage["active_runtime_ms"] = max(0, int(active_runtime_ms))
+    measured = ["tool_calls", "active_runtime_ms"]
+    if any(
+        usage.get(key) is not None
+        for key in ("model_tokens", "total_tokens", "input_tokens", "output_tokens")
+    ):
+        measured.append("model_tokens")
+    if usage.get("model_calls") is not None:
+        measured.append("model_calls")
+    usage["measured_dimensions"] = measured
+    return RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
 
 _DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
 - AskPDF document tools are already exposed directly in the model-facing MCP tool list.
@@ -687,7 +712,9 @@ def create_app() -> FastAPI:
         if effective_limits.get("max_duration_seconds") is None:
             raise ValueError("max_duration_seconds is required in the resolved runtime limits")
         max_duration_seconds = max(1, int(effective_limits["max_duration_seconds"]))
-        deadline = time.monotonic() + max_duration_seconds
+        operation_started_at = time.monotonic()
+        deadline = operation_started_at + max_duration_seconds
+        operation_id = str(options.get("idempotency_key") or f"hermes:{run_id}:execute")
         system_prompt = str(managed_profile.get("instructions") or "").strip()
         task_context = input_data.get("task_context")
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
@@ -729,6 +756,7 @@ def create_app() -> FastAPI:
             "last_tool_name": None,
             "last_tool_call_id": None,
         }
+        started_tool_calls: set[str] = set()
 
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id
@@ -755,7 +783,13 @@ def create_app() -> FastAPI:
             elif kind in {"tool.started", "tool.completed", "tool.failed"}:
                 kind, event_payload = _normalized_tool_payload(kind, event_payload)
                 if kind == "tool.started":
-                    tool_activity["started"] += 1
+                    tool_identity = str(
+                        event_payload.get("tool_call_id")
+                        or source_event_id
+                        or f"tool-started:{sequence}"
+                    )
+                    started_tool_calls.add(tool_identity)
+                    tool_activity["started"] = len(started_tool_calls)
                 elif kind == "tool.completed":
                     tool_activity["completed"] += 1
                     tool_activity["evidence_result_count"] += max(0, int(event_payload.get("result_count") or 0))
@@ -800,6 +834,12 @@ def create_app() -> FastAPI:
                 warnings = [dict(value) for value in (output_mapping.get("warnings") or event_payload.get("warnings") or []) if isinstance(value, Mapping)]
                 gaps = [str(value) for value in (output_mapping.get("gaps") or event_payload.get("gaps") or []) if str(value).strip()]
                 result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
+                usage = _runtime_usage_snapshot(
+                    output_mapping.get("usage") or event_payload.get("usage"),
+                    operation_id=operation_id,
+                    started_tool_calls=started_tool_calls,
+                    active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
+                )
                 neutral_task_result = {
                     "status": result_outcome,
                     "text": text_output,
@@ -807,13 +847,14 @@ def create_app() -> FastAPI:
                     "artifacts": list(output_mapping.get("artifacts") or []),
                     "warnings": warnings,
                     "gaps": gaps,
-                    "usage": dict(output_mapping.get("usage") or event_payload.get("usage") or {}),
+                    "usage": usage,
                     "error": event_payload.get("error"),
                     "framework_details": {"framework": "hermes", "native_output": output_mapping},
                 }
                 result = {
                     "status": status,
                     "task_result": neutral_task_result,
+                    "usage": usage,
                     "output": {
                         "answer": text_output,
                         "final_answer": text_output,

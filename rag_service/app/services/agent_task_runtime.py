@@ -20,9 +20,9 @@ from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
+    apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
-from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
@@ -701,10 +701,82 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
             })
         result = result_to_product_payload(runtime_result)
-        controlled_hermes_budget_boundary = (
-            str(run.framework or "") == "hermes" and await tasks.budget_boundary(task.id) is not None
-        )
+        canonical_task_result = dict(result.get("runtime_task_result") or {})
+        evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
+        if (
+            canonical_task_result
+            and str(run.framework or "") == "hermes"
+            and str(result.get("status") or "") == AgentRunStatus.COMPLETED.value
+            and evidence_policy == "document_when_available"
+        ):
+            grounding = grounding_evaluator.evaluate(
+                result,
+                await repository.list_run_events(run.id),
+                documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
+                artifacts=await tasks.list_artifacts(task.id, agent_run_id=run.id),
+            )
+            result["grounding"] = grounding
+            if grounding.get("grounded") is False:
+                warning = {"code": "grounding_requirement_unsatisfied", "details": grounding}
+                warnings = [
+                    dict(value) for value in canonical_task_result.get("warnings") or []
+                    if isinstance(value, Mapping)
+                ]
+                if warning not in warnings:
+                    warnings.append(warning)
+                gaps = list(dict.fromkeys([
+                    *[str(value) for value in canonical_task_result.get("gaps") or []],
+                    f"Required {grounding.get('requirement') or 'research'} evidence was not established.",
+                ]))
+                canonical_task_result.update({
+                    "status": "completed_with_warnings", "warnings": warnings, "gaps": gaps,
+                })
+                result["runtime_task_result"] = canonical_task_result
+        if canonical_task_result:
+            result["warnings"] = [
+                dict(value) for value in canonical_task_result.get("warnings") or []
+                if isinstance(value, Mapping)
+            ]
+            result["task_incomplete_reasons"] = [
+                str(value) for value in canonical_task_result.get("gaps") or []
+                if str(value).strip()
+            ]
+            if canonical_task_result.get("text"):
+                result["final_answer"] = str(canonical_task_result["text"])
+                result["answer"] = str(canonical_task_result["text"])
         await runtime_event_sink.flush()
+        terminal_statuses = {
+            AgentRunStatus.COMPLETED.value,
+            AgentRunStatus.FAILED.value,
+            AgentRunStatus.CANCELLED.value,
+        }
+        if str(run.framework or "") == "hermes" and str(result.get("status") or "") in terminal_statuses:
+            if not canonical_task_result:
+                canonical_task_result = normalize_runtime_task_result(
+                    result.get("final_answer") or result.get("answer") or result,
+                    usage=dict(runtime_result.usage or {}),
+                    framework_details={"framework": "hermes"},
+                ).to_dict()
+            await apply_neutral_task_completion(
+                task_id=task.id,
+                agent_run_id=run.id,
+                operation_id=_task_runtime_operation_id(task, run),
+                runtime_status=str(result.get("status") or AgentRunStatus.FAILED.value),
+                task_result=canonical_task_result,
+            )
+            metrics = dict(run.metrics_json or {})
+            metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
+            debug_payload = finalize_and_merge_debug_payload(
+                recorder=trace, run=run, metrics=metrics, result=result,
+                route=result.get("route"), route_reason=result.get("route_reason"),
+                error=result.get("agent_error") if isinstance(result.get("agent_error"), dict) else None,
+                run_status=str(result.get("status") or AgentRunStatus.FAILED.value),
+            )
+            await repository.update_run_observability(
+                run.id, metrics_json=metrics, debug_trace_json=debug_payload,
+            )
+            await runtime_event_sink.finish_boundary()
+            return
         if runtime_result.orchestration_delta is not None:
             delta_status = str((runtime_result.orchestration_delta.result or {}).get("status") or "")
             if delta_status and delta_status != str(runtime_result.status):
@@ -754,30 +826,28 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 ):
                     if key in result:
                         result[key] = replace_ids(result[key])
-        if str(result.get("status") or "") in {
-            AgentRunStatus.COMPLETED.value,
-            AgentRunStatus.FAILED.value,
-            AgentRunStatus.CANCELLED.value,
-        } and not controlled_hermes_budget_boundary and not dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {}).get("runtime_result"):
-            # Persist terminal reconciliation state only after the complete
-            # orchestration delta has committed.  If this process exits in
-            # between, the durable runtime journal and projected terminal
-            # event drive reconciliation without exposing partial task state.
-            await record_terminal_result(run, result)
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
-        if controlled_hermes_budget_boundary:
-            provisional = str(result.get("final_answer") or result.get("answer") or "").strip()
-            if not provisional:
-                provisional = "\n\n".join(value.strip() for value in artifact_contents.values() if value.strip())[:60_000]
-            await tasks.create_budget_review(
-                task.id, run_id=run.id, provisional_answer=provisional,
-                warnings=[
-                    *[dict(value) for value in result.get("warnings") or [] if isinstance(value, Mapping)],
-                    {"code": "budget_tranche_exhausted", "details": {"framework": "hermes"}},
-                ],
-                gaps=[str(value) for value in result.get("task_incomplete_reasons") or []],
+        if runtime_result.orchestration_delta is not None and status in {
+            AgentRunStatus.COMPLETED.value,
+            AgentRunStatus.FAILED.value,
+            AgentRunStatus.CANCELLED.value,
+        }:
+            debug_payload = finalize_and_merge_debug_payload(
+                recorder=trace,
+                run=run,
+                metrics=metrics,
+                result=result,
+                route=result.get("route"),
+                route_reason=result.get("route_reason"),
+                error=result.get("agent_error") if isinstance(result.get("agent_error"), dict) else None,
+                run_status=status,
+            )
+            await repository.update_run_observability(
+                run.id,
+                metrics_json=metrics,
+                debug_trace_json=debug_payload,
             )
             await runtime_event_sink.finish_boundary()
             return
@@ -837,167 +907,12 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     )
             await runtime_event_sink.finish_boundary()
             return
-        if status == AgentRunStatus.CANCELLED.value:
-            latest_task = await tasks.get_task(task.id)
-            await _finalize_task_run(
-                task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                run_status=status, task_status=AgentTaskStatus.CANCELLED.value,
-                metrics=metrics, result=result,
-                reason="cancelled_by_user",
-            )
-            return
-        error = result.get("agent_error") if isinstance(result.get("agent_error"), dict) else None
-        if status == AgentRunStatus.COMPLETED.value:
-            terminal_todos = await tasks.list_todos(task.id)
-            incomplete = any(todo.required and todo.status != "completed" for todo in terminal_todos)
-            final_answer = str(result.get("final_answer") or result.get("answer") or "").strip()
-            if not final_answer:
-                terminal_error = {"code": "final_report_missing", "retryable": True}
-                await _finalize_task_run(
-                    task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                    run_status=AgentRunStatus.FAILED.value, task_status=AgentTaskStatus.FAILED.value,
-                    metrics=metrics, result=result, error=terminal_error, reason="final_report_missing",
-                )
-                return
-            evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
-            if evidence_policy == "document_when_available":
-                grounding = grounding_evaluator.evaluate(
-                    result,
-                    await repository.list_run_events(run.id),
-                    documents_present=bool(dict(getattr(thread, "documents_meta", None) or {})),
-                    artifacts=await tasks.list_artifacts(task.id, agent_run_id=run.id),
-                )
-                metrics["grounding"] = grounding
-                result["grounding"] = grounding
-            evidence_manifest = [
-                value for value in result.get("task_evidence_manifest") or []
-                if isinstance(value, dict) and value.get("id")
-            ]
-            incomplete_reasons = [str(value) for value in result.get("task_incomplete_reasons") or []]
-            result_warnings = [
-                dict(value) for value in result.get("warnings") or [] if isinstance(value, Mapping)
-            ]
-            grounding = result.get("grounding") if isinstance(result.get("grounding"), Mapping) else None
-            if grounding is not None and grounding.get("grounded") is False:
-                incomplete_reasons.append(
-                    f"Required {grounding.get('requirement') or 'research'} evidence was not established."
-                )
-                result_warnings.append({
-                    "code": "grounding_requirement_unsatisfied",
-                    "details": dict(grounding),
-                })
-            incomplete_reasons = list(dict.fromkeys(incomplete_reasons))
-            if incomplete and not incomplete_reasons:
-                incomplete_reasons = [
-                    f"Required work item {todo.id} ended with status {todo.status}."
-                    for todo in terminal_todos
-                    if todo.required and todo.status != "completed"
-                ]
-            final_artifact = await persist_task_artifact(
-                task_id=task.id,
-                agent_run_id=run.id,
-                kind="final_report",
-                content=final_answer,
-                provenance={
-                    "incomplete": incomplete,
-                    "draft_model": result.get("task_draft_metadata") or {},
-                    "quality_review": result.get("task_critic_report") or {},
-                    "plan_revision": int(
-                        result.get("task_plan_revision")
-                        or task_context.metadata.get("plan_revision")
-                        or 0
-                    ),
-                    "evidence_manifest": evidence_manifest,
-                    "evidence_gaps": incomplete_reasons,
-                    "warnings": result_warnings,
-                    "outcome": "completed_with_warnings" if incomplete or result_warnings else "completed",
-                },
-                source_refs={"artifact_ids": [str(item["id"]) for item in evidence_manifest]},
-            )
-            orchestration = dict(
-                (dict((resolved_spec.get("config") or {}).get("task_policy") or {})).get("orchestration")
-                or {}
-            )
-            incomplete_policy = str(orchestration.get("incomplete_result_policy") or "review")
-            max_review_rounds = min(5, max(0, int(orchestration.get("max_incomplete_review_rounds") or 3)))
-            needs_review = bool(incomplete or incomplete_reasons or result_warnings)
-            if needs_review and incomplete_policy == "fail":
-                await _finalize_task_run(
-                    task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                    run_status=AgentRunStatus.FAILED.value,
-                    task_status=AgentTaskStatus.FAILED.value,
-                    metrics=metrics, result=result,
-                    error={"code": "incomplete_result_rejected", "retryable": False},
-                    reason="incomplete_result_rejected",
-                    final_artifact_id=final_artifact.id,
-                )
-                return
-            review_round = max(1, int(getattr(run, "task_attempt", 1) or 1))
-            if needs_review and incomplete_policy == "review" and review_round <= max_review_rounds:
-                pending = {
-                    "interrupt_id": f"result-review:{run.id}:{review_round}",
-                    "type": "incomplete_result_review",
-                    "kind": "approval",
-                    "title": "Review incomplete result",
-                    "body": "The agent returned usable output with warnings or unresolved gaps.",
-                    "response_operation": RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND.value,
-                    "allowed_actions": ["accept", "retry_with_input"],
-                    "response_schema": {
-                        "type": "object",
-                        "properties": {"followup_input": {"type": "string", "maxLength": 20000}},
-                    },
-                    "review_round": review_round,
-                    "max_review_rounds": max_review_rounds,
-                    "provisional_artifact_id": final_artifact.id,
-                    "provisional_answer": final_answer,
-                    "warnings": result_warnings,
-                    "gaps": incomplete_reasons,
-                }
-                debug_payload = finalize_and_merge_debug_payload(
-                    recorder=trace, run=run, metrics=metrics, result={
-                        **result,
-                        "result_outcome": "completed_with_warnings",
-                        "warnings": result_warnings,
-                        "gaps": incomplete_reasons,
-                        "provisional_artifact_id": final_artifact.id,
-                    },
-                    route=result.get("route"), route_reason="awaiting_review",
-                    run_status=AgentRunStatus.AWAITING_HUMAN.value,
-                )
-                await repository.mark_run_awaiting_human(
-                    run.id, pending, metrics_json=metrics, debug_trace_json=debug_payload,
-                )
-                await tasks.set_task_runtime_status(
-                    task.id, AgentTaskStatus.AWAITING_APPROVAL.value,
-                    phase="awaiting_result_review", reason="incomplete_result",
-                )
-                await tasks.append_event(
-                    task.id, "task.result_review_requested", agent_run_id=run.id,
-                    artifact_id=final_artifact.id,
-                    payload={
-                        "interrupt_id": pending["interrupt_id"],
-                        "result_outcome": "completed_with_warnings",
-                        "warnings": result_warnings,
-                        "gaps": incomplete_reasons,
-                        "review_round": review_round,
-                    },
-                )
-                await runtime_event_sink.finish_boundary()
-                return
-            await _finalize_task_run(
-                task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                run_status=status, task_status=AgentTaskStatus.COMPLETED.value,
-                metrics=metrics, result=result, error=error,
-                reason="completed_with_warnings" if needs_review else "completed",
-                final_artifact_id=final_artifact.id,
-            )
-        else:
-            await _finalize_task_run(
-                task=task, run=run, recorder=trace, sink=runtime_event_sink,
-                run_status=status, task_status=AgentTaskStatus.FAILED.value,
-                metrics=metrics, result=result, error=error,
-                reason=str((error or {}).get("code") or status),
-            )
+        raise AgentRuntimeError(
+            "runtime_task_completion_projection_missing",
+            "A task runtime returned a terminal result without a supported product projection",
+            retryable=True,
+            details={"framework": str(run.framework or ""), "status": status},
+        )
     except RuntimeTaskProjectionConflict as exc:
         logger.exception(
             "Runtime task projection requires reconciliation | task_id=%s run_id=%s",

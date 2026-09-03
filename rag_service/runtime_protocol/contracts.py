@@ -12,8 +12,8 @@ from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
 
-RUNTIME_PROTOCOL_VERSION = "1.2"
-RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.2"
+RUNTIME_PROTOCOL_VERSION = "1.3"
+RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.3"
 
 
 def ensure_protocol_compatible(
@@ -117,6 +117,69 @@ class RuntimeTaskResultStatus(str, Enum):
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class RuntimeUsageSnapshot:
+    """Cumulative, replay-safe usage measured for one runtime operation."""
+
+    operation_id: str
+    model_tokens: int = 0
+    model_calls: Optional[int] = None
+    tool_calls: Optional[int] = None
+    active_runtime_ms: Optional[int] = None
+    measured_dimensions: tuple[str, ...] = ()
+    cumulative: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.operation_id.strip():
+            raise ValueError("runtime usage operation_id must not be empty")
+        values = {
+            "model_tokens": self.model_tokens,
+            "model_calls": self.model_calls,
+            "tool_calls": self.tool_calls,
+            "active_runtime_ms": self.active_runtime_ms,
+        }
+        if any(value is not None and int(value) < 0 for value in values.values()):
+            raise ValueError("runtime usage counters must not be negative")
+        allowed = frozenset(values)
+        if any(value not in allowed for value in self.measured_dimensions):
+            raise ValueError("runtime usage contains an unknown measured dimension")
+        for dimension in self.measured_dimensions:
+            if values[dimension] is None:
+                raise ValueError("measured runtime usage dimensions require a value")
+        if not self.cumulative:
+            raise ValueError("runtime usage snapshots must be cumulative")
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any] | None, *, operation_id: str
+    ) -> "RuntimeUsageSnapshot":
+        source = dict(value or {})
+        raw_tokens = source.get("model_tokens", source.get("total_tokens"))
+        if raw_tokens is None:
+            raw_tokens = int(source.get("input_tokens") or 0) + int(source.get("output_tokens") or 0)
+        measured = source.get("measured_dimensions")
+        if not isinstance(measured, (list, tuple)):
+            measured = [
+                key for key in ("model_tokens", "model_calls", "tool_calls", "active_runtime_ms")
+                if source.get(key) is not None
+            ]
+            if "model_tokens" not in measured and any(
+                source.get(key) is not None for key in ("total_tokens", "input_tokens", "output_tokens")
+            ):
+                measured.append("model_tokens")
+        return cls(
+            operation_id=str(source.get("operation_id") or operation_id),
+            model_tokens=max(0, int(raw_tokens or 0)),
+            model_calls=(max(0, int(source["model_calls"])) if source.get("model_calls") is not None else None),
+            tool_calls=(max(0, int(source["tool_calls"])) if source.get("tool_calls") is not None else None),
+            active_runtime_ms=(max(0, int(source["active_runtime_ms"])) if source.get("active_runtime_ms") is not None else None),
+            measured_dimensions=tuple(dict.fromkeys(str(item) for item in measured)),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 class RuntimeEvidenceKind(str, Enum):

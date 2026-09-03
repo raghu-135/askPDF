@@ -1197,7 +1197,7 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
         "final_answer": text,
         "task_draft_metadata": metadata,
         "task_incomplete_reasons": [str(todo.get("id")) for todo in failed] + all_gaps,
-        "warnings": [
+        "task_result_warnings": [
             dict(value) for value in state.get("task_result_warnings") or [] if isinstance(value, Mapping)
         ] + ([synthesis_error] if synthesis_error else []),
         "task_provisional_synthesis_failed": synthesis_error or {},
@@ -1226,13 +1226,17 @@ Report:\n{answer[:60000]}"""
     issues = [str(value) for value in review.get("issues") or []][:20]
     if review.get("pass") is False and issues:
         answer = f"{answer}\n\nLimitations identified during evidence review:\n" + "\n".join(f"- {issue}" for issue in issues)
-    warnings = [dict(value) for value in state.get("warnings") or [] if isinstance(value, Mapping)]
+    warnings = [
+        dict(value)
+        for value in state.get("task_result_warnings") or []
+        if isinstance(value, Mapping)
+    ]
     if issues:
         warnings.append({"code": "evidence_critic_issues", "details": {"issues": issues}})
     update = {
         "final_answer": answer,
         "task_critic_report": {"pass": review.get("pass") is not False, "issues": issues, "model": metadata},
-        "warnings": warnings,
+        "task_result_warnings": warnings,
     }
     boundary = state.get("task_budget_boundary") if isinstance(state.get("task_budget_boundary"), Mapping) else None
     if boundary:

@@ -695,6 +695,7 @@ class AgentTaskEvent(SQLModel, table=True):
     task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
     sequence: int
     event_id: Optional[str] = Field(default=None, index=True)
+    causal_key: Optional[str] = Field(default=None, index=True)
     event_type: str = Field(index=True)
     actor_type: str
     actor_id: Optional[str] = None
@@ -716,6 +717,7 @@ class AgentTaskEvent(SQLModel, table=True):
     __table_args__ = (
         CheckConstraint("sequence >= 1", name="ck_agent_task_events_sequence"),
         UniqueConstraint("task_id", "sequence", name="uq_agent_task_event_sequence"),
+        UniqueConstraint("task_id", "causal_key", name="uq_agent_task_event_causal_key"),
         Index("idx_agent_task_events_stream", "task_id", "sequence"),
         Index("idx_agent_task_events_run_stream", "task_id", "agent_run_id", "sequence"),
     )

@@ -6,11 +6,19 @@ from dataclasses import replace
 import pytest
 from sqlalchemy import select
 
-from app.db.models_sqlmodel import AgentRun, AgentTaskArtifact, AgentTaskRuntimeDelta, AgentWorkflow
+from app.db.models_sqlmodel import (
+    AgentRun,
+    AgentRuntimeOperation,
+    AgentTaskArtifact,
+    AgentTaskEvent,
+    AgentTaskRuntimeDelta,
+    AgentWorkflow,
+)
 from app.services import agent_task_repository as repository
 from app.services.agent_task_budgets import initial_budget_state
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
+    apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
 from runtime_protocol.contracts import RuntimePlanChange, TaskOrchestrationDelta
@@ -221,6 +229,99 @@ async def test_projection_rejects_conflicting_identity_without_partial_state(
         )).scalars().all())
     assert len(ledger) == 1
     assert todos[0].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_warning_result_enters_review_in_the_delta_transaction(
+    test_session_maker, sample_thread,
+):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    delta = _delta(
+        run_id=run.id,
+        operation_id="warning-result",
+        event_id=f"{run.id}:attempt:1:operation:warning-result:result",
+        task_version=task.version,
+        plan_revision=0,
+        plan=_plan("evidence-a"),
+        todos=({"id": "evidence-a", "status": "completed", "progress": 100},),
+        budget_calls=1,
+        interrupt={"operation": "clear"},
+    )
+    delta = replace(delta, result={
+        "status": "completed",
+        "result_outcome": "completed_with_warnings",
+        "warnings": [{"code": "evidence_critic_issues"}],
+        "incomplete_reasons": ["A source remains unverified."],
+        "task_result": {
+            "status": "completed_with_warnings",
+            "text": "A useful provisional report.",
+            "warnings": [{"code": "evidence_critic_issues"}],
+            "gaps": ["A source remains unverified."],
+            "usage": {},
+        },
+    })
+
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=delta)
+
+    refreshed = await repository.get_task(task.id)
+    stored_run = await repository.get_task_run(task.id)
+    events = await repository.list_events(task.id, agent_run_id=run.id)
+    assert refreshed is not None and refreshed.status == "awaiting_approval"
+    assert stored_run is not None and stored_run.status == "awaiting_human"
+    assert stored_run.pending_interrupt_json["type"] == "incomplete_result_review"
+    assert stored_run.pending_interrupt_json["allowed_actions"] == ["accept", "retry_with_input"]
+    assert sum(event.event_type == "runtime.event" and (event.source_metadata_json or {}).get("source_event") == "task.result_review_requested" for event in events) == 1
+    assert not any(event.terminal for event in events)
+
+
+@pytest.mark.asyncio
+async def test_hermes_usage_snapshot_is_applied_exactly_once(
+    test_session_maker, sample_thread,
+):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    operation_id = "hermes-operation-1"
+    usage = {
+        "operation_id": operation_id,
+        "model_tokens": 93_422,
+        "model_calls": None,
+        "tool_calls": 4,
+        "active_runtime_ms": 165_223,
+        "measured_dimensions": ["model_tokens", "tool_calls", "active_runtime_ms"],
+    }
+
+    task_result = {
+        "status": "completed", "text": "Hermes completed answer.",
+        "warnings": [], "gaps": [], "usage": usage,
+    }
+    await apply_neutral_task_completion(
+        task_id=task.id, agent_run_id=run.id, operation_id=operation_id,
+        runtime_status="completed", task_result=task_result,
+    )
+    await apply_neutral_task_completion(
+        task_id=task.id, agent_run_id=run.id, operation_id=operation_id,
+        runtime_status="completed", task_result=task_result,
+    )
+
+    refreshed = await repository.get_task(task.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.budgets_json["lifetime_usage"]["model_tokens"] == 93_422
+    assert refreshed.budgets_json["lifetime_usage"]["tool_calls"] == 4
+    assert refreshed.budgets_json["lifetime_usage"]["elapsed_active_ms"] == 165_223
+    assert refreshed.budgets_json["lifetime_usage"]["model_calls"] == 0
+    async with test_session_maker() as session:
+        records = list((await session.execute(select(AgentRuntimeOperation).where(
+            AgentRuntimeOperation.run_id == run.id,
+            AgentRuntimeOperation.operation == "task.completion.project",
+        ))).scalars().all())
+        terminal_events = list((await session.execute(select(AgentTaskEvent).where(
+            AgentTaskEvent.task_id == task.id,
+            AgentTaskEvent.agent_run_id == run.id,
+            AgentTaskEvent.terminal.is_(True),
+        ))).scalars().all())
+    assert len(records) == 1
+    assert records[0].result_json["usage_fingerprint"]
+    assert len(terminal_events) == 1
 
 
 @pytest.mark.asyncio

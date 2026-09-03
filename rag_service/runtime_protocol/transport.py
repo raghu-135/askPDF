@@ -29,6 +29,7 @@ from runtime_protocol.contracts import (
     RuntimeTerminalState,
     RuntimeTaskResultStatus,
     RuntimeTaskResult,
+    RuntimeUsageSnapshot,
     RuntimeArtifact,
     RuntimeApprovalResponse,
     RuntimeCourseCorrection,
@@ -142,6 +143,12 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
 
 def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
     task_value = value.get("task_result") if isinstance(value.get("task_result"), Mapping) else None
+    task_usage = dict(task_value.get("usage") or {}) if task_value is not None else {}
+    if task_usage:
+        task_usage = RuntimeUsageSnapshot.from_mapping(
+            task_usage,
+            operation_id=str(task_usage.get("operation_id") or "runtime-operation"),
+        ).to_dict()
     task_result = RuntimeTaskResult(
         status=RuntimeTaskResultStatus(str(task_value.get("status"))),
         text=task_value.get("text"),
@@ -149,7 +156,7 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         artifacts=tuple(RuntimeArtifact(**dict(item)) for item in task_value.get("artifacts") or [] if isinstance(item, Mapping)),
         warnings=tuple(dict(item) for item in task_value.get("warnings") or [] if isinstance(item, Mapping)),
         gaps=tuple(str(item) for item in task_value.get("gaps") or []),
-        usage=dict(task_value.get("usage") or {}),
+        usage=task_usage,
         error=dict(task_value["error"]) if isinstance(task_value.get("error"), Mapping) else None,
         framework_details=dict(task_value.get("framework_details") or {}),
     ) if task_value is not None else None

@@ -137,7 +137,7 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
     asyncio.run(seed_existing_data())
     _alembic(test_database_url, "upgrade", "head")
     current = _alembic(test_database_url, "current")
-    assert "c3e9f5a7b2d4" in current.stdout
+    assert "d6f2a8c4e1b9" in current.stdout
 
     async def verify_existing_data() -> tuple[int, int, int, int, dict]:
         engine = create_async_engine(test_database_url)
