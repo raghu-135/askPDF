@@ -342,6 +342,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
         "completion_criteria": list(plan.completion_criteria_json or []),
         "ordered_todo_ids": list(plan.ordered_todo_ids_json or []), "content_hash": plan.content_hash,
     }
+    payload["course_corrections"] = await repository.list_course_corrections(task.id)
     return {"task": payload}
 
 
@@ -667,7 +668,7 @@ async def submit_agent_task_course_correction(
                         [runtime_receipt.correction_id],
                         plan_revision=int(runtime_receipt.plan_revision or 0),
                     )
-                    delivery_state = "runtime_applied"
+                    delivery_state = "incorporated"
                 else:
                     await repository.mark_course_correction_delivered(command.id, receipt=receipt)
                     delivery_state = "delivered"

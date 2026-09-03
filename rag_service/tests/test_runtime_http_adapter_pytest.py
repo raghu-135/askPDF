@@ -71,6 +71,7 @@ def test_http_context_preserves_task_request_fields_as_json():
         "permissions": {"use_web_search": True},
         "metadata": {"llm_model": "test-model", "context_window": 8192},
         "context_data": {},
+        "active_corrections": [],
     }
 
 

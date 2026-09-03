@@ -12,6 +12,7 @@ from app.db.models_sqlmodel import (
     AgentTaskArtifact,
     AgentTaskEvent,
     AgentTaskRuntimeDelta,
+    AgentTaskCommand,
     AgentWorkflow,
 )
 from app.services import agent_task_repository as repository
@@ -21,7 +22,7 @@ from app.services.agent_task_runtime_projection import (
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
-from runtime_protocol.contracts import RuntimePlanChange, TaskOrchestrationDelta
+from runtime_protocol.contracts import RuntimeCourseCorrectionOutcome, RuntimePlanChange, TaskOrchestrationDelta
 
 
 async def _task_and_run(test_session_maker, sample_thread):
@@ -403,6 +404,24 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
     await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=initial)
     task = await repository.get_task(task.id)
     assert task is not None
+    correction_id = str(uuid.uuid4())
+    command = AgentTaskCommand(
+        task_id=task.id, action="steer", idempotency_key="redirect-projection",
+        expected_version=task.version, status="accepted",
+        result_json={
+            "correction": {
+                "correction_id": correction_id, "id": correction_id,
+                "operation_id": "redirect-command",
+                "instruction": "Focus on open-source security controls.",
+                "scope": "remaining_work", "status": "accepted",
+            },
+            "delivery_mode": "same_run_safe_boundary", "delivery_state": "accepted",
+            "source_run_id": run.id,
+        },
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(command)
     content = "research completed before redirect"
     budget = initial_budget_state({"max_model_calls": 10})
     budget["tranche_usage"]["model_calls"] = 3
@@ -422,7 +441,7 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
             RuntimePlanChange(
                 runtime_revision=3, parent_runtime_revision=2,
                 acknowledged_product_revision=1, reason="course_correction", planner_visit=3,
-                plan=_plan("redirected-open-source"), correction_ids=("correction-1",),
+                plan=_plan("redirected-open-source"), correction_ids=(correction_id,),
             ),
         ),
         todo_changes=(
@@ -436,6 +455,11 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
             "todo_id": "T2", "media_type": "text/plain",
         },),
         pending_interrupt={"operation": "clear"}, result={"status": "completed"},
+        correction_outcomes=(RuntimeCourseCorrectionOutcome(
+            correction_id=correction_id, operation_id=command.id, state="satisfied",
+            runtime_plan_revision=3, todo_ids=("redirected-open-source",),
+            explanation="The redirected security comparison was completed.",
+        ),),
     )
 
     await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=redirected)
@@ -445,3 +469,7 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
     assert [value.revision for value in plans] == [1, 2, 3]
     assert todos["T2"].status == "completed"
     assert todos["T2"].artifact_ids_json
+    async with test_session_maker() as session:
+        stored_command = await session.get(AgentTaskCommand, command.id)
+    assert stored_command.status == "completed"
+    assert stored_command.result_json["delivery_state"] == "satisfied"

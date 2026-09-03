@@ -111,6 +111,18 @@ def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> 
     documents = task_context.get("documents")
     if isinstance(documents, list) and documents:
         sections.append(_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE)
+    corrections = [
+        value for value in task_context.get("active_corrections") or []
+        if isinstance(value, Mapping)
+    ]
+    if corrections:
+        sections.append(
+            "AUTHORITATIVE USER REDIRECTS (each must be addressed and reported separately):\n"
+            + json.dumps(corrections, sort_keys=True, ensure_ascii=False)
+            + "\nThe terminal result object MUST include correction_outcomes with one entry per "
+            "correction_id. Each entry must contain correction_id, operation_id, state "
+            "(satisfied or unresolved), explanation, unresolved_reason, todo_ids, and artifact_ids."
+        )
     sections.append("askPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False))
     return "\n\n".join(section for section in sections if section)
 
@@ -720,6 +732,10 @@ def create_app() -> FastAPI:
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
             question = _task_input_with_context(question, task_context)
+        active_corrections = [
+            dict(value) for value in (task_context or {}).get("active_corrections") or []
+            if isinstance(value, Mapping)
+        ] if isinstance(task_context, Mapping) else []
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,
@@ -731,6 +747,7 @@ def create_app() -> FastAPI:
                 "askpdf_thread_id": neutral_request.get("thread_id"),
                 "askpdf_definition_id": neutral_request.get("definition_id"),
                 "askpdf_profile_id": (dict(context.get("resolved_spec") or {}).get("managed_profile") or {}).get("profile_id"),
+                "askpdf_correction_ids": [value.get("correction_id") for value in active_corrections],
             },
         }
         upstream_payload = {key: value for key, value in upstream_payload.items() if value not in (None, "")}
@@ -833,6 +850,40 @@ def create_app() -> FastAPI:
                     text_output = str(text_output)[:max_output_chars]
                 warnings = [dict(value) for value in (output_mapping.get("warnings") or event_payload.get("warnings") or []) if isinstance(value, Mapping)]
                 gaps = [str(value) for value in (output_mapping.get("gaps") or event_payload.get("gaps") or []) if str(value).strip()]
+                structured_output = output_mapping.get("structured_output") if isinstance(output_mapping.get("structured_output"), Mapping) else None
+                raw_outcomes = output_mapping.get("correction_outcomes")
+                if raw_outcomes is None and structured_output is not None:
+                    raw_outcomes = structured_output.get("correction_outcomes")
+                outcomes_by_id = {
+                    str(value.get("correction_id")): dict(value)
+                    for value in raw_outcomes or []
+                    if isinstance(value, Mapping) and value.get("correction_id")
+                }
+                correction_outcomes = []
+                for correction in active_corrections:
+                    correction_id = str(correction.get("correction_id") or "")
+                    candidate = outcomes_by_id.get(correction_id)
+                    valid = candidate is not None and candidate.get("state") in {"satisfied", "unresolved"}
+                    outcome_state = str(candidate.get("state")) if valid else "unresolved"
+                    unresolved_reason = (
+                        str(candidate.get("unresolved_reason") or "Runtime reported this redirect as unresolved")
+                        if outcome_state == "unresolved" and candidate is not None
+                        else "Hermes did not return a valid structured coverage outcome for this redirect"
+                        if not valid else None
+                    )
+                    correction_outcomes.append({
+                        "correction_id": correction_id,
+                        "operation_id": str(correction.get("operation_id") or correction_id),
+                        "state": outcome_state,
+                        "linked_run_id": run_id,
+                        "todo_ids": [str(value) for value in (candidate or {}).get("todo_ids") or []][:100],
+                        "artifact_ids": [str(value) for value in (candidate or {}).get("artifact_ids") or []][:200],
+                        "explanation": str((candidate or {}).get("explanation") or "")[:4000] or None,
+                        "unresolved_reason": unresolved_reason,
+                    })
+                    if outcome_state == "unresolved":
+                        warnings.append({"code": "course_correction_unresolved", "details": {"correction_id": correction_id}})
+                        gaps.append(f"course_correction:{correction_id}")
                 result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
                 usage = _runtime_usage_snapshot(
                     output_mapping.get("usage") or event_payload.get("usage"),
@@ -843,13 +894,14 @@ def create_app() -> FastAPI:
                 neutral_task_result = {
                     "status": result_outcome,
                     "text": text_output,
-                    "structured_output": output_mapping.get("structured_output") if isinstance(output_mapping.get("structured_output"), Mapping) else None,
+                    "structured_output": structured_output,
                     "artifacts": list(output_mapping.get("artifacts") or []),
                     "warnings": warnings,
                     "gaps": gaps,
                     "usage": usage,
                     "error": event_payload.get("error"),
                     "framework_details": {"framework": "hermes", "native_output": output_mapping},
+                    "correction_outcomes": correction_outcomes,
                 }
                 result = {
                     "status": status,
@@ -1061,6 +1113,13 @@ def create_app() -> FastAPI:
                 store.update(run_id, continuation=continuation)
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
                 sequence += 1
+                if active_corrections:
+                    yield _sse(_neutral_event(run_id, sequence, "course_correction.incorporated", {
+                        "correction_ids": [value.get("correction_id") for value in active_corrections],
+                        "operation_ids": [value.get("operation_id") for value in active_corrections],
+                        "linked_run_id": run_id,
+                    }, continuation=continuation))
+                    sequence += 1
                 yield _sse(_neutral_event(run_id, sequence, "operation.started", {
                     "operation_id": "hermes_session",
                     "operation_type": "agent_session",

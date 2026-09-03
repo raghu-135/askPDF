@@ -1908,6 +1908,41 @@ async def respond_to_result_review(
                 ))
 
             if decision == "accept":
+                active_corrections = list((await session.execute(select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task.id,
+                    AgentTaskCommand.action == "steer",
+                    AgentTaskCommand.status == "accepted",
+                ).with_for_update())).scalars().all())
+                accepted_unresolved: list[str] = []
+                for command in active_corrections:
+                    command_result = dict(command.result_json or {})
+                    correction = dict(command_result.get("correction") or {})
+                    correction_id = str(correction.get("correction_id") or correction.get("id") or "")
+                    correction.update({
+                        "status": "accepted_unresolved",
+                        "accepted_unresolved_at": now.isoformat(),
+                        "review_action_version": task.version + 1,
+                    })
+                    command_result.update({
+                        "correction": correction,
+                        "delivery_state": "accepted_unresolved",
+                        "review_interrupt_id": interrupt_id,
+                    })
+                    replace_jsonb_field(command, "result_json", command_result)
+                    command.status = "completed"
+                    command.completed_at = now
+                    command.result_version = task.version + 1
+                    accepted_unresolved.append(correction_id)
+                if accepted_unresolved:
+                    await _append_event(
+                        session, task, "task.course_correction_accepted_unresolved",
+                        agent_run_id=run.id,
+                        payload={
+                            "correction_ids": accepted_unresolved,
+                            "interrupt_id": interrupt_id,
+                            "action_version": task.version + 1,
+                        },
+                    )
                 task.status = AgentTaskStatus.COMPLETED.value
                 task.current_phase = AgentTaskStatus.COMPLETED.value
                 task.terminal_reason = "completed_with_warnings"
@@ -2395,7 +2430,7 @@ async def backfill_legacy_course_corrections(*, limit: int = 100) -> int:
 async def mark_course_corrections_runtime_applied(
     task_id: str, correction_ids: Iterable[str], *, plan_revision: int,
 ) -> None:
-    """Record runtime acknowledgement without claiming product projection succeeded."""
+    """Record prompt/plan incorporation without claiming result satisfaction."""
 
     selected = {str(value) for value in correction_ids}
     if not selected:
@@ -2418,21 +2453,21 @@ async def mark_course_corrections_runtime_applied(
                 if correction_id not in selected:
                     continue
                 if (
-                    result.get("delivery_state") == "runtime_applied"
+                    result.get("delivery_state") == "incorporated"
                     and int(result.get("runtime_plan_revision") or 0) == plan_revision
                 ):
                     continue
-                correction.update({"status": "runtime_applied", "runtime_plan_revision": plan_revision})
+                correction.update({"status": "incorporated", "runtime_plan_revision": plan_revision})
                 result.update({
                     "correction": correction,
-                    "delivery_state": "runtime_applied",
+                    "delivery_state": "incorporated",
                     "runtime_plan_revision": plan_revision,
                 })
                 replace_jsonb_field(command, "result_json", result)
                 acknowledged.append(correction_id)
             if acknowledged:
                 await _append_event(
-                    session, task, "task.course_correction_runtime_applied",
+                    session, task, "task.course_correction_incorporated",
                     agent_run_id=task.active_run_id,
                     payload={"correction_ids": sorted(acknowledged), "runtime_plan_revision": plan_revision},
                 )
@@ -2529,28 +2564,69 @@ async def list_pending_course_correction_commands(*, limit: int = 100) -> list[A
         )).scalars().all())
 
 
+async def list_course_corrections(task_id: str, *, limit: int = 100) -> list[Dict[str, Any]]:
+    """Return bounded product-owned redirect lifecycle projections in submission order."""
+
+    async with async_session_maker() as session:
+        commands = list((await session.execute(select(AgentTaskCommand).where(
+            AgentTaskCommand.task_id == task_id,
+            AgentTaskCommand.action == "steer",
+        ).order_by(AgentTaskCommand.created_at, AgentTaskCommand.id).limit(max(1, min(limit, 200))))).scalars().all())
+    values: list[Dict[str, Any]] = []
+    for command in commands:
+        result = dict(command.result_json or {})
+        correction = dict(result.get("correction") or {})
+        values.append({
+            "command_id": command.id,
+            "correction_id": correction.get("correction_id") or correction.get("id"),
+            "instruction": correction.get("instruction"),
+            "status": correction.get("status") or command.status,
+            "delivery_mode": result.get("delivery_mode"),
+            "delivery_state": result.get("delivery_state") or command.status,
+            "linked_run_id": result.get("linked_run_id"),
+            "runtime_outcome": dict(result.get("runtime_outcome") or {}),
+            "submitted_at": correction.get("submitted_at"),
+        })
+    return values
+
+
 async def complete_linked_course_corrections(
     task_id: str,
     *,
     source_run_id: str,
     linked_run_id: str,
 ) -> None:
+    """Record linked-run delivery without claiming result coverage."""
     async with async_session_maker() as session:
         async with session.begin():
+            task = await session.get(AgentTask, task_id, with_for_update=True)
             commands = list((await session.execute(select(AgentTaskCommand).where(
                 AgentTaskCommand.task_id == task_id,
                 AgentTaskCommand.action == "steer",
                 AgentTaskCommand.status == "accepted",
             ).with_for_update())).scalars().all())
-            now = utc_now()
+            linked: list[str] = []
             for command in commands:
                 result = dict(command.result_json or {})
-                if str(result.get("source_run_id") or "") != source_run_id:
+                if (
+                    str(result.get("source_run_id") or "") != source_run_id
+                    and str(result.get("delivery_mode") or "") != "linked_run"
+                ):
                     continue
-                result.update({"delivery_mode": "linked_run", "delivery_state": "linked", "linked_run_id": linked_run_id})
+                correction = dict(result.get("correction") or {})
+                correction_id = str(correction.get("correction_id") or correction.get("id") or "")
+                correction.update({"status": "linked", "linked_run_id": linked_run_id})
+                result.update({
+                    "correction": correction, "delivery_mode": "linked_run",
+                    "delivery_state": "linked", "linked_run_id": linked_run_id,
+                })
                 replace_jsonb_field(command, "result_json", result)
-                command.status = "completed"
-                command.completed_at = now
+                linked.append(correction_id)
+            if task is not None and linked:
+                await _append_event(
+                    session, task, "task.course_correction_linked", agent_run_id=linked_run_id,
+                    payload={"correction_ids": linked, "source_run_id": source_run_id, "linked_run_id": linked_run_id},
+                )
 
 
 async def queue_linked_course_correction(task_id: str, *, run_id: str) -> AgentTask:

@@ -272,6 +272,70 @@ async def apply_neutral_task_completion(
                         payload={"kind": "final_report", "byte_size": artifact.byte_size, "sha256": artifact.sha256},
                     )
 
+            correction_outcomes = {
+                str(value.get("correction_id")): dict(value)
+                for value in task_result.get("correction_outcomes") or []
+                if isinstance(value, Mapping) and value.get("correction_id")
+            }
+            linked_corrections = [
+                dict(value) for value in (run.run_metadata_json or {}).get("course_corrections") or []
+                if isinstance(value, Mapping)
+            ]
+            if linked_corrections:
+                commands = list((await session.execute(select(AgentTaskCommand).where(
+                    AgentTaskCommand.task_id == task_id,
+                    AgentTaskCommand.action == "steer",
+                    AgentTaskCommand.status == "accepted",
+                ).with_for_update())).scalars().all())
+                commands_by_correction = {
+                    str((value.result_json or {}).get("correction", {}).get("correction_id") or
+                        (value.result_json or {}).get("correction", {}).get("id") or ""): value
+                    for value in commands
+                }
+                expected = {
+                    str(value.get("correction_id") or value.get("id") or "")
+                    for value in linked_corrections
+                }
+                if expected - set(correction_outcomes):
+                    raise RuntimeTaskProjectionConflict(
+                        "Hermes terminal result omitted correction coverage"
+                    )
+                for correction_id in expected:
+                    command = commands_by_correction.get(correction_id)
+                    if command is None:
+                        raise RuntimeTaskProjectionConflict(
+                            "Hermes result references a correction that is not active"
+                        )
+                    outcome = correction_outcomes[correction_id]
+                    if outcome.get("state") not in {"satisfied", "unresolved"}:
+                        raise RuntimeTaskProjectionConflict("Hermes correction outcome is invalid")
+                    command_result = dict(command.result_json or {})
+                    correction = dict(command_result.get("correction") or {})
+                    correction.update({"status": "incorporated", "linked_run_id": agent_run_id})
+                    command_result.update({
+                        "correction": correction, "delivery_state": "incorporated",
+                        "runtime_outcome": outcome,
+                    })
+                    await tasks._append_event(
+                        session, task, "task.course_correction_incorporated", agent_run_id=agent_run_id,
+                        payload={"correction_ids": [correction_id], "linked_run_id": agent_run_id},
+                    )
+                    if outcome["state"] == "satisfied":
+                        correction.update({"status": "satisfied", "satisfied_at": now.isoformat()})
+                        command_result["delivery_state"] = "satisfied"
+                        command.status = "completed"
+                        command.completed_at = now
+                        command.result_version = task.version + 1
+                    else:
+                        correction["status"] = "unresolved"
+                        command_result["delivery_state"] = "unresolved"
+                    command_result["correction"] = correction
+                    replace_jsonb_field(command, "result_json", command_result)
+                    await tasks._append_event(
+                        session, task, f"task.course_correction_{outcome['state']}", agent_run_id=agent_run_id,
+                        payload={"correction_ids": [correction_id], "linked_run_id": agent_run_id},
+                    )
+
             dimensions = exhausted_dimensions(budget)
             budget["boundary"] = {
                 "dimensions": dimensions, "operation_id": operation_id, "observed_at": now.isoformat(),
@@ -403,6 +467,14 @@ async def apply_runtime_task_delta(
             raise RuntimeTaskProjectionConflict("runtime result gaps disagree with the canonical task result")
         if result_envelope.get("result_outcome") != task_result.get("status"):
             raise RuntimeTaskProjectionConflict("runtime result outcome disagrees with the canonical task result")
+        task_outcomes = [
+            dict(value) for value in task_result.get("correction_outcomes") or []
+            if isinstance(value, Mapping)
+        ]
+        if task_outcomes != [value.to_dict() for value in delta.correction_outcomes]:
+            raise RuntimeTaskProjectionConflict(
+                "runtime delta correction outcomes disagree with the canonical task result"
+            )
     final_stage = await _stage_final_report(
         task_id=task_id,
         agent_run_id=agent_run_id,
@@ -576,6 +648,12 @@ async def apply_runtime_task_delta(
             referenced_artifact_ids.update(
                 str(item) for item in boundary_artifact_ids
                 if item and str(item) not in artifact_ids
+            )
+            referenced_artifact_ids.update(
+                str(item)
+                for outcome in delta.correction_outcomes
+                for item in outcome.artifact_ids
+                if str(item) not in artifact_ids
             )
             existing_artifact_ids = set()
             if referenced_artifact_ids:
@@ -847,34 +925,84 @@ async def apply_runtime_task_delta(
                         payload={"reason": task.terminal_reason, "runtime_event_id": delta.event_id},
                     )
 
-            if applied_correction_ids:
+            correction_outcomes = {value.correction_id: value for value in delta.correction_outcomes}
+            correction_ids_to_lock = applied_correction_ids | set(correction_outcomes)
+            if correction_ids_to_lock:
                 now = utc_now()
                 commands = list((await session.execute(select(AgentTaskCommand).where(
                     AgentTaskCommand.task_id == task_id,
                     AgentTaskCommand.action == "steer",
                     AgentTaskCommand.status == "accepted",
                 ).with_for_update())).scalars().all())
-                completed_corrections: list[str] = []
+                incorporated_corrections: list[str] = []
+                satisfied_corrections: list[str] = []
+                unresolved_corrections: list[str] = []
+                known_corrections: set[str] = set()
                 for command in commands:
                     command_result = dict(command.result_json or {})
                     correction = dict(command_result.get("correction") or {})
                     correction_id = str(correction.get("correction_id") or correction.get("id") or "")
-                    if correction_id not in applied_correction_ids:
+                    known_corrections.add(correction_id)
+                    if correction_id not in correction_ids_to_lock:
                         continue
-                    correction.update({"status": "applied", "applied_at": now.isoformat(), "plan_revision": plan_revision})
-                    command_result.update({"correction": correction, "delivery_state": "applied", "plan_revision": plan_revision})
+                    if correction_id in applied_correction_ids:
+                        correction.update({
+                            "status": "incorporated", "incorporated_at": now.isoformat(),
+                            "plan_revision": plan_revision,
+                        })
+                        command_result.update({
+                            "correction": correction, "delivery_state": "incorporated",
+                            "plan_revision": plan_revision,
+                        })
+                        incorporated_corrections.append(correction_id)
+                    outcome = correction_outcomes.get(correction_id)
+                    if outcome is not None:
+                        if outcome.state == "satisfied" and correction.get("status") != "incorporated":
+                            raise RuntimeTaskProjectionConflict(
+                                "runtime cannot satisfy a correction it did not incorporate"
+                            )
+                        missing_todos = set(outcome.todo_ids) - valid_todo_ids
+                        missing_artifacts = {
+                            value for value in outcome.artifact_ids
+                            if value not in artifact_ids and value not in existing_artifact_ids
+                        }
+                        if missing_todos or missing_artifacts:
+                            raise RuntimeTaskProjectionConflict(
+                                "runtime correction outcome references unknown product state"
+                            )
+                        outcome_payload = translated_value(outcome.to_dict())
+                        command_result["runtime_outcome"] = outcome_payload
+                        if outcome.state == "satisfied":
+                            correction.update({"status": "satisfied", "satisfied_at": now.isoformat()})
+                            command_result["delivery_state"] = "satisfied"
+                            command.status = "completed"
+                            command.result_version = task.version + 1
+                            command.completed_at = now
+                            satisfied_corrections.append(correction_id)
+                        elif outcome.state == "unresolved":
+                            correction.update({"status": "unresolved"})
+                            command_result["delivery_state"] = "unresolved"
+                            unresolved_corrections.append(correction_id)
+                    command_result["correction"] = correction
                     replace_jsonb_field(command, "result_json", command_result)
-                    command.status = "completed"
-                    command.result_version = task.version + 1
-                    command.completed_at = now
-                    completed_corrections.append(correction_id)
-                if completed_corrections:
+                unknown = correction_ids_to_lock - known_corrections
+                if unknown:
+                    raise RuntimeTaskProjectionConflict(
+                        f"runtime delta references unknown corrections: {sorted(unknown)}"
+                    )
+                if incorporated_corrections:
                     if task.current_phase == "budget_correction_delivery_pending":
                         task.current_phase = "budget_continuation_queued"
                     await tasks._append_event(
-                        session, task, "task.course_correction_applied", agent_run_id=agent_run_id,
-                        payload={"correction_ids": sorted(completed_corrections), "plan_revision": plan_revision},
+                        session, task, "task.course_correction_incorporated", agent_run_id=agent_run_id,
+                        payload={"correction_ids": sorted(incorporated_corrections), "plan_revision": plan_revision},
                     )
+                for state, values in (("satisfied", satisfied_corrections), ("unresolved", unresolved_corrections)):
+                    if values:
+                        await tasks._append_event(
+                            session, task, f"task.course_correction_{state}", agent_run_id=agent_run_id,
+                            payload={"correction_ids": sorted(values), "runtime_event_id": delta.event_id},
+                        )
 
             task.version, task.updated_at = task.version + 1, utc_now()
             await session.flush()

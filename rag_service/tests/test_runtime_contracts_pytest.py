@@ -20,6 +20,7 @@ from runtime_protocol.contracts import (
     ContinuationBinding,
     RuntimeApprovalResponse,
     RuntimeCourseCorrection,
+    RuntimeCourseCorrectionOutcome,
     RuntimeCourseCorrectionReceipt,
     RuntimeSteeringInput,
     RuntimeCapabilities,
@@ -87,6 +88,46 @@ def test_course_correction_contract_is_json_only_and_versioned():
             scope="all_work",
             observed_task_version=4,
         )
+
+
+def test_correction_outcomes_round_trip_independently_for_multiple_redirects():
+    outcomes = (
+        RuntimeCourseCorrectionOutcome(
+            correction_id="correction-1", operation_id="operation-1",
+            state="satisfied", runtime_plan_revision=2, todo_ids=("targeted-1",),
+        ),
+        RuntimeCourseCorrectionOutcome(
+            correction_id="correction-2", operation_id="operation-2",
+            state="unresolved", runtime_plan_revision=3,
+            unresolved_reason="Comparison evidence was unavailable.",
+        ),
+    )
+    task_result = RuntimeTaskResult(
+        status=RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS,
+        text="Partial answer", warnings=({"code": "course_correction_unresolved"},),
+        correction_outcomes=outcomes,
+    )
+    restored = result_from_dict(AgentRuntimeResult(status="completed", task_result=task_result).to_dict())
+
+    assert restored.task_result is not None
+    assert restored.task_result.correction_outcomes == outcomes
+
+
+def test_fallback_plan_prioritizes_every_active_course_correction():
+    plan = deep_research_nodes._fallback_research_plan(
+        objective="Compare the frameworks",
+        enabled_profiles=["document_researcher", "web_researcher"],
+        max_todos=4,
+        course_corrections=(
+            {"id": "correction-1", "instruction": "Compare red-team security features."},
+            {"id": "correction-2", "instruction": "Add current pricing differences."},
+        ),
+    )
+
+    assert plan.incorporated_correction_ids == ["correction-1", "correction-2"]
+    assert [todo.profile_id.value for todo in plan.todos[:2]] == ["web_researcher", "web_researcher"]
+    assert "red-team security" in plan.todos[0].description
+    assert "pricing differences" in plan.todos[1].description
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():

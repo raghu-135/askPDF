@@ -25,7 +25,13 @@ from app.services.agent_task_runtime_projection import (
 )
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
+from runtime_protocol.contracts import (
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    RuntimeCourseCorrection,
+    RuntimeOperationId,
+    RuntimeTaskContext,
+)
 from app.runtime.capability_resolver import require_capability
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from app.runtime.catalog import (
@@ -572,7 +578,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 },
             )
             return
-        if event.kind != "course_correction.applied":
+        if event.kind not in {"course_correction.applied", "course_correction.incorporated"}:
             return
         correction_ids = payload.get("correction_ids") or [payload.get("correction_id")]
         await tasks.mark_course_corrections_runtime_applied(
@@ -646,6 +652,18 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 ),
             },
             context_data=await _task_context_snapshot(task, thread, config),
+            active_corrections=tuple(
+                RuntimeCourseCorrection(
+                    correction_id=str(value.get("correction_id") or value.get("id") or ""),
+                    operation_id=str(value.get("operation_id") or value.get("command_id") or ""),
+                    instruction=str(value.get("instruction") or ""),
+                    observed_task_version=int(value.get("observed_task_version") or 0),
+                    observed_plan_revision=int(value.get("observed_plan_revision") or 0),
+                    scope=str(value.get("scope") or "remaining_work"),
+                    submitted_at=value.get("submitted_at"),
+                )
+                for value in pending_corrections
+            ),
         )
         runtime_request = AgentRuntimeRequest(
             run_id=run.id,

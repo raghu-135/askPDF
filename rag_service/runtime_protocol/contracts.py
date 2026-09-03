@@ -12,8 +12,8 @@ from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
 
-RUNTIME_PROTOCOL_VERSION = "1.3"
-RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.3"
+RUNTIME_PROTOCOL_VERSION = "1.4"
+RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.4"
 
 
 def ensure_protocol_compatible(
@@ -104,6 +104,9 @@ class RuntimeEventKind(str, Enum):
     PLAN_SUPERSEDED = "plan.superseded"
     COURSE_CORRECTION_ACCEPTED = "course_correction.accepted"
     COURSE_CORRECTION_APPLIED = "course_correction.applied"
+    COURSE_CORRECTION_INCORPORATED = "course_correction.incorporated"
+    COURSE_CORRECTION_SATISFIED = "course_correction.satisfied"
+    COURSE_CORRECTION_UNRESOLVED = "course_correction.unresolved"
     CHECKPOINT_CONTINUED = "checkpoint.continued"
     LINKED_RUN_CREATED = "linked_run.created"
     RUNTIME_EVENT = "runtime.event"
@@ -707,6 +710,43 @@ class RuntimeCourseCorrectionReceipt:
 
 
 @dataclass(frozen=True)
+class RuntimeCourseCorrectionOutcome:
+    """Framework-neutral evidence of one correction's delivery and coverage."""
+
+    correction_id: str
+    operation_id: str
+    state: str
+    runtime_plan_revision: Optional[int] = None
+    linked_run_id: Optional[str] = None
+    todo_ids: tuple[str, ...] = ()
+    artifact_ids: tuple[str, ...] = ()
+    explanation: Optional[str] = None
+    unresolved_reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.correction_id.strip() or not self.operation_id.strip():
+            raise ValueError("course correction outcome identities must not be empty")
+        if self.state not in {
+            "accepted", "delivered", "incorporated", "satisfied",
+            "unresolved", "accepted_unresolved",
+        }:
+            raise ValueError("invalid course correction outcome state")
+        if self.runtime_plan_revision is not None and self.runtime_plan_revision < 1:
+            raise ValueError("runtime plan revision must be positive")
+        if len(self.todo_ids) > 100 or len(self.artifact_ids) > 200:
+            raise ValueError("course correction outcome references exceed the runtime limit")
+        if self.explanation is not None and len(self.explanation) > 4_000:
+            raise ValueError("course correction explanation exceeds the runtime limit")
+        if self.unresolved_reason is not None and len(self.unresolved_reason) > 2_000:
+            raise ValueError("course correction unresolved reason exceeds the runtime limit")
+        if self.state == "unresolved" and not str(self.unresolved_reason or "").strip():
+            raise ValueError("unresolved correction outcomes require a reason")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class RuntimeValidationIssue:
     code: str
     message: str
@@ -830,6 +870,7 @@ class RuntimeTaskResult:
     usage: Mapping[str, Any] = field(default_factory=dict)
     error: Optional[Mapping[str, Any]] = None
     framework_details: Mapping[str, Any] = field(default_factory=dict)
+    correction_outcomes: tuple[RuntimeCourseCorrectionOutcome, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, RuntimeTaskResultStatus):
@@ -859,6 +900,8 @@ class RuntimeTaskResult:
             raise ValueError("completed task results require usable output or artifacts")
         if self.status is RuntimeTaskResultStatus.COMPLETED_WITH_WARNINGS and not (self.warnings or self.gaps):
             raise ValueError("completed_with_warnings requires warnings or gaps")
+        if not all(isinstance(item, RuntimeCourseCorrectionOutcome) for item in self.correction_outcomes):
+            raise TypeError("correction_outcomes must contain RuntimeCourseCorrectionOutcome values")
 
     @property
     def usable(self) -> bool:
@@ -875,6 +918,7 @@ class RuntimeTaskResult:
             "usage": dict(self.usage),
             "error": dict(self.error) if self.error is not None else None,
             "framework_details": dict(self.framework_details),
+            "correction_outcomes": [item.to_dict() for item in self.correction_outcomes],
         }
 
 
@@ -891,6 +935,7 @@ class RuntimeTaskContext:
     permissions: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     context_data: Mapping[str, Any] = field(default_factory=dict)
+    active_corrections: tuple[RuntimeCourseCorrection, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -903,6 +948,7 @@ class RuntimeTaskContext:
             "permissions": dict(self.permissions),
             "metadata": dict(self.metadata),
             "context_data": dict(self.context_data),
+            "active_corrections": [value.to_dict() for value in self.active_corrections],
         }
 
 
@@ -958,6 +1004,7 @@ class TaskOrchestrationDelta:
     artifacts: tuple[Mapping[str, Any], ...] = ()
     pending_interrupt: Optional[Mapping[str, Any]] = None
     result: Optional[Mapping[str, Any]] = None
+    correction_outcomes: tuple[RuntimeCourseCorrectionOutcome, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -986,6 +1033,7 @@ class TaskOrchestrationDelta:
             "artifacts": [dict(value) for value in self.artifacts],
             "pending_interrupt": dict(self.pending_interrupt) if self.pending_interrupt is not None else None,
             "result": dict(self.result) if self.result is not None else None,
+            "correction_outcomes": [value.to_dict() for value in self.correction_outcomes],
         }
 
 

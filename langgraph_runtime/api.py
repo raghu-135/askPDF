@@ -88,6 +88,11 @@ def _task_context(value: Any) -> RuntimeTaskContext | None:
         permissions=mapping("permissions"),
         metadata=mapping("metadata"),
         context_data=mapping("context_data"),
+        active_corrections=tuple(
+            course_correction_from_dict(item)
+            for item in value.get("active_corrections") or []
+            if isinstance(item, Mapping)
+        ),
     )
 
 

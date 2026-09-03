@@ -33,6 +33,7 @@ from runtime_protocol.contracts import (
     RuntimeArtifact,
     RuntimeApprovalResponse,
     RuntimeCourseCorrection,
+    RuntimeCourseCorrectionOutcome,
     RuntimeCourseCorrectionReceipt,
     RuntimeSteeringInput,
     RuntimeValidationIssue,
@@ -110,6 +111,28 @@ def course_correction_receipt_from_dict(
     )
 
 
+def course_correction_outcome_from_dict(
+    value: Mapping[str, Any],
+) -> RuntimeCourseCorrectionOutcome:
+    return RuntimeCourseCorrectionOutcome(
+        correction_id=str(value["correction_id"]),
+        operation_id=str(value["operation_id"]),
+        state=str(value["state"]),
+        runtime_plan_revision=(
+            int(value["runtime_plan_revision"])
+            if value.get("runtime_plan_revision") is not None else None
+        ),
+        linked_run_id=str(value["linked_run_id"]) if value.get("linked_run_id") else None,
+        todo_ids=tuple(str(item) for item in value.get("todo_ids") or []),
+        artifact_ids=tuple(str(item) for item in value.get("artifact_ids") or []),
+        explanation=str(value["explanation"]) if value.get("explanation") is not None else None,
+        unresolved_reason=(
+            str(value["unresolved_reason"])
+            if value.get("unresolved_reason") is not None else None
+        ),
+    )
+
+
 def definition_from_dict(value: Mapping[str, Any]) -> AgentDefinition:
     return AgentDefinition(
         definition_id=str(value["definition_id"]),
@@ -159,6 +182,11 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         usage=task_usage,
         error=dict(task_value["error"]) if isinstance(task_value.get("error"), Mapping) else None,
         framework_details=dict(task_value.get("framework_details") or {}),
+        correction_outcomes=tuple(
+            course_correction_outcome_from_dict(item)
+            for item in task_value.get("correction_outcomes") or []
+            if isinstance(item, Mapping)
+        ),
     ) if task_value is not None else None
     delta_value = value.get("orchestration_delta") if isinstance(value.get("orchestration_delta"), Mapping) else None
     orchestration_delta = TaskOrchestrationDelta(
@@ -187,6 +215,11 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         artifacts=tuple(dict(item) for item in delta_value.get("artifacts") or [] if isinstance(item, Mapping)),
         pending_interrupt=dict(delta_value["pending_interrupt"]) if isinstance(delta_value.get("pending_interrupt"), Mapping) else None,
         result=dict(delta_value["result"]) if isinstance(delta_value.get("result"), Mapping) else None,
+        correction_outcomes=tuple(
+            course_correction_outcome_from_dict(item)
+            for item in delta_value.get("correction_outcomes") or []
+            if isinstance(item, Mapping)
+        ),
     ) if delta_value is not None else None
     return AgentRuntimeResult(
         status=str(value.get("status") or "failed"),

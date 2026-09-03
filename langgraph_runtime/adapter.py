@@ -143,6 +143,10 @@ def _result_from_graph(
             "gaps": gaps,
             "usage": usage,
             "framework_details": {"framework": "langgraph"},
+            "correction_outcomes": [
+                dict(value) for value in result.get("task_correction_outcomes") or []
+                if isinstance(value, Mapping)
+            ],
         })
     if task_id:
         web_access_decision = result.get("task_web_access_decision") if isinstance(result.get("task_web_access_decision"), Mapping) else None
@@ -180,6 +184,10 @@ def _result_from_graph(
                 "task_result": task_result.to_dict() if task_result is not None else None,
                 "final_artifact_id": str(result.get("final_artifact_id") or "") or None,
             },
+            "correction_outcomes": [
+                dict(value) for value in result.get("task_correction_outcomes") or []
+                if isinstance(value, Mapping)
+            ],
         }
         identity_payload = {
             "run_id": run_id,
@@ -210,6 +218,7 @@ def _result_from_graph(
             artifacts=tuple(changes["artifacts"]),
             pending_interrupt=changes["pending_interrupt"],
             result=changes["result"],
+            correction_outcomes=task_result.correction_outcomes if task_result is not None else (),
         )
     return AgentRuntimeResult(
         status=status,
@@ -359,8 +368,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             task_budget_usage=dict(metadata.get("budget_usage") or {}),
             task_orchestration=dict(metadata.get("orchestration") or {}),
             task_course_corrections=[
-                dict(value) for value in metadata.get("course_corrections") or []
-                if isinstance(value, Mapping)
+                value.to_dict() for value in task.active_corrections
             ],
             runtime_execution_mode=True,
             runtime_artifact_manifest=[dict(value) for value in task.artifact_manifests],

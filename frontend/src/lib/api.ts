@@ -2367,6 +2367,17 @@ export interface AgentTaskSummary {
   updated_at: string;
   active_run?: { id: string; status: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
   plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
+  course_corrections?: Array<{
+    command_id: string;
+    correction_id: string;
+    instruction: string;
+    status: string;
+    delivery_mode?: string | null;
+    delivery_state: string;
+    linked_run_id?: string | null;
+    runtime_outcome?: { explanation?: string | null; unresolved_reason?: string | null };
+    submitted_at?: string | null;
+  }>;
 }
 
 export interface AgentTaskTodo {
@@ -2589,7 +2600,7 @@ export async function submitAgentTaskCourseCorrection(
   correction_id: string;
   correction: Record<string, unknown>;
   delivery_mode: 'same_run_safe_boundary' | 'linked_run';
-  delivery_state: 'accepted' | 'delivered' | 'runtime_applied' | 'applied' | 'linked' | 'rejected';
+  delivery_state: 'accepted' | 'delivered' | 'linked' | 'incorporated' | 'satisfied' | 'unresolved' | 'accepted_unresolved' | 'rejected';
   runtime_receipt?: Record<string, unknown> | null;
   duplicate: boolean;
 }> {

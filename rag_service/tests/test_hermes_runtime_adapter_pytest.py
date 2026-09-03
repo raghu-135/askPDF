@@ -337,6 +337,20 @@ def test_hermes_tool_completion_preserves_bounded_evidence_metadata():
     assert payload["explicit_gap"] is False
 
 
+def test_hermes_task_input_makes_multiple_redirects_authoritative():
+    rendered = hermes_api._task_input_with_context("Original objective", {
+        "active_corrections": [
+            {"correction_id": "c-1", "operation_id": "o-1", "instruction": "Compare security."},
+            {"correction_id": "c-2", "operation_id": "o-2", "instruction": "Compare pricing."},
+        ],
+    })
+
+    assert "AUTHORITATIVE USER REDIRECTS" in rendered
+    assert "c-1" in rendered and "Compare security" in rendered
+    assert "c-2" in rendered and "Compare pricing" in rendered
+    assert "correction_outcomes" in rendered
+
+
 @pytest.mark.asyncio
 async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
     requested = []

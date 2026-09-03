@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from runtime_protocol.contracts import (
     RuntimeArtifact,
+    RuntimeCourseCorrectionOutcome,
     RuntimeTaskResult,
     RuntimeTaskResultStatus,
 )
@@ -16,7 +17,7 @@ _TEXT_ALIAS_KEYS = ("output", "content", "result", "message")
 _NON_ANSWER_BLOCK_TYPES = frozenset({"reasoning", "thinking", "tool_use", "tool_call"})
 _RESULT_CONTROL_KEYS = frozenset({
     "status", "warnings", "gaps", "uncovered_gaps", "error", "usage",
-    "framework_details", "artifacts", "structured", "structured_output",
+    "framework_details", "artifacts", "structured", "structured_output", "correction_outcomes",
     *_CANONICAL_TEXT_KEYS,
 })
 
@@ -172,6 +173,20 @@ def normalize_runtime_task_result(
         usage=dict(usage or data.get("usage") or {}),
         error=error,
         framework_details=dict(framework_details or data.get("framework_details") or {}),
+        correction_outcomes=tuple(
+            RuntimeCourseCorrectionOutcome(
+                correction_id=str(item.get("correction_id") or ""),
+                operation_id=str(item.get("operation_id") or ""),
+                state=str(item.get("state") or "unresolved"),
+                runtime_plan_revision=int(item["runtime_plan_revision"]) if item.get("runtime_plan_revision") else None,
+                linked_run_id=str(item["linked_run_id"]) if item.get("linked_run_id") else None,
+                todo_ids=tuple(str(value) for value in item.get("todo_ids") or []),
+                artifact_ids=tuple(str(value) for value in item.get("artifact_ids") or []),
+                explanation=str(item["explanation"]) if item.get("explanation") is not None else None,
+                unresolved_reason=str(item["unresolved_reason"]) if item.get("unresolved_reason") is not None else None,
+            )
+            for item in data.get("correction_outcomes") or [] if isinstance(item, Mapping)
+        ),
     )
 
 

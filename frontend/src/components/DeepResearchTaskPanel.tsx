@@ -829,8 +829,12 @@ export default function DeepResearchTaskPanel({
               setCourseCorrectionStatus(
                 response.delivery_state === 'linked'
                   ? 'Correction linked to a follow-up run.'
-                  : response.delivery_state === 'runtime_applied'
-                    ? 'Correction was applied by the runtime and is waiting for product-state projection.'
+                  : response.delivery_state === 'incorporated'
+                    ? 'Correction is incorporated into this attempt and remains active until the result verifies coverage.'
+                  : response.delivery_state === 'satisfied'
+                    ? 'Correction was verified in the final result.'
+                  : response.delivery_state === 'unresolved'
+                    ? 'Execution finished without fully resolving this correction. Review the partial result or retry.'
                   : response.delivery_state === 'delivered'
                     ? 'Correction delivered and waiting for the next safe planning boundary.'
                     : 'Correction accepted and queued for delivery.',
@@ -841,6 +845,21 @@ export default function DeepResearchTaskPanel({
         }}>Redirect research</Button>
       </Stack> : null}
       {courseCorrectionStatus ? <Alert severity="info" sx={{ mb: 1 }}>{courseCorrectionStatus}</Alert> : null}
+      {task.course_corrections?.length ? <Stack spacing={0.75} sx={{ mb: 1 }}>
+        {task.course_corrections.map((correction) => <Alert
+          key={correction.correction_id}
+          severity={correction.delivery_state === 'unresolved' ? 'warning' : correction.delivery_state === 'satisfied' ? 'success' : 'info'}
+          icon={false}
+        >
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Chip size="small" label={correction.delivery_state.replaceAll('_', ' ')} />
+            <Typography variant="body2">{correction.instruction}</Typography>
+          </Stack>
+          {correction.delivery_state === 'unresolved' ? <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+            {correction.runtime_outcome?.unresolved_reason || 'Execution finished without fully addressing this redirect. Retry or accept the partial result.'}
+          </Typography> : null}
+        </Alert>)}
+      </Stack> : null}
       <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
         {interactionDescriptors.map((operation) => <Button
           key={operation.id}

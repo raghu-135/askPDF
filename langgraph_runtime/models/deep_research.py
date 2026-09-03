@@ -202,6 +202,7 @@ class DeepResearchPlanProposal(BaseModel):
     assumptions: List[str] = Field(default_factory=list, max_length=20)
     constraints: List[str] = Field(default_factory=list, max_length=20)
     todos: List[DeepResearchTodoProposal] = Field(min_length=1, max_length=50)
+    incorporated_correction_ids: List[str] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_dag(self):

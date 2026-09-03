@@ -179,11 +179,16 @@ async def test_hermes_linked_correction_preserves_failed_source_run(
     await repository.complete_linked_course_corrections(
         task.id, source_run_id=source.id, linked_run_id=linked.id,
     )
-    assert await repository.pending_course_corrections(task.id) == []
+    pending = await repository.pending_course_corrections(task.id)
+    assert [value["correction_id"] for value in pending] == [
+        command.result_json["correction"]["correction_id"]
+    ]
     async with test_session_maker() as session:
         stored_command = await session.get(AgentTaskCommand, command.id)
         stored_linked = await session.get(AgentRun, linked.id)
         assert stored_command.result_json["linked_run_id"] == linked.id
+        assert stored_command.result_json["delivery_state"] == "linked"
+        assert stored_command.status == "accepted"
         assert stored_linked.parent_run_id == source.id
 
 

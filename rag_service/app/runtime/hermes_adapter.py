@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -53,7 +55,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         task_context = getattr(context, "task_context", None)
         if task_context is None:
             return request
-        data = dict(getattr(task_context, "context_data", {}) or {})
+        context_data = dict(getattr(task_context, "context_data", {}) or {})
+        data = {**context_data, **task_context.to_dict()}
         limits = dict(getattr(task_context, "limits", {}) or {})
         spec = dict(getattr(context, "resolved_spec", {}) or {})
         config = dict(spec.get("config") or {})
@@ -75,7 +78,14 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 context_window=context_window,
                 use_web_search=bool(config.get("use_web_search")),
                 use_reranker=True,
-                extensions={"task_id": task_context.task_id, "llm_model": config.get("llm_model")},
+                extensions={
+                    "task_id": task_context.task_id,
+                    "llm_model": config.get("llm_model"),
+                    "correction_context_sha256": hashlib.sha256(json.dumps(
+                        data.get("active_corrections") or [], sort_keys=True,
+                        separators=(",", ":"), ensure_ascii=True,
+                    ).encode()).hexdigest(),
+                },
             ),
             task_id=task_context.task_id,
             allowed_tools=allowed_tools,
