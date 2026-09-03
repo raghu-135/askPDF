@@ -50,6 +50,7 @@ class ToolWarningCode(str, Enum):
     TOOL_OUTPUT_MISSING_CONTENT = "tool_output_missing_content"
     TOOL_OUTPUT_SOURCES_INVALID = "tool_output_sources_invalid"
     WEB_SEARCH_DISABLED = "web_search_disabled"
+    WEB_SEARCH_FAILED = "search_web_failed"
 
 
 class ToolErrorCode(str, Enum):
@@ -69,6 +70,7 @@ class ToolError(BaseModel):
     message: str
     type: str = "ToolError"
     retryable: bool = True
+    evidence_gap: bool = False
 
 
 class ToolMetrics(BaseModel):
@@ -279,12 +281,14 @@ def make_tool_error_result(
     started: Optional[float] = None,
     user_message: Optional[str] = None,
     code: Optional[str] = None,
+    evidence_gap: bool = False,
 ) -> ToolResult:
     tool_error = ToolError(
         code=code or ToolErrorCode.failed(tool_name),
         message=str(error),
         type=type(error).__name__,
         retryable=True,
+        evidence_gap=evidence_gap,
     )
     result = make_tool_result(
         tool_name=tool_name,

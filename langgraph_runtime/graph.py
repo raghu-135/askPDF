@@ -314,7 +314,22 @@ class NodeRegistry:
                         status=NodeEventStatus.FAILED.value,
                         error=exc,
                     )
-                failure_data = {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc), "detail": detail}
+                # Preserve the neutral runtime error envelope on the durable
+                # node event.  Using only ``str(exc)`` here discards the
+                # retryability (and code/details) that the runtime adapter
+                # later persists on the terminal result.
+                error_payload = (
+                    exc.to_dict()
+                    if hasattr(exc, "to_dict") and callable(exc.to_dict)
+                    else {"message": str(exc), "retryable": bool(getattr(exc, "retryable", False))}
+                )
+                failure_data = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "visit_index": visit_index,
+                    "error": error_payload,
+                    "detail": detail,
+                }
                 if execution_event_sink is not None:
                     await execution_event_sink.emit("node.failed", failure_data)
                 elif queue is not None:

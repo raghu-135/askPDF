@@ -47,6 +47,34 @@ def test_langgraph_node_translation_preserves_operation_identity_and_topology() 
     assert event.payload["framework_details"]["langgraph"]["route"] == "answer"
 
 
+def test_langgraph_node_failure_preserves_retryability_in_diagnostics() -> None:
+    event = _event_from_graph(
+        {
+            "event": "node.failed",
+            "data": {
+                "node_id": "deep_task_planner",
+                "node_type": "deep_task_planner",
+                "visit_index": 1,
+                "error": {
+                    "code": "deep_research_plan_invalid",
+                    "safe_message": "The research planner returned an invalid plan after repair",
+                    "retryable": True,
+                    "details": {"stage": "repair"},
+                },
+            },
+        },
+        run_id="run-1",
+        sequence=1,
+    )
+
+    projection = build_canonical_trace_projection(events=[event], resolved_spec={}, framework="langgraph")
+
+    failure = projection["diagnostics"]["failures"][0]
+    assert failure["code"] == "deep_research_plan_invalid"
+    assert failure["retryable"] is True
+    assert projection["diagnostics"]["summary"]["retryable"] is True
+
+
 def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
     projection = build_canonical_trace_projection(
         events=[_event(1, "operation.completed", {"operation_type": "unknown"}, "future")],

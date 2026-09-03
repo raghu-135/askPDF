@@ -1,6 +1,7 @@
 import pytest
 
 from app.models import retry as retry_module
+from app.services import retry as retry_service
 
 
 def test_retry_classifier_does_not_retry_generic_bad_request_or_vendor_400():
@@ -35,10 +36,55 @@ async def test_invoke_with_retry_retries_openai_compatible_status(monkeypatch):
     async def fake_sleep(delay):
         sleeps.append(delay)
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(retry_service.asyncio, "sleep", fake_sleep)
 
     result = await retry_module.invoke_with_retry(flaky_call)
 
     assert result == "ok"
     assert calls == 2
     assert sleeps == [2]
+
+
+@pytest.mark.asyncio
+async def test_bounded_retry_retries_ddgs_timeout_and_reraises_after_bound(monkeypatch):
+    calls = 0
+    sleeps = []
+
+    class TimeoutException(Exception):
+        pass
+
+    async def flaky_call():
+        nonlocal calls
+        calls += 1
+        raise TimeoutException("provider timed out")
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(retry_service.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(TimeoutException):
+        await retry_service.run_with_bounded_retries(
+            flaky_call,
+            max_attempts=3,
+            base_delay_seconds=0.5,
+            max_delay_seconds=2,
+        )
+
+    assert calls == 3
+    assert sleeps == [0.5, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_bounded_retry_does_not_retry_non_transient_errors(monkeypatch):
+    calls = 0
+
+    async def invalid_call():
+        nonlocal calls
+        calls += 1
+        raise ValueError("invalid query")
+
+    with pytest.raises(ValueError, match="invalid query"):
+        await retry_service.run_with_bounded_retries(invalid_call)
+
+    assert calls == 1

@@ -19,6 +19,7 @@ EXPLICIT_GAP_WARNINGS = frozenset({
     "no_thread_documents",
     "no_usable_web_results",
     "web_search_disabled",
+    "search_web_failed",
 })
 
 
@@ -117,7 +118,11 @@ def tool_result_evidence(value: Mapping[str, Any]) -> RuntimeInheritedEvidence:
     tool_name = str(trace.get("tool_name") or "")
     warnings = tuple(str(item) for item in value.get("warnings") or [])
     sources = value.get("sources") if isinstance(value.get("sources"), list) else []
-    explicit_gap = bool(not sources and warnings and set(warnings).issubset(EXPLICIT_GAP_WARNINGS))
+    error = value.get("error") if isinstance(value.get("error"), Mapping) else {}
+    explicit_gap = bool(
+        error.get("evidence_gap")
+        or (not sources and warnings and set(warnings).issubset(EXPLICIT_GAP_WARNINGS))
+    )
     return _packet(
         (
             RuntimeEvidenceKind.WEB if tool_name in {"search_web", "internet_search"}
@@ -137,10 +142,14 @@ def evidence_event_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     content = str(value.get("content") or "")
     sources = value.get("sources") if isinstance(value.get("sources"), list) else []
     warnings = [str(item) for item in value.get("warnings") or []]
+    error = value.get("error") if isinstance(value.get("error"), Mapping) else {}
     return {
         "result_chars": len(content),
         "source_count": len(sources),
         "warnings": warnings,
-        "explicit_gap": bool(not sources and warnings and set(warnings).issubset(EXPLICIT_GAP_WARNINGS)),
+        "explicit_gap": bool(
+            error.get("evidence_gap")
+            or (not sources and warnings and set(warnings).issubset(EXPLICIT_GAP_WARNINGS))
+        ),
         **({"result_preview": content[:TOOL_EVIDENCE_PREVIEW_LIMIT]} if content else {}),
     }

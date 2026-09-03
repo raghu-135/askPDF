@@ -462,7 +462,7 @@ async def test_deep_planner_repairs_invalid_output_once(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypatch):
+async def test_deep_planner_fails_closed_with_bounded_validation_diagnostics(monkeypatch):
     secret_marker = "must-not-be-persisted"
     call_model = AsyncMock(side_effect=[
         (f"not json {secret_marker}", {}),
@@ -479,18 +479,23 @@ async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypat
         "llm_model": "small-test-model",
     }
 
-    result = await deep_research_nodes.deep_task_planner(
-        state, _deep_config(runtime=True, execution_event_sink=sink),
-    )
+    with pytest.raises(AgentRuntimeError) as caught:
+        await deep_research_nodes.deep_task_planner(
+            state, _deep_config(runtime=True, execution_event_sink=sink),
+        )
 
-    assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
-    assert len(result["task_plan"]["todos"]) == 1
+    assert caught.value.code == "deep_research_plan_invalid"
+    assert caught.value.retryable is True
+    assert caught.value.details["initial"]["category"] == "json_parse_error"
+    assert caught.value.details["initial"]["reason"]
+    assert caught.value.details["repair"]["category"] == "schema_validation"
+    assert caught.value.details["repair"]["errors"][0]["field"] == "objective"
     assert call_model.await_count == 2
     assert [call.args[0] for call in sink.emit.await_args_list] == [
         "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
-        "planner.fallback_created",
     ]
-    assert secret_marker not in json.dumps(sink.emit.await_args_list[-1].args[1])
+    diagnostics = json.dumps([call.args[1] for call in sink.emit.await_args_list])
+    assert secret_marker not in diagnostics
 
 
 async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | None = None) -> AgentRun:
@@ -867,6 +872,26 @@ def test_tool_gap_is_explicit_but_not_available_evidence():
 
     assert packet.explicit_gap is True
     assert packet.available is False
+
+
+def test_failed_web_search_is_a_typed_explicit_evidence_gap():
+    packet = tool_result_evidence({
+        "ok": False,
+        "content": "Web search failed; this task has an explicit web-evidence gap.",
+        "sources": [],
+        "warnings": ["search_web_failed"],
+        "error": {
+            "code": "search_web_failed",
+            "message": "provider timed out",
+            "retryable": True,
+            "evidence_gap": True,
+        },
+        "trace": {"tool_name": "search_web", "tool_call_id": "call-2"},
+    })
+
+    assert packet.explicit_gap is True
+    assert packet.available is False
+    assert "search_web_failed" in packet.warnings
 
 
 @pytest.mark.asyncio

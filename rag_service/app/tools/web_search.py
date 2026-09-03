@@ -42,4 +42,12 @@ async def search_web(request: QueryRequest, context: ToolInvocationContext, *, s
         content = "\n\n".join(f'[Source: Internet Search — "{titles[i] or urls[i]}" | {urls[i]}]\n{text}' for i, text in enumerate(texts))
         return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=web_sources, artifacts={"web_sources": web_sources, "evidence_segments": [s for i, text in enumerate(texts) if (s := evidence_segment(kind="web", content=text, source={"url": urls[i], "title": titles[i], "web_search_performed_at": performed_at}, raw_score=scores[i] if scores and i < len(scores) else None))]})
     except Exception as exc:
-        return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=f"Web search failed: {exc}")
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=exc,
+            context=context,
+            started=started,
+            user_message="Web search failed; this task has an explicit web-evidence gap.",
+            code=ToolWarningCode.WEB_SEARCH_FAILED.value,
+            evidence_gap=True,
+        )

@@ -6,7 +6,7 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 DEEP_RESEARCH_WORKFLOW_ID = "deep_research_agent"
@@ -174,6 +174,7 @@ class AgentTaskCourseCorrectionRequest(BaseModel):
 
 
 class DeepResearchTodoProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=300)
     description: str = Field(min_length=1, max_length=4_000)
@@ -197,6 +198,7 @@ class DeepResearchTodoProposal(BaseModel):
 
 
 class DeepResearchPlanProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     objective: str = Field(min_length=1, max_length=20_000)
     success_criteria: List[str] = Field(min_length=1, max_length=20)
     assumptions: List[str] = Field(default_factory=list, max_length=20)
