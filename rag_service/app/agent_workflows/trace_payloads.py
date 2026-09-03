@@ -464,7 +464,7 @@ def merge_debug_payloads(
     merged_events = merge_rows("events", ("event_id",))
     from app.agent_workflows.canonical_trace import (
         TRACE_VISUALIZATION_PARALLEL,
-        build_parallel_groups,
+        build_parallel_groups_safely,
         build_trace_diagnostics,
     )
     from runtime_protocol.contracts import AgentRuntimeEvent
@@ -480,7 +480,7 @@ def merge_debug_payloads(
         )
         for index, row in enumerate(merged_events)
     ]
-    parallel_groups = build_parallel_groups(diagnostic_events)
+    parallel_groups = build_parallel_groups_safely(diagnostic_events)
     visualizations = {
         **_as_dict(base_payload.get("visualizations")),
         **_as_dict(incoming_payload.get("visualizations")),

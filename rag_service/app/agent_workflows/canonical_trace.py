@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence, TypedDict
 
 from app.agent_workflows.trace_sanitization import _bounded_value
 from runtime_protocol.contracts import AgentRuntimeEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 class TraceVisualizationId(str, Enum):
@@ -245,7 +249,6 @@ def _parallel_status(kind: str, payload: Mapping[str, Any]) -> str:
 
 def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTraceParallelGroup]:
     groups: dict[str, dict[str, Any]] = {}
-    member_owners: dict[str, str] = {}
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
     for event in ordered:
         payload = dict(event.payload)
@@ -330,10 +333,6 @@ def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTrac
         if member_value is None or not str(member_value).strip():
             raise TraceProjectionError(f"parallel member event {event.event_id} is missing a member identity")
         member_id = str(member_value).strip()
-        prior_owner = member_owners.get(member_id)
-        if prior_owner and prior_owner != group_id:
-            raise TraceProjectionError(f"parallel member {member_id} belongs to conflicting groups")
-        member_owners[member_id] = group_id
         members: dict[str, dict[str, Any]] = group["members"]
         member = members.setdefault(member_id, {
             "member_id": member_id,
@@ -425,6 +424,39 @@ def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTrac
                 attempt.setdefault("related_event_ids", [])
         result.append(sanitized)
     return sorted(result, key=lambda row: (int(row["first_sequence"]), row["group_id"]))
+
+
+def build_parallel_groups_safely(
+    events: Sequence[AgentRuntimeEvent],
+) -> list[AgentTraceParallelGroup]:
+    """Project groups for delivery, isolating malformed groups from the stream."""
+    grouped: dict[str, list[AgentRuntimeEvent]] = {}
+    for event in events:
+        payload = dict(event.payload)
+        mode = str(payload.get("dispatch_mode") or payload.get("mode") or "parallel").strip().lower()
+        if mode == "serial":
+            continue
+        group_id = _parallel_group_id(payload)
+        is_lifecycle = event.kind.startswith(_PARALLEL_EVENT_PREFIXES)
+        is_correlated_operation = event.kind.startswith("operation.") and group_id is not None
+        if not is_lifecycle and not is_correlated_operation:
+            continue
+        if group_id is None:
+            logger.warning("Parallel trace event omitted from delivery: missing group identity")
+            continue
+        grouped.setdefault(group_id, []).append(event)
+
+    projected: list[AgentTraceParallelGroup] = []
+    for group_id, group_events in grouped.items():
+        try:
+            projected.extend(build_parallel_groups(group_events))
+        except TraceProjectionError as exc:
+            logger.warning(
+                "Parallel trace group omitted from delivery: group_id=%s error=%s",
+                group_id,
+                str(exc)[:300],
+            )
+    return sorted(projected, key=lambda row: (int(row["first_sequence"]), row["group_id"]))
 
 
 def _operation_key(payload: Mapping[str, Any]) -> tuple[str, int] | None:

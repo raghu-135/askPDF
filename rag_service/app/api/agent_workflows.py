@@ -33,7 +33,7 @@ from app.agent_workflows.chat_cancellation import (
 )
 from app.agent_workflows.trace_details import detail_manifest
 from app.agent_workflows.trace_payloads import is_current_debug_payload
-from app.agent_workflows.canonical_trace import build_parallel_groups
+from app.agent_workflows.canonical_trace import build_parallel_groups_safely
 from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
 logger = logging.getLogger(__name__)
 
@@ -708,7 +708,7 @@ async def stream_agent_run_events(
                         "occurred_at": maybe_iso_utc_z(getattr(row, "occurred_at", None)),
                         "created_at": maybe_iso_utc_z(getattr(row, "created_at", None)),
                         "terminal": terminal,
-                        "parallel_groups": build_parallel_groups(canonical_events),
+                        "parallel_groups": build_parallel_groups_safely(canonical_events),
                     }
                     yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
                     if terminal:

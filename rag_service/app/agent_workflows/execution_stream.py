@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.agent_workflows.canonical_trace import build_parallel_groups
+from app.agent_workflows.canonical_trace import build_parallel_groups_safely
 from app.agent_workflows.parallel_projection_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
@@ -346,7 +346,7 @@ class AgentExecutionEventSink:
         if self._delivery_attached:
             delivery_payload = dict(canonical.payload)
             delivery_payload.setdefault("event_id", canonical.event_id)
-            parallel_groups = build_parallel_groups(self._canonical_events)
+            parallel_groups = build_parallel_groups_safely(self._canonical_events)
             if parallel_groups:
                 delivery_payload["parallel_groups"] = parallel_groups
             await self.queue.put({"event": canonical.kind, "data": delivery_payload})

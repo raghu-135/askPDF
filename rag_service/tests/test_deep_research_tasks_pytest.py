@@ -467,6 +467,7 @@ async def test_deep_planner_fails_closed_with_bounded_validation_diagnostics(mon
     call_model = AsyncMock(side_effect=[
         (f"not json {secret_marker}", {}),
         ("{}", {}),
+        ("[]", {}),
     ])
     monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
     sink = SimpleNamespace(emit=AsyncMock())
@@ -486,16 +487,88 @@ async def test_deep_planner_fails_closed_with_bounded_validation_diagnostics(mon
 
     assert caught.value.code == "deep_research_plan_invalid"
     assert caught.value.retryable is True
-    assert caught.value.details["initial"]["category"] == "json_parse_error"
-    assert caught.value.details["initial"]["reason"]
-    assert caught.value.details["repair"]["category"] == "schema_validation"
-    assert caught.value.details["repair"]["errors"][0]["field"] == "objective"
-    assert call_model.await_count == 2
+    attempts = caught.value.details["attempts"]
+    assert [attempt["stage"] for attempt in attempts] == ["initial", "repair_1", "repair_2"]
+    assert attempts[0]["category"] == "json_parse_error"
+    assert attempts[0]["reason"]
+    assert attempts[1]["category"] == "schema_validation"
+    assert attempts[1]["errors"][0]["field"] == "objective"
+    assert attempts[2]["errors"][0]["code"] == "json_object_required"
+    assert call_model.await_count == 3
     assert [call.args[0] for call in sink.emit.await_args_list] == [
         "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
+        "planner.repair_started", "planner.validation_failed",
     ]
     diagnostics = json.dumps([call.args[1] for call in sink.emit.await_args_list])
     assert secret_marker not in diagnostics
+
+
+def test_plan_validator_reports_strict_structural_errors_without_model_output():
+    candidate = json.dumps({
+        "objective": "Research",
+        "success_criteria": ["Answer"],
+        "todos": [
+            {
+                "id": "todo-1",
+                "title": "One",
+                "description": "Collect evidence",
+                "completion_criteria": "Evidence collected",
+                "profile_id": "not-enabled",
+                "dependency_ids": ["missing"],
+            },
+            {
+                "id": "todo-1",
+                "title": "Two",
+                "description": "Synthesize evidence",
+                "completion_criteria": "Answer written",
+                "profile_id": "document_researcher",
+                "dependency_ids": ["todo-1"],
+            },
+        ],
+    })
+    result = deep_research_nodes._decode_research_plan(
+        candidate,
+        stage="initial",
+        enabled_profiles=["document_researcher"],
+        max_todos=5,
+        required_correction_ids=["corr-1"],
+    )
+
+    assert result.valid is False
+    codes = {error.code for error in result.errors}
+    assert {"unknown_profile", "duplicate_todo_id", "unknown_dependency", "missing_course_correction"} <= codes
+    assert candidate not in json.dumps(result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_deep_planner_uses_third_call_for_targeted_repair(monkeypatch):
+    call_model = AsyncMock(side_effect=[
+        ("not json", {}),
+        ("{}", {}),
+        (_valid_plan_text(), {}),
+    ])
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    sink = SimpleNamespace(emit=AsyncMock())
+    state = {
+        "runtime_execution_mode": True,
+        "question": "Research Lamport clocks",
+        "task_enabled_profiles": ["document_researcher"],
+        "task_limits": {"max_todos": 5},
+        "task_todos": [],
+        "llm_model": "small-test-model",
+    }
+
+    result = await deep_research_nodes.deep_task_planner(
+        state, _deep_config(runtime=True, execution_event_sink=sink),
+    )
+
+    assert result["task_plan"]["todos"]
+    assert call_model.await_count == 3
+    events = [call.args[0] for call in sink.emit.await_args_list]
+    assert events == [
+        "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
+        "planner.repair_started",
+    ]
 
 
 async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | None = None) -> AgentRun:

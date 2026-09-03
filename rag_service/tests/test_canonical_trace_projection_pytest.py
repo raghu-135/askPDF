@@ -3,7 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent_workflows.canonical_trace import TraceProjectionError, build_canonical_trace_projection, build_parallel_groups
+from app.agent_workflows.canonical_trace import (
+    TraceProjectionError,
+    build_canonical_trace_projection,
+    build_parallel_groups,
+    build_parallel_groups_safely,
+)
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from runtime_protocol.contracts import AgentRuntimeEvent
 from langgraph_runtime.adapter import _event_from_graph
@@ -85,6 +90,33 @@ def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
     assert projection["operations"] == []
     assert set(projection["visualizations"]) == {"generic.timeline"}
     assert projection["events"][0]["kind"] == "operation.completed"
+
+
+def test_parallel_projection_scopes_reused_work_id_to_each_dispatch_group() -> None:
+    groups = build_parallel_groups([
+        _event(1, "dispatch.started", {"dispatch_id": "dispatch-1", "planned": 1}),
+        _event(2, "worker.started", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(3, "worker.failed", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(4, "dispatch.started", {"dispatch_id": "dispatch-2", "planned": 1}),
+        _event(5, "worker.started", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+        _event(6, "worker.completed", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+    ])
+
+    assert [group["group_id"] for group in groups] == ["dispatch-1", "dispatch-2"]
+    assert [group["members"][0]["member_id"] for group in groups] == ["work-a", "work-a"]
+    assert groups[0]["members"][0]["attempts"][0]["status"] == "failed"
+    assert groups[1]["members"][0]["attempts"][0]["status"] == "completed"
+
+
+def test_safe_parallel_projection_omits_only_malformed_group_projection() -> None:
+    events = [
+        _event(1, "worker.started", {"work_id": "work-a"}),
+        _event(2, "dispatch.started", {"dispatch_id": "dispatch-b", "planned": 1}),
+        _event(3, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-b", "attempt": 1}),
+    ]
+
+    groups = build_parallel_groups_safely(events)
+    assert [group["group_id"] for group in groups] == ["dispatch-b"]
 
 
 def test_unknown_framework_metadata_remains_visible_without_specialized_visualization() -> None:
@@ -392,10 +424,6 @@ def test_serial_dispatch_events_never_create_parallel_groups() -> None:
         ([_event(1, "worker.started", {"work_id": "work-a"})], "missing a group identity"),
         ([_event(1, "worker.started", {"dispatch_id": "dispatch-a"})], "missing a member identity"),
         ([_event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a", "attempt": 0})], "invalid attempt"),
-        ([
-            _event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a"}),
-            _event(2, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-a"}),
-        ], "conflicting groups"),
     ],
 )
 def test_parallel_projection_rejects_malformed_correlation(events, message) -> None:
