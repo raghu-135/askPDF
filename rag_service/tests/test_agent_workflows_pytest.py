@@ -45,11 +45,10 @@ from app.agent_workflows.service import AgentRunService
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from runtime_protocol.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
-from langgraph_runtime.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from langgraph_runtime.workflows.hitl_materializer import materialize_hitl_gates
-from app.agent_workflows import hitl_runtime
+from langgraph_runtime.workflows import hitl_runtime
 from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
@@ -90,42 +89,6 @@ def _collapsed_event_nodes(events) -> list[str]:
         if node and (not nodes or nodes[-1] != node):
             nodes.append(node)
     return nodes
-
-
-def test_builder_test_initial_state_includes_only_transient_request_history():
-    request = SimpleNamespace(
-        question="Follow-up question",
-        llm_model="test-model",
-        context_window=4096,
-        use_web_search=False,
-        use_reranker=True,
-        system_role_override=None,
-        tool_instructions_override=None,
-        custom_instructions_override=None,
-        replans=1,
-        client_timezone="America/Chicago",
-        client_locale="en-US",
-        client_now_iso="2026-07-27T12:00:00Z",
-        transient_messages=[
-            SimpleNamespace(role="user", content="First temporary question"),
-            SimpleNamespace(role="assistant", content="First temporary answer"),
-        ],
-    )
-
-    state = initial_studio_state(
-        run_id="run-temporary",
-        thread_id="thread-read-only",
-        spec={"workflow_id": "custom", "config": {}},
-        request=request,
-        embedding_model="test-embedding",
-    )
-
-    assert state["transient_history_text"] == (
-        "User: First temporary question\n"
-        "Assistant: First temporary answer"
-    )
-    assert state["question"] == "Follow-up question"
-    assert "chat_turn_id" not in state
 
 
 @pytest.mark.asyncio
@@ -3164,17 +3127,23 @@ class TestAgentWorkflowRepository:
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
         assert router_version.schema_version == 1
         assert router_version.spec_json["schema_version"] == 1
-        assert router_version.validation_result_json == {"valid": True, "errors": []}
+        envelope_validation = {
+            "valid": True,
+            "errors": [],
+            "scope": "product_envelope",
+            "framework_validation": "runtime_admission",
+        }
+        assert router_version.validation_result_json == envelope_validation
         assert plan_workflow.metadata_json["version_id"] == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_version.schema_version == 1
         assert plan_version.spec_json["schema_version"] == 1
-        assert plan_version.validation_result_json == {"valid": True, "errors": []}
+        assert plan_version.validation_result_json == envelope_validation
         assert evaluator_workflow.metadata_json["version_id"] == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert evaluator_version.schema_version == 1
         assert evaluator_version.spec_json["schema_version"] == 1
-        assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
+        assert evaluator_version.validation_result_json == envelope_validation
 
     @pytest.mark.asyncio
     async def test_seed_builtin_current_v1_versions_validate_and_compile(self, repo):
@@ -3199,7 +3168,12 @@ class TestAgentWorkflowRepository:
             assert current_version.version == version_number
             assert current_version.schema_version == 1
             assert current_version.spec_json == spec_factory()
-            assert current_version.validation_result_json == {"valid": True, "errors": []}
+            assert current_version.validation_result_json == {
+                "valid": True,
+                "errors": [],
+                "scope": "product_envelope",
+                "framework_validation": "runtime_admission",
+            }
             WorkflowCompiler().compile(current_version.spec_json)
 
     @pytest.mark.asyncio

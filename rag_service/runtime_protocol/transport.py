@@ -24,6 +24,7 @@ from runtime_protocol.contracts import (
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
+    RuntimePlanChange,
     RuntimeSupportLevel,
     RuntimeTerminalState,
     RuntimeTaskResultStatus,
@@ -156,10 +157,22 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
     orchestration_delta = TaskOrchestrationDelta(
         event_id=str(delta_value["event_id"]),
         attempt_id=str(delta_value["attempt_id"]),
+        operation_id=str(delta_value["operation_id"]),
         idempotency_key=str(delta_value["idempotency_key"]),
         observed_task_version=int(delta_value.get("observed_task_version") or 0),
         observed_plan_revision=int(delta_value.get("observed_plan_revision") or 0),
-        plan=dict(delta_value["plan"]) if isinstance(delta_value.get("plan"), Mapping) else None,
+        plan_changes=tuple(
+            RuntimePlanChange(
+                runtime_revision=int(item["runtime_revision"]),
+                parent_runtime_revision=int(item.get("parent_runtime_revision") or 0),
+                acknowledged_product_revision=int(item.get("acknowledged_product_revision") or 0),
+                reason=str(item.get("reason") or "runtime_projection"),
+                planner_visit=int(item.get("planner_visit") or 1),
+                plan=dict(item.get("plan") or {}),
+                correction_ids=tuple(str(value) for value in item.get("correction_ids") or []),
+            )
+            for item in delta_value.get("plan_changes") or [] if isinstance(item, Mapping)
+        ),
         todo_changes=tuple(dict(item) for item in delta_value.get("todo_changes") or [] if isinstance(item, Mapping)),
         subagent_changes=tuple(dict(item) for item in delta_value.get("subagent_changes") or [] if isinstance(item, Mapping)),
         budget_usage=dict(delta_value.get("budget_usage") or {}),

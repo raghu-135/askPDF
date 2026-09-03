@@ -38,6 +38,9 @@ class RuntimeExecutionContext:
     task_id: Optional[str] = None
     task_worker_id: Optional[str] = None
     task_context: Optional[RuntimeTaskContext] = None
+    operation_id: Optional[str] = None
+    attempt_id: Optional[str] = None
+    boundary_event_id: Optional[str] = None
 
 
 class AgentRuntimeEventSink(Protocol):

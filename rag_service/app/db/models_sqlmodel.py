@@ -540,7 +540,7 @@ class AgentTask(SQLModel, table=True):
         CheckConstraint("length(btrim(objective)) > 0", name="ck_agent_tasks_objective_nonempty"),
         CheckConstraint("length(btrim(objective_hash)) > 0", name="ck_agent_tasks_objective_hash_nonempty"),
         CheckConstraint("length(btrim(create_idempotency_key)) > 0", name="ck_agent_tasks_idempotency_nonempty"),
-        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
+        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','recovery_required','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
         CheckConstraint("version >= 1 and latest_run_attempt >= 0", name="ck_agent_tasks_versions"),
         CheckConstraint("progress between 0 and 100 and completed_todos >= 0 and total_todos >= 0", name="ck_agent_tasks_progress"),
         Index(
@@ -718,6 +718,37 @@ class AgentTaskEvent(SQLModel, table=True):
         UniqueConstraint("task_id", "sequence", name="uq_agent_task_event_sequence"),
         Index("idx_agent_task_events_stream", "task_id", "sequence"),
         Index("idx_agent_task_events_run_stream", "task_id", "agent_run_id", "sequence"),
+    )
+
+
+class AgentTaskRuntimeDelta(SQLModel, table=True):
+    """Exactly-once ledger for runtime-owned orchestration boundaries."""
+
+    __tablename__ = "agent_task_runtime_deltas"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    attempt_id: str
+    operation_id: str
+    event_id: str
+    idempotency_key: str
+    payload_sha256: str
+    observed_task_version: int
+    observed_plan_revision: int
+    applied_task_version: int
+    applied_plan_revision: int
+    applied_runtime_plan_revision: int = 0
+    applied_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint(
+            "observed_task_version >= 0 and observed_plan_revision >= 0 and "
+            "applied_task_version >= 1 and applied_plan_revision >= 0 and applied_runtime_plan_revision >= 0",
+            name="ck_agent_task_runtime_delta_versions",
+        ),
+        UniqueConstraint("agent_run_id", "event_id", name="uq_agent_task_runtime_delta_event"),
+        UniqueConstraint("task_id", "idempotency_key", name="uq_agent_task_runtime_delta_idempotency"),
     )
 
 

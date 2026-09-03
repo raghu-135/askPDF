@@ -544,7 +544,7 @@ async def respond_to_agent_task_budget_review(
                         command.id, delivery_mode="linked_run", receipt=correction_delivery,
                     )
                 elif receipt.status == "applied":
-                    await repository.mark_course_corrections_applied(
+                    await repository.mark_course_corrections_runtime_applied(
                         task.id, [receipt.correction_id],
                         plan_revision=int(receipt.plan_revision or 0),
                     )
@@ -662,12 +662,12 @@ async def submit_agent_task_course_correction(
                         await ensure_task_run(task.id)
                         delivery_state = "linked"
                 elif runtime_receipt.status == "applied":
-                    await repository.mark_course_corrections_applied(
+                    await repository.mark_course_corrections_runtime_applied(
                         task.id,
                         [runtime_receipt.correction_id],
                         plan_revision=int(runtime_receipt.plan_revision or 0),
                     )
-                    delivery_state = "applied"
+                    delivery_state = "runtime_applied"
                 else:
                     await repository.mark_course_correction_delivered(command.id, receipt=receipt)
                     delivery_state = "delivered"

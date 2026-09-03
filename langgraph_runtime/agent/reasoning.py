@@ -162,7 +162,7 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
         }
 
     tag_reasoning, cleaned_answer = _extract_from_think_tags(raw_answer)
-    
+
     # Strip LLM-mimicked "Q: ... A: ..." prefixes if present
     if cleaned_answer.startswith("Q:") and "\nA:" in cleaned_answer:
         parts = cleaned_answer.split("\nA:", 1)

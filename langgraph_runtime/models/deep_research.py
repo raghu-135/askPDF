@@ -20,6 +20,7 @@ class AgentTaskStatus(str, Enum):
     PAUSED = "paused"
     AWAITING_APPROVAL = "awaiting_approval"
     CANCELLING = "cancelling"
+    RECOVERY_REQUIRED = "recovery_required"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"

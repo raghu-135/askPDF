@@ -52,6 +52,7 @@ services:
         condition: service_healthy
     volumes:
       - ./rag_service:/app
+      - ./langgraph_runtime:/app/langgraph_runtime:ro
       - .:/workspace:ro
       - test_data:/data
       - content_test_data:/static

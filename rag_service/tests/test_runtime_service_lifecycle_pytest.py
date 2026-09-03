@@ -102,16 +102,27 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
 
     monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", unavailable_probe)
     payload = {
+        "operation_id": "dependency-blocked:start",
         "request": {
             "run_id": "dependency-blocked",
             "thread_id": "thread-1",
             "definition_id": "router_rag_agent",
             "framework": "langgraph",
             "builder_id": "langgraph_graph",
-            "input": {"question": "hello"},
+            "input": {
+                "question": "hello",
+                "mcp_allowed_tool_ids": ["search_documents"],
+            },
             "options": {},
         },
         "context": {"resolved_spec": {"config": {"allowed_tool_ids": ["document_evidence"]}}},
+        "definition": {
+            "definition_id": "router_rag_agent",
+            "framework": "langgraph",
+            "builder_id": "langgraph_graph",
+            "capabilities": {},
+            "definition_metadata": {},
+        },
     }
     with TestClient(create_app(require_auth=False)) as client:
         assert client.get("/readyz").status_code == 200
@@ -142,7 +153,7 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
             return AgentRuntimeResult(status="completed", output={"answer": "recovered"})
 
     monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    store = ExecutionStore()
+    store = ExecutionStore(database_url="")
     request = {
         "run_id": "restart-recovery",
         "thread_id": "thread-1",
@@ -154,7 +165,13 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     }
 
     async def seed():
-        await store.create("restart-recovery", "start", request, {"request": request, "context": {}})
+        await store.create(
+            "restart-recovery",
+            "start",
+            request,
+            {"request": request, "context": {}},
+            operation_id="restart-recovery:start",
+        )
         await store.claim("restart-recovery", owner_id="old-worker", lease_seconds=1)
 
     import asyncio

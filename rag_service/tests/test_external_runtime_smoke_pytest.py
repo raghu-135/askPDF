@@ -96,6 +96,7 @@ async def test_external_runtime_executes_builtin_workflows(workflow_id):
         assert capabilities.operations["run.start"].enabled is True
         validation = await adapter.validate(definition, spec)
         assert validation.valid is True
+        request = await adapter.prepare_request(request, context=context)
         try:
             async with asyncio.timeout(smoke_timeout):
                 result = await adapter.start(request, context=context, event_sink=recent_events)

@@ -757,12 +757,12 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
 _DEEP_NODE_FLOW_METADATA = {
     NODE_DEEP_TASK_PLANNER: (
         ["agent_task_id", "question", "pre_fetch_bundle", "task_todos", "task_limits", "task_enabled_profiles", "task_course_corrections"],
-        ["task_plan_revision", "task_plan", "task_todos", "task_memory_snapshot", "task_course_corrections"],
+        ["task_plan_revision", "task_plan", "task_plan_changes", "task_todos", "task_memory_snapshot", "task_course_corrections"],
         SPAN_CONTROL,
     ),
     NODE_DEEP_TASK_SCHEDULER: (
-        ["agent_task_id", "task_todos", "task_limits", "task_plan_revision", "web_search_mode", "task_web_access"],
-        ["task_todos", "task_work_items", "task_controller_route", "task_web_access", "task_web_access_decision"],
+        ["agent_task_id", "task_todos", "task_limits", "task_plan_revision", "web_search_mode", "task_web_access", "task_budget_usage"],
+        ["task_todos", "task_work_items", "task_controller_route", "task_web_access", "task_web_access_decision", "task_budget_usage", "task_budget_boundary"],
         SPAN_CONTROL,
     ),
     NODE_DEEP_RESEARCH_SUBAGENT: (
@@ -772,7 +772,7 @@ _DEEP_NODE_FLOW_METADATA = {
     ),
     NODE_DEEP_COORDINATOR: (
         ["agent_task_id", "task_result_packets", "task_todos", "task_plan_revision", "task_limits", "task_pause_requested", "task_cancel_requested", "context_window", "task_web_access_decision", "task_budget_boundary", "task_course_corrections"],
-        ["task_todos", "task_work_items", "task_result_packets", "task_artifact_manifest", "task_context_summary", "task_controller_route", "task_controller_reason", "task_web_access_decision", "task_budget_boundary", "task_course_corrections"],
+        ["task_todos", "task_work_items", "task_result_packets", "task_artifact_manifest", "task_context_summary", "task_controller_route", "task_controller_reason", "task_web_access_decision", "task_budget_usage", "task_budget_boundary", "task_course_corrections"],
         SPAN_CONTROL,
     ),
     NODE_DEEP_TASK_SYNTHESIZER: (

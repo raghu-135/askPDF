@@ -170,6 +170,7 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:

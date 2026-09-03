@@ -256,6 +256,7 @@ class RouterRagState(TypedDict, total=False):
     task_plan_revision: int
     task_run_plan_count: int
     task_plan: Dict[str, Any]
+    task_plan_changes: List[Dict[str, Any]]
     task_todos: List[Dict[str, Any]]
     task_work_item: Dict[str, Any]
     task_work_items: List[Dict[str, Any]]

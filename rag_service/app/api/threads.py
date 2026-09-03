@@ -269,6 +269,8 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             client_now_iso=req.client_now_iso,
         )
         return {"prompt": prompt}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

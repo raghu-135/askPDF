@@ -388,9 +388,17 @@ async def _confirm_upstream_terminal(
     )
     deadline = time.monotonic() + timeout
     last_status = "stopping"
+    # The session header is needed to target the live stop request, but the
+    # pinned run-status endpoint authenticates the profile-scoped run itself
+    # and rejects session routing metadata. Preserve bearer authentication.
+    polling_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() != "x-hermes-session-id"
+    }
     async with httpx.AsyncClient(timeout=_upstream_timeout()) as client:
         while True:
-            response = await client.get(status_url, headers=dict(headers))
+            response = await client.get(status_url, headers=polling_headers)
             response.raise_for_status()
             try:
                 payload = response.json()
@@ -453,6 +461,7 @@ def create_app() -> FastAPI:
         "worker_count": worker_count,
         "storage_healthy": True,
         "profile_manager": profile_manager,
+        "profile_retirement_holds": set(),
     }
     start_lock = asyncio.Lock()
 
@@ -574,6 +583,10 @@ def create_app() -> FastAPI:
             request_id=request.headers.get("x-request-id"),
             result={"capabilities": {
                 "operations": {
+                    "run.events": {
+                        "support": "native", "owner": "runtime", "enabled": True,
+                        "replay": "event_id",
+                    },
                     "run.approval.respond": {
                         "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
@@ -1156,6 +1169,8 @@ def create_app() -> FastAPI:
         finally:
             # Approval is a resumable boundary. Keep the credential-bearing
             # profile active until a terminal result, cancellation, or expiry.
+            if run_id in state["profile_retirement_holds"]:
+                retain_profile = True
             if terminal_seen and not retain_profile:
                 try:
                     upstream_terminal = await _confirm_upstream_terminal(
@@ -1384,6 +1399,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        retirement_held = False
         try:
             record = state["store"].records.get(run_id)
             persisted_status = str((record or {}).get("status") or "").lower()
@@ -1403,6 +1419,10 @@ def create_app() -> FastAPI:
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
             runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
+            # Keep the profile credential available while the concurrent event
+            # stream observes cancellation and enters its terminal cleanup.
+            state["profile_retirement_holds"].add(run_id)
+            retirement_held = True
             stop_result = await _stop_and_confirm_upstream_run(
                 hermes_api_url,
                 str(runtime_profile or ""),
@@ -1438,6 +1458,9 @@ def create_app() -> FastAPI:
             )
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_cancel_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
+        finally:
+            if retirement_held:
+                state["profile_retirement_holds"].discard(run_id)
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:

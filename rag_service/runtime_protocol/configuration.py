@@ -224,23 +224,27 @@ def validate_runtime_environment(
     values = dict(os.environ if environ is None else environ)
     errors: list[str] = []
 
-    for name in _RUNTIME_FLOATS:
-        if name == "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO":
-            _jitter_ratio(name, values, errors)
-        else:
-            _positive_float(name, values, errors)
-    for name in _RUNTIME_INTS:
-        _positive_int(name, values, errors)
-    _positive_int("AGENT_RUNTIME_LEASE_SECONDS", values, errors)
-    _positive_int("HERMES_RUNTIME_WORKERS", values, errors) if service == "hermes" else None
-    _boolean("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", values, errors) if service == "langgraph" else None
-    _boolean("MCP_OTEL_ENABLED", values, errors)
+    # The profile renderer is a one-shot bootstrap job, not an HTTP runtime.
+    # Validate only the inputs it consumes so it does not inherit connector,
+    # polling, lease, or frontend configuration requirements.
+    if service != "hermes_profile":
+        for name in _RUNTIME_FLOATS:
+            if name == "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO":
+                _jitter_ratio(name, values, errors)
+            else:
+                _positive_float(name, values, errors)
+        for name in _RUNTIME_INTS:
+            _positive_int(name, values, errors)
+        _positive_int("AGENT_RUNTIME_LEASE_SECONDS", values, errors)
+        _positive_int("HERMES_RUNTIME_WORKERS", values, errors) if service == "hermes" else None
+        _boolean("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", values, errors) if service == "langgraph" else None
+        _boolean("MCP_OTEL_ENABLED", values, errors)
 
-    transport = _required("MCP_TRANSPORT", values, errors)
-    if transport is not None and transport not in {"in_process", "loopback_http"}:
-        errors.append("MCP_TRANSPORT must be 'in_process' or 'loopback_http'")
-    if transport == "loopback_http":
-        _url("MCP_LOOPBACK_URL", values, errors)
+        transport = _required("MCP_TRANSPORT", values, errors)
+        if transport is not None and transport not in {"in_process", "loopback_http"}:
+            errors.append("MCP_TRANSPORT must be 'in_process' or 'loopback_http'")
+        if transport == "loopback_http":
+            _url("MCP_LOOPBACK_URL", values, errors)
 
     if service == "hermes_profile":
         provider = _required("HERMES_MODEL_PROVIDER", values, errors)

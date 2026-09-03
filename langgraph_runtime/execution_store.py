@@ -87,6 +87,21 @@ def request_fingerprint(operation: str, request: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def operation_fingerprint(
+    operation: str,
+    request: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> str:
+    """Fingerprint the complete durable operation, including its context."""
+
+    encoded = json.dumps(
+        _json_safe({"operation": operation, "request": request, "payload": payload}),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class ExecutionRecord:
     run_id: str
@@ -192,7 +207,11 @@ class ExecutionStore:
         operation_id: str | None = None,
         source_attempt: int | None = None,
     ) -> ExecutionRecord:
-        fingerprint = request_fingerprint(operation, request)
+        # The operation payload carries continuation decisions and immutable
+        # task context in addition to the neutral request.  Both participate
+        # in idempotency so an operation ID cannot be reused with a different
+        # resume decision or orchestration snapshot.
+        fingerprint = operation_fingerprint(operation, request, payload)
         record = ExecutionRecord(run_id, operation, dict(request), dict(payload), request_fingerprint=fingerprint, last_operation_id=operation_id, retry_source_attempt=source_attempt)
         if self._pool is None:
             if operation_id:
@@ -237,6 +256,29 @@ class ExecutionStore:
                     if existing.request_fingerprint in {None, fingerprint}:
                         return existing
                     raise ExecutionConflictError("terminal execution is immutable; use retry")
+                if operation == "resume":
+                    if existing.status not in {"awaiting_human", "paused"}:
+                        raise ExecutionConflictError("only checkpointed executions can be resumed")
+                    existing.operation = operation
+                    existing.request = dict(request)
+                    existing.payload = dict(payload)
+                    existing.status = "queued"
+                    existing.request_fingerprint = fingerprint
+                    existing.last_operation_id = operation_id
+                    existing.owner_id = None
+                    existing.lease_expires_at = None
+                    existing.heartbeat_at = None
+                    existing.updated_at = _now()
+                    if operation_id:
+                        self._operations[(run_id, operation_id)] = {
+                            "attempt": existing.attempt,
+                            "fingerprint": fingerprint,
+                            "status": existing.status,
+                            "result": None,
+                        }
+                    return existing
+                if operation_id:
+                    raise ExecutionConflictError("an active execution already exists for this run")
                 if any(item.get("terminal") for item in self._events.get(run_id, [])):
                     return replace(existing, replay_only=True)
                 return existing
@@ -289,10 +331,31 @@ class ExecutionStore:
                             run_id, str(request.get("retry_operation") or "start"), json.dumps(_json_safe(dict(request.get("retry_request") or request))), json.dumps(_json_safe(dict(payload))), fingerprint, operation_id, source_attempt,
                         )
                         await connection.execute("insert into runtime_operations(run_id, operation_id, operation, request_fingerprint, attempt) values($1,$2,$3,$4,(select attempt from runtime_executions where run_id=$1))", run_id, operation_id, operation, fingerprint)
+                elif replay_attempt is not None:
+                    pass
                 elif existing is not None and existing["status"] in TERMINAL_STATUSES:
                     existing_fingerprint = existing["request_fingerprint"] or request_fingerprint(existing["operation"], _json_object(existing["request"]) or {})
                     if existing_fingerprint != fingerprint:
                         raise ExecutionConflictError("terminal execution is immutable; use retry")
+                elif existing is not None and operation == "resume":
+                    if existing["status"] not in {"awaiting_human", "paused"}:
+                        raise ExecutionConflictError("only checkpointed executions can be resumed")
+                    await connection.execute(
+                        """update runtime_executions
+                           set operation=$2, request=$3::jsonb, payload=$4::jsonb,
+                               status='queued', request_fingerprint=$5,
+                               last_operation_id=$6, owner_id=null,
+                               lease_expires_at=null, heartbeat_at=null, updated_at=now()
+                           where run_id=$1""",
+                        run_id,
+                        operation,
+                        json.dumps(_json_safe(dict(request))),
+                        json.dumps(_json_safe(dict(payload))),
+                        fingerprint,
+                        operation_id,
+                    )
+                elif existing is not None and operation_id:
+                    raise ExecutionConflictError("an active execution already exists for this run")
                 elif existing is None:
                     await connection.execute(
                         """insert into runtime_executions(run_id, operation, request, payload, status, request_fingerprint, last_operation_id, retry_source_attempt)
@@ -1010,6 +1073,11 @@ class ExecutionStore:
                     record.continuation = dict(safe_continuation) if safe_continuation else None
                     record.owner_id = record.lease_expires_at = record.heartbeat_at = None
                     record.updated_at = _now()
+                    if record.last_operation_id:
+                        operation = self._operations.get((run_id, record.last_operation_id))
+                        if operation is not None:
+                            operation["status"] = status
+                            operation["result"] = dict(safe_result)
                     return dict(existing)
                 item["event_id"] = event_id
                 item["sequence"] = record.next_sequence
@@ -1022,6 +1090,11 @@ class ExecutionStore:
                 record.continuation = dict(safe_continuation) if safe_continuation else None
                 record.owner_id = record.lease_expires_at = record.heartbeat_at = None
                 record.updated_at = _now()
+                if record.last_operation_id:
+                    operation = self._operations.get((run_id, record.last_operation_id))
+                    if operation is not None:
+                        operation["status"] = status
+                        operation["result"] = dict(safe_result)
                 return dict(item)
         async with self._pool.acquire() as connection:
             async with connection.transaction():

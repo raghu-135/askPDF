@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import os
 import uuid
+import json
 
 import httpx
 import pytest
 
-from hermes_runtime.execution_store import HermesExecutionStore
-
-from hermes_test_helpers import LEGACY_PROFILE_MODEL, RUNTIME_URL, read_sse, runtime_payload
+from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.mcp.execution_context_token import issue_execution_context_token
+from app.runtime.hermes_builder import HermesBuilderProvider
+from app.tools.context import ToolInvocationContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
+from hermes_test_helpers import RUNTIME_URL, read_sse
 
 
 pytestmark = pytest.mark.skipif(
@@ -18,34 +22,70 @@ pytestmark = pytest.mark.skipif(
 
 
 RECOVERY_RUN_ID = os.getenv("HERMES_RUNTIME_RECOVERY_RUN_ID") or f"hermes-runtime-recovery-{uuid.uuid4().hex}"
+TEST_MODEL = os.getenv("HERMES_MODEL", "hermes-runtime-deterministic-hermes")
+
+
+async def _recovery_payload() -> dict:
+    thread_id = f"thread-{RECOVERY_RUN_ID}"
+    definition = AgentDefinition(
+        definition_id="hermes_rag_agent",
+        framework="hermes",
+        builder_id="hermes_agent",
+        category="deep",
+    )
+    builtin = next(
+        item for item in load_builtin_workflows()
+        if item["builtin_key"] == "hermes_rag_agent"
+    )
+    spec = dict(builtin["spec_json"])
+    context_window = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
+    token = issue_execution_context_token(
+        ToolInvocationContext(
+            thread_id=thread_id,
+            run_id=RECOVERY_RUN_ID,
+            embedding_model="hermes-runtime-deterministic-embedding",
+            context_window=context_window,
+            extensions={"task_id": RECOVERY_RUN_ID, "llm_model": TEST_MODEL},
+        ),
+        task_id=RECOVERY_RUN_ID,
+        allowed_tools=list(spec["config"]["allowed_tool_ids"]),
+    )
+    request = AgentRuntimeRequest(
+        run_id=RECOVERY_RUN_ID,
+        thread_id=thread_id,
+        task_id=RECOVERY_RUN_ID,
+        definition_id=definition.definition_id,
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        input={
+            "question": "Work slowly and continue until stopped.",
+            "mcp_execution_context_token": token,
+        },
+        options={"llm_model": TEST_MODEL, "context_window": context_window},
+    )
+    resolved = await HermesBuilderProvider().resolve(
+        definition,
+        spec,
+        request_overrides={"llm_model": TEST_MODEL, "context_window": context_window},
+    )
+    return {"request": request.to_dict(), "context": {"resolved_spec": resolved}}
 
 
 @pytest.mark.asyncio
 async def test_seed_restart_recovery_record() -> None:
-    payload = runtime_payload(RECOVERY_RUN_ID, "Work slowly and continue until stopped.")
-    headers = {"authorization": f"Bearer {os.environ['HERMES_API_TOKEN']}"}
-    async with httpx.AsyncClient(base_url=os.environ["HERMES_API_URL"], headers=headers) as hermes:
-        response = await hermes.post(
-            "/v1/runs",
-            json={
-                "input": payload["request"]["input"]["question"],
-                "instructions": "Respond one word at a time.",
-                "model": LEGACY_PROFILE_MODEL,
-                "provider": "lmstudio",
-                "metadata": {"askpdf_run_id": RECOVERY_RUN_ID},
-            },
-        )
-        response.raise_for_status()
-        upstream = response.json()
-        status = await hermes.get(f"/v1/runs/{upstream['run_id']}")
-        status.raise_for_status()
-        upstream_status = status.json()
-    binding = {
-        "binding_type": "hermes_session",
-        "payload": {"upstream_run_id": upstream["run_id"], "session_id": upstream_status["session_id"]},
-    }
-    store = HermesExecutionStore(os.environ["HERMES_RUNTIME_STATE_PATH"])
-    store.update(RECOVERY_RUN_ID, status="running", payload=payload, continuation=binding)
+    payload = await _recovery_payload()
+    started = False
+    async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
+        async with client.stream("POST", "/v1/runs/start", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                event = json.loads(line[5:].strip()).get("event") or {}
+                if event.get("kind") == "run.started":
+                    started = True
+                    break
+    assert started
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
@@ -19,6 +21,7 @@ from runtime_protocol.contracts import (
     RuntimeValidationIssue,
     RuntimeValidationResult,
     RuntimeOperationId,
+    RuntimePlanChange,
     TaskOrchestrationDelta,
 )
 from runtime_protocol.events import create_runtime_event
@@ -55,6 +58,10 @@ def _result_from_graph(
     result: Mapping[str, Any],
     *,
     observed_plan_revision: int | None = None,
+    acknowledged_runtime_plan_revision: int = 0,
+    operation_id: str = "",
+    attempt_id: str = "",
+    boundary_event_id: str = "",
 ) -> AgentRuntimeResult:
     status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
     interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None
@@ -76,24 +83,77 @@ def _result_from_graph(
     orchestration_delta = None
     if task_id:
         run_id = str(result.get("agent_run_id") or "")
+        operation_id = operation_id or f"{run_id}:direct"
+        attempt_id = attempt_id or f"{run_id}:attempt:1"
+        boundary_event_id = boundary_event_id or f"{attempt_id}:operation:{operation_id}:result"
+        web_access_decision = result.get("task_web_access_decision") if isinstance(result.get("task_web_access_decision"), Mapping) else None
+        plan_changes = [
+            RuntimePlanChange(
+                runtime_revision=int(value.get("runtime_revision") or 0),
+                parent_runtime_revision=int(value.get("parent_runtime_revision") or 0),
+                acknowledged_product_revision=int(observed_plan_revision or 0),
+                reason=str(value.get("reason") or "runtime_projection"),
+                planner_visit=int(value.get("planner_visit") or 1),
+                plan=dict(value.get("plan") or {}),
+                correction_ids=tuple(str(item) for item in value.get("correction_ids") or []),
+            )
+            for value in result.get("task_plan_changes") or []
+            if isinstance(value, Mapping)
+            and int(value.get("runtime_revision") or 0) > acknowledged_runtime_plan_revision
+        ]
+        changes = {
+            "plan_changes": [value.to_dict() for value in plan_changes],
+            "todo_changes": [dict(value) for value in result.get("task_todos") or [] if isinstance(value, Mapping)],
+            "subagent_changes": [dict(value) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
+            "budget_usage": dict(result.get("task_budget_usage") or {}),
+            "web_access": dict(web_access_decision) if web_access_decision and web_access_decision.get("interrupt_id") else None,
+            "artifacts": [dict(value) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
+            "pending_interrupt": (
+                {"operation": "set", "value": dict(public_interruption)}
+                if isinstance(public_interruption, Mapping)
+                else {"operation": "clear"}
+            ),
+            "result": {
+                "status": status,
+                "incomplete_reasons": list(result.get("task_incomplete_reasons") or [])[:50],
+                "warnings": [
+                    _public_value(dict(value))
+                    for value in result.get("warnings") or []
+                    if isinstance(value, Mapping)
+                ][:50],
+                "result_outcome": str(result.get("result_outcome") or "") or None,
+                "final_artifact_id": str(result.get("final_artifact_id") or "") or None,
+            },
+        }
+        identity_payload = {
+            "run_id": run_id,
+            "attempt_id": attempt_id,
+            "operation_id": operation_id,
+            "event_id": boundary_event_id,
+            "changes": changes,
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
+        ).hexdigest()
         orchestration_delta = TaskOrchestrationDelta(
-            event_id=f"{run_id}:task-delta:{int(result.get('task_plan_revision') or 0)}",
-            attempt_id=run_id,
-            idempotency_key=f"task-delta:{run_id}",
+            event_id=boundary_event_id,
+            attempt_id=attempt_id,
+            operation_id=operation_id,
+            idempotency_key=f"task-delta:{digest}",
             observed_task_version=int(result.get("task_version") or 0),
             observed_plan_revision=int(
                 result.get("task_observed_plan_revision")
                 if result.get("task_observed_plan_revision") is not None
                 else observed_plan_revision or 0
             ),
-            plan=dict(result["task_plan"]) if isinstance(result.get("task_plan"), Mapping) else None,
-            todo_changes=tuple(dict(value) for value in result.get("task_todos") or [] if isinstance(value, Mapping)),
-            subagent_changes=tuple(dict(value) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)),
-            budget_usage=dict(result.get("task_budget_usage") or {}),
-            web_access={"status": str(result.get("task_web_access"))} if result.get("task_web_access") else None,
-            artifacts=tuple(dict(value) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)),
-            pending_interrupt=dict(public_interruption) if isinstance(public_interruption, Mapping) else None,
-            result={"status": status, "incomplete_reasons": list(result.get("task_incomplete_reasons") or [])},
+            plan_changes=tuple(plan_changes),
+            todo_changes=tuple(changes["todo_changes"]),
+            subagent_changes=tuple(changes["subagent_changes"]),
+            budget_usage=changes["budget_usage"],
+            web_access=changes["web_access"],
+            artifacts=tuple(changes["artifacts"]),
+            pending_interrupt=changes["pending_interrupt"],
+            result=changes["result"],
         )
     final_text = result.get("final_answer") or result.get("answer")
     task_result = None
@@ -366,6 +426,13 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return _result_from_graph(
             result,
             observed_plan_revision=self._observed_plan_revision(context),
+            acknowledged_runtime_plan_revision=int(
+                ((context.task_context.metadata or {}).get("acknowledged_runtime_plan_revision") or 0)
+                if context.task_context is not None else 0
+            ),
+            operation_id=str(context.operation_id or ""),
+            attempt_id=str(context.attempt_id or ""),
+            boundary_event_id=str(context.boundary_event_id or ""),
         )
 
     async def resume(
@@ -388,6 +455,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         run = self._run_with_continuation(request, run)
         if context.resolved_spec:
             run.resolved_spec_json = dict(context.resolved_spec)
+        if context.task_context is not None:
+            run.task_budget_usage = dict(
+                (context.task_context.metadata or {}).get("budget_usage") or {}
+            )
         kwargs = {
             "trace_recorder": context.trace_recorder,
             "cancellation_checker": context.cancellation_checker,
@@ -409,6 +480,13 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return _result_from_graph(
             result,
             observed_plan_revision=self._observed_plan_revision(context),
+            acknowledged_runtime_plan_revision=int(
+                ((context.task_context.metadata or {}).get("acknowledged_runtime_plan_revision") or 0)
+                if context.task_context is not None else 0
+            ),
+            operation_id=str(context.operation_id or ""),
+            attempt_id=str(context.attempt_id or ""),
+            boundary_event_id=str(context.boundary_event_id or ""),
         )
 
     async def continue_run(
@@ -433,6 +511,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         # before invoking the graph continuation.
         if context.resolved_spec:
             run.resolved_spec_json = dict(context.resolved_spec)
+        if context.task_context is not None:
+            run.task_budget_usage = dict(
+                (context.task_context.metadata or {}).get("budget_usage") or {}
+            )
         bridge = _event_bridge(request.run_id, event_sink)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             try:
@@ -453,6 +535,13 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             _result_from_graph(
                 result,
                 observed_plan_revision=self._observed_plan_revision(context),
+                acknowledged_runtime_plan_revision=int(
+                    ((context.task_context.metadata or {}).get("acknowledged_runtime_plan_revision") or 0)
+                    if context.task_context is not None else 0
+                ),
+                operation_id=str(context.operation_id or ""),
+                attempt_id=str(context.attempt_id or ""),
+                boundary_event_id=str(context.boundary_event_id or ""),
             )
             if result is not None
             else None

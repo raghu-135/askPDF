@@ -54,6 +54,7 @@ RESUMABLE_TASK_STATES = frozenset({
 RETRYABLE_TASK_STATES = frozenset({
     AgentTaskStatus.FAILED.value,
     AgentTaskStatus.EXPIRED.value,
+    AgentTaskStatus.RECOVERY_REQUIRED.value,
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CANCEL,
@@ -472,6 +473,16 @@ async def resolve_run_capability_resolution(
                 )
 
     task_status = str(getattr(task, "status", "") or status)
+    if task_status == AgentTaskStatus.RECOVERY_REQUIRED.value:
+        for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS | {
+            RuntimeOperationId.TASK_PAUSE,
+            RuntimeOperationId.TASK_RESUME,
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
+        }:
+            if operation in operations:
+                operations[operation] = _disabled(
+                    operations[operation], RuntimeCapabilityDisabledReason.RECOVERY_REQUIRED,
+                )
     budget_review = operations.get(RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND)
     if budget_review is not None:
         operations[RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND] = replace(

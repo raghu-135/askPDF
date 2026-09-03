@@ -25,6 +25,19 @@ class MCPUnavailableError(RuntimeError):
         self.cause = cause
         self.retryable = retryable
 
+    def as_dict(self) -> dict[str, Any]:
+        """Return the bounded runtime-local error shape consumed by workflows."""
+
+        cause = str(self.cause or "MCP request failed")[:700]
+        return {
+            "code": "mcp_unavailable",
+            "type": type(self).__name__,
+            "message": str(self)[:700],
+            "raw_message": cause,
+            "retryable": self.retryable,
+            "tool_name": self.tool_name,
+        }
+
 
 class _OpenArguments(BaseModel):
     model_config = ConfigDict(extra="allow")

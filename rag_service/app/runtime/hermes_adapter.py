@@ -100,6 +100,9 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             **kwargs,
         )
 
+    async def aclose(self) -> None:
+        await self.transport.aclose()
+
     def _ensure_enabled(self) -> None:
         if not hermes_runtime_enabled():
             raise RuntimeError("runtime_disabled", "Hermes runtime is disabled")

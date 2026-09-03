@@ -750,6 +750,26 @@ async def test_task_lifecycle_operations_require_task_definition_and_eligible_st
 
 
 @pytest.mark.asyncio
+async def test_recovery_required_allows_retry_and_cancel_but_disables_live_runtime_controls():
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    definition = _definition(supports_long_running_tasks=True)
+    run = SimpleNamespace(
+        status="recovery_required", pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"}, runtime_binding_status="active",
+        run_metadata_json={},
+    )
+    task = SimpleNamespace(status="recovery_required")
+
+    capabilities = await resolve_capabilities(definition, registry=registry, run=run, task=task)
+
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "recovery_required"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("interrupt_status", ["resolved", "rejected", "expired"])
 async def test_only_explicit_pending_interrupts_enable_the_declared_response_operation(interrupt_status):
     registry = RuntimeRegistry(adapters=[CapabilityAdapter()])

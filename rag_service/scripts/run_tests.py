@@ -42,6 +42,7 @@ UNIT_TEST_FILES = [
     "test_runtime_execution_store_pytest.py",
     "test_runtime_http_adapter_pytest.py",
     "test_runtime_contracts_pytest.py",
+    "test_runtime_configuration_pytest.py",
     "test_runtime_events_pytest.py",
     "test_runtime_capability_gate_pytest.py",
     "test_runtime_capability_resolver_pytest.py",
@@ -87,6 +88,7 @@ DB_TEST_FILES = [
     "test_thread_file_repository_pytest.py",
     "test_stats_repository_pytest.py",
     "test_repository_transactions_pytest.py",
+    "test_agent_task_runtime_projection_pytest.py",
     "test_jsonb_operations_pytest.py",
     "test_thread_fork_service_pytest.py",
 ]
@@ -109,7 +111,7 @@ SCHEMA_TEST_FILES = [
 ]
 
 AGENT_CHECKPOINT_TEST_TARGETS = [
-    "/app/tests/test_agent_workflows_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
+    "/app/tests/test_runtime_checkpoint_pytest.py::test_runtime_graph_resumes_after_postgres_checkpointer_reopen",
 ]
 
 DIAGNOSTIC_PACKAGES = (

@@ -29,7 +29,7 @@ from runtime_protocol.transport import (
 from langgraph_runtime.capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from langgraph_runtime.budgets import deep_agent_budgets
 from runtime_protocol.configuration import validate_runtime_environment
-from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, request_fingerprint
+from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
 from langgraph_runtime.dependencies import (
     DependencyMonitor,
     langgraph_dependency_requirements,
@@ -99,6 +99,9 @@ def _context(
     pause_checker: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
+    operation_id: str | None = None,
+    attempt_id: str | None = None,
+    boundary_event_id: str | None = None,
 ) -> RuntimeExecutionContext:
     value = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
     run_context = dict(value.get("agent_run_context") or {})
@@ -133,6 +136,9 @@ def _context(
         pause_checker=pause_checker,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        boundary_event_id=boundary_event_id,
     )
 
 
@@ -198,13 +204,27 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                         )
                         continue
                     recovered_request = request_from_dict(record.request)
+                    operation_id = str(record.last_operation_id or "").strip()
+                    if not operation_id:
+                        raise RuntimeError(
+                            "runtime_operation_id_required",
+                            "Recovery candidate has no durable operation identity",
+                            retryable=False,
+                        )
                     fencing_token = await execution_store.claim(record.run_id)
                     if fencing_token is None:
                         # Another worker still owns a valid lease. The next
                         # scan must reconsider this record after expiry.
                         continue
                     task = asyncio.create_task(
-                        _execute_operation(record.payload, record.operation, recovered_request, attempt=record.attempt, fencing_token=fencing_token),
+                        _execute_operation(
+                            record.payload,
+                            record.operation,
+                            recovered_request,
+                            attempt=record.attempt,
+                            operation_id=operation_id,
+                            fencing_token=fencing_token,
+                        ),
                         name=f"agent-runtime-recovery-{record.run_id}",
                     )
                     runtime_state["active"][record.run_id] = task
@@ -313,7 +333,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         if record is None or record.status not in TERMINAL_STATUSES:
             return
         request = request_from_dict(payload["request"])
-        fingerprint = request_fingerprint(operation, request.to_dict())
+        fingerprint = operation_fingerprint(operation, request.to_dict(), payload)
         existing = record.request_fingerprint or request_fingerprint(record.operation, record.request)
         if fingerprint != existing:
             raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False})
@@ -482,9 +502,19 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    async def _execute_operation(payload: Mapping[str, Any], operation: str, request: Any, *, attempt: int, fencing_token: int) -> None:
+    async def _execute_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        request: Any,
+        *,
+        attempt: int,
+        operation_id: str,
+        fencing_token: int,
+    ) -> None:
         """Run independently of any HTTP subscriber and journal every event."""
         run_id = request.run_id
+        attempt_id = f"{run_id}:attempt:{attempt}"
+        boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
         cancellation_event = asyncio.Event()
         owner_id = execution_store.owner_id
 
@@ -535,7 +565,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         async def finalize(result: AgentRuntimeResult, *, error: Mapping[str, Any] | None = None) -> None:
             if result.status in {"awaiting_human", "paused"}:
                 checkpoint = create_runtime_event(
-                    event_id=f"{run_id}:checkpoint",
+                    event_id=boundary_event_id,
                     run_id=run_id,
                     sequence=1,
                     kind="run.paused",
@@ -564,7 +594,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             )
             if durable_sink.terminal_event_id is None:
                 terminal = create_runtime_event(
-                    event_id=f"{run_id}:terminal",
+                    event_id=boundary_event_id,
                     run_id=run_id,
                     sequence=1,
                     kind=terminal_kind,
@@ -572,9 +602,21 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     continuation=result.continuation,
                 )
             else:
-                terminal = durable_sink.terminal_event
-                if terminal is None:
+                source_terminal = durable_sink.terminal_event
+                if source_terminal is None:
                     raise RuntimeError("runtime_protocol_error", "Runtime terminal event was not found")
+                terminal = create_runtime_event(
+                    event_id=boundary_event_id,
+                    run_id=source_terminal.run_id,
+                    sequence=source_terminal.sequence,
+                    kind=source_terminal.kind,
+                    payload=source_terminal.payload,
+                    attempt=attempt,
+                    occurred_at=source_terminal.occurred_at,
+                    trace_id=source_terminal.trace_id,
+                    source_metadata=source_terminal.source_metadata,
+                    continuation=source_terminal.continuation,
+                )
             stored_terminal = await execution_store.finalize_execution(
                     run_id,
                     terminal.to_dict(),
@@ -611,6 +653,9 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     pause_checker=pause_probe,
                     course_correction_reader=correction_reader,
                     course_correction_acknowledger=correction_acknowledger,
+                    operation_id=operation_id,
+                    attempt_id=attempt_id,
+                    boundary_event_id=boundary_event_id,
                 )
             )
             framework = str(getattr(request, "framework", None) or "").strip()
@@ -694,13 +739,23 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             # replace a durable execution record, especially after terminal
             # completion or after a process restart.
             if allow_start:
+                effective_operation_id = str(operation_id or payload.get("operation_id") or "").strip()
+                if not effective_operation_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": "runtime_operation_id_required",
+                            "safe_message": "operation_id is required",
+                            "retryable": False,
+                        },
+                    )
                 try:
                     record = await execution_store.create(
                         request.run_id,
                         operation,
                         request.to_dict(),
                         payload,
-                        operation_id=operation_id or payload.get("operation_id"),
+                        operation_id=effective_operation_id,
                         source_attempt=source_attempt,
                     )
                 except ExecutionConflictError as exc:
@@ -737,6 +792,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                         operation if operation == "resume" else record.operation,
                         request_from_dict(record.request),
                         attempt=record.attempt,
+                        operation_id=str(record.last_operation_id or effective_operation_id),
                         fencing_token=fencing_token,
                     ),
                     name=f"agent-runtime-{request.run_id}",

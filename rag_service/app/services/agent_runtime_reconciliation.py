@@ -6,10 +6,12 @@ import hashlib
 import json
 import argparse
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.time_utils import utc_now
 from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
@@ -125,6 +127,42 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     status = "preserved"
     task = await tasks.get_task(str(run.task_id)) if getattr(run, "task_id", None) else None
     known_status = str((result or {}).get("status") or "") if isinstance(result, Mapping) else ""
+    if task is not None and isinstance(result, Mapping) and result.get("orchestration_delta"):
+        from app.services.agent_task_runtime_projection import apply_runtime_task_delta
+        from runtime_protocol.transport import result_from_dict
+
+        runtime_result = result_from_dict(result)
+        delta = runtime_result.orchestration_delta
+        if delta is None:
+            return "deferred"
+        artifact_ids = await apply_runtime_task_delta(
+            task_id=str(task.id), agent_run_id=str(run.id), delta=delta,
+        )
+        delta_sha256 = hashlib.sha256(
+            json.dumps(delta.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        final_runtime_artifact = str((delta.result or {}).get("final_artifact_id") or "")
+        await tasks.finalize_reconciled_runtime_task(
+            str(task.id), str(run.id), delta_event_id=delta.event_id,
+            payload_sha256=delta_sha256, runtime_status=runtime_result.status,
+            result=dict(result),
+            final_artifact_id=artifact_ids.get(final_runtime_artifact, final_runtime_artifact or None),
+        )
+        return "projected"
+    if (
+        task is not None and str(task.status) != "cancelling"
+        and definition.framework == "langgraph" and isinstance(result, Mapping)
+    ):
+        projection.update({
+            "reconciliation_status": "manual_required",
+            "projection_error": {
+                "code": "runtime_task_delta_missing",
+                "message": "A task-backed LangGraph result cannot be projected by the chat projector",
+                "retryable": False,
+            },
+        })
+        await repository.update_runtime_projection(run.id, projection)
+        return "deferred"
     if (
         task is not None
         and str(task.status) == "cancelling"
@@ -205,7 +243,21 @@ async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = F
         try:
             status = await reconcile_run_by_id(run.id, dry_run=dry_run)
             counts[status] = counts.get(status, 0) + 1
-        except Exception:
+        except Exception as exc:
+            failed_run = await AgentWorkflowRepository().get_run(run.id)
+            projection = dict(((failed_run.run_metadata_json if failed_run is not None else {}) or {}).get("projection") or {})
+            failure_count = int(projection.get("reconciliation_failure_count") or 0) + 1
+            projection.update({
+                "reconciliation_status": "manual_required" if failure_count >= 3 else "failed",
+                "reconciliation_failure_count": failure_count,
+                "last_reconciliation_error": {
+                    "type": type(exc).__name__, "message": str(exc)[:1000],
+                },
+                "next_retry_at": None if failure_count >= 3 else (
+                    utc_now() + timedelta(seconds=min(300, 2 ** failure_count * 5))
+                ).isoformat(),
+            })
+            await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
             counts["failed"] += 1
     for command in await tasks.list_pending_course_correction_commands(limit=batch_size):
         if dry_run:
@@ -264,7 +316,7 @@ async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = F
             if receipt.status == "terminal":
                 await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run", receipt=receipt.to_dict())
             elif receipt.status == "applied":
-                await tasks.mark_course_corrections_applied(
+                await tasks.mark_course_corrections_runtime_applied(
                     task.id,
                     [receipt.correction_id],
                     plan_revision=int(receipt.plan_revision or 0),

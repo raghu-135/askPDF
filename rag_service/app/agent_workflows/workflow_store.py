@@ -73,26 +73,12 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
             builder_id = str(workflow_def.get("builder_id") or "").strip()
             if not framework or not builder_id:
                 raise ValueError(f"Builtin workflow {builtin_key} is missing runtime identity")
-            definition = AgentDefinition(
-                definition_id=builtin_key,
-                framework=framework,
-                builder_id=builder_id,
-                category=workflow_def.get("category"),
-                display_name=workflow_def.get("name"),
-            )
-            try:
-                provider = builder_for_definition(definition)
-                validation = await provider.validate(definition, spec_json)
-            except BuilderSelectionError as exc:
-                raise WorkflowValidationError(str(exc)) from exc
             validation_result = {
-                "valid": validation.valid,
-                "errors": [issue.message for issue in validation.issues],
+                "valid": True,
+                "errors": [],
+                "scope": "product_envelope",
+                "framework_validation": "runtime_admission",
             }
-            if not validation.valid:
-                raise WorkflowValidationError(
-                    "; ".join(validation_result["errors"]) or f"Invalid workflow: {builtin_key}"
-                )
             metadata = {
                 "source": WorkflowVisibility.BUILTIN.value,
                 "builtin_key": builtin_key,

@@ -70,9 +70,9 @@ def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
         (Path(__file__).parents[1] / "app/agent_workflows/builtins/hermes_rag_agent.json").read_text()
     )
     prompt = definition["spec_json"]["config"]["system_prompt"]
-    assert "tool_search searches only the deferred tool catalog" in prompt
-    assert "tool_search results" in prompt and "do not count as document evidence" in prompt
-    assert "only a successful underlying document-retrieval tool_call result does" in prompt
+    assert "bridge APIs are only for genuinely deferred tools" in prompt
+    assert "Tool-discovery results" in prompt and "are not document evidence" in prompt
+    assert "only a successful document-retrieval result is evidence" in prompt
     assert "If a relevant retrieval call fails or returns no evidence after valid attempts" in prompt
     assert {"get_thread_shape", "search_documents", "search_document_by_id"}.issubset(
         definition["spec_json"]["config"]["allowed_tool_ids"]

@@ -12,8 +12,8 @@ from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
 
-RUNTIME_PROTOCOL_VERSION = "1.0"
-RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.0"
+RUNTIME_PROTOCOL_VERSION = "1.2"
+RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.2"
 
 
 def ensure_protocol_compatible(
@@ -262,6 +262,7 @@ class RuntimeCapabilityDisabledReason(str, Enum):
     RUNTIME_BINDING_UNAVAILABLE = "runtime_binding_unavailable"
     RUN_NOT_CHECKPOINT_BOUNDARY = "run_not_checkpoint_boundary"
     CANCELLATION_PENDING = "cancellation_pending"
+    RECOVERY_REQUIRED = "recovery_required"
 
 
 def _dict(value: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -843,15 +844,50 @@ class RuntimeTaskContext:
 
 
 @dataclass(frozen=True)
+class RuntimePlanChange:
+    """One framework-neutral plan revision produced by a runtime."""
+
+    runtime_revision: int
+    parent_runtime_revision: int
+    acknowledged_product_revision: int
+    reason: str
+    planner_visit: int
+    plan: Mapping[str, Any]
+    correction_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.runtime_revision < 1 or self.parent_runtime_revision < 0:
+            raise ValueError("runtime plan revision identities must be positive")
+        if self.acknowledged_product_revision < 0 or self.planner_visit < 1:
+            raise ValueError("runtime plan change versions must not be negative")
+        if self.parent_runtime_revision >= self.runtime_revision:
+            raise ValueError("runtime plan parent must precede its revision")
+        if not self.reason.strip() or not isinstance(self.plan, Mapping):
+            raise ValueError("runtime plan change requires a reason and plan")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "runtime_revision": self.runtime_revision,
+            "parent_runtime_revision": self.parent_runtime_revision,
+            "acknowledged_product_revision": self.acknowledged_product_revision,
+            "reason": self.reason,
+            "planner_visit": self.planner_visit,
+            "plan": dict(self.plan),
+            "correction_ids": list(self.correction_ids),
+        }
+
+
+@dataclass(frozen=True)
 class TaskOrchestrationDelta:
     """Idempotent product-state changes computed by an external runtime."""
 
     event_id: str
     attempt_id: str
+    operation_id: str
     idempotency_key: str
     observed_task_version: int
     observed_plan_revision: int = 0
-    plan: Optional[Mapping[str, Any]] = None
+    plan_changes: tuple[RuntimePlanChange, ...] = ()
     todo_changes: tuple[Mapping[str, Any], ...] = ()
     subagent_changes: tuple[Mapping[str, Any], ...] = ()
     budget_usage: Mapping[str, Any] = field(default_factory=dict)
@@ -861,7 +897,12 @@ class TaskOrchestrationDelta:
     result: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self) -> None:
-        if not self.event_id.strip() or not self.attempt_id.strip() or not self.idempotency_key.strip():
+        if (
+            not self.event_id.strip()
+            or not self.attempt_id.strip()
+            or not self.operation_id.strip()
+            or not self.idempotency_key.strip()
+        ):
             raise ValueError("task orchestration delta identities must not be empty")
         if self.observed_task_version < 0 or self.observed_plan_revision < 0:
             raise ValueError("task orchestration delta versions must not be negative")
@@ -870,10 +911,11 @@ class TaskOrchestrationDelta:
         return {
             "event_id": self.event_id,
             "attempt_id": self.attempt_id,
+            "operation_id": self.operation_id,
             "idempotency_key": self.idempotency_key,
             "observed_task_version": self.observed_task_version,
             "observed_plan_revision": self.observed_plan_revision,
-            "plan": dict(self.plan) if self.plan is not None else None,
+            "plan_changes": [value.to_dict() for value in self.plan_changes],
             "todo_changes": [dict(value) for value in self.todo_changes],
             "subagent_changes": [dict(value) for value in self.subagent_changes],
             "budget_usage": dict(self.budget_usage),

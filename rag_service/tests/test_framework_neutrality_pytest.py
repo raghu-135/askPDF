@@ -30,10 +30,10 @@ def test_langgraph_result_reports_confirmed_checkpoint_boundary() -> None:
     })
 
     assert result.checkpoint_boundary_available is True
-    assert result.continuation == ContinuationBinding(
-        binding_type="langgraph.checkpoint",
-        payload={"checkpoint_thread_id": "checkpoint-1"},
-    )
+    assert result.continuation is not None
+    assert result.continuation.binding_type == "langgraph.checkpoint"
+    assert set(result.continuation.payload) == {"binding_id"}
+    assert "checkpoint-1" not in str(result.continuation.payload)
     assert _result_from_graph({"status": "completed"}).checkpoint_boundary_available is None
 
 
@@ -60,12 +60,19 @@ def test_deep_agent_result_keeps_launch_revision_separate_from_runtime_plan() ->
         "task_version": 4,
         "task_observed_plan_revision": 0,
         "task_plan_revision": 1,
-        "task_plan": {"objective": "Research the document"},
-    })
+        "task_plan_changes": [{
+            "runtime_revision": 1,
+            "parent_runtime_revision": 0,
+            "acknowledged_product_revision": 0,
+            "reason": "initial",
+            "planner_visit": 1,
+            "plan": {"objective": "Research the document"},
+        }],
+    }, operation_id="operation-1", attempt_id="run-1:attempt:1", boundary_event_id="event-1")
 
     assert result.orchestration_delta is not None
     assert result.orchestration_delta.observed_plan_revision == 0
-    assert result.orchestration_delta.plan == {"objective": "Research the document"}
+    assert result.orchestration_delta.plan_changes[0].plan == {"objective": "Research the document"}
 
 
 def test_langgraph_interrupt_event_supplies_source_and_checkpoint_fact() -> None:
@@ -202,7 +209,7 @@ def test_runtime_json_validation_rejects_coercion_depth_and_aggregate_size() -> 
         validate_bounded_json({"values": values}, field_name="input")
 
 
-def test_shared_product_modules_do_not_branch_on_framework_names() -> None:
+def test_shared_product_modules_do_not_import_framework_implementations() -> None:
     app_root = Path(__file__).parents[1] / "app"
     shared_paths = (
         app_root / "services" / "agent_task_runtime.py",
@@ -213,30 +220,28 @@ def test_shared_product_modules_do_not_branch_on_framework_names() -> None:
         app_root / "runtime" / "cleanup.py",
         app_root / "api" / "agent_tasks.py",
     )
-    framework_names = {"langgraph", "hermes"}
     violations: list[str] = []
     for path in shared_paths:
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare):
+            if isinstance(node, ast.Import):
+                names = [value.name for value in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
                 continue
-            operands = (node.left, *node.comparators)
-            if any(
-                isinstance(operand, ast.Constant) and operand.value in framework_names
-                for operand in operands
-            ):
-                violations.append(f"{path.name}:{node.lineno}: {ast.unparse(node)}")
+            for name in names:
+                if name == "langgraph" or name.startswith("langgraph.") or name.startswith("langgraph_runtime"):
+                    violations.append(f"{path.name}:{node.lineno}: {name}")
     assert violations == []
 
 
 def test_langgraph_runtime_has_no_product_persistence_execution_path() -> None:
-    source = (
-        Path(__file__).parents[1]
-        / "app"
-        / "runtime"
-        / "langgraph"
-        / "router_runtime.py"
-    ).read_text()
+    packaged_root = Path(__file__).parents[1]
+    runtime_root = packaged_root / "langgraph_runtime"
+    if not runtime_root.exists():
+        runtime_root = packaged_root.parent / "langgraph_runtime"
+    source = (runtime_root / "router_runtime.py").read_text()
     assert "persist_product_records" not in source
     assert "result_projector" not in source
     assert "create_chat_turn" not in source

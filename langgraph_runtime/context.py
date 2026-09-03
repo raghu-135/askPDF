@@ -22,3 +22,6 @@ class RuntimeExecutionContext:
     task_id: str | None = None
     task_worker_id: str | None = None
     task_context: RuntimeTaskContext | None = None
+    operation_id: str | None = None
+    attempt_id: str | None = None
+    boundary_event_id: str | None = None

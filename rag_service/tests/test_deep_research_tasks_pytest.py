@@ -14,12 +14,11 @@ from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from langgraph_runtime.compiler import WorkflowCompiler
-from app.agent_workflows import deep_research_nodes
+from langgraph_runtime.workflows import deep_research_nodes
 from langgraph_runtime import router_runtime
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import builder_for_definition
 from langgraph_runtime.workflows.deep_research_execution import (
-    product_execution_services_factory,
     runtime_execution_services_factory,
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder
@@ -84,9 +83,7 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
 
 def _deep_config(*, runtime: bool = False, **configurable) -> dict:
     return {"configurable": {
-        "deep_research_services_factory": (
-            runtime_execution_services_factory if runtime else product_execution_services_factory
-        ),
+        "deep_research_services_factory": runtime_execution_services_factory,
         "cancellation_checker": lambda: False,
         **configurable,
     }}
@@ -685,6 +682,8 @@ async def _seed_deep_workflow(test_session_maker) -> None:
                 visibility="builtin", is_builtin=True, schema_version=1,
                 spec_json=_spec(), metadata_json={"version": 1},
             ))
+
+
 
 
 def test_deep_research_builtin_is_valid_and_compilable():

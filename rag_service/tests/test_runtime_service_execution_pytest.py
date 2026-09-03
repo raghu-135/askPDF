@@ -35,6 +35,7 @@ def _request(run_id: str) -> dict:
 
 def _payload(run_id: str) -> dict:
     return {
+        "operation_id": f"{run_id}:start",
         "request": _request(run_id),
         "context": {},
         "definition": {

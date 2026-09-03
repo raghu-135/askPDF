@@ -21,6 +21,7 @@ from app.db.models_sqlmodel import (
     AgentTaskCommand,
     AgentTaskEvent,
     AgentTaskPlanRevision,
+    AgentTaskRuntimeDelta,
     AgentTaskSubagentRun,
     AgentTaskTodo,
 )
@@ -45,6 +46,7 @@ ACTIVE_TASK_STATUSES = {
     AgentTaskStatus.PAUSED.value,
     AgentTaskStatus.AWAITING_APPROVAL.value,
     AgentTaskStatus.CANCELLING.value,
+    AgentTaskStatus.RECOVERY_REQUIRED.value,
 }
 TERMINAL_TASK_STATUSES = {
     AgentTaskStatus.CANCELLED.value,
@@ -307,6 +309,14 @@ async def list_plans(task_id: str, *, agent_run_id: Optional[str] = None) -> lis
             query = query.where(AgentTaskPlanRevision.agent_run_id == agent_run_id)
         result = await session.execute(query.order_by(AgentTaskPlanRevision.revision, AgentTaskPlanRevision.created_at))
         return list(result.scalars().all())
+
+
+async def latest_applied_runtime_plan_revision(task_id: str) -> int:
+    async with async_session_maker() as session:
+        value = (await session.execute(select(func.coalesce(
+            func.max(AgentTaskRuntimeDelta.applied_runtime_plan_revision), 0,
+        )).where(AgentTaskRuntimeDelta.task_id == task_id))).scalar_one()
+        return int(value or 0)
 
 
 async def list_artifacts(task_id: str, *, agent_run_id: Optional[str] = None) -> list[AgentTaskArtifact]:
@@ -648,7 +658,7 @@ COMMAND_TRANSITIONS = {
     "pause": ({AgentTaskStatus.QUEUED.value, AgentTaskStatus.RUNNING.value}, AgentTaskStatus.PAUSING.value),
     "resume": ({AgentTaskStatus.PAUSED.value}, AgentTaskStatus.QUEUED.value),
     "cancel": ({*ACTIVE_TASK_STATUSES, AgentTaskStatus.CREATED.value}, AgentTaskStatus.CANCELLING.value),
-    "retry": ({AgentTaskStatus.FAILED.value, AgentTaskStatus.EXPIRED.value}, AgentTaskStatus.QUEUED.value),
+    "retry": ({AgentTaskStatus.FAILED.value, AgentTaskStatus.EXPIRED.value, AgentTaskStatus.RECOVERY_REQUIRED.value}, AgentTaskStatus.QUEUED.value),
     "expire": ({AgentTaskStatus.PAUSED.value, AgentTaskStatus.AWAITING_APPROVAL.value}, AgentTaskStatus.EXPIRED.value),
 }
 
@@ -935,6 +945,10 @@ async def claim_next_task(worker_id: str, *, lease_seconds: int = 60) -> Optiona
                         AgentTask.current_phase.is_(None),
                         AgentTask.current_phase != "budget_correction_delivery_pending",
                     ),
+                    or_(
+                        AgentTask.current_phase.is_(None),
+                        AgentTask.current_phase != "runtime_projection_recovery_required",
+                    ),
                     or_(AgentTask.lease_expires_at.is_(None), AgentTask.lease_expires_at < now),
                 )
                 # Cancellation recovery must never starve runnable work. A
@@ -1017,6 +1031,13 @@ async def defer_task_lease(task_id: str, worker_id: str, *, retry_seconds: float
 
 
 async def _accrue_active_runtime(session: Any, task: AgentTask, *, now: Any, cap_ms: int) -> int:
+    if task.active_run_id:
+        active_run = await session.get(AgentRun, task.active_run_id)
+        if active_run is not None and active_run.framework == "langgraph":
+            # External LangGraph execution meters active time in checkpointed
+            # graph state and projects the cumulative value at each boundary.
+            # Product heartbeats only own the lease and must not double count.
+            return 0
     previous = task.heartbeat_at
     if previous is None or now <= previous:
         return 0
@@ -1626,6 +1647,148 @@ async def set_task_runtime_status(task_id: str, status: str, *, phase: Optional[
         return task
 
 
+async def mark_runtime_projection_recovery_required(
+    task_id: str,
+    run_id: str,
+    *,
+    projection: Dict[str, Any],
+    error: Dict[str, Any],
+) -> AgentTask:
+    """Atomically expose a runtime-complete/product-unprojected task state."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(
+                AgentTask.id == task_id,
+            ).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(
+                AgentRun.id == run_id,
+                AgentRun.task_id == task_id,
+            ).with_for_update())).scalar_one()
+            if task.status in TERMINAL_TASK_STATUSES:
+                return task
+            projection_value = {
+                **dict(projection),
+                "status": "pending",
+                "reconciliation_status": "failed",
+                "projection_error": dict(error),
+            }
+            metadata = dict(run.run_metadata_json or {})
+            metadata["projection"] = projection_value
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            run.status = AgentRunStatus.RECOVERY_REQUIRED.value
+            run.error_json = dict(error)
+            task.status = AgentTaskStatus.RECOVERY_REQUIRED.value
+            task.current_phase = "runtime_projection_recovery_required"
+            task.terminal_reason = "runtime_task_projection_conflict"
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.updated_at = utc_now()
+            task.version += 1
+            await _append_event(
+                session,
+                task,
+                "task.runtime_projection_failed",
+                agent_run_id=run_id,
+                payload={
+                    "code": error.get("code"),
+                    "retryable": bool(error.get("retryable")),
+                    "delta_event_id": projection_value.get("delta_event_id"),
+                    "operation_id": projection_value.get("operation_id"),
+                },
+            )
+        await session.refresh(task)
+        return task
+
+
+async def finalize_reconciled_runtime_task(
+    task_id: str,
+    run_id: str,
+    *,
+    delta_event_id: str,
+    payload_sha256: str,
+    runtime_status: str,
+    result: Dict[str, Any],
+    final_artifact_id: Optional[str] = None,
+) -> AgentTask:
+    """Finalize only after proving the task delta committed with matching content."""
+
+    run_status = {
+        "completed": AgentRunStatus.COMPLETED.value,
+        "failed": AgentRunStatus.FAILED.value,
+        "cancelled": AgentRunStatus.CANCELLED.value,
+        "canceled": AgentRunStatus.CANCELLED.value,
+    }.get(runtime_status)
+    task_status = {
+        AgentRunStatus.COMPLETED.value: AgentTaskStatus.COMPLETED.value,
+        AgentRunStatus.FAILED.value: AgentTaskStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value: AgentTaskStatus.CANCELLED.value,
+    }.get(run_status or "")
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(
+                AgentRun.id == run_id, AgentRun.task_id == task_id,
+            ).with_for_update())).scalar_one()
+            ledger = (await session.execute(select(AgentTaskRuntimeDelta).where(
+                AgentTaskRuntimeDelta.agent_run_id == run_id,
+                AgentTaskRuntimeDelta.event_id == delta_event_id,
+            ).with_for_update())).scalar_one_or_none()
+            if ledger is None or ledger.payload_sha256 != payload_sha256:
+                raise AgentTaskConflict("runtime_delta_not_applied", "Runtime delta ledger does not match reconciliation")
+            metadata = dict(run.run_metadata_json or {})
+            projection = dict(metadata.get("projection") or {})
+            projection.update({
+                "status": "applied",
+                "reconciliation_status": "projected",
+                "delta_event_id": delta_event_id,
+                "final_artifact_id": final_artifact_id,
+            })
+            projection.pop("projection_error", None)
+            metadata["projection"] = projection
+            replace_jsonb_field(run, "run_metadata_json", metadata)
+            if run_status is not None and task_status is not None:
+                completed_at = utc_now()
+                run.status = run_status
+                run.completed_at = completed_at
+                replace_jsonb_field(run, "error_json", dict(result.get("agent_error") or result.get("error") or {}))
+                task.status = task_status
+                task.current_phase = task_status
+                task.terminal_reason = str((result.get("agent_error") or {}).get("code") or runtime_status)
+                task.completed_at = completed_at
+                task.expires_at = None
+                task.lease_owner = None
+                task.lease_expires_at = None
+                task.version += 1
+                terminal_kind = "run.cancelled" if run_status == "cancelled" else "run.failed" if run_status == "failed" else "run.completed"
+                existing_terminal = (await session.execute(select(AgentRunEvent).where(
+                    AgentRunEvent.agent_run_id == run_id,
+                    AgentRunEvent.terminal.is_(True),
+                ))).scalar_one_or_none()
+                if existing_terminal is None:
+                    sequence = int((await session.execute(select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(
+                        AgentRunEvent.agent_run_id == run_id,
+                    ))).scalar_one()) + 1
+                    session.add(AgentRunEvent(
+                        agent_run_id=run_id, event_id=delta_event_id, sequence=sequence,
+                        attempt=max(1, int(run.task_attempt or 1)), kind=terminal_kind,
+                        occurred_at=completed_at, payload_json=dict(result), terminal=True,
+                        source_metadata_json={"source": "runtime_delta_reconciliation"},
+                    ))
+                await _append_event(
+                    session, task, f"task.{task_status}", agent_run_id=run_id,
+                    artifact_id=final_artifact_id,
+                    payload={"reason": task.terminal_reason, "version": task.version, "reconciled": True},
+                )
+            else:
+                await _append_event(
+                    session, task, "task.runtime_projection_reconciled", agent_run_id=run_id,
+                    payload={"delta_event_id": delta_event_id},
+                )
+        await session.refresh(task)
+        return task
+
+
 async def respond_to_result_review(
     task_id: str,
     *,
@@ -2208,37 +2371,50 @@ async def backfill_legacy_course_corrections(*, limit: int = 100) -> int:
     return len(task_ids)
 
 
-async def mark_course_corrections_applied(task_id: str, correction_ids: Iterable[str], *, plan_revision: int) -> None:
+async def mark_course_corrections_runtime_applied(
+    task_id: str, correction_ids: Iterable[str], *, plan_revision: int,
+) -> None:
+    """Record runtime acknowledgement without claiming product projection succeeded."""
+
     selected = {str(value) for value in correction_ids}
     if not selected:
         return
     async with async_session_maker() as session:
         async with session.begin():
-            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
-            now = utc_now().isoformat()
+            task = await session.get(AgentTask, task_id, with_for_update=True)
+            if task is None:
+                return
             commands = list((await session.execute(select(AgentTaskCommand).where(
                 AgentTaskCommand.task_id == task_id,
                 AgentTaskCommand.action == "steer",
                 AgentTaskCommand.status == "accepted",
             ).with_for_update())).scalars().all())
-            applied: list[str] = []
+            acknowledged: list[str] = []
             for command in commands:
                 result = dict(command.result_json or {})
                 correction = dict(result.get("correction") or {})
                 correction_id = str(correction.get("correction_id") or correction.get("id") or "")
                 if correction_id not in selected:
                     continue
-                correction.update({"status": "applied", "applied_at": now, "plan_revision": plan_revision})
-                result.update({"correction": correction, "delivery_state": "applied", "plan_revision": plan_revision})
+                if (
+                    result.get("delivery_state") == "runtime_applied"
+                    and int(result.get("runtime_plan_revision") or 0) == plan_revision
+                ):
+                    continue
+                correction.update({"status": "runtime_applied", "runtime_plan_revision": plan_revision})
+                result.update({
+                    "correction": correction,
+                    "delivery_state": "runtime_applied",
+                    "runtime_plan_revision": plan_revision,
+                })
                 replace_jsonb_field(command, "result_json", result)
-                command.status = "completed"
-                command.result_version = task.version
-                command.completed_at = utc_now()
-                applied.append(correction_id)
-            if applied:
-                if task.current_phase == "budget_correction_delivery_pending":
-                    task.current_phase = "budget_continuation_queued"
-                await _append_event(session, task, "task.course_correction_applied", agent_run_id=task.active_run_id, payload={"correction_ids": sorted(applied), "plan_revision": plan_revision})
+                acknowledged.append(correction_id)
+            if acknowledged:
+                await _append_event(
+                    session, task, "task.course_correction_runtime_applied",
+                    agent_run_id=task.active_run_id,
+                    payload={"correction_ids": sorted(acknowledged), "runtime_plan_revision": plan_revision},
+                )
 
 
 async def mark_course_correction_delivered(command_id: str, *, receipt: Dict[str, Any]) -> None:

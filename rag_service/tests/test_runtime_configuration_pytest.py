@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -134,7 +135,6 @@ def test_langgraph_database_requirements_are_conditional():
     values = _environment()
     values.pop("AGENT_CHECKPOINT_DATABASE_URL")
     values.pop("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
-    values.pop("LANGGRAPH_RUNTIME_URL")
 
     validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
@@ -143,8 +143,25 @@ def test_langgraph_database_requirements_are_conditional():
     assert "AGENT_RUNTIME_EXECUTION_DATABASE_URL" in str(caught.value)
 
 
+def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
+    validated = validate_runtime_environment(
+        service="hermes_profile",
+        environ={
+            "HERMES_MODEL_CONTEXT_LENGTH": "32768",
+            "HERMES_MODEL_PROVIDER": "lmstudio",
+            "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
+            "API_SERVER_KEY": "server-key",
+            "HERMES_PROFILE_ROOT": "/opt/data/profiles",
+            "HERMES_PROFILE_UID": "10000",
+            "HERMES_PROFILE_GID": "10000",
+        },
+    )
+
+    assert validated.get("HERMES_MODEL_PROVIDER") == "lmstudio"
+
+
 def test_unused_environment_names_are_not_documented():
-    example = Path(__file__).parents[2] / ".env.example"
+    example = Path(os.environ.get("ASKPDF_REPO_DIR", Path(__file__).parents[2])) / ".env.example"
     text = example.read_text()
     for name in (
         "AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS",

@@ -40,7 +40,7 @@ def _runtime_alembic(test_database_url: str, *arguments: str) -> subprocess.Comp
     environment = os.environ.copy()
     environment["DATABASE_URL"] = test_database_url
     result = subprocess.run(
-        ["alembic", "-c", "runtime_alembic.ini", *arguments],
+        ["alembic", "-c", "langgraph_runtime/alembic.ini", *arguments],
         cwd=SERVICE_ROOT,
         env=environment,
         check=False,
@@ -137,7 +137,7 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
     asyncio.run(seed_existing_data())
     _alembic(test_database_url, "upgrade", "head")
     current = _alembic(test_database_url, "current")
-    assert "a9c7e1f3b5d2" in current.stdout
+    assert "c3e9f5a7b2d4" in current.stdout
 
     async def verify_existing_data() -> tuple[int, int, int, int, dict]:
         engine = create_async_engine(test_database_url)
@@ -164,8 +164,10 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
 
 
 def test_runtime_migrations_have_an_independent_single_head():
-    config = Config(str(SERVICE_ROOT / "runtime_alembic.ini"))
-    config.set_main_option("script_location", str(SERVICE_ROOT / "runtime_alembic"))
+    config = Config(str(SERVICE_ROOT / "langgraph_runtime/alembic.ini"))
+    config.set_main_option(
+        "script_location", str(SERVICE_ROOT / "langgraph_runtime/migrations")
+    )
     scripts = ScriptDirectory.from_config(config)
     assert set(scripts.get_heads()) == {"r1_runtime_schema"}
 

@@ -2344,7 +2344,7 @@ export async function streamResumeAgentRun(
 
 // ============ Durable Deep Research Tasks ============
 
-export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'expired';
+export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'recovery_required' | 'cancelled' | 'completed' | 'failed' | 'expired';
 
 export interface AgentTaskSummary {
   id: string;
@@ -2589,7 +2589,7 @@ export async function submitAgentTaskCourseCorrection(
   correction_id: string;
   correction: Record<string, unknown>;
   delivery_mode: 'same_run_safe_boundary' | 'linked_run';
-  delivery_state: 'accepted' | 'delivered' | 'applied' | 'linked' | 'rejected';
+  delivery_state: 'accepted' | 'delivered' | 'runtime_applied' | 'applied' | 'linked' | 'rejected';
   runtime_receipt?: Record<string, unknown> | null;
   duplicate: boolean;
 }> {

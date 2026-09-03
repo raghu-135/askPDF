@@ -256,6 +256,49 @@ async def test_operation_id_replays_identical_request_and_rejects_conflict() -> 
 
 
 @pytest.mark.asyncio
+async def test_resume_operation_replaces_boundary_identity_and_fingerprints_decision() -> None:
+    store = ExecutionStore()
+    request = {"run_id": "run-resume-identity"}
+    await store.create(
+        "run-resume-identity",
+        "start",
+        request,
+        {"request": request, "context": {"task_context": {"metadata": {"task_version": 2}}}},
+        operation_id="start-command",
+    )
+    await store.set_status("run-resume-identity", "awaiting_human")
+    resume_payload = {"request": request, "interrupt": {"action": "continue", "action_version": 1}}
+    resumed = await store.create(
+        "run-resume-identity",
+        "resume",
+        request,
+        resume_payload,
+        operation_id="resume-command",
+    )
+
+    assert resumed.status == "queued"
+    assert resumed.last_operation_id == "resume-command"
+    replay = await store.create(
+        "run-resume-identity",
+        "resume",
+        request,
+        resume_payload,
+        operation_id="resume-command",
+    )
+    assert replay.replay_only is True
+    assert replay.attempt == resumed.attempt
+
+    with pytest.raises(ExecutionConflictError, match="different input"):
+        await store.create(
+            "run-resume-identity",
+            "resume",
+            request,
+            {"request": request, "interrupt": {"action": "accept_partial", "action_version": 1}},
+            operation_id="resume-command",
+        )
+
+
+@pytest.mark.asyncio
 async def test_resume_transport_retry_is_read_only_after_terminal_completion() -> None:
     store = ExecutionStore()
     await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})

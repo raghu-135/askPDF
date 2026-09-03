@@ -28,7 +28,7 @@ test('active tasks continue polling while terminal tasks stop', () => {
   for (const status of ['created', 'queued', 'running', 'pausing', 'paused', 'awaiting_approval', 'cancelling']) {
     assert.equal(shouldPollAgentTask({ status }), true, status);
   }
-  for (const status of ['completed', 'failed', 'expired', 'cancelled']) {
+  for (const status of ['completed', 'failed', 'expired', 'cancelled', 'recovery_required']) {
     assert.equal(shouldPollAgentTask({ status }), false, status);
   }
 });
@@ -39,6 +39,7 @@ test('Definitions stop event subscriptions at the shared terminal boundary', () 
     assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'running' }), true, definitionId);
     assert.equal(shouldSubscribeToAgentTaskEvents({ ...activeTask, status: 'completed' }, { status: 'running' }), false, definitionId);
     assert.equal(shouldSubscribeToAgentTaskEvents(activeTask, { status: 'completed' }), false, definitionId);
+    assert.equal(shouldSubscribeToAgentTaskEvents({ ...activeTask, status: 'recovery_required' }, { status: 'recovery_required' }), false, definitionId);
   }
 });
 

@@ -17,9 +17,12 @@ from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.agent_run_cancellation import request_task_cancellation
-from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
-from app.services.agent_task_runtime_projection import apply_runtime_task_delta, runtime_delta_conflict_details
+from app.services.agent_task_runtime_projection import (
+    RuntimeTaskProjectionConflict,
+    apply_runtime_task_delta,
+)
+from app.services.task_artifact_service import persist_task_artifact
 from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
 from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentRuntimeRequest, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
@@ -42,6 +45,24 @@ grounding_evaluator = AgentGroundingEvaluator()
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 15
 CANCELLATION_RETRY_SECONDS = 2.0
+
+
+def _task_runtime_operation_id(task: Any, run: Any) -> str:
+    """Return the durable identity of one start/continuation boundary."""
+
+    if getattr(run, "_fresh_runtime_run", False):
+        return f"task:{task.id}:run:{run.id}:start"
+    pending = dict(getattr(run, "pending_interrupt_json", None) or {})
+    if pending.get("status") in {"resumed", "resolved"}:
+        decision = dict(pending.get("decision") or {})
+        discriminator = (
+            pending.get("resume_version")
+            or decision.get("action_version")
+            or pending.get("interrupt_id")
+            or task.version
+        )
+        return f"task:{task.id}:run:{run.id}:resume:{discriminator}"
+    return f"task:{task.id}:run:{run.id}:continue:{task.version}"
 
 
 async def _invoke_task_runtime(
@@ -513,6 +534,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             except (FileNotFoundError, OSError):
                 continue
     todos = await tasks.list_todos(task.id)
+    latest_plan = await tasks.get_latest_plan(task.id)
+    acknowledged_runtime_plan_revision = await tasks.latest_applied_runtime_plan_revision(task.id)
     task_web_access = await tasks.get_task_web_access(task.id)
     repository = AgentWorkflowRepository()
     trace = AgentTraceRecorder(run)
@@ -552,7 +575,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         if event.kind != "course_correction.applied":
             return
         correction_ids = payload.get("correction_ids") or [payload.get("correction_id")]
-        await tasks.mark_course_corrections_applied(
+        await tasks.mark_course_corrections_runtime_applied(
             task.id,
             [str(value) for value in correction_ids if value],
             plan_revision=int(payload.get("plan_revision") or 0),
@@ -613,7 +636,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "use_reranker": True,
                 "task_version": task.version,
                 "enabled_profiles": list(config.get("enabled_profiles") or []),
-                "plan_revision": max((todo.updated_revision for todo in todos), default=0),
+                "plan_revision": int(getattr(latest_plan, "revision", 0) or 0),
+                "acknowledged_runtime_plan_revision": acknowledged_runtime_plan_revision,
                 "budget_usage": dict(task.budgets_json or {}),
                 "course_corrections": pending_corrections,
                 "orchestration": dict(
@@ -631,6 +655,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             builder_id=definition.builder_id,
             input={"question": runtime_question},
             task_id=task.id,
+            options={"idempotency_key": _task_runtime_operation_id(task, run)},
             continuation=continuation_from_run(run),
         )
         runtime_context = RuntimeInvocationContext(
@@ -663,6 +688,12 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     "retryable": False,
                 },
             )
+        if str(run.framework or "") == "langgraph" and runtime_result.orchestration_delta is None:
+            raise AgentRuntimeError(
+                "runtime_task_delta_missing",
+                "The LangGraph runtime did not return the required task orchestration delta",
+                retryable=True,
+            )
         if runtime_result.continuation is not None:
             await repository.update_runtime_binding(run.id, runtime_result.continuation)
         if runtime_result.checkpoint_boundary_available is not None:
@@ -673,88 +704,66 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         controlled_hermes_budget_boundary = (
             str(run.framework or "") == "hermes" and await tasks.budget_boundary(task.id) is not None
         )
+        await runtime_event_sink.flush()
+        if runtime_result.orchestration_delta is not None:
+            delta_status = str((runtime_result.orchestration_delta.result or {}).get("status") or "")
+            if delta_status and delta_status != str(runtime_result.status):
+                raise AgentRuntimeError(
+                    "runtime_task_delta_conflict",
+                    "The runtime result and orchestration delta disagree",
+                    retryable=True,
+                    details={"result_status": runtime_result.status, "delta_status": delta_status},
+                )
+            interrupt_change = runtime_result.orchestration_delta.pending_interrupt
+            if isinstance(interrupt_change, Mapping) and interrupt_change.get("operation") == "set":
+                if dict(interrupt_change.get("value") or {}) != dict(runtime_result.interruption or {}):
+                    raise AgentRuntimeError(
+                        "runtime_task_delta_conflict",
+                        "The runtime interrupt and orchestration delta disagree",
+                        retryable=True,
+                    )
+            elif isinstance(interrupt_change, Mapping) and interrupt_change.get("operation") == "clear":
+                if runtime_result.interruption is not None:
+                    raise AgentRuntimeError(
+                        "runtime_task_delta_conflict",
+                        "The runtime returned an interrupt while clearing product interrupt state",
+                        retryable=True,
+                    )
+            artifact_id_map = await apply_runtime_task_delta(
+                task_id=task.id,
+                agent_run_id=run.id,
+                delta=runtime_result.orchestration_delta,
+                artifact_id_map={},
+            )
+            if artifact_id_map:
+                def replace_ids(value: Any) -> Any:
+                    if isinstance(value, str):
+                        return artifact_id_map.get(value, value)
+                    if isinstance(value, list):
+                        return [replace_ids(item) for item in value]
+                    if isinstance(value, dict):
+                        return {key: replace_ids(item) for key, item in value.items()}
+                    return value
+
+                for key in (
+                    "runtime_artifacts",
+                    "task_todos",
+                    "task_artifact_manifest",
+                    "task_evidence_manifest",
+                    "task_result_packets",
+                ):
+                    if key in result:
+                        result[key] = replace_ids(result[key])
         if str(result.get("status") or "") in {
             AgentRunStatus.COMPLETED.value,
             AgentRunStatus.FAILED.value,
             AgentRunStatus.CANCELLED.value,
         } and not controlled_hermes_budget_boundary and not dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {}).get("runtime_result"):
+            # Persist terminal reconciliation state only after the complete
+            # orchestration delta has committed.  If this process exits in
+            # between, the durable runtime journal and projected terminal
+            # event drive reconciliation without exposing partial task state.
             await record_terminal_result(run, result)
-        await runtime_event_sink.flush()
-        delta_version_verified = False
-        if runtime_result.orchestration_delta is not None:
-            latest_task = await tasks.get_task(task.id)
-            prior_plans = await tasks.list_plans(task.id)
-            delta_already_applied = any(
-                str((plan.provenance_json or {}).get("runtime_idempotency_key") or "")
-                == runtime_result.orchestration_delta.idempotency_key
-                for plan in prior_plans
-            )
-            current_plan_revision = max((int(plan.revision) for plan in prior_plans), default=0)
-            conflict = (
-                None
-                if latest_task is None
-                else runtime_delta_conflict_details(
-                    task=latest_task,
-                    agent_run_id=run.id,
-                    delta=runtime_result.orchestration_delta,
-                    current_plan_revision=current_plan_revision,
-                )
-            )
-            if (
-                latest_task is None
-                or (conflict is not None and not delta_already_applied)
-            ):
-                raise AgentRuntimeError(
-                    "runtime_task_version_conflict",
-                    "The runtime result was computed from stale task state",
-                    retryable=True,
-                    details={
-                        "observed_task_version": runtime_result.orchestration_delta.observed_task_version,
-                        "current_task_version": getattr(latest_task, "version", None),
-                        **(conflict or {}),
-                    },
-                )
-            delta_version_verified = True
-        # Runtime artifacts are data, not product records. Project them in
-        # rag-service after the stream completes and translate deterministic
-        # runtime IDs to the persisted artifact IDs used by task APIs.
-        runtime_artifacts = [value for value in result.get("runtime_artifacts") or [] if isinstance(value, dict) and value.get("content") is not None]
-        artifact_id_map: dict[str, str] = {}
-        for artifact in runtime_artifacts:
-            projected = await persist_task_artifact(
-                task_id=task.id,
-                agent_run_id=run.id,
-                kind=str(artifact.get("kind") or "tool_output"),
-                content=str(artifact.get("content") or ""),
-                media_type=str(artifact.get("media_type") or "text/plain"),
-                todo_id=artifact.get("todo_id"),
-                # Runtime subagent IDs are intentionally opaque and are not
-                # product FK values; task ownership is retained in provenance.
-                provenance={**dict(artifact.get("provenance") or {}), "runtime_artifact_id": artifact.get("artifact_id"), "runtime_subagent_run_id": artifact.get("subagent_run_id")},
-                source_refs=dict(artifact.get("source_refs") or {}),
-            )
-            if artifact.get("artifact_id"):
-                artifact_id_map[str(artifact["artifact_id"])] = projected.id
-        if artifact_id_map:
-            def replace_ids(value: Any) -> Any:
-                if isinstance(value, str):
-                    return artifact_id_map.get(value, value)
-                if isinstance(value, list):
-                    return [replace_ids(item) for item in value]
-                if isinstance(value, dict):
-                    return {key: replace_ids(item) for key, item in value.items()}
-                return value
-            for key in ("task_todos", "task_artifact_manifest", "task_evidence_manifest", "task_result_packets"):
-                if key in result:
-                    result[key] = replace_ids(result[key])
-        if runtime_result.orchestration_delta is not None:
-            await apply_runtime_task_delta(
-                task_id=task.id,
-                agent_run_id=run.id,
-                delta=runtime_result.orchestration_delta,
-                artifact_id_map=artifact_id_map,
-                observed_version_verified=delta_version_verified,
-            )
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
@@ -796,26 +805,36 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 route_reason=result.get("route_reason"),
                 run_status=AgentRunStatus.AWAITING_HUMAN.value,
             )
-            await repository.mark_run_awaiting_human(
-                run.id,
-                pending,
-                metrics_json=metrics,
-                debug_trace_json=debug_payload,
-            )
-            task_status = AgentTaskStatus.PAUSED.value if pending.get("type") == "task_pause" else AgentTaskStatus.AWAITING_APPROVAL.value
-            await tasks.set_task_runtime_status(task.id, task_status, phase="checkpointed_interrupt")
-            if task_status == AgentTaskStatus.AWAITING_APPROVAL.value:
-                await tasks.append_event(
-                    task.id,
-                    "task.approval_requested",
-                    agent_run_id=run.id,
-                    payload={
-                        "interrupt_id": pending.get("interrupt_id"),
-                        "title": pending.get("title"),
-                        "type": pending.get("type"),
-                        "approval_scope_kind": pending.get("approval_scope_kind"),
-                    },
+            if runtime_result.orchestration_delta is not None:
+                # The projector already committed the run/task interrupt state and
+                # matching product event atomically.  Trace/metric persistence is
+                # deliberately independent and must not repeat those mutations.
+                await repository.update_run_observability(
+                    run.id,
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
                 )
+            else:
+                await repository.mark_run_awaiting_human(
+                    run.id,
+                    pending,
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
+                )
+                task_status = AgentTaskStatus.PAUSED.value if pending.get("type") == "task_pause" else AgentTaskStatus.AWAITING_APPROVAL.value
+                await tasks.set_task_runtime_status(task.id, task_status, phase="checkpointed_interrupt")
+                if task_status == AgentTaskStatus.AWAITING_APPROVAL.value:
+                    await tasks.append_event(
+                        task.id,
+                        "task.approval_requested",
+                        agent_run_id=run.id,
+                        payload={
+                            "interrupt_id": pending.get("interrupt_id"),
+                            "title": pending.get("title"),
+                            "type": pending.get("type"),
+                            "approval_scope_kind": pending.get("approval_scope_kind"),
+                        },
+                    )
             await runtime_event_sink.finish_boundary()
             return
         if status == AgentRunStatus.CANCELLED.value:
@@ -979,6 +998,40 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 metrics=metrics, result=result, error=error,
                 reason=str((error or {}).get("code") or status),
             )
+    except RuntimeTaskProjectionConflict as exc:
+        logger.exception(
+            "Runtime task projection requires reconciliation | task_id=%s run_id=%s",
+            task.id,
+            run.id,
+        )
+        recoverable_result = result if "result" in locals() and isinstance(result, dict) else {
+            "status": "failed",
+            "agent_error": {
+                "code": "runtime_task_projection_conflict",
+                "type": type(exc).__name__,
+                "raw_message": str(exc)[:1000],
+                "retryable": True,
+            },
+        }
+        projection = await record_terminal_result(run, recoverable_result)
+        delta = runtime_result.orchestration_delta if "runtime_result" in locals() else None
+        projection.update({
+            "delta_event_id": getattr(delta, "event_id", None),
+            "operation_id": getattr(delta, "operation_id", None),
+            "delta": delta.to_dict() if delta is not None else None,
+        })
+        await tasks.mark_runtime_projection_recovery_required(
+            task.id,
+            run.id,
+            projection=projection,
+            error={
+                "code": "runtime_task_projection_conflict",
+                "type": type(exc).__name__,
+                "message": str(exc)[:1000],
+                "retryable": True,
+            },
+        )
+        return
     except Exception as exc:
         logger.exception("Deep research task execution failed | task_id=%s run_id=%s", task.id, run.id)
         terminal_error = exc.to_dict() if isinstance(exc, AgentRuntimeError) else {
@@ -997,6 +1050,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             reason=str(terminal_error.get("code") or "deep_research_execution_failed"),
         )
     finally:
+        try:
+            await runtime_event_sink.finish_boundary()
+        except Exception:
+            logger.exception("Failed to finish runtime event boundary | task_id=%s run_id=%s", task.id, run.id)
         heartbeat.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat

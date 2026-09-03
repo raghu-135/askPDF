@@ -10,7 +10,11 @@ REPOSITORY_ROOT = Path(
 
 
 def _compose(name: str) -> dict:
-    return yaml.safe_load((REPOSITORY_ROOT / name).read_text())
+    class ComposeLoader(yaml.SafeLoader):
+        pass
+
+    ComposeLoader.add_constructor("!reset", lambda loader, node: loader.construct_sequence(node))
+    return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
 
 
 def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():

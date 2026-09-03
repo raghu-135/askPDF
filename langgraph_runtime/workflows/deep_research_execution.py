@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import uuid
 from dataclasses import dataclass, field
@@ -104,6 +105,7 @@ class DeepResearchExecutionServices:
     pause_checker: Any = None
     course_correction_reader: Any = None
     course_correction_acknowledger: Any = None
+    runtime_budget_meter: "RuntimeBudgetMeter | None" = None
 
     async def consume_budget(self, task_id: str, **usage: int) -> Mapping[str, Any]:
         if self.budgets is None:
@@ -153,6 +155,11 @@ class DeepResearchExecutionServices:
         boundary = self.state.get("task_budget_boundary")
         return dict(boundary) if isinstance(boundary, Mapping) else None
 
+    async def budget_snapshot(self) -> Mapping[str, Any]:
+        if self.runtime_budget_meter is not None:
+            return await self.runtime_budget_meter.snapshot()
+        return dict(self.state.get("task_budget_usage") or {})
+
     async def pending_course_corrections(self) -> list[dict[str, Any]]:
         current = [
             {**dict(value), "id": value.get("id") or value.get("correction_id")}
@@ -185,7 +192,93 @@ class DeepResearchExecutionServices:
         raise NotImplementedError
 
 
+class RuntimeBudgetMeter:
+    """Concurrency-safe counters shared by all nodes in one graph invocation.
+
+    Parallel LangGraph nodes receive independent state snapshots. The meter is
+    carried in RunnableConfig for the duration of an invocation, while safe
+    boundary nodes copy its JSON snapshot back into checkpointed graph state.
+    """
+
+    def __init__(self, budget: Mapping[str, Any] | None, limits: Mapping[str, Any] | None):
+        self._limits = dict(limits or {})
+        source = copy.deepcopy(dict(budget or {}))
+        tranche_limits = dict(source.get("tranche_limits") or {})
+        self._budget = {
+            **source,
+            "tranche_index": max(1, int(source.get("tranche_index") or 1)),
+            "tranche_limits": tranche_limits,
+            "tranche_usage": dict(source.get("tranche_usage") or {}),
+            "lifetime_usage": dict(source.get("lifetime_usage") or {}),
+        }
+        self._lock = asyncio.Lock()
+
+    async def consume(self, **usage: int) -> Mapping[str, Any]:
+        async with self._lock:
+            tranche_usage = dict(self._budget.get("tranche_usage") or {})
+            lifetime_usage = dict(self._budget.get("lifetime_usage") or {})
+            limit_names = {
+                "model_calls": "max_model_calls",
+                "model_tokens": "max_model_tokens",
+                "tool_calls": "max_tool_calls",
+                "elapsed_active_ms": "max_active_runtime_ms",
+            }
+            for key, amount in usage.items():
+                increment = max(0, int(amount or 0))
+                if key in limit_names:
+                    tranche_usage[key] = int(tranche_usage.get(key) or 0) + increment
+                lifetime_usage[key] = int(lifetime_usage.get(key) or 0) + increment
+            self._budget.update({
+                "tranche_usage": tranche_usage,
+                "lifetime_usage": lifetime_usage,
+            })
+            exhausted = [
+                key for key, limit_name in limit_names.items()
+                if int(tranche_usage.get(key) or 0)
+                >= max(
+                    1,
+                    int(
+                        self._limits.get(limit_name)
+                        or (self._budget.get("tranche_limits") or {}).get(key)
+                        or 1_000_000_000
+                    ),
+                )
+            ]
+            boundary = self._budget.get("boundary")
+            if exhausted and not (isinstance(boundary, Mapping) and boundary):
+                self._budget["boundary"] = {
+                    "status": "requested",
+                    "dimensions": exhausted,
+                    "tranche_index": self._budget["tranche_index"],
+                }
+            return copy.deepcopy(self._budget)
+
+    async def snapshot(self) -> Mapping[str, Any]:
+        async with self._lock:
+            return copy.deepcopy(self._budget)
+
+    async def boundary(self) -> Mapping[str, Any] | None:
+        snapshot = await self.snapshot()
+        boundary = snapshot.get("boundary")
+        return dict(boundary) if isinstance(boundary, Mapping) and boundary else None
+
+
 class RuntimeExecutionServices(DeepResearchExecutionServices):
+    async def consume_budget(self, task_id: str, **usage: int) -> Mapping[str, Any]:
+        if self.runtime_budget_meter is None:
+            self.runtime_budget_meter = RuntimeBudgetMeter(
+                self.state.get("task_budget_usage") if isinstance(self.state, Mapping) else None,
+                self.state.get("task_limits") if isinstance(self.state, Mapping) else None,
+            )
+        return await self.runtime_budget_meter.consume(**usage)
+
+    async def budget_boundary(self) -> Mapping[str, Any] | None:
+        if self.runtime_budget_meter is not None:
+            boundary = await self.runtime_budget_meter.boundary()
+            if boundary:
+                return boundary
+        return await super().budget_boundary()
+
     async def persist_plan(self, task_id: str, proposal: Any, **kwargs: Any) -> tuple[Any, list[Any]]:
         revision = PlanRevisionRecord(revision=int(self.state.get("task_plan_revision") or 0) + 1)
         limits = self.state.get("task_limits") if isinstance(self.state.get("task_limits"), Mapping) else {}
@@ -241,6 +334,7 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
                 todo.update({"status": "blocked", "result_summary": reason})
 
     async def start_subagent(self, **kwargs: Any) -> tuple[SubagentRecord, bool]:
+        await self.consume_budget(str(kwargs.get("task_id") or ""), subagent_attempts=1)
         return SubagentRecord(id=f"runtime:{uuid.uuid4()}"), False
 
     async def persist_artifact(self, **kwargs: Any) -> Mapping[str, Any]:
@@ -257,6 +351,7 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
             "source_refs": dict(kwargs.get("source_refs") or {}),
         }
         self.state.setdefault("runtime_artifacts", []).append(artifact)  # type: ignore[attr-defined]
+        await self.consume_budget(str(kwargs.get("task_id") or ""), artifact_bytes=len(content.encode("utf-8")))
         return artifact
 
     async def record_result_packets(self, packets: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -383,8 +478,17 @@ def _common_services(state: Mapping[str, Any], configurable: Mapping[str, Any]) 
 def runtime_execution_services_factory(
     state: Mapping[str, Any], configurable: Mapping[str, Any]
 ) -> DeepResearchExecutionServices:
+    meter = configurable.get("runtime_budget_meter")
+    if not isinstance(meter, RuntimeBudgetMeter):
+        meter = RuntimeBudgetMeter(
+            state.get("task_budget_usage") if isinstance(state, Mapping) else None,
+            state.get("task_limits") if isinstance(state, Mapping) else None,
+        )
+        if isinstance(configurable, dict):
+            configurable["runtime_budget_meter"] = meter
     return RuntimeExecutionServices(
         budgets=None, memory=None,
+        runtime_budget_meter=meter,
         **_common_services(state, configurable),
     )
 

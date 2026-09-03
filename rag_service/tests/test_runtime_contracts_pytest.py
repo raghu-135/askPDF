@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,7 @@ from runtime_protocol.contracts import (
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
+    RuntimePlanChange,
     RuntimeSupportLevel,
     RuntimeValidationIssue,
     RuntimeValidationResult,
@@ -46,7 +48,15 @@ from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pen
 from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.task_results import normalize_runtime_task_result, runtime_task_result_summary
 from app.services.agent_task_runtime_projection import runtime_delta_conflict_details
-from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices
+from langgraph_runtime.workflows.deep_research_execution import (
+    RuntimeBudgetMeter,
+    RuntimeExecutionServices,
+    runtime_execution_services_factory,
+)
+from langgraph_runtime.workflows.deep_research_nodes import deep_task_scheduler
+from langgraph_runtime.adapter import _result_from_graph
+from langgraph_runtime.workflows import deep_research_nodes
+from langgraph_runtime.router_runtime import _install_budget_meter
 
 
 def test_course_correction_contract_is_json_only_and_versioned():
@@ -124,10 +134,20 @@ def test_neutral_contracts_are_frozen_and_json_compatible():
 def test_task_orchestration_delta_round_trips_with_idempotency_and_versions():
     delta = TaskOrchestrationDelta(
         event_id="evt-1",
-        attempt_id="run-1",
+        attempt_id="run-1:attempt:1",
+        operation_id="operation-1",
         idempotency_key="delta:run-1:1",
         observed_task_version=4,
         observed_plan_revision=2,
+        plan_changes=(RuntimePlanChange(
+            runtime_revision=3,
+            parent_runtime_revision=2,
+            acknowledged_product_revision=2,
+            reason="course_correction",
+            planner_visit=3,
+            plan={"objective": "Redirect remaining work", "todos": []},
+            correction_ids=("correction-1",),
+        ),),
         todo_changes=({"id": "todo-1", "status": "completed"},),
         artifacts=({"artifact_id": "runtime:a1", "sha256": "abc"},),
     )
@@ -136,10 +156,38 @@ def test_task_orchestration_delta_round_trips_with_idempotency_and_versions():
     assert restored.orchestration_delta == delta
 
 
+def test_runtime_delta_emits_only_unacknowledged_ordered_plan_history():
+    history = [
+        {
+            "runtime_revision": revision,
+            "parent_runtime_revision": revision - 1,
+            "reason": "initial" if revision == 1 else "course_correction",
+            "planner_visit": revision,
+            "plan": {"objective": f"revision {revision}", "todos": []},
+            "correction_ids": [] if revision == 1 else ["correction-1"],
+        }
+        for revision in (1, 2)
+    ]
+    result = _result_from_graph(
+        {
+            "status": "completed", "agent_run_id": "run-1", "agent_task_id": "task-1",
+            "task_version": 3, "task_plan_changes": history,
+        },
+        observed_plan_revision=1, acknowledged_runtime_plan_revision=1,
+        operation_id="resume-1", attempt_id="run-1:attempt:1",
+        boundary_event_id="run-1:attempt:1:operation:resume-1:result",
+    )
+
+    assert result.orchestration_delta is not None
+    assert [value.runtime_revision for value in result.orchestration_delta.plan_changes] == [2]
+    assert result.orchestration_delta.plan_changes[0].acknowledged_product_revision == 1
+
+
 def test_runtime_delta_allows_version_advances_owned_by_the_active_run():
     delta = TaskOrchestrationDelta(
-        event_id="event-1",
-        attempt_id="run-1",
+        event_id="run-1:attempt:1:operation:operation-1:result",
+        attempt_id="run-1:attempt:1",
+        operation_id="operation-1",
         idempotency_key="delta:run-1",
         observed_task_version=4,
         observed_plan_revision=2,
@@ -198,6 +246,154 @@ async def test_runtime_execution_retries_empty_subagent_result_once():
 def test_incompatible_runtime_protocol_is_rejected_before_execution():
     with pytest.raises(ValueError, match="protocol"):
         ensure_protocol_compatible("2.0", "2.0")
+
+
+@pytest.mark.asyncio
+async def test_runtime_budget_meter_accumulates_parallel_usage_without_lost_updates():
+    meter = RuntimeBudgetMeter(
+        {
+            "tranche_index": 1,
+            "tranche_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0},
+            "lifetime_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0, "artifact_bytes": 0},
+        },
+        {"max_model_calls": 50, "max_model_tokens": 1000, "max_tool_calls": 50, "max_active_runtime_ms": 1000},
+    )
+
+    await asyncio.gather(*(
+        meter.consume(model_calls=1, model_tokens=10, artifact_bytes=7)
+        for _ in range(8)
+    ))
+
+    snapshot = await meter.snapshot()
+    assert snapshot["tranche_usage"]["model_calls"] == 8
+    assert snapshot["lifetime_usage"]["model_tokens"] == 80
+    assert snapshot["lifetime_usage"]["artifact_bytes"] == 56
+
+
+@pytest.mark.asyncio
+async def test_scheduler_stops_at_runtime_budget_boundary_and_returns_checkpoint_snapshot():
+    limits = {
+        "max_model_calls": 1,
+        "max_model_tokens": 1000,
+        "max_tool_calls": 10,
+        "max_active_runtime_ms": 1000,
+        "max_concurrency": 1,
+        "max_fanout": 1,
+    }
+    meter = RuntimeBudgetMeter({}, limits)
+    await meter.consume(model_calls=1)
+    state = {
+        "agent_task_id": "task-1",
+        "agent_run_id": "run-1",
+        "task_limits": limits,
+        "task_budget_usage": {},
+        "task_todos": [{
+            "id": "todo-1", "title": "Remaining research", "status": "pending",
+            "priority": 1, "required": True, "profile_id": "document_researcher",
+            "dependency_ids": [], "attempt": 0, "max_attempts": 2,
+            "progress": 0, "artifact_ids": [], "version": 1,
+        }],
+    }
+    result = await deep_task_scheduler(state, {"configurable": {
+        "deep_research_services_factory": runtime_execution_services_factory,
+        "runtime_budget_meter": meter,
+        "cancellation_checker": lambda: False,
+    }})
+
+    assert result["task_work_items"] == []
+    assert result["task_budget_boundary"]["dimensions"] == ["model_calls"]
+    assert result["task_budget_usage"]["tranche_usage"]["model_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_artifact_bytes_are_present_in_boundary_budget_snapshot():
+    state = {
+        "agent_task_id": "task-1",
+        "task_limits": {},
+        "task_budget_usage": {},
+        "runtime_artifacts": [],
+    }
+    configurable = {"cancellation_checker": lambda: False}
+    services = runtime_execution_services_factory(state, configurable)
+
+    artifact = await services.persist_artifact(
+        task_id="task-1",
+        kind="intermediate_report",
+        content="research so far",
+    )
+    snapshot = await services.budget_snapshot()
+
+    assert snapshot["lifetime_usage"]["artifact_bytes"] == artifact["byte_size"]
+
+
+@pytest.mark.asyncio
+async def test_budget_review_interrupt_exposes_research_so_far_and_retry_choices(monkeypatch):
+    captured = {}
+
+    async def fake_call_model(*_args, **_kwargs):
+        return '{"pass": true, "issues": []}', {}
+
+    def fake_interrupt(payload):
+        captured.update(payload)
+        return {"action": "accept_partial"}
+
+    monkeypatch.setattr(deep_research_nodes, "_call_model", fake_call_model)
+    monkeypatch.setattr(deep_research_nodes, "interrupt", fake_interrupt)
+    state = {
+        "agent_task_id": "task-1",
+        "agent_run_id": "run-1",
+        "final_answer": "This is the evidence-backed research completed so far.",
+        "task_budget_boundary": {
+            "status": "requested", "dimensions": ["model_calls"], "tranche_index": 1,
+        },
+        "task_incomplete_reasons": ["todo-remaining"],
+        "task_evidence_manifest": [],
+        "warnings": [],
+        "task_limits": {},
+        "task_budget_usage": {},
+    }
+
+    result = await deep_research_nodes.evidence_critic(state, {"configurable": {
+        "deep_research_services_factory": runtime_execution_services_factory,
+        "cancellation_checker": lambda: False,
+    }})
+
+    assert captured["type"] == "budget_review"
+    assert captured["provisional_answer"] == state["final_answer"]
+    assert captured["allowed_actions"] == ["continue", "accept_partial", "steer"]
+    assert result["task_budget_review_route"] == "accept_partial"
+
+
+@pytest.mark.asyncio
+async def test_resumed_runtime_uses_product_authorized_reset_tranche():
+    exhausted = {
+        "tranche_index": 1,
+        "tranche_usage": {"model_calls": 1},
+        "lifetime_usage": {"model_calls": 1},
+        "boundary": {"status": "requested", "dimensions": ["model_calls"], "tranche_index": 1},
+    }
+    reset = {
+        "tranche_index": 2,
+        "tranche_usage": {"model_calls": 0},
+        "lifetime_usage": {"model_calls": 1},
+        "boundary": None,
+    }
+    config = {"configurable": {}}
+    _install_budget_meter(
+        config,
+        {
+            "agent_task_id": "task-1",
+            "task_budget_usage": exhausted,
+            "task_limits": {"max_model_calls": 1},
+        },
+        authoritative_budget=reset,
+    )
+
+    snapshot = await config["configurable"]["runtime_budget_meter"].snapshot()
+    assert snapshot["tranche_index"] == 2
+    assert snapshot["tranche_usage"]["model_calls"] == 0
+    assert snapshot["lifetime_usage"]["model_calls"] == 1
+    assert snapshot.get("boundary") is None
 
 
 def test_runtime_operation_descriptor_rejects_invalid_enabled_states():

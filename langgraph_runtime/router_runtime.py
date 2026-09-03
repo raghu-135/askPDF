@@ -56,12 +56,42 @@ async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: D
             if isinstance(chunk, dict):
                 latest_state = chunk
     except ChatRunCancellationRequested as exc:
+        await _attach_budget_snapshot(latest_state, config)
         exc.state = {**latest_state, **dict(exc.state or {})}
         raise
     except Exception as exc:
+        await _attach_budget_snapshot(latest_state, config)
         exc.agent_workflow_state = latest_state
         raise
+    await _attach_budget_snapshot(latest_state, config)
     return latest_state
+
+
+def _install_budget_meter(
+    config: Dict[str, Any],
+    state: Dict[str, Any],
+    *,
+    authoritative_budget: Any = None,
+) -> None:
+    from langgraph_runtime.workflows.deep_research_execution import RuntimeBudgetMeter
+
+    if not state.get("agent_task_id"):
+        return
+    budget = authoritative_budget if isinstance(authoritative_budget, dict) else state.get("task_budget_usage")
+    config.setdefault("configurable", {})["runtime_budget_meter"] = RuntimeBudgetMeter(
+        budget if isinstance(budget, dict) else {},
+        state.get("task_limits") if isinstance(state.get("task_limits"), dict) else {},
+    )
+
+
+async def _attach_budget_snapshot(state: Dict[str, Any], config: Dict[str, Any]) -> None:
+    meter = (config.get("configurable") or {}).get("runtime_budget_meter")
+    if meter is None or not hasattr(meter, "snapshot"):
+        return
+    snapshot = dict(await meter.snapshot())
+    state["task_budget_usage"] = snapshot
+    boundary = snapshot.get("boundary")
+    state["task_budget_boundary"] = dict(boundary) if isinstance(boundary, dict) else {}
 
 
 def _runtime_config(
@@ -506,6 +536,7 @@ async def _handle_compiled_rag_chat(
         "task_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_run_plan_count": int(getattr(req, "task_run_plan_count", 0) or 0),
         "task_plan": dict(getattr(req, "task_plan", None) or {}),
+        "task_plan_changes": [],
         "task_todos": list(getattr(req, "task_todos", None) or []),
         "task_work_items": [],
         "task_result_packets": [],
@@ -533,6 +564,7 @@ async def _handle_compiled_rag_chat(
         "tool_events": [],
         "errors": [],
     }
+    _install_budget_meter(config, state)
 
     try:
         logger.info(
@@ -812,6 +844,11 @@ async def continue_compiled_rag_chat(
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
     )
+    _install_budget_meter(
+        config,
+        snapshot_values,
+        authoritative_budget=getattr(run, "task_budget_usage", None),
+    )
     agent_run_context = {
         "agent_run_id": run.id,
         "agent_workflow_id": run.workflow_id,
@@ -937,6 +974,11 @@ async def resume_compiled_rag_chat(
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
+    )
+    _install_budget_meter(
+        config,
+        snapshot_values,
+        authoritative_budget=getattr(run, "task_budget_usage", None),
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {

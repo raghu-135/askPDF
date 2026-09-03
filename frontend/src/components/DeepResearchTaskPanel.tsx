@@ -140,7 +140,7 @@ export function DeepResearchTaskPicker({
           secondary={`${task.status.replaceAll('_', ' ')} · attempt ${task.run_attempt || 0}`}
           slotProps={{ primary: { noWrap: true }, secondary: { noWrap: true } }}
         />
-        {['completed', 'failed', 'expired', 'cancelled'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
+        {['completed', 'failed', 'expired', 'cancelled', 'recovery_required'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
           <DeleteIcon fontSize="small" />
         </IconButton>}
       </MenuItem>)}
@@ -418,7 +418,7 @@ export default function DeepResearchTaskPanel({
 
   useEffect(() => {
     if (!selectedTaskId || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) return;
-    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired'];
+    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'];
     if (!terminalStatuses.includes(String(task?.status)) && !terminalStatuses.includes(String(selectedRun.status))) return;
     void refreshTimeline(selectedTaskId, selectedRun.id).catch((value) => setError(String(value)));
   }, [refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status]);
@@ -574,7 +574,7 @@ export default function DeepResearchTaskPanel({
     setTraceLiveRequested(true);
     const details = await getAgentRun(selectedRun.id, threadId);
     liveTraceRunDetailsRef.current = details;
-    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired'].includes(selectedRun.status) });
+    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(selectedRun.status) });
   };
 
   const decide = async (
@@ -733,9 +733,12 @@ export default function DeepResearchTaskPanel({
       {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
       {requestedWebUnavailable && <Alert severity="warning" sx={{ mb: 1 }}>The selected definition does not allow web search.</Alert>}
       {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
+      {task?.status === 'recovery_required' && <Alert severity="warning" sx={{ mb: 1 }}>
+        Runtime execution finished, but its product-state update could not be applied safely. Retry the task or ask an administrator to reconcile this run.
+      </Alert>}
       {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
-          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'primary'} />
+          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />
           <Typography variant="caption">Attempt {selectedRun?.attempt || 0} of {runs.length}</Typography>
           <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
           <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
@@ -826,6 +829,8 @@ export default function DeepResearchTaskPanel({
               setCourseCorrectionStatus(
                 response.delivery_state === 'linked'
                   ? 'Correction linked to a follow-up run.'
+                  : response.delivery_state === 'runtime_applied'
+                    ? 'Correction was applied by the runtime and is waiting for product-state projection.'
                   : response.delivery_state === 'delivered'
                     ? 'Correction delivered and waiting for the next safe planning boundary.'
                     : 'Correction accepted and queued for delivery.',
@@ -863,7 +868,7 @@ export default function DeepResearchTaskPanel({
           }}
         />}
     </Box> : <Box sx={{ px: 2, py: 1 }}><Typography variant="body2" color="text.secondary">
-      {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
+      {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'recovery_required' ? 'Runtime execution stopped at a product-state recovery boundary. Retry or cancel the task above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
     </Typography></Box>}
   />;
 }

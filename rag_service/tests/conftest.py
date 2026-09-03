@@ -27,7 +27,7 @@ from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
 os.environ.setdefault("LANGGRAPH_RUNTIME_BINDING_SECRET", "test-langgraph-binding-secret-32-characters")
-os.environ.setdefault("ASKPDF_AGENT_CHECKPOINTER_SETUP", "memory")
+os.environ.setdefault("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
 os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
 
 from app.db.models_sqlmodel import (

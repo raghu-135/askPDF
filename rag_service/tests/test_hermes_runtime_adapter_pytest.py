@@ -200,7 +200,10 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
         "http://hermes.test",
         "profile-1",
         "upstream-1",
-        {"X-Hermes-Session-Id": "session-1"},
+        {
+            "authorization": "Bearer test-hermes-api-token-32-characters",
+            "X-Hermes-Session-Id": "session-1",
+        },
     )
     result = HermesExecutionStore(str(state_path)).records["run-conflict"]
     assert result["status"] == "cancelled"
@@ -369,8 +372,10 @@ async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
 async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypatch):
     statuses = iter(("stopping", "running", "cancelled"))
     async_client = httpx.AsyncClient
+    observed_headers = []
 
     def handler(request):
+        observed_headers.append(dict(request.headers))
         return httpx.Response(
             200,
             json={"run_id": "upstream-run-7", "status": next(statuses)},
@@ -387,7 +392,10 @@ async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypat
         "http://hermes.test",
         "askpdf-run-profile-1",
         "upstream-run-7",
-        {},
+        {
+            "authorization": "Bearer test-hermes-token",
+            "X-Hermes-Session-Id": "session-3",
+        },
         timeout_seconds=1,
         poll_interval_seconds=0.01,
     )
@@ -397,6 +405,8 @@ async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypat
         "status": "cancelled",
         "last_event": None,
     }
+    assert all(headers["authorization"] == "Bearer test-hermes-token" for headers in observed_headers)
+    assert all("x-hermes-session-id" not in headers for headers in observed_headers)
 
 
 @pytest.mark.asyncio
@@ -664,7 +674,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
     monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "postgres")
     monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "1")
-    with pytest.raises(builtins.RuntimeError, match="PostgreSQL execution storage is not enabled"):
+    with pytest.raises(builtins.RuntimeError, match="HERMES_RUNTIME_STORAGE_BACKEND must be 'file'"):
         hermes_api.create_app()
 
 
@@ -755,31 +765,8 @@ def test_hermes_readiness_rejects_rendered_context_mismatch(monkeypatch, tmp_pat
 def test_hermes_readiness_does_not_invent_health_route_from_mcp_transport(monkeypatch, tmp_path):
     monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
     monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
-    response, requested_urls = _readiness_response(
-        monkeypatch, tmp_path, hermes_status=200, mcp_status=200
-    )
-
-    # The helper configures the explicit health URL; remove it and exercise the
-    # app again to ensure the streamable transport URL is never treated as a
-    # conventional GET health endpoint.
-    monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
-    async_client = httpx.AsyncClient
-
-    def handler(request):
-        requested_urls.append(str(request.url))
-        return httpx.Response(200, request=request)
-
-    monkeypatch.setattr(
-        hermes_api.httpx,
-        "AsyncClient",
-        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
-    )
-    with TestClient(hermes_api.create_app()) as client:
-        response = client.get("/readyz")
-
-    assert response.status_code == 503
-    assert response.json()["checks"]["mcp"]["status"] == "not_checked"
-    assert not any("/internal/mcp/healthz" in url for url in requested_urls)
+    with pytest.raises(builtins.RuntimeError, match="ASKPDF_MCP_HEALTH_URL is required"):
+        hermes_api.create_app()
 
 
 def test_hermes_readiness_rejects_unhealthy_required_mcp(monkeypatch, tmp_path):

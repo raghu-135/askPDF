@@ -101,7 +101,7 @@ if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
         export EXTERNAL_RUNTIME_LLM_API_URL="http://fake-llm:9000/v1"
     fi
     echo "Starting isolated External runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
     echo "Verifying the immutable production control-plane image..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
@@ -134,12 +134,16 @@ if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
     external_runtime_test test-runner --file test_runtime_service_lifecycle_pytest.py
     external_runtime_test test-runner --file test_agent_runtime_reconciliation_pytest.py
     external_runtime_test test-runner --file test_control_plane_import_boundary_pytest.py
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+        'import json, urllib.error, urllib.request
+try: urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3); raise AssertionError("protected runtime endpoint admitted an anonymous request")
+except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 401 and body["error"]["code"] == "runtime_unauthorized"'
     echo "Verifying dependency outage isolation and admission recovery..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" stop rag-service fake-llm
     dependencies_degraded=0
     for attempt in $(seq 1 30); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] in {"degraded", "unavailable"} and dependencies["provider"]["state"] in {"degraded", "unavailable"}'; then
+            'import json, os, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); protected=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", headers={"Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}); dependencies=json.load(urllib.request.urlopen(protected, timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] in {"degraded", "unavailable"} and dependencies["provider"]["state"] in {"degraded", "unavailable"}'; then
             dependencies_degraded=1
             break
         fi
@@ -150,14 +154,14 @@ if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
         exit 1
     fi
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-        'import json, urllib.error, urllib.request; payload={"request":{"run_id":"external_runtime-dependency-outage","thread_id":"external_runtime-thread","definition_id":"router_rag_agent","framework":"langgraph","builder_id":"langgraph_graph","input":{"question":"test"},"options":{"llm_model":"external_runtime-deterministic","embedding_model":"external_runtime-deterministic-embedding"}},"context":{"embedding_model":"external_runtime-deterministic-embedding","resolved_spec":{"config":{"allowed_tool_ids":["document_evidence"]}}}}; request=urllib.request.Request("http://127.0.0.1:8100/v1/runs/start", data=json.dumps(payload).encode(), headers={"content-type":"application/json"}, method="POST");
+        'import json, os, urllib.error, urllib.request; payload={"operation_id":"external-runtime-dependency-outage:start","request":{"run_id":"external_runtime-dependency-outage","thread_id":"external_runtime-thread","definition_id":"router_rag_agent","framework":"langgraph","builder_id":"langgraph_graph","input":{"question":"test"},"options":{"llm_model":"external_runtime-deterministic","embedding_model":"external_runtime-deterministic-embedding"}},"context":{"embedding_model":"external_runtime-deterministic-embedding","resolved_spec":{"config":{"allowed_tool_ids":["document_evidence"]}}}}; request=urllib.request.Request("http://127.0.0.1:8100/v1/runs/start", data=json.dumps(payload).encode(), headers={"content-type":"application/json", "Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}, method="POST");
 try: urllib.request.urlopen(request, timeout=3); raise AssertionError("dependent run was admitted")
 except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 503 and body["error"]["code"] == "runtime_dependency_unavailable" and body["error"]["retryable"] is True'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" start fake-llm rag-service
     dependencies_available=0
     for attempt in $(seq 1 45); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-            'import json, urllib.request; dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert dependencies["mcp"]["state"] == "available" and dependencies["provider"]["state"] == "available"'; then
+            'import json, os, urllib.request; request=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", headers={"Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}); dependencies=json.load(urllib.request.urlopen(request, timeout=3))["result"]["dependencies"]; assert dependencies["mcp"]["state"] == "available" and dependencies["provider"]["state"] == "available"'; then
             dependencies_available=1
             break
         fi
@@ -173,7 +177,7 @@ except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 50
     runtime_ready=0
     for attempt in $(seq 1 45); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); startup=json.load(urllib.request.urlopen("http://127.0.0.1:8100/startupz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); dependencies=json.load(urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and startup["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] == "available" and dependencies["mcp"]["protocol"] == "mcp"; assert dependencies["provider"]["state"] == "available"; print(json.dumps({"health": health, "startup": startup, "ready": ready, "dependencies": dependencies}, sort_keys=True))'; then
+            'import json, os, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); startup=json.load(urllib.request.urlopen("http://127.0.0.1:8100/startupz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); request=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", headers={"Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}); dependencies=json.load(urllib.request.urlopen(request, timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and startup["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] == "available" and dependencies["mcp"]["protocol"] == "mcp"; assert dependencies["provider"]["state"] == "available"; print(json.dumps({"health": health, "startup": startup, "ready": ready, "dependencies": dependencies}, sort_keys=True))'; then
             runtime_ready=1
             break
         fi
@@ -207,6 +211,7 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
         test-runner --file test_external_hermes_runtime_smoke_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm \
         -e HERMES_RUNTIME_REAL_SMOKE=true \
+        -e HERMES_MODEL=hermes-runtime-deterministic-hermes \
         -e HERMES_RUNTIME_URL=http://hermes-runtime:8200 \
         test-runner --file test_real_hermes_container_smoke_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm \

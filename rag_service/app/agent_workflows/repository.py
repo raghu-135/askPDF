@@ -44,6 +44,7 @@ from app.agent_workflows.run_store import (
     list_runs_for_thread as run_store_list_runs_for_thread,
     list_run_events as run_store_list_run_events,
     set_run_debug_trace as run_store_set_run_debug_trace,
+    update_run_observability as run_store_update_run_observability,
 )
 from app.agent_workflows.workflow_store import (
     AgentWorkflowVersion,
@@ -225,7 +226,7 @@ class AgentWorkflowRepository:
         async with session.begin():
             result = await session.execute(
                 select(AgentRun)
-                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN, RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, AgentRunStatus.CANCELLED.value]))
+                .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN, RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, AgentRunStatus.CANCELLED.value, AgentRunStatus.RECOVERY_REQUIRED.value]))
                 .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
                 .limit(max(bounded * 4, bounded))
             )
@@ -233,6 +234,15 @@ class AgentWorkflowRepository:
         candidates: list[AgentRun] = []
         for run in runs:
             projection = dict((run.run_metadata_json or {}).get("projection") or {})
+            if projection.get("reconciliation_status") == "manual_required":
+                continue
+            next_retry_at = projection.get("next_retry_at")
+            if next_retry_at:
+                try:
+                    if datetime.fromisoformat(str(next_retry_at).replace("Z", "+00:00")) > utc_now():
+                        continue
+                except (TypeError, ValueError):
+                    pass
             task = await session.get(AgentTask, run.task_id) if run.task_id else None
             cancellation_pending = task is not None and str(task.status) == "cancelling"
             if cancellation_pending or projection.get("runtime_result") or projection.get("terminal_event_id") or projection.get("reconciliation_status") in {"pending", "deferred", "failed"}:
@@ -726,6 +736,21 @@ class AgentWorkflowRepository:
     ) -> Optional[AgentRun]:
         session = await self._get_session()
         return await run_store_set_run_debug_trace(session, run_id, debug_trace_json)
+
+    async def update_run_observability(
+        self,
+        run_id: str,
+        *,
+        metrics_json: Dict[str, Any],
+        debug_trace_json: Dict[str, Any],
+    ) -> Optional[AgentRun]:
+        session = await self._get_session()
+        return await run_store_update_run_observability(
+            session,
+            run_id,
+            metrics_json=metrics_json,
+            debug_trace_json=debug_trace_json,
+        )
 
     async def append_run_event(self, run_id: str, event: Any) -> bool:
         return await self.append_run_event_payload(

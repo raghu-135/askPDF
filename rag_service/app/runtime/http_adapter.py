@@ -232,11 +232,23 @@ class RuntimeTransportConnector:
             capabilities=dict(features),
             definition_metadata=definition_metadata_from_spec(resolved_spec),
         )
+        operation_id = str(request.options.get("idempotency_key") or "").strip()
+        if not operation_id:
+            operation_seed = {
+                "path": path,
+                "run_id": request.run_id,
+                "input": request.input,
+                "interrupt": dict((payload or {}).get("interrupt") or {}),
+                "continuation": request.continuation.to_dict() if request.continuation else None,
+            }
+            operation_id = "runtime-operation:" + hashlib.sha256(
+                json.dumps(operation_seed, sort_keys=True, separators=(",", ":"), default=str).encode()
+            ).hexdigest()
         body = {
             "definition": definition.to_dict(),
             "request": request.to_dict(),
             "context": context_to_dict(context),
-            "operation_id": request.options.get("idempotency_key"),
+            "operation_id": operation_id,
             **dict(payload or {}),
         }
         seen: dict[str, str] = {}

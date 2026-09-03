@@ -812,8 +812,8 @@ class TestThreadEndpoints:
         assert "# Planner Node Prompt" in prompt
         assert "execution_plan" in prompt
 
-    def test_prompt_preview_unknown_pattern_falls_back_to_router(self, client):
-        """Unknown preview pattern IDs should preserve Router default behavior."""
+    def test_prompt_preview_unknown_workflow_is_not_found(self, client):
+        """Unknown workflow IDs must not silently select a different workflow."""
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -822,10 +822,8 @@ class TestThreadEndpoints:
             },
         )
 
-        assert response.status_code == 200
-        prompt = response.json()["prompt"]
-        assert "# Router Node Prompt" in prompt
-        assert "# Planner Node Prompt" not in prompt
+        assert response.status_code == 404
+        assert response.json()["detail"] == {"code": "agent_workflow_not_found"}
 
     def test_reasoning_mode_removed_from_request_models(self):
         """Reasoning-mode compatibility should not be exposed by API schemas."""

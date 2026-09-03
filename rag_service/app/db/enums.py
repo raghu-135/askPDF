@@ -65,6 +65,7 @@ class AgentRunStatus(str, Enum):
 
     RUNNING = "running"
     AWAITING_HUMAN = "awaiting_human"
+    RECOVERY_REQUIRED = "recovery_required"
     COMPLETED = "completed"
     CLARIFICATION = "clarification"
     FAILED = "failed"
