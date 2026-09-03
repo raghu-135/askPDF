@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -34,7 +36,7 @@ def _definition(**kwargs):
 @pytest.mark.parametrize(
     ("backend", "url", "saver", "checkpoint_available", "durable"),
     [
-        ("memory", "", False, True, False),
+        ("memory", "", False, False, False),
         ("postgres", "postgresql://db/runtime", True, True, True),
         ("postgres", "", True, False, False),
         ("postgres", "postgresql://db/runtime", False, False, False),
@@ -169,10 +171,18 @@ async def test_definition_resolver_uses_deep_definition_features_and_task_operat
 
 
 def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
-    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
+    monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", "postgresql://db/runtime")
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    @asynccontextmanager
+    async def injected_test_checkpointer(*, setup=True):
+        yield InMemorySaver()
+
+    monkeypatch.setattr("langgraph_runtime.checkpointing.open_agent_checkpointer", injected_test_checkpointer)
     with TestClient(create_app(require_auth=False)) as client:
         response = client.post("/v1/capabilities", json={"definition": _definition().to_dict()})
 

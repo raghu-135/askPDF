@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements-control-plane.txt requirements-control-plane.txt
-COPY rag_service/requirements-langgraph-runtime.txt requirements-langgraph-runtime.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 COPY langgraph_runtime/requirements.txt requirements-langgraph-service.txt
 RUN pip install -r requirements-dev.txt

@@ -8,8 +8,8 @@
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
-#   ./run_tests.sh --external-runtime                 # Run isolated external runtime integration checks
-#   ./run_tests.sh --external-runtime-real            # Run External runtime against a configured real provider
+#   ./run_tests.sh --langgraph-runtime                # Run isolated LangGraph runtime integration checks
+#   ./run_tests.sh --langgraph-runtime-real           # Run LangGraph runtime against a configured real provider
 #   ./run_tests.sh --hermes-runtime                 # Run deterministic Hermes runtime proof
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
@@ -44,12 +44,12 @@ EXTERNAL_RUNTIME_COMPOSE_ARGS=(-p "$EXTERNAL_RUNTIME_PROJECT_NAME" -f docker-com
 
 args=("$@")
 for arg in "${args[@]}"; do
-    if [ "$arg" = "--external-runtime" ]; then
-        RUN_EXTERNAL_RUNTIME=1
+    if [ "$arg" = "--langgraph-runtime" ]; then
+        RUN_LANGGRAPH_RUNTIME=1
     fi
-    if [ "$arg" = "--external-runtime-real" ]; then
-        RUN_EXTERNAL_RUNTIME=1
-        RUN_EXTERNAL_RUNTIME_REAL=1
+    if [ "$arg" = "--langgraph-runtime-real" ]; then
+        RUN_LANGGRAPH_RUNTIME=1
+        RUN_LANGGRAPH_RUNTIME_REAL=1
     fi
     if [ "$arg" = "--hermes-runtime" ]; then
         RUN_HERMES_RUNTIME=1
@@ -63,7 +63,7 @@ cleanup() {
     fi
 
     "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
-    if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ] || [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
+    if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ] || [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
         "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" down --volumes --remove-orphans || true
     fi
 }
@@ -89,23 +89,20 @@ external_runtime_test() {
     fi
 }
 
-if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
+if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     trap external_runtime_diagnostics ERR
-    if [ "${RUN_EXTERNAL_RUNTIME_REAL:-0}" = "1" ]; then
+    if [ "${RUN_LANGGRAPH_RUNTIME_REAL:-0}" = "1" ]; then
         if [ -z "${LLM_API_URL:-}" ]; then
-            echo "--external-runtime-real requires LLM_API_URL" >&2
+            echo "--langgraph-runtime-real requires LLM_API_URL" >&2
             exit 1
         fi
         export EXTERNAL_RUNTIME_LLM_API_URL="$LLM_API_URL"
     else
         export EXTERNAL_RUNTIME_LLM_API_URL="http://fake-llm:9000/v1"
     fi
-    echo "Starting isolated External runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
+    echo "Starting isolated LangGraph runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
-    echo "Verifying the immutable production control-plane image..."
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
-        'import importlib.util; from runtime_protocol.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
     control_plane_ready=0
     for attempt in $(seq 1 45); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
@@ -119,11 +116,14 @@ if [ "${RUN_EXTERNAL_RUNTIME:-0}" = "1" ]; then
         echo "Control plane did not become healthy" >&2
         exit 1
     fi
+    echo "Verifying the immutable production control-plane image..."
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
+        'import importlib.util; from runtime_protocol.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
     external_runtime_test test-runner --file test_runtime_contracts_pytest.py
     external_runtime_test test-runner --file test_runtime_http_adapter_pytest.py
-    if [ "${RUN_EXTERNAL_RUNTIME_REAL:-0}" = "1" ]; then
+    if [ "${RUN_LANGGRAPH_RUNTIME_REAL:-0}" = "1" ]; then
         if [ -z "${EXTERNAL_RUNTIME_LLM_MODEL:-}" ]; then
-            echo "--external-runtime-real requires EXTERNAL_RUNTIME_LLM_MODEL" >&2
+            echo "--langgraph-runtime-real requires EXTERNAL_RUNTIME_LLM_MODEL" >&2
             exit 1
         fi
         external_runtime_test -e EXTERNAL_RUNTIME_SMOKE=true -e EXTERNAL_RUNTIME_LLM_MODEL="$EXTERNAL_RUNTIME_LLM_MODEL" test-runner --file test_external_runtime_smoke_pytest.py

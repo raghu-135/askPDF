@@ -55,17 +55,7 @@ class LangGraphDeploymentProfile:
         values = environ or os.environ
         runtime_mode = "external_service"
 
-        backend = str(values.get("ASKPDF_AGENT_CHECKPOINTER") or "memory").strip().lower()
-        if backend == "memory":
-            available = _module_available("langgraph.checkpoint.memory")
-            return cls(
-                runtime_mode=runtime_mode,
-                checkpointer_backend=backend,
-                checkpoint_available=available,
-                durable_persistence=False,
-                runtime_available=available,
-                configuration_error=None if available else "LangGraph memory checkpointer is unavailable",
-            )
+        backend = str(values.get("ASKPDF_AGENT_CHECKPOINTER") or "").strip().lower()
         if backend == "postgres":
             url_available = bool(checkpoint_database_url(values))
             saver_available = _module_available("langgraph.checkpoint.postgres.aio")

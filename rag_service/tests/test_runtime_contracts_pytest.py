@@ -113,21 +113,8 @@ def test_correction_outcomes_round_trip_independently_for_multiple_redirects():
     assert restored.task_result.correction_outcomes == outcomes
 
 
-def test_fallback_plan_prioritizes_every_active_course_correction():
-    plan = deep_research_nodes._fallback_research_plan(
-        objective="Compare the frameworks",
-        enabled_profiles=["document_researcher", "web_researcher"],
-        max_todos=4,
-        course_corrections=(
-            {"id": "correction-1", "instruction": "Compare red-team security features."},
-            {"id": "correction-2", "instruction": "Add current pricing differences."},
-        ),
-    )
-
-    assert plan.incorporated_correction_ids == ["correction-1", "correction-2"]
-    assert [todo.profile_id.value for todo in plan.todos[:2]] == ["web_researcher", "web_researcher"]
-    assert "red-team security" in plan.todos[0].description
-    assert "pricing differences" in plan.todos[1].description
+def test_invalid_plans_are_not_fabricated():
+    assert not hasattr(deep_research_nodes, "_fallback_research_plan")
 
 
 def test_neutral_contracts_are_frozen_and_json_compatible():

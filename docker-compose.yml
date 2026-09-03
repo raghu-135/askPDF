@@ -73,6 +73,7 @@ services:
     build:
       context: .
       dockerfile: langgraph_runtime/Dockerfile
+    env_file: []
     environment:
       - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
@@ -81,9 +82,13 @@ services:
       - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
       - DATABASE_URL=
       - TEST_DATABASE_URL=
-    env_file:
-      - path: .env
-        required: true
+      - LANGGRAPH_RUNTIME_TOKEN=${LANGGRAPH_RUNTIME_TOKEN:?LANGGRAPH_RUNTIME_TOKEN must be set}
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=${LANGGRAPH_RUNTIME_BINDING_SECRET:?LANGGRAPH_RUNTIME_BINDING_SECRET must be set}
+      - ASKPDF_AGENT_CHECKPOINTER=${ASKPDF_AGENT_CHECKPOINTER:?ASKPDF_AGENT_CHECKPOINTER must be set}
+      - AGENT_CHECKPOINT_DATABASE_URL=${AGENT_CHECKPOINT_DATABASE_URL:?AGENT_CHECKPOINT_DATABASE_URL must be set}
+      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=${AGENT_RUNTIME_EXECUTION_DATABASE_URL:?AGENT_RUNTIME_EXECUTION_DATABASE_URL must be set}
+      - ASKPDF_AGENT_CHECKPOINTER_SETUP=${ASKPDF_AGENT_CHECKPOINTER_SETUP:-false}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set}
     depends_on:
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
@@ -103,9 +108,7 @@ services:
     command: ["python", "-m", "hermes_runtime.profile_manager"]
     environment:
       - HERMES_DATA_ROOT=/opt/data
-    env_file:
-      - path: .env
-        required: true
+    env_file: []
     volumes:
       - hermes_data:/opt/data
 
@@ -123,9 +126,7 @@ services:
       - GATEWAY_MULTIPLEX_PROFILES=true
       - ASKPDF_HERMES_COMPAT_ENABLED=1
       - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
-    env_file:
-      - path: .env
-        required: true
+    env_file: []
     command: ["gateway"]
     depends_on:
       hermes-config-init:
@@ -155,9 +156,7 @@ services:
       - ASKPDF_MCP_URL=http://rag-service:8000/internal/mcp/
       - ASKPDF_MCP_HEALTH_URL=http://rag-service:8000/health
       - HERMES_API_TOKEN=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
-    env_file:
-      - path: .env
-        required: true
+    env_file: []
     depends_on:
       hermes:
         condition: service_healthy

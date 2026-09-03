@@ -72,7 +72,6 @@ from langgraph_runtime.workflows.planning import (
     WORKER_NODE_ORDER,
     available_worker_node_ids,
     current_replan_count as _current_replan_count,
-    fallback_clarification_options as _fallback_clarification_options,
     infer_required_plan_steps,
     normalize_clarification_options as _normalize_clarification_options,
     normalize_evaluator_report,
@@ -154,6 +153,7 @@ from langgraph_runtime.workflows.deep_research_nodes import (
 )
 
 logger = logging.getLogger(__name__)
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 # Compatibility seams retained for existing graph tests and studio callers.
@@ -722,22 +722,23 @@ class NodeRegistry:
         if not allowed_routes:
             raise ValueError("Router has no configured route that is enabled for this test run")
         requested_route = parsed.get("route")
-        fallback_order = [
-            RouterRoute.DIRECT.value if bypass_clarification else RouterRoute.DOCUMENT.value,
-            RouterRoute.DOCUMENT.value if bypass_clarification else RouterRoute.DIRECT.value,
-            RouterRoute.CLARIFY.value,
-            RouterRoute.THREAD_CONVERSATION_HISTORY.value,
-            RouterRoute.DURABLE_MEMORY.value,
-            RouterRoute.THREAD_EVENTS.value,
-            RouterRoute.WEB.value,
-        ]
-        fallback_route = next(route for route in fallback_order if route in allowed_routes)
-        route = requested_route if requested_route in allowed_routes else fallback_route
+        if requested_route not in allowed_routes:
+            raise AgentRuntimeError(
+                "router_output_invalid",
+                "The router returned an unavailable route",
+                retryable=True,
+                details={"requested_route": requested_route, "allowed_routes": sorted(allowed_routes)},
+            )
+        route = requested_route
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _normalize_clarification_options(clarification_options)
             if len(clarification_options) < 2:
-                clarification_options = _fallback_clarification_options(state.get("question"))
+                raise AgentRuntimeError(
+                    "router_clarification_invalid",
+                    "The router returned insufficient clarification choices",
+                    retryable=True,
+                )
         route_reason = str(parsed.get("reason") or "")
         if requested_route != route:
             route_reason = (

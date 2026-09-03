@@ -1,3 +1,0 @@
-# Compatibility entrypoint for developer tooling. Production runtime images
-# install the standalone manifest directly.
--r ../langgraph_runtime/requirements.txt

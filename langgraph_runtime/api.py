@@ -374,7 +374,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
             checks["checkpoint_store"] = {
                 "status": "ok",
-                "backend": os.getenv("ASKPDF_AGENT_CHECKPOINTER", "memory").strip().lower(),
+                "backend": os.getenv("ASKPDF_AGENT_CHECKPOINTER", "").strip().lower(),
             }
         except Exception as exc:
             checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}

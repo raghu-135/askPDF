@@ -27,6 +27,7 @@ env:
   SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE: "false"
   SELKIES_UI_SIDEBAR_SHOW_SHARING: "false"
   SELKIES_UI_SIDEBAR_SHOW_APPS: "false"
+  HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
 
 jobs:
   docker-build:
@@ -36,6 +37,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Create clean CI environment
+        run: |
+          cp .env.ci .env
+
       - name: Build Docker images
         run: docker compose build
 
@@ -43,8 +48,10 @@ jobs:
         run: |
           docker build --build-arg DOWNLOAD_LOCAL_MODELS=false -f rag_service/Dockerfile -t askpdf-control-plane .
           docker build -f langgraph_runtime/Dockerfile -t askpdf-langgraph-runtime .
+          docker build -f hermes_runtime/Dockerfile -t askpdf-hermes-runtime .
           docker run --rm askpdf-control-plane python -c 'import importlib.util; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
           docker run --rm askpdf-langgraph-runtime python -c 'import importlib.util, langgraph, runtime_protocol, langgraph_runtime; assert importlib.util.find_spec("app") is None'
+          docker run --rm askpdf-hermes-runtime python -c 'import importlib.util, hermes_runtime, runtime_protocol; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("app") is None'
 
       - name: Check diff hygiene
         run: git diff --check
@@ -57,34 +64,42 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Create clean CI environment
+        run: |
+          cp .env.ci .env
+
       - name: Run Docker test runner
         run: ./run_tests.sh
 
       - name: Run Postgres checkpoint/resume test
         run: ./run_tests.sh --agent-checkpoint
 
-      - name: Run mandatory external LangGraph phase
+      - name: Run mandatory LangGraph runtime proof
         timeout-minutes: 15
-        run: ./run_tests.sh --phase5
+        run: ./run_tests.sh --langgraph-runtime
 
       - name: Stop test services
         if: always()
         run: docker compose -p askpdf-test -f docker-compose.test.yml down --volumes --remove-orphans
 
-  phase7-hermes-proof:
-    name: Phase 7 Hermes proof
+  hermes-runtime-proof:
+    name: Hermes runtime proof
     runs-on: ubuntu-latest
     needs: docker-build
     timeout-minutes: 20
     env:
-      ASKPDF_RUNTIME_TEST_PROJECT_NAME: askpdf-phase7-ci
+      ASKPDF_RUNTIME_TEST_PROJECT_NAME: askpdf-hermes-ci
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Create clean CI environment
+        run: |
+          cp .env.ci .env
+
       - name: Run deterministic Hermes proof
-        run: ./run_tests.sh --phase7
+        run: ./run_tests.sh --hermes-runtime
 
       - name: Stop Phase 7 services
         if: always()
-        run: docker compose -p askpdf-phase7-ci -f docker-compose.runtime-integration.yml down --volumes --remove-orphans
+        run: docker compose -p askpdf-hermes-ci -f docker-compose.runtime-integration.yml down --volumes --remove-orphans

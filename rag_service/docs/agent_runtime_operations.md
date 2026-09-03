@@ -3,11 +3,10 @@
 ## LangGraph runtime
 
 Capability discovery derives checkpoint-dependent operations from the deployment
-configuration. `ASKPDF_AGENT_CHECKPOINTER=memory` supports checkpoint operations
-only within the current process and reports `durable_persistence=false`.
-`ASKPDF_AGENT_CHECKPOINTER=postgres` reports durable checkpoint capabilities only
-when the Postgres saver and checkpoint database URL are configured; invalid
-Postgres configuration does not downgrade to memory in capability responses.
+configuration. External runtime deployments require
+`ASKPDF_AGENT_CHECKPOINTER=postgres` and a dedicated checkpoint database URL.
+In-memory checkpointing is available only through explicit test dependency
+injection and is never selected by runtime environment configuration.
 
 The built-in `deep_research_agent` remains a LangGraph deployment. Its capability
 response additionally describes planning, parallel dispatch, artifacts, memory,
@@ -25,9 +24,8 @@ application migrations with `DATABASE_URL`, then apply the independent runtime
 migration with the dedicated bootstrap command:
 
 ```bash
-cd rag_service
 AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints \
-python -m app.db.migrate_runtime
+python -m langgraph_runtime.migrate
 ```
 
 The runtime database has its own Alembic configuration and one complete schema

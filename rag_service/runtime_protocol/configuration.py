@@ -284,10 +284,9 @@ def validate_runtime_environment(
         if runtime_token is not None and len(runtime_token) < 32:
             errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
         checkpoint = _required("ASKPDF_AGENT_CHECKPOINTER", values, errors)
-        if checkpoint is not None and checkpoint not in {"memory", "postgres"}:
-            errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'memory' or 'postgres'")
+        if checkpoint is not None and checkpoint != "postgres":
+            errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'postgres' for the external runtime")
         _boolean("ASKPDF_AGENT_CHECKPOINTER_SETUP", values, errors)
-        _boolean("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", values, errors)
         if checkpoint == "postgres":
             checkpoint_values = dict(values)
             if not checkpoint_values.get("AGENT_CHECKPOINT_DATABASE_URL") and checkpoint_values.get("DATABASE_URL"):

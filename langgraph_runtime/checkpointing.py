@@ -32,18 +32,14 @@ def _postgres_checkpoint_url() -> str:
 async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
     """Yield a LangGraph checkpointer.
 
-    Production can opt into LangGraph's Postgres saver with
-    ASKPDF_AGENT_CHECKPOINTER=postgres. Tests and local dev use one process-wide
-    in-memory saver so a run can pause in one service call and resume in another.
-    An explicit Postgres mode fails closed when the configured saver is unavailable.
+    Production requires LangGraph's Postgres saver. Tests may inject the
+    process-wide in-memory saver directly, but environment configuration never
+    selects it for the runtime service.
     """
 
     mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", "").strip().lower()
-    if mode == AgentCheckpointerMode.MEMORY.value:
-        yield _MEMORY_CHECKPOINTER
-        return
     if mode != AgentCheckpointerMode.POSTGRES.value:
-        raise ValueError(f"Unsupported ASKPDF_AGENT_CHECKPOINTER value: {mode!r}")
+        raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres is required for the external runtime")
 
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

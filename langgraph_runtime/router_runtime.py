@@ -724,13 +724,6 @@ async def _handle_compiled_rag_chat(
                 "%s run failed | run_id=%s thread_id=%s elapsed_ms=%.1f",
                 runtime_label, agent_run_id, thread_id, duration_ms,
             )
-        fallback_answer = (
-            "I reached the workflow execution limit before completing the answer. "
-            "The evidence collected so far is preserved; please retry with a narrower question."
-            if budget_exhausted else
-            "I'm sorry, I encountered a technical error while processing your request. "
-            "Please try again in a moment or try rephrasing your question."
-        )
         parallel_unauthorized = str(exc) == "parallel runtime is not authorized for this workflow"
         error_payload = {
             "code": "workflow_budget_exhausted" if budget_exhausted else ("agent_workflow_parallel_unauthorized" if parallel_unauthorized else failure_code),
@@ -775,7 +768,7 @@ async def _handle_compiled_rag_chat(
         }
         return {
             **failure_result,
-            "answer": fallback_answer,
+            "answer": None,
             "used_chat_ids": [],
             "document_sources": [],
             "web_sources": [],

@@ -5,9 +5,7 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
 
   rag-service:
-    env_file:
-      - path: .env
-        required: true
+    env_file: []
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -38,9 +36,7 @@ services:
       - DOCLING_DO_FORMULA_ENRICHMENT=False
 
   db-migrate:
-    env_file:
-      - path: .env
-        required: true
+    env_file: []
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf

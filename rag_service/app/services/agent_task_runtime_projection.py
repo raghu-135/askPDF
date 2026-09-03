@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from contextvars import ContextVar
+from functools import wraps
 from datetime import timedelta
 from typing import Any, Mapping
 
@@ -29,6 +31,44 @@ from runtime_protocol.contracts import TaskOrchestrationDelta
 
 class RuntimeTaskProjectionConflict(RuntimeError):
     """The runtime delta is stale, malformed, or causally inconsistent."""
+
+
+_staged_content_keys: ContextVar[set[str] | None] = ContextVar("runtime_staged_content_keys", default=None)
+
+
+async def _cleanup_staged_content() -> None:
+    keys = _staged_content_keys.get() or set()
+    if not keys:
+        return
+    store = get_content_store()
+    for key in keys:
+        try:
+            await store.delete(key)
+        except Exception:
+            # Cleanup is retried by the normal content-store sweeper; projection
+            # failures must not be hidden by a secondary storage failure.
+            continue
+    _staged_content_keys.set(set())
+
+
+def _cleanup_projection_on_error(function):
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        token = _staged_content_keys.set(set())
+        try:
+            return await function(*args, **kwargs)
+        except Exception:
+            await _cleanup_staged_content()
+            raise
+        finally:
+            _staged_content_keys.reset(token)
+    return wrapped
+
+
+def _register_staged_content(key: str) -> None:
+    keys = _staged_content_keys.get()
+    if keys is not None:
+        keys.add(key)
 
 
 def _payload_hash(delta: TaskOrchestrationDelta) -> str:
@@ -87,7 +127,13 @@ async def _stage_artifacts(
             raise RuntimeTaskProjectionConflict("runtime artifact digest mismatch")
         artifact_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:{task_id}:{agent_run_id}:{runtime_id}:{digest}"))
         object_key = task_artifact_content_key(task_id, agent_run_id, artifact_id)
-        await store.put(object_key, body, expected_sha256=digest)
+        if await store.exists(object_key):
+            existing = await store.stat(object_key)
+            if existing.sha256 != digest or existing.size != len(body):
+                raise RuntimeTaskProjectionConflict("runtime artifact object conflicts with existing content")
+        else:
+            await store.put(object_key, body, expected_sha256=digest)
+            _register_staged_content(object_key)
         staged.append({**dict(source), "runtime_id": runtime_id, "id": artifact_id, "object_key": object_key, "sha256": digest, "byte_size": len(body)})
     return staged
 
@@ -105,6 +151,7 @@ async def _stage_final_report(
     ))
     object_key = task_artifact_content_key(task_id, agent_run_id, artifact_id)
     await get_content_store().put(object_key, body, expected_sha256=digest)
+    _register_staged_content(object_key)
     return {
         "id": artifact_id,
         "object_key": object_key,
@@ -449,6 +496,7 @@ async def apply_neutral_task_completion(
             return result
 
 
+@_cleanup_projection_on_error
 async def apply_runtime_task_delta(
     *, task_id: str, agent_run_id: str, delta: TaskOrchestrationDelta,
     artifact_id_map: Mapping[str, str] | None = None,

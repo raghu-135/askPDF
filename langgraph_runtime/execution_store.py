@@ -184,7 +184,7 @@ class ExecutionStore:
                 await connection.execute("select 1 from runtime_events limit 0")
             except asyncpg.UndefinedTableError as exc:
                 raise RuntimeError(
-                    "Runtime schema is missing; run app.db.migrate_runtime before starting the runtime"
+                    "Runtime schema is missing; run python -m langgraph_runtime.migrate before starting the runtime"
                 ) from exc
 
     async def close(self) -> None:
