@@ -27,6 +27,12 @@ _REFERENCE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
 _HERMES_PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
+LANGGRAPH_LIMIT_NAMES = (
+    "DEFAULT_TOKEN_BUDGET",
+    "REPLANS_LIMIT",
+    "MAX_CUSTOM_INSTRUCTIONS_CHARS",
+    "MAX_SYSTEM_ROLE_CHARS",
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,22 @@ def _positive_int(name: str, values: Mapping[str, str], errors: list[str]) -> in
     if parsed <= 0:
         errors.append(f"{name} must be a positive integer")
         return None
+    return parsed
+
+
+def parse_required_positive_int(name: str, value: str | None) -> int:
+    """Parse one required positive integer without applying a fallback."""
+    if value is None or not value.strip():
+        raise ValueError(f"{name} is required")
+    normalized = value.strip().lower()
+    if normalized in _TRUE or normalized in _FALSE:
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        parsed = int(normalized, 10)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer")
     return parsed
 
 
@@ -276,6 +298,8 @@ def validate_runtime_environment(
             errors.append("OPENAI_API_KEY is required for the selected Hermes provider")
 
     if service in {"control_plane", "langgraph"}:
+        for name in LANGGRAPH_LIMIT_NAMES:
+            _positive_int(name, values, errors)
         _deep_agent_budgets("langgraph", values, errors)
     hermes_enabled = service == "hermes" or (
         service == "control_plane"

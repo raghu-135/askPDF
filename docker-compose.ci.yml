@@ -22,6 +22,7 @@ services:
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
       - DEFAULT_TOKEN_BUDGET=8192
+      - REPLANS_LIMIT=10
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
       - MAX_SYSTEM_ROLE_CHARS=500
       - MAX_TOOL_INSTRUCTION_CHARS=500
@@ -54,6 +55,7 @@ services:
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
       - DEFAULT_TOKEN_BUDGET=8192
+      - REPLANS_LIMIT=10
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
       - MAX_SYSTEM_ROLE_CHARS=500
       - MAX_TOOL_INSTRUCTION_CHARS=500

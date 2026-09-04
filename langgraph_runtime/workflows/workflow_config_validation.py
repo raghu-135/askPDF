@@ -9,11 +9,7 @@ from langgraph_runtime.workflows.parallel_contracts import (
     PARALLEL_POLICY_LIMITS,
 )
 from langgraph_runtime.workflows.workflow_runtime import ALLOWED_WORKFLOW_CONFIG_KEYS
-from langgraph_runtime.models.llm import (
-    MAX_CUSTOM_INSTRUCTIONS_CHARS,
-    MAX_SYSTEM_ROLE_CHARS,
-    REPLANS_LIMIT,
-)
+from langgraph_runtime.models.llm import runtime_limits
 from langgraph_runtime.workflows.execution_contracts import PREFETCH_MODES
 from langgraph_runtime.workflows.corrective_contracts import collect_corrective_policy_errors
 
@@ -22,6 +18,7 @@ CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
 CONTEXT_EVIDENCE_COMPRESSION_MODES = {mode.value for mode in EvidenceCompressionMode}
 def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]:
     errors: list[str] = []
+    runtime_config = runtime_limits()
     errors.extend(collect_corrective_policy_errors(config.get("corrective_policy")))
     unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
     if unknown_keys:
@@ -40,8 +37,8 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
             profiles = task_policy.get("profiles")
             if not isinstance(profiles, list) or not profiles or not all(isinstance(value, str) and value for value in profiles):
                 errors.append("task_policy.profiles must be a non-empty list of strings")
-            limits = task_policy.get("limits")
-            if not isinstance(limits, dict):
+            task_limits = task_policy.get("limits")
+            if not isinstance(task_limits, dict):
                 errors.append("task_policy.limits must be an object")
             orchestration = task_policy.get("orchestration")
             if orchestration is not None:
@@ -105,16 +102,16 @@ def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]
         replans = config.get("replans")
         if not isinstance(replans, int):
             errors.append("replans must be an integer")
-        elif replans < 1 or replans > REPLANS_LIMIT:
-            errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
+        elif replans < 1 or replans > runtime_config.replans_limit:
+            errors.append(f"replans must be between 1 and {runtime_config.replans_limit}")
 
     system_role = config.get("system_role", "")
-    if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
-        errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
+    if not isinstance(system_role, str) or len(system_role) > runtime_config.max_system_role_chars:
+        errors.append(f"system_role must be a string up to {runtime_config.max_system_role_chars} characters")
 
     custom_instructions = config.get("custom_instructions", "")
-    if not isinstance(custom_instructions, str) or len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS_CHARS:
-        errors.append(f"custom_instructions must be a string up to {MAX_CUSTOM_INSTRUCTIONS_CHARS} characters")
+    if not isinstance(custom_instructions, str) or len(custom_instructions) > runtime_config.max_custom_instructions_chars:
+        errors.append(f"custom_instructions must be a string up to {runtime_config.max_custom_instructions_chars} characters")
 
     tool_instructions = config.get("tool_instructions", {})
     if not isinstance(tool_instructions, dict):

@@ -209,6 +209,17 @@ class RuntimeTransportConnector:
         try:
             response.raise_for_status()
         except httpx.HTTPError as exc:
+            # A plain JSON ``detail`` is an explicit runtime rejection, not a
+            # connectivity failure. Preserve it so callers can fix the
+            # definition/configuration instead of retrying an available runtime.
+            detail = payload.get("detail") if isinstance(payload, Mapping) else None
+            if response.status_code < 500 and isinstance(detail, str) and detail.strip():
+                raise RuntimeError(
+                    code="runtime_request_rejected",
+                    safe_message=detail[:2000],
+                    retryable=False,
+                    details={"status_code": response.status_code},
+                ) from exc
             raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
         if not isinstance(payload, Mapping):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response")
@@ -374,6 +385,18 @@ class RuntimeTransportConnector:
                     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                         envelope = {}
                     _raise_structured_runtime_error(envelope)
+                    if (
+                        response.status_code < 500
+                        and isinstance(envelope, Mapping)
+                        and isinstance(envelope.get("detail"), str)
+                        and envelope["detail"].strip()
+                    ):
+                        raise RuntimeError(
+                            code="runtime_request_rejected",
+                            safe_message=envelope["detail"][:2000],
+                            retryable=False,
+                            details={"status_code": response.status_code},
+                        )
                 response.raise_for_status()
                 async for _name, item in iter_sse(response):
                     envelope = item["data"]

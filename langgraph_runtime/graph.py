@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.agent.tool_registry import get_tool_contract_id
-from langgraph_runtime.models.llm import DEFAULT_TOKEN_BUDGET, get_llm
+from langgraph_runtime.models.llm import get_llm, runtime_limits
 from langgraph_runtime.models.retry import is_retryable_model_error
 from langgraph_runtime.workflows.prompting import (
     build_evaluator_prompt,
@@ -493,7 +493,7 @@ class NodeRegistry:
                     thread_id=state["thread_id"],
                     raw_question=state["question"],
                     embedding_model=state["embedding_model"],
-                    context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
+                    context_window=state.get("context_window", runtime_limits().default_token_budget),
                     use_web_search=state.get("use_web_search", False),
                     use_reranker=state.get("use_reranker", True),
                     prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),

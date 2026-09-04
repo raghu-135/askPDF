@@ -15,7 +15,7 @@ from langgraph_runtime.workflows.enums import (
     TraceSpanKind,
     WorkflowNodeType,
 )
-from langgraph_runtime.models.llm import REPLANS_LIMIT
+from langgraph_runtime.models.llm import runtime_limits
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REDUCER_CHANNELS
 
 
@@ -196,7 +196,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_AGGREGATOR,
             NODE_SERIAL_DISPATCH,
         ],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
         "display_name": "Thread Conversation History Retrieval",
@@ -216,7 +216,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_AGGREGATOR,
             NODE_SERIAL_DISPATCH,
         ],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_DURABLE_MEMORY_WORKER: {
         "display_name": "Durable Memory Retrieval",
@@ -235,7 +235,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_AGGREGATOR,
             NODE_SERIAL_DISPATCH,
         ],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_THREAD_EVENTS_WORKER: {
         "display_name": "Thread Events Retrieval",
@@ -245,7 +245,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [TOOL_THREAD_EVENTS],
         "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "allowed_child_types": [NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_AGGREGATOR, NODE_SERIAL_DISPATCH, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_WEB_WORKER: {
         "display_name": "Web Retrieval",
@@ -264,7 +264,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_EVENTS_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
         "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_AGGREGATOR, NODE_SERIAL_DISPATCH, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_EVIDENCE_EVALUATOR: {
         "display_name": "Evidence Evaluator",
@@ -274,7 +274,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_AGGREGATOR, NODE_HITL_GATE],
         "allowed_child_types": [NODE_SYNTHESIZER, NODE_REPLANNER, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 2, "max_visits": 0},
     },
     NODE_REPLANNER: {
         "display_name": "Replanner",
@@ -284,7 +284,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_RETRIEVAL_QUALITY_GRADER, NODE_GROUNDED_ANSWER_VERIFIER, NODE_HITL_GATE],
         "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
+        "limits": {"default_max_visits": 1, "max_visits": 0},
     },
     NODE_DIRECT_ANSWER: {
         "display_name": "Direct Answer",
@@ -395,7 +395,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_WEB_WORKER,
         ],
         "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_RETRIEVAL_QUALITY_GRADER, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
-        "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT + 1},
+        "limits": {"default_max_visits": 1, "max_visits": 0},
     },
     NODE_ANSWER_EVALUATOR: {
         "display_name": "Answer Quality Review",
@@ -1120,6 +1120,20 @@ def collect_node_catalog_errors(catalog: Dict[str, Dict[str, Any]] | None = None
 
 def get_node_catalog() -> Dict[str, Dict[str, Any]]:
     catalog = deepcopy(NODE_CATALOG)
+    replan_limit = runtime_limits().replans_limit
+    plus_one_types = {
+        NODE_RETRIEVAL_WORKER,
+        NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+        NODE_DURABLE_MEMORY_WORKER,
+        NODE_THREAD_EVENTS_WORKER,
+        NODE_WEB_WORKER,
+        NODE_EVIDENCE_EVALUATOR,
+        NODE_AGGREGATOR,
+        NODE_ANSWER_REVISER,
+    }
+    for node_type, metadata in catalog.items():
+        if metadata.get("limits", {}).get("max_visits") == 0:
+            metadata["limits"]["max_visits"] = replan_limit + (1 if node_type in plus_one_types else 0)
     for node_type, metadata in catalog.items():
         ui = deepcopy(NODE_UI_METADATA.get(node_type, {}))
         ui["field_guidance"] = {
@@ -1132,7 +1146,8 @@ def get_node_catalog() -> Dict[str, Dict[str, Any]]:
 
 
 def get_node_type_metadata(node_type: str) -> Dict[str, Any]:
-    return deepcopy(NODE_CATALOG.get(node_type) or {})
+    catalog = get_node_catalog()
+    return deepcopy(catalog.get(node_type) or {})
 
 
 def known_node_types() -> set[str]:
@@ -1140,17 +1155,17 @@ def known_node_types() -> set[str]:
 
 
 def node_type_capabilities(node_type: str) -> list[str]:
-    metadata = NODE_CATALOG.get(node_type) or {}
+    metadata = get_node_catalog().get(node_type) or {}
     return list(metadata.get("capabilities") or [])
 
 
 def node_type_allowed_tool_contract_ids(node_type: str) -> set[str]:
-    metadata = NODE_CATALOG.get(node_type) or {}
+    metadata = get_node_catalog().get(node_type) or {}
     return {str(item) for item in metadata.get("allowed_tool_contract_ids") or [] if item}
 
 
 def node_type_default_max_visits(node_type: str) -> int:
-    metadata = NODE_CATALOG.get(node_type) or {}
+    metadata = get_node_catalog().get(node_type) or {}
     limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
     try:
         return max(1, int(limits.get("default_max_visits", 1)))
@@ -1159,7 +1174,7 @@ def node_type_default_max_visits(node_type: str) -> int:
 
 
 def node_type_max_visits(node_type: str) -> int:
-    metadata = NODE_CATALOG.get(node_type) or {}
+    metadata = get_node_catalog().get(node_type) or {}
     limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
     default = node_type_default_max_visits(node_type)
     try:

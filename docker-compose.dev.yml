@@ -13,6 +13,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY-}
       LLM_AUTH_MODE: ${LLM_AUTH_MODE:?LLM_AUTH_MODE must be set in .env}
       LLM_KEYLESS_PROVIDER: ${LLM_KEYLESS_PROVIDER-}
+      DEFAULT_TOKEN_BUDGET: ${DEFAULT_TOKEN_BUDGET:?DEFAULT_TOKEN_BUDGET must be set in .env}
+      REPLANS_LIMIT: ${REPLANS_LIMIT:?REPLANS_LIMIT must be set in .env}
+      MAX_CUSTOM_INSTRUCTIONS_CHARS: ${MAX_CUSTOM_INSTRUCTIONS_CHARS:?MAX_CUSTOM_INSTRUCTIONS_CHARS must be set in .env}
+      MAX_SYSTEM_ROLE_CHARS: ${MAX_SYSTEM_ROLE_CHARS:?MAX_SYSTEM_ROLE_CHARS must be set in .env}
       # This is a container-to-container address.  Do not inherit the host
       # development value (usually 127.0.0.1), which points back at the
       # langgraph-runtime container and makes dependency admission fail.
@@ -60,6 +64,7 @@ services:
   hermes-config-init:
     environment:
       HERMES_DATA_ROOT: /opt/data
+      HERMES_CONFIG_TEMPLATE_ROOT: /app/hermes_runtime
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:-32768}
       HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-lmstudio}
       HERMES_MCP_CONTEXT_SECRET: ${HERMES_MCP_CONTEXT_SECRET:?HERMES_MCP_CONTEXT_SECRET must be set in .env}
@@ -68,6 +73,7 @@ services:
       HERMES_PROFILE_GID: ${HERMES_PROFILE_GID:-10000}
       HERMES_UPSTREAM_REVISION: ${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
       API_SERVER_KEY: ${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
 
   hermes:
     environment:

@@ -3,24 +3,49 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from langchain_openai import ChatOpenAI
+from runtime_protocol.configuration import LANGGRAPH_LIMIT_NAMES, parse_required_positive_int
 
 
-def _positive_int(name: str, default: int) -> int:
-    value = os.getenv(name, str(default))
-    result = int(value)
-    if result < 1:
-        raise RuntimeError(f"{name} must be positive")
-    return result
+@dataclass(frozen=True)
+class LangGraphLimits:
+    default_token_budget: int
+    replans_limit: int
+    max_custom_instructions_chars: int
+    max_system_role_chars: int
 
 
-DEFAULT_TOKEN_BUDGET = _positive_int("DEFAULT_TOKEN_BUDGET", 8192)
-REPLANS_LIMIT = _positive_int("REPLANS_LIMIT", 10)
-MAX_CUSTOM_INSTRUCTIONS_CHARS = _positive_int("MAX_CUSTOM_INSTRUCTIONS_CHARS", 2000)
-MAX_SYSTEM_ROLE_CHARS = _positive_int("MAX_SYSTEM_ROLE_CHARS", 500)
+def load_runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
+    values = os.environ if environ is None else environ
+    parsed = {
+        name: parse_required_positive_int(name, values.get(name))
+        for name in LANGGRAPH_LIMIT_NAMES
+    }
+    return LangGraphLimits(
+        default_token_budget=parsed["DEFAULT_TOKEN_BUDGET"],
+        replans_limit=parsed["REPLANS_LIMIT"],
+        max_custom_instructions_chars=parsed["MAX_CUSTOM_INSTRUCTIONS_CHARS"],
+        max_system_role_chars=parsed["MAX_SYSTEM_ROLE_CHARS"],
+    )
+
+
+_RUNTIME_LIMITS: LangGraphLimits | None = None
+
+
+def configure_runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
+    global _RUNTIME_LIMITS
+    _RUNTIME_LIMITS = load_runtime_limits(environ)
+    return _RUNTIME_LIMITS
+
+
+def runtime_limits() -> LangGraphLimits:
+    if _RUNTIME_LIMITS is None:
+        raise RuntimeError("LangGraph runtime limits have not been configured")
+    return _RUNTIME_LIMITS
 
 
 def provider_configuration(base_url_override: str | None = None) -> tuple[str, dict[str, str], str]:

@@ -4,6 +4,53 @@ import httpx
 import pytest
 
 
+def test_runtime_limits_are_configured_and_used_without_defaults(monkeypatch):
+    from langgraph_runtime.models.llm import configure_runtime_limits, runtime_limits
+    from langgraph_runtime.workflows.node_catalog import node_type_max_visits
+    from langgraph_runtime.workflows.workflow_config_validation import collect_config_errors
+
+    monkeypatch.setenv("DEFAULT_TOKEN_BUDGET", "16384")
+    monkeypatch.setenv("REPLANS_LIMIT", "20")
+    monkeypatch.setenv("MAX_CUSTOM_INSTRUCTIONS_CHARS", "4000")
+    monkeypatch.setenv("MAX_SYSTEM_ROLE_CHARS", "1000")
+    configure_runtime_limits()
+
+    limits = runtime_limits()
+    assert limits.default_token_budget == 16384
+    assert limits.replans_limit == 20
+    assert limits.max_custom_instructions_chars == 4000
+    assert limits.max_system_role_chars == 1000
+    assert node_type_max_visits("aggregator") == 21
+    assert not any("replans" in error for error in collect_config_errors({"replans": 20}, "test"))
+
+
+def test_task_policy_does_not_shadow_runtime_limits(monkeypatch):
+    from langgraph_runtime.models.llm import configure_runtime_limits
+    from langgraph_runtime.workflows.workflow_config_validation import collect_config_errors
+
+    monkeypatch.setenv("DEFAULT_TOKEN_BUDGET", "16384")
+    monkeypatch.setenv("REPLANS_LIMIT", "20")
+    monkeypatch.setenv("MAX_CUSTOM_INSTRUCTIONS_CHARS", "4000")
+    monkeypatch.setenv("MAX_SYSTEM_ROLE_CHARS", "1000")
+    configure_runtime_limits()
+
+    errors = collect_config_errors(
+        {
+            "replans": 20,
+            "system_role": "",
+            "custom_instructions": "",
+            "task_policy": {
+                "builtin_only": True,
+                "profiles": ["document_researcher"],
+                "limits": {"max_replans": 5},
+            },
+        },
+        "deep_research_agent",
+    )
+    assert not any("attribute 'replans_limit'" in error for error in errors)
+    assert not any("replans must be between" in error for error in errors)
+
+
 def test_graph_result_projection_does_not_expose_invocation_credentials():
     from langgraph_runtime.adapter import _result_from_graph
 

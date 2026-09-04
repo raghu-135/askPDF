@@ -51,6 +51,10 @@ def _environment() -> dict[str, str]:
         "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
         "API_SERVER_KEY": "server-key",
         "HERMES_RUNTIME_URL": "http://hermes-runtime:8200",
+        "DEFAULT_TOKEN_BUDGET": "8192",
+        "REPLANS_LIMIT": "10",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "2000",
+        "MAX_SYSTEM_ROLE_CHARS": "500",
     }
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
@@ -86,6 +90,42 @@ def test_control_plane_requires_langgraph_runtime_token():
     values.pop("LANGGRAPH_RUNTIME_TOKEN")
     with pytest.raises(RuntimeConfigurationError, match="LANGGRAPH_RUNTIME_TOKEN"):
         validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+
+
+def test_langgraph_limits_accept_non_default_values():
+    values = _environment()
+    values.update({
+        "DEFAULT_TOKEN_BUDGET": "16384",
+        "REPLANS_LIMIT": "20",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "4000",
+        "MAX_SYSTEM_ROLE_CHARS": "1000",
+    })
+
+    validated = validate_runtime_environment(service="langgraph", environ=values)
+
+    assert {name: validated.get(name) for name in (
+        "DEFAULT_TOKEN_BUDGET", "REPLANS_LIMIT",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS", "MAX_SYSTEM_ROLE_CHARS",
+    )} == {
+        "DEFAULT_TOKEN_BUDGET": "16384",
+        "REPLANS_LIMIT": "20",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "4000",
+        "MAX_SYSTEM_ROLE_CHARS": "1000",
+    }
+
+
+@pytest.mark.parametrize("name,value", [
+    ("DEFAULT_TOKEN_BUDGET", ""),
+    ("REPLANS_LIMIT", "0"),
+    ("MAX_CUSTOM_INSTRUCTIONS_CHARS", "false"),
+    ("MAX_SYSTEM_ROLE_CHARS", "not-an-integer"),
+])
+def test_langgraph_limits_reject_missing_or_invalid_values(name: str, value: str):
+    values = _environment()
+    values[name] = value
+
+    with pytest.raises(RuntimeConfigurationError, match=name):
+        validate_runtime_environment(service="langgraph", environ=values)
 
 
 @pytest.mark.parametrize("value", ["0", "0.5"])

@@ -620,3 +620,26 @@ async def test_http_adapter_does_not_replay_unstructured_http_status_failures(st
     assert caught.value.details["status_code"] == status_code
     assert calls == ["POST /v1/runs/start"]
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_preserves_plain_runtime_rejection_detail():
+    request = _request()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=http_request,
+            json={"detail": "replans must be between 1 and 20"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.start(request, context=RuntimeInvocationContext())
+
+    assert caught.value.code == "runtime_request_rejected"
+    assert caught.value.safe_message == "replans must be between 1 and 20"
+    assert caught.value.retryable is False
+    assert caught.value.details == {"status_code": 400}
+    await client.aclose()

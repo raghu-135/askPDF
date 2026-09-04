@@ -28,6 +28,7 @@ from runtime_protocol.transport import (
 )
 from langgraph_runtime.capabilities import langgraph_capabilities, langgraph_deployment_capabilities
 from langgraph_runtime.budgets import deep_agent_budgets
+from langgraph_runtime.models.llm import configure_runtime_limits
 from runtime_protocol.configuration import validate_runtime_environment
 from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
 from langgraph_runtime.dependencies import (
@@ -43,6 +44,20 @@ class DependencyUnavailable(Exception):
     def __init__(self, details: Mapping[str, Any]) -> None:
         self.details = dict(details)
         super().__init__("A dependency required by this agent is unavailable")
+
+
+def _definition_http_error(exc: Exception) -> HTTPException:
+    """Expose admission failures as structured non-retryable API errors."""
+    if isinstance(exc, RuntimeError):
+        detail = exc.to_dict()
+    else:
+        detail = {
+            "code": "runtime_definition_invalid",
+            "safe_message": str(exc)[:2000] or "Agent definition is invalid",
+            "retryable": False,
+            "details": {},
+        }
+    return HTTPException(status_code=400, detail=detail)
 
 
 def _namespace(value: Any) -> Any:
@@ -192,6 +207,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         validation_environment["LLM_AUTH_MODE"] = validation_environment.get("LLM_AUTH_MODE") or "none"
         validation_environment["LLM_KEYLESS_PROVIDER"] = validation_environment.get("LLM_KEYLESS_PROVIDER") or "local"
     validate_runtime_environment(service="langgraph", environ=validation_environment)
+    configure_runtime_limits(validation_environment)
     runtime_state: dict[str, Any] = {
         "draining": False,
         "started": False,
@@ -462,7 +478,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             value = await get_adapter().validate(definition, payload.get("spec") or {}, options=payload.get("options") or {})
             return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": value.to_dict()})
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _definition_http_error(exc) from exc
 
     @app.post("/v1/resolve")
     async def resolve(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
@@ -500,7 +516,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _definition_http_error(exc) from exc
 
     @app.post("/v1/catalog")
     async def catalog(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
@@ -547,7 +563,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _definition_http_error(exc) from exc
 
     async def _execute_operation(
         payload: Mapping[str, Any],

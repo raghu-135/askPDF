@@ -47,6 +47,24 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert services["rag-service"]["env_file"][0]["path"] == ".env"
 
 
+def test_hermes_bootstrap_has_explicit_complete_environment():
+    services = _compose("docker-compose.yml")["services"]
+    bootstrap = services["hermes-config-init"]
+    assert bootstrap.get("env_file") == []
+    assert {
+        "HERMES_DATA_ROOT", "HERMES_CONFIG_TEMPLATE_ROOT", "HERMES_MODEL_PROVIDER",
+        "HERMES_MODEL_CONTEXT_LENGTH", "HERMES_PROFILE_ROOT", "HERMES_PROFILE_UID",
+        "HERMES_PROFILE_GID", "API_SERVER_KEY", "HERMES_MCP_CONTEXT_SECRET",
+        "OPENAI_API_KEY",
+    } <= {entry.split("=", 1)[0] for entry in bootstrap["environment"]}
+
+
+def test_runtime_integration_bootstrap_allowlists_provider_credential():
+    bootstrap = _compose("docker-compose.runtime-integration.yml")["services"]["hermes-config-init"]
+    assert "OPENAI_API_KEY" in bootstrap["environment"]
+    assert bootstrap["environment"]["HERMES_MODEL_PROVIDER"] == "lmstudio"
+
+
 def test_pinned_contract_copies_match_authoritative_module():
     from app.runtime.hermes_pinned_contract import HERMES_CONFIG_SCHEMA_VERSION, HERMES_REVISION
 

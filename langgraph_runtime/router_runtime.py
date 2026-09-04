@@ -18,7 +18,7 @@ from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
 from langgraph_runtime.workflows.state import merge_parallel_deltas, WorkflowBudgetExceeded
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
-from langgraph_runtime.models.llm import DEFAULT_TOKEN_BUDGET
+from langgraph_runtime.models.llm import runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
 
 
@@ -436,7 +436,7 @@ async def _handle_compiled_rag_chat(
     use_reranker = getattr(req, "use_reranker", None)
     if use_reranker is None:
         use_reranker = True
-    context_window = getattr(req, "context_window", None) or DEFAULT_TOKEN_BUDGET
+    context_window = getattr(req, "context_window", None) or runtime_limits().default_token_budget
     system_role = getattr(req, "system_role_override", "") or ""
     tool_instructions = getattr(req, "tool_instructions_override", None) or {}
     custom_instructions = getattr(req, "custom_instructions_override", "") or ""
@@ -858,7 +858,7 @@ async def continue_compiled_rag_chat(
         app_thread_id=run.thread_id,
         checkpoint_thread_id=checkpoint_thread_id,
         embedding_model=snapshot_values.get("embedding_model"),
-        context_window=snapshot_values.get("context_window") or DEFAULT_TOKEN_BUDGET,
+        context_window=snapshot_values.get("context_window") or runtime_limits().default_token_budget,
         use_web_search=snapshot_values.get("use_web_search"),
         use_reranker=snapshot_values.get("use_reranker"),
         telemetry_sink=telemetry_sink,
@@ -992,7 +992,7 @@ async def resume_compiled_rag_chat(
         app_thread_id=run.thread_id,
         checkpoint_thread_id=checkpoint_thread_id,
         embedding_model=snapshot_values.get("embedding_model"),
-        context_window=snapshot_values.get("context_window") or DEFAULT_TOKEN_BUDGET,
+        context_window=snapshot_values.get("context_window") or runtime_limits().default_token_budget,
         use_web_search=snapshot_values.get("use_web_search"),
         use_reranker=snapshot_values.get("use_reranker"),
         telemetry_sink=telemetry_sink,
