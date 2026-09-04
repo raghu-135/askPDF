@@ -22,6 +22,10 @@ _RESULT_CONTROL_KEYS = frozenset({
 })
 
 
+class RuntimeTaskResultValidationError(ValueError):
+    """A runtime result violates the neutral result contract."""
+
+
 def _usable_text(value: Any, *, depth: int = 0) -> str | None:
     """Extract answer text from bounded, framework-neutral response shapes."""
 
@@ -96,6 +100,13 @@ def normalize_runtime_task_result(
 
     data = dict(value) if isinstance(value, Mapping) else {}
     raw_status = str(data.get("status") or "completed")
+    try:
+        status = RuntimeTaskResultStatus(raw_status)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in RuntimeTaskResultStatus)
+        raise RuntimeTaskResultValidationError(
+            f"unknown runtime task result status {raw_status!r}; expected one of: {allowed}"
+        ) from exc
     canonical_text_value = next(
         (data.get(key) for key in _CANONICAL_TEXT_KEYS if data.get(key) is not None),
         value if isinstance(value, str) else None,
@@ -145,12 +156,6 @@ def normalize_runtime_task_result(
             "code": "structured_output_missing",
             "message": "The requested structured output was not returned; usable text was preserved.",
         })
-
-    try:
-        status = RuntimeTaskResultStatus(raw_status)
-    except ValueError:
-        status = RuntimeTaskResultStatus.COMPLETED if (text or structured or artifacts) else RuntimeTaskResultStatus.FAILED
-        warnings.append({"code": "runtime_status_unknown", "details": {"status": raw_status}})
 
     usable = bool(text or structured or artifacts)
     if status in {RuntimeTaskResultStatus.FAILED, RuntimeTaskResultStatus.TIMED_OUT, RuntimeTaskResultStatus.CANCELLED} and usable:

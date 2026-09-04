@@ -50,6 +50,20 @@ async def test_shared_volume_content_store_rejects_traversal_symlinks_and_bad_ha
         await store.put("linked/object", b"no")
 
 
+@pytest.mark.asyncio
+async def test_shared_volume_content_store_put_if_absent_never_overwrites(tmp_path):
+    store = SharedVolumeContentStore(tmp_path)
+    key = task_artifact_content_key("task", "run", "artifact")
+
+    created, first = await store.put_if_absent(key, b"first")
+    reused, second = await store.put_if_absent(key, b"second")
+
+    assert created is True
+    assert reused is False
+    assert first.sha256 == second.sha256
+    assert await store.read(key) == b"first"
+
+
 def test_content_key_contracts():
     assert pdf_content_key("0" * 32) == f"{'0' * 32}.pdf"
     with pytest.raises(ValueError, match="PDF content hash"):

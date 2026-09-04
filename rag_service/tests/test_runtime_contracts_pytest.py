@@ -58,6 +58,10 @@ from langgraph_runtime.workflows.deep_research_execution import (
 from langgraph_runtime.workflows.deep_research_nodes import deep_task_scheduler
 from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.workflows import deep_research_nodes
+from langgraph_runtime.runtime_support.task_results import (
+    RuntimeTaskResultValidationError,
+    normalize_runtime_task_result as normalize_runtime_service_task_result,
+)
 from langgraph_runtime.router_runtime import _install_budget_meter
 
 
@@ -711,6 +715,35 @@ def test_runtime_task_result_preserves_text_when_optional_structure_is_invalid()
     assert result.warnings[0]["code"] == "structured_output_invalid"
     assert result.framework_details == {"framework": "langgraph"}
     assert runtime_task_result_summary(result)["output_shape"] == "text"
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "timed_out"])
+def test_runtime_service_result_preserves_failure_status_with_partial_text(status):
+    result = normalize_runtime_service_task_result({"status": status, "text": "partial output"})
+
+    assert result.status.value == status
+    assert result.text == "partial output"
+
+
+@pytest.mark.parametrize("value", [
+    {"status": "unknown", "text": "partial output"},
+    {"status": "unknown", "structured_output": {"answer": "partial output"}},
+])
+def test_runtime_service_result_rejects_unknown_status(value):
+    with pytest.raises(RuntimeTaskResultValidationError, match="unknown runtime task result status"):
+        normalize_runtime_service_task_result(value)
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "timed_out"])
+def test_deep_research_subagent_conversion_preserves_declared_failure(status):
+    neutral = normalize_runtime_service_task_result({"status": status, "text": "partial output"})
+
+    result = deep_research_nodes._subagent_result_from_neutral(
+        neutral, summary="partial output", structured_value={}
+    )
+
+    assert result.status == status
+    assert result.summary == "partial output"
 
 
 def test_runtime_task_result_rejects_empty_success_and_normalizes_empty_output_failure():

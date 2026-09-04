@@ -132,8 +132,11 @@ async def _stage_artifacts(
             if existing.sha256 != digest or existing.size != len(body):
                 raise RuntimeTaskProjectionConflict("runtime artifact object conflicts with existing content")
         else:
-            await store.put(object_key, body, expected_sha256=digest)
-            _register_staged_content(object_key)
+            created, existing = await store.put_if_absent(object_key, body, expected_sha256=digest)
+            if not created and (existing.sha256 != digest or existing.size != len(body)):
+                raise RuntimeTaskProjectionConflict("runtime artifact object conflicts with existing content")
+            if created:
+                _register_staged_content(object_key)
         staged.append({**dict(source), "runtime_id": runtime_id, "id": artifact_id, "object_key": object_key, "sha256": digest, "byte_size": len(body)})
     return staged
 
@@ -150,8 +153,11 @@ async def _stage_final_report(
         f"askpdf:{task_id}:{agent_run_id}:final:{operation_id}:{digest}",
     ))
     object_key = task_artifact_content_key(task_id, agent_run_id, artifact_id)
-    await get_content_store().put(object_key, body, expected_sha256=digest)
-    _register_staged_content(object_key)
+    created, existing = await get_content_store().put_if_absent(object_key, body, expected_sha256=digest)
+    if not created and (existing.sha256 != digest or existing.size != len(body)):
+        raise RuntimeTaskProjectionConflict("final report object conflicts with existing content")
+    if created:
+        _register_staged_content(object_key)
     return {
         "id": artifact_id,
         "object_key": object_key,
@@ -195,6 +201,7 @@ def _incomplete_disposition(run: AgentRun, task_result: Mapping[str, Any]) -> tu
     return policy, max_rounds, max(1, int(run.task_attempt or 1))
 
 
+@_cleanup_projection_on_error
 async def apply_neutral_task_completion(
     *,
     task_id: str,
@@ -221,10 +228,7 @@ async def apply_neutral_task_completion(
         {"status": runtime_status, "task_result": dict(task_result), "usage": canonical_usage},
         sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
     ).encode()).hexdigest()
-    final_stage = await _stage_final_report(
-        task_id=task_id, agent_run_id=agent_run_id, operation_id=operation_id,
-        text=str(task_result.get("text") or ""),
-    ) if runtime_status == "completed" else None
+    final_stage = None
 
     async with async_session_maker() as session:
         async with session.begin():
@@ -257,6 +261,11 @@ async def apply_neutral_task_completion(
                 session.add(operation)
             elif operation.request_fingerprint != fingerprint:
                 raise RuntimeTaskProjectionConflict("runtime completion identity was replayed with different content")
+
+            final_stage = await _stage_final_report(
+                task_id=task_id, agent_run_id=agent_run_id, operation_id=operation_id,
+                text=str(task_result.get("text") or ""),
+            ) if runtime_status == "completed" else None
 
             limits = dict((task.config_json or {}).get("limits") or {})
             budget = normalize_budget_state(task.budgets_json, limits)
@@ -503,7 +512,7 @@ async def apply_runtime_task_delta(
 ) -> dict[str, str]:
     """Apply one runtime boundary exactly once in one product DB transaction."""
 
-    staged = await _stage_artifacts(task_id=task_id, agent_run_id=agent_run_id, artifacts=delta.artifacts) if delta.artifacts else []
+    staged: list[dict[str, Any]] = []
     result_envelope = dict(delta.result or {})
     task_result = dict(result_envelope.get("task_result") or {}) if isinstance(result_envelope.get("task_result"), Mapping) else {}
     if task_result:
@@ -523,14 +532,8 @@ async def apply_runtime_task_delta(
             raise RuntimeTaskProjectionConflict(
                 "runtime delta correction outcomes disagree with the canonical task result"
             )
-    final_stage = await _stage_final_report(
-        task_id=task_id,
-        agent_run_id=agent_run_id,
-        operation_id=delta.operation_id,
-        text=str(task_result.get("text") or ""),
-    ) if str(result_envelope.get("status") or "") == "completed" else None
-    artifact_ids = {str(value["runtime_id"]): str(value["id"]) for value in staged}
-    artifact_ids.update({str(key): str(value) for key, value in (artifact_id_map or {}).items()})
+    final_stage = None
+    artifact_ids = {str(key): str(value) for key, value in (artifact_id_map or {}).items()}
     payload_sha256 = _payload_hash(delta)
 
     async with async_session_maker() as session:
@@ -555,6 +558,17 @@ async def apply_runtime_task_delta(
             conflict = runtime_delta_conflict_details(task=task, agent_run_id=agent_run_id, delta=delta, current_plan_revision=current_plan_revision)
             if conflict is not None:
                 raise RuntimeTaskProjectionConflict(f"stale runtime delta: {conflict}")
+
+            staged = await _stage_artifacts(
+                task_id=task_id, agent_run_id=agent_run_id, artifacts=delta.artifacts
+            ) if delta.artifacts else []
+            artifact_ids.update({str(value["runtime_id"]): str(value["id"]) for value in staged})
+            final_stage = await _stage_final_report(
+                task_id=task_id,
+                agent_run_id=agent_run_id,
+                operation_id=delta.operation_id,
+                text=str(task_result.get("text") or ""),
+            ) if str(result_envelope.get("status") or "") == "completed" else None
 
             plan_revision = current_plan_revision
             applied_runtime_plan_revision = delta.observed_plan_revision

@@ -32,7 +32,11 @@ from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, Dee
 from langgraph_runtime.models.llm import close_model_client, get_llm
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.runtime_support.evidence import inherited_evidence_packets, tool_result_evidence
-from langgraph_runtime.runtime_support.task_results import normalize_runtime_task_result, runtime_task_result_summary
+from langgraph_runtime.runtime_support.task_results import (
+    RuntimeTaskResultValidationError,
+    normalize_runtime_task_result,
+    runtime_task_result_summary,
+)
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
 
 
@@ -42,6 +46,35 @@ def canonical_hash(value: Any) -> str:
     # hash a checkpointable value.
     encoded = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _subagent_result_from_neutral(
+    neutral_result: Any, *, summary: str, structured_value: Mapping[str, Any]
+) -> DeepResearchSubagentResult:
+    """Convert a neutral result without deriving lifecycle from output presence."""
+
+    declared_status = neutral_result.status.value
+    if declared_status in {"failed", "timed_out", "cancelled"}:
+        subagent_status = declared_status
+    elif neutral_result.usable and declared_status in {"completed", "completed_with_warnings"}:
+        subagent_status = "completed"
+    else:
+        subagent_status = "failed"
+    retryable = (
+        bool(neutral_result.error["retryable"])
+        if neutral_result.error is not None and "retryable" in neutral_result.error
+        else subagent_status in {"failed", "timed_out"}
+    )
+    return DeepResearchSubagentResult(
+        status=subagent_status,
+        summary=summary,
+        claims=list(structured_value.get("claims") or []),
+        source_refs=list(structured_value.get("source_refs") or structured_value.get("citations") or []),
+        uncovered_gaps=list(neutral_result.gaps),
+        retryable=retryable,
+        usage=dict(neutral_result.usage),
+        error=dict(neutral_result.error) if neutral_result.error else None,
+    )
 
 
 def _active_corrections(state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -486,74 +519,6 @@ def _decode_research_plan(
         return PlanValidationResult(False, tuple(errors), diagnostics=details)
     details = _plan_validation_details(stage=stage, text=text, errors=(), category="valid")
     return PlanValidationResult(True, (), normalized_plan=proposal, diagnostics=details)
-
-
-def _legacy_plan_builder_removed(
-    *, objective: str, enabled_profiles: list[str], max_todos: int,
-    course_corrections: Iterable[Mapping[str, Any]] = (),
-) -> DeepResearchPlanProposal:
-    """Removed legacy behavior; invalid model output must fail closed."""
-    raise AgentRuntimeError(
-        "deep_research_plan_invalid",
-        "A substitute research plan is not permitted",
-        retryable=True,
-    )
-    profiles = list(dict.fromkeys(enabled_profiles))[:max(1, max_todos)]
-    if not profiles:
-        raise AgentRuntimeError(
-            "deep_research_profiles_unavailable",
-            "Deep Research has no enabled research profile",
-            retryable=False,
-        )
-    labels = {
-        "document_researcher": "Collect document evidence",
-        "web_researcher": "Collect current web evidence",
-        "memory_researcher": "Collect relevant remembered context",
-    }
-    corrections = [dict(value) for value in course_corrections if value.get("id") or value.get("correction_id")]
-    correction_ids = [str(value.get("id") or value.get("correction_id")) for value in corrections]
-    todos = []
-    for index, correction in enumerate(corrections[:max_todos], start=1):
-        instruction = str(correction.get("instruction") or "").strip()[:4000]
-        profile = "web_researcher" if "web_researcher" in profiles else profiles[0]
-        todos.append({
-            "id": f"correction-{index}-{canonical_hash(correction_ids[index - 1])[:8]}",
-            "title": f"Address redirect {index}",
-            "description": instruction,
-            "completion_criteria": f"The final report directly and with evidence addresses: {instruction}",
-            "dependency_ids": [],
-            "priority": 100 - index,
-            "required": True,
-            "profile_id": profile,
-            "evidence_expectations": ["Evidence directly relevant to the authoritative redirect"],
-        })
-    remaining = max_todos - len(todos)
-    for index, profile in enumerate(profiles[:remaining], start=1):
-        title = labels.get(profile, f"Collect evidence with {profile}")
-        todos.append({
-            "id": f"legacy-{len(todos) + 1}-{profile.replace('_', '-')}",
-            "title": title,
-            "description": f"Use the {profile} profile to gather evidence for the objective.",
-            "completion_criteria": "Relevant evidence or a clearly documented evidence gap is returned.",
-            "dependency_ids": [],
-            "priority": max(0, 100 - ((index - 1) * 10)),
-            "required": True,
-            "profile_id": profile,
-            "evidence_expectations": ["Source-linked evidence or an explicit evidence gap"],
-        })
-    return DeepResearchPlanProposal.model_validate({
-        "objective": "\n".join([
-            objective.strip() or "Complete the requested research",
-            *[f"Authoritative redirect: {str(value.get('instruction') or '')[:4000]}" for value in corrections],
-        ])[:20000],
-        "success_criteria": [
-            "Produce an evidence-backed answer, directly address every incorporated redirect, and identify unresolved gaps"
-        ],
-        "assumptions": ["Legacy plan generation is disabled"],
-        "constraints": ["Use only enabled research profiles and configured task limits"],
-        "todos": todos,
-        "incorporated_correction_ids": correction_ids,
-    })
 
 
 async def _emit_planner_validation(
@@ -1175,6 +1140,8 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
                 structured_output_requested=structured_requested,
                 framework_details={"profile_id": profile_id, "framework": "langgraph"},
             )
+        except RuntimeTaskResultValidationError:
+            raise
         except Exception as validation_error:
             neutral_result = normalize_runtime_task_result(
                 text,
@@ -1200,15 +1167,8 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
             json.dumps(structured_value, ensure_ascii=False, sort_keys=True)[:12_000]
             if structured_value else ""
         )
-        result = DeepResearchSubagentResult(
-            status="completed" if neutral_result.usable else "failed",
-            summary=result_summary,
-            claims=list(structured_value.get("claims") or []),
-            source_refs=list(structured_value.get("source_refs") or structured_value.get("citations") or []),
-            uncovered_gaps=list(neutral_result.gaps),
-            retryable=not neutral_result.usable,
-            usage=dict(neutral_result.usage),
-            error=dict(neutral_result.error) if neutral_result.error else None,
+        result = _subagent_result_from_neutral(
+            neutral_result, summary=result_summary, structured_value=structured_value
         )
         source_refs = {
             "inherited_evidence": [{
