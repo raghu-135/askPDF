@@ -715,6 +715,30 @@ test('retained trace projection consumes canonical parallel groups without metri
   assert.equal(view.parallelGroups[0].members[0].attempts[1].status, 'completed');
 });
 
+test('trace parser allows a stable member id in sequential dispatch groups', () => {
+  const debug = canonicalDebug(backendDebug);
+  const group = (groupId, eventId, status) => ({
+    group_id: groupId, status, planned: 1, first_sequence: 1, last_sequence: 2,
+    event_ids: [eventId], barrier: { status: 'reached' },
+    aggregation: { status, counts: { completed: status === 'completed' ? 1 : 0 } },
+    members: [{
+      member_id: 'work-1', operation_id: 'documents', status,
+      first_sequence: 1, last_sequence: 2, event_ids: [eventId], attempts: [{
+        attempt: 1, status, first_sequence: 1, last_sequence: 2,
+        event_ids: [eventId], failure_event_ids: [], caused_by_event_ids: [], related_event_ids: [],
+      }],
+    }],
+  });
+  debug.parallel_groups = [group('dispatch-1', 'event-1', 'failed'), group('dispatch-2', 'event-2', 'completed')];
+  debug.events = [
+    { event_id: 'event-1', sequence: 1, kind: 'worker.failed', payload: {} },
+    { event_id: 'event-2', sequence: 2, kind: 'worker.completed', payload: {} },
+  ];
+
+  const parsed = parseRunDebug({ ...traceBackedRun, debug });
+  assert.equal(parsed.ok, true);
+});
+
 test('trace parser rejects missing and malformed canonical parallel groups', () => {
   const missing = canonicalDebug(backendDebug);
   delete missing.parallel_groups;

@@ -540,6 +540,28 @@ def test_plan_validator_reports_strict_structural_errors_without_model_output():
     assert candidate not in json.dumps(result.diagnostics)
 
 
+def test_plan_validator_does_not_require_unpersisted_runtime_fields_on_completed_todos():
+    result = deep_research_nodes._decode_research_plan(
+        _valid_plan_text(),
+        stage="repair_1",
+        enabled_profiles=["document_researcher"],
+        max_todos=5,
+        prior_todos=[{
+            "id": "retrieve-evidence",
+            "title": "Retrieve evidence",
+            "description": "Search the available evidence",
+            "completion_criteria": "Relevant sources are collected",
+            "dependency_ids": [],
+            "priority": 50,
+            "required": True,
+            "profile_id": "document_researcher",
+            "status": "completed",
+        }],
+    )
+
+    assert result.valid is True
+
+
 @pytest.mark.asyncio
 async def test_deep_planner_uses_third_call_for_targeted_repair(monkeypatch):
     call_model = AsyncMock(side_effect=[
