@@ -93,19 +93,23 @@ def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
 
 
 def test_parallel_projection_scopes_reused_work_id_to_each_dispatch_group() -> None:
-    groups = build_parallel_groups([
+    events = [
         _event(1, "dispatch.started", {"dispatch_id": "dispatch-1", "planned": 1}),
         _event(2, "worker.started", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
         _event(3, "worker.failed", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
         _event(4, "dispatch.started", {"dispatch_id": "dispatch-2", "planned": 1}),
         _event(5, "worker.started", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
         _event(6, "worker.completed", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
-    ])
+    ]
+    groups = build_parallel_groups(events)
 
     assert [group["group_id"] for group in groups] == ["dispatch-1", "dispatch-2"]
     assert [group["members"][0]["member_id"] for group in groups] == ["work-a", "work-a"]
     assert groups[0]["members"][0]["attempts"][0]["status"] == "failed"
     assert groups[1]["members"][0]["attempts"][0]["status"] == "completed"
+
+    rendered = build_canonical_trace_projection(events=events, resolved_spec={}, framework="langgraph")
+    assert [group["group_id"] for group in rendered["parallel_groups"]] == ["dispatch-1", "dispatch-2"]
 
 
 def test_safe_parallel_projection_omits_only_malformed_group_projection() -> None:

@@ -764,7 +764,9 @@ def build_canonical_trace_projection(
 ) -> dict[str, Any]:
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
     operations = _operations(ordered, framework)
-    parallel_groups = build_parallel_groups(ordered)
+    # Trace rendering is diagnostic-only. Isolate malformed historical groups
+    # so a projection problem cannot turn an otherwise valid trace into a 500.
+    parallel_groups = build_parallel_groups_safely(ordered)
     diagnostics = build_trace_diagnostics(ordered)
     failures = diagnostics["failures"]
     visualizations: dict[str, Any] = {
