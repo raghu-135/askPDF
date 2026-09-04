@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from langgraph_runtime.context import RuntimeExecutionContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
 from runtime_protocol.events import create_runtime_event
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.transport import (
@@ -145,6 +145,31 @@ def _context(
         attempt_id=attempt_id,
         boundary_event_id=boundary_event_id,
     )
+
+
+def _terminal_result(
+    request: Any,
+    context: RuntimeExecutionContext | None,
+    *,
+    status: str,
+    error: Mapping[str, Any],
+    operation_id: str,
+    attempt_id: str,
+    boundary_event_id: str,
+) -> AgentRuntimeResult:
+    task = context.task_context if context is not None else None
+    metadata = dict(task.metadata or {}) if task is not None else {}
+    delta = TaskOrchestrationDelta(
+        event_id=boundary_event_id,
+        attempt_id=attempt_id,
+        operation_id=operation_id,
+        idempotency_key=f"task-delta:{boundary_event_id}",
+        observed_task_version=int(metadata.get("task_version") or getattr(request, "agent_task_version", 0) or 0),
+        observed_plan_revision=int(metadata.get("plan_revision") or getattr(request, "task_plan_revision", 0) or 0),
+        pending_interrupt={"operation": "clear"},
+        result={"status": status, "error": dict(error)},
+    )
+    return AgentRuntimeResult(status=status, error=dict(error), orchestration_delta=delta)
 
 
 def create_app(*, execution_store: ExecutionStore | None = None, require_auth: bool = True) -> FastAPI:
@@ -666,6 +691,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
         heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
         runtime_adapter = get_adapter()
+        context: RuntimeExecutionContext | None = None
         try:
             context = await runtime_adapter.prepare_execution_context(
                 _context(
@@ -694,7 +720,11 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 timeout=execution_timeout,
             )
             if result is None:
-                result = AgentRuntimeResult(status="no_continuation", runtime_metadata={"continuation_available": False})
+                error = RuntimeError("runtime_continuation_missing", "The runtime did not return a continuation", retryable=False)
+                result = _terminal_result(
+                    request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                    attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+                )
             result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
             await finalize(result)
         except LeaseLostError:
@@ -702,22 +732,34 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             return
         except asyncio.TimeoutError:
             error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
-            result = AgentRuntimeResult(status="failed", error=error.to_dict())
+            result = _terminal_result(
+                request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
             await finalize(result, error=error.to_dict())
         except asyncio.CancelledError:
             if not await cancellation_probe():
                 raise
             error = RuntimeError("run_cancelled", "Agent runtime execution was cancelled", retryable=False)
-            result = AgentRuntimeResult(status="cancelled", error=error.to_dict())
+            result = _terminal_result(
+                request, context, status="cancelled", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
             await finalize(result, error=error.to_dict())
         except RuntimeError as exc:
             logger.exception("LangGraph runtime failed | run_id=%s", run_id)
-            result = AgentRuntimeResult(status="failed", error=exc.to_dict())
+            result = _terminal_result(
+                request, context, status="failed", error=exc.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
             await finalize(result, error=exc.to_dict())
         except Exception as exc:
             logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
             error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
-            result = AgentRuntimeResult(status="failed", error=error.to_dict())
+            result = _terminal_result(
+                request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
             await finalize(result, error=error.to_dict())
         finally:
             heartbeat_stop.set()

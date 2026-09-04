@@ -36,11 +36,51 @@ def _public_value(value: Any) -> Any:
         return {
             str(key): _public_value(item)
             for key, item in value.items()
-            if "checkpoint" not in str(key).lower()
+            if not _is_private_key(str(key))
         }
     if isinstance(value, list):
         return [_public_value(item) for item in value]
     return value
+
+
+def _is_private_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return (
+        "checkpoint" in normalized
+        or "mcp_execution_context_token" in normalized
+        or normalized in {
+            "authorization", "api_key", "apikey", "access_token", "refresh_token",
+            "cookie", "set_cookie", "credential", "credentials", "password",
+        }
+    )
+
+
+_PUBLIC_RESULT_KEYS = frozenset({
+    "answer", "final_answer", "rewritten_query", "used_chat_ids", "document_sources",
+    "web_sources", "clarification_options", "reasoning", "reasoning_available",
+    "reasoning_format", "context", "route", "route_reason", "node_events", "tool_events",
+    "duration_ms", "status", "pending_interrupt", "agent_trace_refs", "parallel_summary",
+    "_parallel_attempt_records", "_corrective_wave_records", "_corrective_metrics_state",
+    "structured_output", "usage", "metrics", "errors", "workflow_budget", "agent_error",
+    "task_result_warnings", "task_result_gaps", "task_incomplete_reasons", "task_result_packets",
+    "task_todos", "task_budget_usage", "task_web_access_decision", "runtime_artifacts",
+    "final_artifact_id", "runtime_artifact_manifest", "task_artifact_manifest",
+    "task_evidence_manifest", "result_outcome", "checkpoint_boundary_available",
+})
+
+
+def _public_result(result: Mapping[str, Any], *, status: str, duration_ms: float,
+                   agent_run_context: Mapping[str, Any], answer: str | None = None) -> dict[str, Any]:
+    """Project graph state into the public result; invocation context never crosses this boundary."""
+    projected = {
+        key: _public_value(result[key])
+        for key in _PUBLIC_RESULT_KEYS
+        if key in result and not _is_private_key(key)
+    }
+    projected["answer"] = answer if answer is not None else result.get("final_answer") or result.get("answer") or ""
+    projected["status"] = status
+    projected["duration_ms"] = duration_ms
+    return _public_value(projected)
 
 
 def _visualization_descriptor(data: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -118,7 +158,12 @@ def _result_from_graph(
         if checkpoint_thread_id and status in {"awaiting_human", "paused"}
         else None
     )
-    public_result = _public_value(result)
+    public_result = _public_result(
+        result,
+        status=status,
+        duration_ms=float(result.get("duration_ms") or 0),
+        agent_run_context={},
+    )
     public_interruption = _public_value(interruption) if interruption is not None else None
     task_id = str(result.get("agent_task_id") or "")
     orchestration_delta = None
@@ -138,13 +183,13 @@ def _result_from_graph(
         task_result = normalize_runtime_task_result({
             "status": "completed_with_warnings" if warnings or gaps else "completed",
             "text": final_text,
-            "structured_output": result.get("structured_output"),
+            "structured_output": _public_value(result.get("structured_output")),
             "warnings": warnings,
             "gaps": gaps,
             "usage": usage,
             "framework_details": {"framework": "langgraph"},
             "correction_outcomes": [
-                dict(value) for value in result.get("task_correction_outcomes") or []
+                _public_value(dict(value)) for value in result.get("task_correction_outcomes") or []
                 if isinstance(value, Mapping)
             ],
         })
@@ -166,11 +211,11 @@ def _result_from_graph(
         ]
         changes = {
             "plan_changes": [value.to_dict() for value in plan_changes],
-            "todo_changes": [dict(value) for value in result.get("task_todos") or [] if isinstance(value, Mapping)],
-            "subagent_changes": [dict(value) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
-            "budget_usage": dict(result.get("task_budget_usage") or {}),
-            "web_access": dict(web_access_decision) if web_access_decision and web_access_decision.get("interrupt_id") else None,
-            "artifacts": [dict(value) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
+            "todo_changes": [_public_value(dict(value)) for value in result.get("task_todos") or [] if isinstance(value, Mapping)],
+            "subagent_changes": [_public_value(dict(value)) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
+            "budget_usage": _public_value(dict(result.get("task_budget_usage") or {})),
+            "web_access": _public_value(dict(web_access_decision)) if web_access_decision and web_access_decision.get("interrupt_id") else None,
+            "artifacts": [_public_value(dict(value)) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
             "pending_interrupt": (
                 {"operation": "set", "value": dict(public_interruption)}
                 if isinstance(public_interruption, Mapping)
@@ -183,9 +228,11 @@ def _result_from_graph(
                 "result_outcome": task_result.status.value if task_result is not None else str(result.get("result_outcome") or "") or None,
                 "task_result": task_result.to_dict() if task_result is not None else None,
                 "final_artifact_id": str(result.get("final_artifact_id") or "") or None,
+                **({"error": _public_value(result.get("agent_error"))}
+                   if isinstance(result.get("agent_error"), Mapping) else {}),
             },
             "correction_outcomes": [
-                dict(value) for value in result.get("task_correction_outcomes") or []
+                _public_value(dict(value)) for value in result.get("task_correction_outcomes") or []
                 if isinstance(value, Mapping)
             ],
         }
@@ -226,10 +273,15 @@ def _result_from_graph(
         task_result=task_result,
         clarification={"options": list(result["clarification_options"])} if result.get("clarification_options") else None,
         interruption=public_interruption,
-        usage=dict(result.get("usage") or result.get("metrics") or {}),
+        artifacts=tuple(
+            _public_value(dict(value))
+            for value in result.get("runtime_artifacts") or []
+            if isinstance(value, Mapping)
+        ),
+        usage=_public_value(dict(result.get("usage") or result.get("metrics") or {})),
         runtime_metadata={key: result[key] for key in ("agent_run_id", "agent_workflow_id") if key in result},
         continuation=continuation,
-        error=result.get("agent_error") if isinstance(result.get("agent_error"), Mapping) else None,
+        error=_public_value(result.get("agent_error")) if isinstance(result.get("agent_error"), Mapping) else None,
         checkpoint_boundary_available=(
             bool(result["checkpoint_boundary_available"])
             if "checkpoint_boundary_available" in result
@@ -428,6 +480,13 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         }
 
     @staticmethod
+    def _mcp_token(request: AgentRuntimeRequest) -> str:
+        token = str(request.input.get("mcp_execution_context_token") or "").strip()
+        if not token:
+            raise RuntimeError("mcp_execution_grant_missing", "A fresh MCP execution grant is required")
+        return token
+
+    @staticmethod
     def _observed_plan_revision(context: RuntimeExecutionContext) -> int:
         task = context.task_context
         return int((task.metadata or {}).get("plan_revision") or 0) if task is not None else 0
@@ -456,6 +515,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         from langgraph_runtime import checkpointing, router_runtime
 
         bridge = _event_bridge(request.run_id, event_sink)
+        mcp_token = self._mcp_token(request)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             try:
                 result = await router_runtime.execute_compiled_rag_chat(
@@ -471,6 +531,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     pause_checker=context.pause_checker,
                     course_correction_reader=context.course_correction_reader,
                     course_correction_acknowledger=context.course_correction_acknowledger,
+                    mcp_execution_context_token=mcp_token,
                 )
             finally:
                 if bridge is not None:
@@ -519,12 +580,14 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "course_correction_acknowledger": context.course_correction_acknowledger,
         }
         bridge = _event_bridge(request.run_id, event_sink)
+        mcp_token = self._mcp_token(request)
         if bridge is not None:
             kwargs["execution_event_sink"] = bridge
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             try:
                 result = await router_runtime.resume_compiled_rag_chat(
-                    run, interrupt=dict(interrupt), checkpointer=checkpointer, **kwargs
+                    run, interrupt=dict(interrupt), checkpointer=checkpointer,
+                    mcp_execution_context_token=mcp_token, **kwargs
                 )
             finally:
                 if bridge is not None:
@@ -568,6 +631,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 (context.task_context.metadata or {}).get("budget_usage") or {}
             )
         bridge = _event_bridge(request.run_id, event_sink)
+        mcp_token = self._mcp_token(request)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
             try:
                 result = await router_runtime.continue_compiled_rag_chat(
@@ -579,6 +643,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     pause_checker=context.pause_checker,
                     course_correction_reader=context.course_correction_reader,
                     course_correction_acknowledger=context.course_correction_acknowledger,
+                    mcp_execution_context_token=mcp_token,
                 )
             finally:
                 if bridge is not None:

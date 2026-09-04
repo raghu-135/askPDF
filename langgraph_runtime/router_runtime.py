@@ -38,6 +38,29 @@ class _Status:
 AgentRunStatus = ReasoningFormat = _Status
 
 
+def _public_agent_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Expose identity only; invocation credentials stay in graph config."""
+    return {
+        key: context[key]
+        for key in ("agent_run_id", "agent_workflow_id")
+        if context.get(key) is not None
+    }
+
+
+def _public_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _public_value(item)
+            for key, item in value.items()
+            if "checkpoint" not in str(key).lower()
+            and "mcp_execution_context_token" not in str(key).lower()
+            and str(key).lower() not in {"authorization", "api_key", "apikey", "access_token", "credentials"}
+        }
+    if isinstance(value, list):
+        return [_public_value(item) for item in value]
+    return value
+
+
 def _corrective_metrics_state(result: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
         return {}
@@ -111,6 +134,7 @@ def _runtime_config(
     course_correction_acknowledger: Any = None,
     max_concurrency: int | None = None,
     deep_research_services_factory: Any,
+    mcp_execution_context_token: str | None = None,
 ) -> Dict[str, Any]:
     configurable = {
         "thread_id": checkpoint_thread_id,
@@ -130,6 +154,8 @@ def _runtime_config(
         configurable["course_correction_reader"] = course_correction_reader
     if course_correction_acknowledger is not None:
         configurable["course_correction_acknowledger"] = course_correction_acknowledger
+    if mcp_execution_context_token:
+        configurable["mcp_execution_context_token"] = str(mcp_execution_context_token)
     if embedding_model is not None:
         configurable["embedding_model"] = embedding_model
     if context_window is not None:
@@ -191,13 +217,18 @@ def _runtime_result(
 ) -> Dict[str, Any]:
     """Return JSON-compatible execution output without product persistence."""
 
-    return {
+    public = {
         **result,
         "answer": answer if answer is not None else result.get("final_answer") or result.get("answer") or "",
         "status": status,
         "duration_ms": duration_ms,
-        **agent_run_context,
     }
+    return _public_value({
+        **{key: value for key, value in public.items()
+           if "mcp_execution_context_token" not in str(key).lower()
+           and str(key).lower() not in {"authorization", "api_key", "apikey", "access_token", "credentials"}},
+        **_public_agent_context(agent_run_context),
+    })
 
 
 def _as_resume_action(interrupt: Dict[str, Any]) -> Any:
@@ -271,6 +302,7 @@ async def execute_compiled_rag_chat(
     pause_checker: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
+    mcp_execution_context_token: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -287,6 +319,7 @@ async def execute_compiled_rag_chat(
         pause_checker=pause_checker,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
+        mcp_execution_context_token=mcp_execution_context_token,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -392,6 +425,7 @@ async def _handle_compiled_rag_chat(
     pause_checker: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
+    mcp_execution_context_token: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and return runtime-owned output."""
 
@@ -454,11 +488,8 @@ async def _handle_compiled_rag_chat(
         course_correction_acknowledger=course_correction_acknowledger,
         max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
         deep_research_services_factory=_deep_research_services_factory(),
+        mcp_execution_context_token=mcp_execution_context_token,
     )
-    if agent_run_context.get("mcp_execution_context_token"):
-        config["configurable"]["mcp_execution_context_token"] = str(
-            agent_run_context["mcp_execution_context_token"]
-        )
     state = {
         "agent_run_id": agent_run_id,
         "workflow_id": resolved_spec.get("workflow_id"),
@@ -621,7 +652,7 @@ async def _handle_compiled_rag_chat(
                 "_parallel_attempt_records": partial.get("parallel_attempt_records") or [],
                 "_corrective_wave_records": partial.get("corrective_wave_records") or [],
                 "_corrective_metrics_state": _corrective_metrics_state(partial),
-                **agent_run_context,
+                **_public_agent_context(agent_run_context),
             }
 
         result = _without_runtime_keys(result)
@@ -702,7 +733,7 @@ async def _handle_compiled_rag_chat(
         partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **agent_run_context}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         exception_state = getattr(exc, "agent_workflow_state", None)
@@ -789,7 +820,7 @@ async def _handle_compiled_rag_chat(
             "_parallel_attempt_records": partial_result.get("parallel_attempt_records") or [],
             "_corrective_wave_records": partial_result.get("corrective_wave_records") or [],
             "_corrective_metrics_state": _corrective_metrics_state(partial_result),
-            **agent_run_context,
+            **_public_agent_context(agent_run_context),
         }
 
 
@@ -803,6 +834,7 @@ async def continue_compiled_rag_chat(
     pause_checker: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
+    mcp_execution_context_token: str | None = None,
 ) -> Dict[str, Any] | None:
     """Continue a nonterminal graph from its latest durable checkpoint."""
 
@@ -816,6 +848,7 @@ async def continue_compiled_rag_chat(
         telemetry_sink=telemetry_sink,
         trace_recorder=None,
         deep_research_services_factory=_deep_research_services_factory(),
+        mcp_execution_context_token=mcp_execution_context_token,
     )
     snapshot = await app.aget_state(initial_config)
     snapshot_values = dict(getattr(snapshot, "values", None) or {})
@@ -836,6 +869,7 @@ async def continue_compiled_rag_chat(
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
+        mcp_execution_context_token=mcp_execution_context_token,
     )
     _install_budget_meter(
         config,
@@ -877,7 +911,7 @@ async def continue_compiled_rag_chat(
         partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **agent_run_context}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     pending_interrupt = _pending_interrupt_from_result(result, checkpoint_thread_id=checkpoint_thread_id)
     if pending_interrupt:
@@ -894,7 +928,7 @@ async def continue_compiled_rag_chat(
             "status": AgentRunStatus.AWAITING_HUMAN.value,
             "pending_interrupt": pending_interrupt,
             "duration_ms": duration_ms,
-            **agent_run_context,
+            **_public_agent_context(agent_run_context),
         }
     result = _without_runtime_keys(result)
     question = str(result.get("question") or snapshot_values.get("question") or "")
@@ -933,6 +967,7 @@ async def resume_compiled_rag_chat(
     pause_checker: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
+    mcp_execution_context_token: str | None = None,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and return runtime output."""
 
@@ -949,6 +984,7 @@ async def resume_compiled_rag_chat(
         telemetry_sink=telemetry_sink,
         trace_recorder=None,
         deep_research_services_factory=_deep_research_services_factory(),
+        mcp_execution_context_token=mcp_execution_context_token,
     )
     snapshot = await app.aget_state(config)
     snapshot_values = dict(getattr(snapshot, "values", None) or {})
@@ -967,6 +1003,7 @@ async def resume_compiled_rag_chat(
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
+        mcp_execution_context_token=mcp_execution_context_token,
     )
     _install_budget_meter(
         config,
@@ -1026,7 +1063,7 @@ async def resume_compiled_rag_chat(
             "status": AgentRunStatus.AWAITING_HUMAN.value,
             "pending_interrupt": pending_interrupt,
             "duration_ms": duration_ms,
-            **agent_run_context,
+            **_public_agent_context(agent_run_context),
         }
 
     result = _without_runtime_keys(result)
