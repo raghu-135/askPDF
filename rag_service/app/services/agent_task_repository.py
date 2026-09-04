@@ -54,6 +54,13 @@ TERMINAL_TASK_STATUSES = {
     AgentTaskStatus.FAILED.value,
     AgentTaskStatus.EXPIRED.value,
 }
+# A recovery-required task has been deliberately taken out of the execution
+# path: its runtime result is known, but product projection needs intervention.
+# It is therefore safe to hide/delete, even though it is kept separate from
+# normal terminal states for retry/reconciliation and capability decisions.
+DELETABLE_TASK_STATUSES = TERMINAL_TASK_STATUSES | {
+    AgentTaskStatus.RECOVERY_REQUIRED.value,
+}
 ACTIVE_TASK_RUN_STATUSES = {
     AgentRunStatus.RUNNING.value,
     AgentRunStatus.AWAITING_HUMAN.value,
@@ -868,8 +875,12 @@ async def request_task_deletion(
                 return task, duplicate, True
             if task.version != expected_version:
                 raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
-            if task.status not in TERMINAL_TASK_STATUSES:
-                raise AgentTaskConflict("task_delete_nonterminal", "Only terminal tasks can be deleted", current_version=task.version)
+            if task.status not in DELETABLE_TASK_STATUSES:
+                raise AgentTaskConflict(
+                    "task_delete_nonterminal",
+                    "Only completed, failed, expired, cancelled, or recovery-required tasks can be deleted",
+                    current_version=task.version,
+                )
             now = utc_now()
             command = AgentTaskCommand(
                 task_id=task.id,

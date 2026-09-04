@@ -769,6 +769,13 @@ async def test_recovery_required_allows_retry_and_cancel_but_disables_live_runti
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "recovery_required"
 
 
+def test_recovery_required_task_is_deletable_without_being_normal_terminal():
+    from app.services.agent_task_repository import DELETABLE_TASK_STATUSES, TERMINAL_TASK_STATUSES
+
+    assert "recovery_required" in DELETABLE_TASK_STATUSES
+    assert "recovery_required" not in TERMINAL_TASK_STATUSES
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupt_status", ["resolved", "rejected", "expired"])
 async def test_only_explicit_pending_interrupts_enable_the_declared_response_operation(interrupt_status):
