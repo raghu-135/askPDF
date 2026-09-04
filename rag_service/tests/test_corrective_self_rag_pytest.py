@@ -5,7 +5,7 @@ import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from langgraph_runtime.workflows.answer_nodes import finalizer_node
-from app.agent_workflows.corrective_contracts import (
+from langgraph_runtime.workflows.corrective_contracts import (
     DEFAULT_CORRECTIVE_POLICY,
     collect_corrective_policy_errors,
     normalized_corrective_policy,
@@ -25,7 +25,7 @@ from langgraph_runtime.workflows.evidence import (
     normalized_canonical_source_id,
     normalized_source_url,
 )
-from app.agent_workflows.prompting import build_grounded_answer_verifier_prompt
+from langgraph_runtime.workflows.prompting import build_grounded_answer_verifier_prompt
 from langgraph_runtime.workflows.parallel_runtime import aggregate_parallel_results, dispatch_started_epoch_ms, normalize_work_items
 from langgraph_runtime.workflows.parallel_runtime import worker_terminal_delta
 from langgraph_runtime.compiler import WorkflowCompiler

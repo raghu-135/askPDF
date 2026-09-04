@@ -480,6 +480,22 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         except Exception as exc:
             raise _definition_http_error(exc) from exc
 
+    @app.post("/v1/prompt-preview")
+    async def prompt_preview(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        try:
+            definition = definition_from_dict(payload["definition"])
+            spec = payload.get("spec") or {}
+            options = payload.get("options") or {}
+            from langgraph_runtime.workflows.prompting import build_agent_workflow_prompt_preview
+            runtime = spec.get("runtime") if isinstance(spec, Mapping) and isinstance(spec.get("runtime"), Mapping) else {}
+            prompt = build_agent_workflow_prompt_preview(
+                prompt_profile=str(runtime.get("prompt_preview") or "router"),
+                **dict(options),
+            )
+            return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"prompt": prompt})
+        except Exception as exc:
+            raise _definition_http_error(exc) from exc
+
     @app.post("/v1/resolve")
     async def resolve(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
         """Resolve and materialize a LangGraph definition inside the runtime boundary."""

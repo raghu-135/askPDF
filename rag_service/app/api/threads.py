@@ -26,7 +26,6 @@ from app.agent.prompting import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
-from app.agent_workflows.prompting import build_agent_workflow_prompt_preview
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.workflow_runtime import (
@@ -35,6 +34,8 @@ from app.agent_workflows.workflow_runtime import (
     workflow_supports_replans,
 )
 from app.time_utils import iso_utc_z
+from app.runtime.builder_registry import builder_for_definition
+from app.runtime.catalog import definition_from_workflow
 from app.db import (
     EmbeddingReadinessStatus,
     ProcessStatus,
@@ -256,17 +257,20 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
         if not workflow_is_chat_eligible(workflow.spec_json):
             raise HTTPException(status_code=422, detail={"code": "agent_workflow_not_chat_eligible"})
         spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
-        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-        prompt = build_agent_workflow_prompt_preview(
-            prompt_profile=str(runtime.get("prompt_preview") or "router"),
-            context_window=req.context_window,
-            system_role=req.system_role or "",
-            tool_instructions=tool_instructions,
-            custom_instructions=req.custom_instructions or "",
-            use_web_search=req.use_web_search,
-            client_timezone=req.client_timezone,
-            client_locale=req.client_locale,
-            client_now_iso=req.client_now_iso,
+        definition = definition_from_workflow(workflow)
+        prompt = await builder_for_definition(definition).prompt_preview(
+            definition,
+            spec,
+            {
+                "context_window": req.context_window,
+                "system_role": req.system_role or "",
+                "tool_instructions": tool_instructions,
+                "custom_instructions": req.custom_instructions or "",
+                "use_web_search": req.use_web_search,
+                "client_timezone": req.client_timezone,
+                "client_locale": req.client_locale,
+                "client_now_iso": req.client_now_iso,
+            },
         )
         return {"prompt": prompt}
     except HTTPException:

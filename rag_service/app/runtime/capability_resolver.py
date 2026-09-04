@@ -165,6 +165,26 @@ def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabi
     return replace(capabilities, operations=operations)
 
 
+def _reconcile_adapter_task_operations(
+    capabilities: RuntimeCapabilities,
+    adapter: Any,
+) -> RuntimeCapabilities:
+    """Reapply adapter-owned task restrictions after product operations merge."""
+    if bool(getattr(adapter, "supports_task_pause", False)) and capabilities.deployment.get("checkpoint_available", True) is not False:
+        return capabilities
+    operations = dict(capabilities.operations)
+    for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
+        descriptor = operations.get(operation_id)
+        if descriptor is not None:
+            operations[operation_id] = replace(
+                descriptor,
+                support=RuntimeSupportLevel.UNSUPPORTED,
+                enabled=False,
+                disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+            )
+    return replace(capabilities, operations=operations)
+
+
 def _failure_disabled_reason(error: Mapping[str, Any]) -> RuntimeCapabilityDisabledReason:
     code = str(error.get("code") or "")
     if code == RuntimeCapabilityDisabledReason.RUNTIME_CONFIGURATION_INVALID.value:
@@ -265,13 +285,12 @@ async def _reconciled_capabilities(
     )
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
+    capabilities = _reconcile_adapter_task_operations(capabilities, adapter)
     task_runtime_requested = definition is not None and bool(
         definition.capabilities.get("supports_long_running_tasks")
     )
     checkpoint_unavailable = capabilities.deployment.get("checkpoint_available") is False
-    if task_runtime_requested and (
-        not bool(getattr(adapter, "supports_task_pause", False)) or checkpoint_unavailable
-    ):
+    if task_runtime_requested and checkpoint_unavailable:
         operations = dict(capabilities.operations)
         for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
             descriptor = operations.get(operation_id)
@@ -535,7 +554,7 @@ async def resolve_run_capability_resolution(
     elif RuntimeOperationId.TASK_RESUME in operations and task_status in {
         AgentTaskStatus.AWAITING_APPROVAL.value,
         AgentTaskStatus.PAUSED.value,
-    } and pending_type != "task_pause":
+    } and (pending_type != "task_pause" or not binding_available or not checkpoint_boundary_available(run)):
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
     if RuntimeOperationId.TASK_RETRY in operations and task_status not in RETRYABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RETRY] = _disabled(operations[RuntimeOperationId.TASK_RETRY], RuntimeCapabilityDisabledReason.TASK_NOT_RETRYABLE)

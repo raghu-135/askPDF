@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 
 from app.agent.prompting import get_tool_catalog, normalize_tool_instructions, format_runtime_datetime_context
-from app.agent_workflows.prompting import (
+from langgraph_runtime.workflows.prompting import (
     build_agent_workflow_prompt_preview,
     build_planner_prompt,
     build_replanner_prompt,

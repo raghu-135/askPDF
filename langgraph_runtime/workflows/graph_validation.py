@@ -25,6 +25,7 @@ from langgraph_runtime.workflows.route_registry import (
     get_route_function_registry as _default_get_route_function_registry,
     known_route_function_ids,
     route_function_allowed_for_node_type,
+    get_route_function_metadata,
     route_function_labels,
 )
 from langgraph_runtime.workflows.tool_permission_validation import (
@@ -204,6 +205,11 @@ class GenericGraphValidator:
                     if not isinstance(route_name, str) or not isinstance(route_target, str):
                         errors.append(f"graph conditional edge from {source} routes keys and values must be strings")
                         continue
+                    route_kind = (get_route_function_metadata(route_fn) or {}).get("route_kind")
+                    if not route_name:
+                        errors.append(f"graph conditional edge from {source} has an empty source handle")
+                    if route_kind == "hitl" and source_type != WorkflowNodeType.HITL_GATE.value:
+                        errors.append(f"HITL route {route_fn} must originate at a HITL node")
                     if labels is not None and route_name not in labels:
                         errors.append(f"graph conditional edge from {source} has invalid route label: {route_name}")
                     if route_target not in valid_targets:

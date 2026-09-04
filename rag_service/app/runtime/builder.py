@@ -137,6 +137,8 @@ class AgentBuilderProvider(Protocol):
 
     async def source(self, definition_id: str) -> Mapping[str, Any]: ...
 
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str: ...
+
     async def transient_test(
         self,
         request: AgentRuntimeRequest,

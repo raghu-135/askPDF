@@ -17,6 +17,7 @@ from langgraph_runtime.workflows.enums import (
 
 ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     RouteFunctionId.ROUTER.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.ROUTER.value],
         "route_labels": [route.value for route in RouterRoute],
         "target_types_by_label": {
@@ -31,6 +32,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.PLANNER.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.PLANNER.value],
         "route_labels": [route.value for route in PlannerRoute],
         "target_types_by_label": {
@@ -51,6 +53,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.EVALUATOR.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.EVIDENCE_EVALUATOR.value],
         "route_labels": [route.value for route in EvaluatorRoute],
         "target_types_by_label": {
@@ -60,21 +63,25 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.HITL_GATE.value: {
+        "route_kind": "hitl",
         "allowed_source_types": [WorkflowNodeType.HITL_GATE.value],
         "route_labels": None,
         "target_types_by_label": None,
     },
     RouteFunctionId.PARALLEL_DISPATCH.value: {
+        "route_kind": "parallel_dispatch",
         "allowed_source_types": [WorkflowNodeType.PARALLEL_DISPATCH.value],
         "route_labels": None,
         "target_types_by_label": None,
     },
     RouteFunctionId.SERIAL_DISPATCH.value: {
+        "route_kind": "serial_dispatch",
         "allowed_source_types": [WorkflowNodeType.SERIAL_DISPATCH.value],
         "route_labels": None,
         "target_types_by_label": None,
     },
     RouteFunctionId.ANSWER_QUALITY.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.ANSWER_EVALUATOR.value],
         "route_labels": [route.value for route in AnswerQualityRoute],
         "target_types_by_label": {
@@ -84,6 +91,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.CORRECTIVE_RETRIEVAL.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value],
         "route_labels": [route.value for route in CorrectiveRetrievalRoute],
         "target_types_by_label": {
@@ -93,6 +101,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.GROUNDED_ANSWER.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value],
         "route_labels": [route.value for route in GroundedAnswerRoute],
         "target_types_by_label": {
@@ -103,11 +112,13 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.DEEP_TASK_DISPATCH.value: {
+        "route_kind": "parallel_dispatch",
         "allowed_source_types": [WorkflowNodeType.DEEP_TASK_SCHEDULER.value],
         "route_labels": None,
         "target_types_by_label": None,
     },
     RouteFunctionId.DEEP_TASK.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.DEEP_COORDINATOR.value],
         "route_labels": ["dispatch_more", "replan", "synthesize", "pause", "fail"],
         "target_types_by_label": {
@@ -119,6 +130,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
     RouteFunctionId.BUDGET_REVIEW.value: {
+        "route_kind": "conditional",
         "allowed_source_types": [WorkflowNodeType.EVIDENCE_CRITIC.value],
         "route_labels": ["continue", "steer", "accept_partial"],
         "target_types_by_label": {
@@ -199,9 +211,11 @@ def collect_route_function_registry_errors(registry: Dict[str, Dict[str, Any]] |
             errors.append(f"{route_fn} metadata must be an object")
             continue
 
-        missing = sorted({"allowed_source_types", "route_labels", "target_types_by_label"} - set(metadata))
+        missing = sorted({"allowed_source_types", "route_labels", "target_types_by_label", "route_kind"} - set(metadata))
         if missing:
             errors.append(f"{route_fn} missing registry keys: {', '.join(missing)}")
+        if metadata.get("route_kind") not in {"conditional", "hitl", "parallel_dispatch", "serial_dispatch", "default"}:
+            errors.append(f"{route_fn}.route_kind must be a supported route semantic")
 
         allowed_source_types = metadata.get("allowed_source_types")
         if not isinstance(allowed_source_types, list) or not all(

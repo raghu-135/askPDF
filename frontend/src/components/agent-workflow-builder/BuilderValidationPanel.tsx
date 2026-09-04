@@ -19,11 +19,13 @@ export default function BuilderValidationPanel({
   validation,
   issues,
   workflowIsValid,
+  serviceError,
   onSelectIssue,
 }: {
   validation: AgentWorkflowValidationReport | null;
   issues: BuilderValidationIssue[];
   workflowIsValid: boolean;
+  serviceError?: string | null;
   onSelectIssue: (selection: BuilderSelection) => void;
 }) {
   const hasErrors = issues.some((issue) => issue.severity === 'error');
@@ -37,6 +39,7 @@ export default function BuilderValidationPanel({
             {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : workflowIsValid ? <CheckCircleIcon fontSize="small" color="success" /> : null}
             Validation
           </Typography>
+          {serviceError ? <Alert severity="error">Validation service error: {serviceError}</Alert> : null}
             {!validation ? (
               <Alert severity="info">Run validation to check the assembled graph against the backend validator.</Alert>
             ) : workflowIsValid ? (

@@ -702,6 +702,7 @@ export interface AgentWorkflowRouteFunctionMetadata {
   name?: string;
   display_name?: string;
   description?: string;
+  route_kind?: 'conditional' | 'hitl' | 'parallel_dispatch' | 'serial_dispatch' | 'default';
   allowed_source_node_types?: string[];
   route_labels?: string[];
   routes?: string[];
@@ -1938,12 +1939,14 @@ export async function deleteInternalAgentWorkflow(
 }
 
 export async function validateAgentWorkflowSpec(
-  spec: AgentWorkflowBuilderSpec | Record<string, any>
+  spec: AgentWorkflowBuilderSpec | Record<string, any>,
+  framework: string,
+  builderId: string,
 ): Promise<AgentWorkflowValidationReport> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ spec }),
+    body: JSON.stringify({ spec, framework, builder_id: builderId }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();

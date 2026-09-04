@@ -115,6 +115,9 @@ class LangGraphBuilderProvider:
             "spec_json": workflow["spec_json"],
         }
 
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str:
+        return await self._runtime().prompt_preview(definition, spec, options)
+
     @staticmethod
     def _execution_context(context: BuilderTestContext) -> RuntimeInvocationContext:
         run = context.run

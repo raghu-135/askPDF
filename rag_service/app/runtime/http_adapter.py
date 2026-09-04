@@ -676,6 +676,16 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid builder catalog")
         return dict(catalog)
 
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str:
+        value = await self.transport._json(
+            "POST", "/v1/prompt-preview",
+            json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options)},
+        )
+        prompt = value.get("prompt")
+        if not isinstance(prompt, str):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid prompt preview")
+        return prompt
+
     async def start(self, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
         return await self.transport._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
 

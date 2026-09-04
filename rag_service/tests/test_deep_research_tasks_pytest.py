@@ -22,7 +22,7 @@ from langgraph_runtime.workflows.deep_research_execution import (
     runtime_execution_services_factory,
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder
-from app.agent_workflows.enums import WorkflowNodeType
+from langgraph_runtime.workflows.enums import WorkflowNodeType
 from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
 from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidator

@@ -31,7 +31,7 @@ try:
         ReasoningFormat,
         ThreadCloneMode,
     )
-    from app.agent_workflows.enums import (
+    from langgraph_runtime.workflows.enums import (
         AgentCheckpointerMode,
         AgentRunResumeAction,
         EvidenceCompressionMode,
