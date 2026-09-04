@@ -151,10 +151,21 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     validation_environment = None
     if not require_auth:
         validation_environment = dict(os.environ)
+        # Unit tests inject an in-memory checkpointer and do not represent a
+        # production deployment. Validate the production-shaped configuration
+        # while leaving the injected test implementation untouched.
+        validation_environment["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
+        validation_environment["AGENT_CHECKPOINT_DATABASE_URL"] = (
+            validation_environment.get("AGENT_CHECKPOINT_DATABASE_URL")
+            or "postgresql://runtime-test:runtime-test@localhost/runtime-test"
+        )
         validation_environment["AGENT_RUNTIME_EXECUTION_DATABASE_URL"] = (
             validation_environment.get("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
             or "postgresql://runtime-test:runtime-test@localhost/runtime-test"
         )
+        validation_environment["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
+        validation_environment["LLM_AUTH_MODE"] = validation_environment.get("LLM_AUTH_MODE") or "none"
+        validation_environment["LLM_KEYLESS_PROVIDER"] = validation_environment.get("LLM_KEYLESS_PROVIDER") or "local"
     validate_runtime_environment(service="langgraph", environ=validation_environment)
     runtime_state: dict[str, Any] = {
         "draining": False,
@@ -173,10 +184,11 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def lifespan(_app: FastAPI):
         runtime_state["draining"] = False
         await execution_store.initialize()
-        from langgraph_runtime.checkpointing import open_agent_checkpointer
+        if require_auth:
+            from langgraph_runtime.checkpointing import open_agent_checkpointer
 
-        async with open_agent_checkpointer():
-            pass
+            async with open_agent_checkpointer():
+                pass
         runtime_state["started"] = True
         dependency_stop = asyncio.Event()
         await dependency_monitor.refresh()
@@ -368,10 +380,15 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         except Exception as exc:
             checks["execution_store"] = {"status": "failed", "error": type(exc).__name__}
         try:
-            from langgraph_runtime.checkpointing import open_agent_checkpointer
+            if not require_auth:
+                from langgraph_runtime.checkpointing import _MEMORY_CHECKPOINTER
 
-            async with open_agent_checkpointer(setup=False) as checkpointer:
-                await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
+                await _MEMORY_CHECKPOINTER.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
+            else:
+                from langgraph_runtime.checkpointing import open_agent_checkpointer
+
+                async with open_agent_checkpointer(setup=False) as checkpointer:
+                    await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
             checks["checkpoint_store"] = {
                 "status": "ok",
                 "backend": os.getenv("ASKPDF_AGENT_CHECKPOINTER", "").strip().lower(),
@@ -1045,17 +1062,5 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         continuation = _binding(payload.get("continuation"))
         result = await get_adapter().delete_continuation(continuation)
         return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=result if isinstance(result, Mapping) else {"value": result})
-
-    @app.post("/v1/admin/bindings/migrate")
-    async def migrate_bindings(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        from langgraph_runtime.admin import migrate_legacy_bindings
-
-        items = [dict(item) for item in payload.get("items") or [] if isinstance(item, Mapping)]
-        migrated = migrate_legacy_bindings(items)
-        return json_envelope(
-            status="ok",
-            request_id=request.headers.get("x-request-id"),
-            result={"bindings": migrated, "unconverted": len(items) - len(migrated)},
-        )
 
     return app

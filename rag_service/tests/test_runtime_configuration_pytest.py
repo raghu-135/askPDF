@@ -38,11 +38,14 @@ def _environment() -> dict[str, str]:
         "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "2000",
         "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "2000",
         "ASKPDF_AGENT_CHECKPOINTER": "postgres",
+        "ASKPDF_AGENT_CHECKPOINTER_SETUP": "false",
         "AGENT_CHECKPOINT_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "AGENT_RUNTIME_EXECUTION_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "LANGGRAPH_RUNTIME_URL": "http://langgraph-runtime:8100",
         "LANGGRAPH_RUNTIME_TOKEN": "r" * 32,
         "LANGGRAPH_RUNTIME_BINDING_SECRET": "b" * 32,
+        "LLM_AUTH_MODE": "none",
+        "LLM_KEYLESS_PROVIDER": "local",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
@@ -141,6 +144,36 @@ def test_langgraph_database_requirements_are_conditional():
     with pytest.raises(RuntimeConfigurationError) as caught:
         validate_runtime_environment(service="langgraph", environ=values)
     assert "AGENT_RUNTIME_EXECUTION_DATABASE_URL" in str(caught.value)
+
+
+def test_langgraph_checkpoint_database_never_falls_back_to_product_database():
+    values = _environment()
+    values.pop("AGENT_CHECKPOINT_DATABASE_URL")
+    values["DATABASE_URL"] = "postgresql://product/database"
+
+    with pytest.raises(RuntimeConfigurationError) as caught:
+        validate_runtime_environment(service="langgraph", environ=values)
+    assert "AGENT_CHECKPOINT_DATABASE_URL" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "mode,keyless_provider,api_key,expected",
+    [
+        ("required", "", "secret", True),
+        ("required", "", "", False),
+        ("none", "local", "", True),
+        ("none", "", "", False),
+        ("none", "remote", "", False),
+    ],
+)
+def test_langgraph_model_authentication_is_explicit(mode, keyless_provider, api_key, expected):
+    values = _environment()
+    values.update({"LLM_AUTH_MODE": mode, "LLM_KEYLESS_PROVIDER": keyless_provider, "OPENAI_API_KEY": api_key})
+    if expected:
+        validate_runtime_environment(service="langgraph", environ=values)
+    else:
+        with pytest.raises(RuntimeConfigurationError):
+            validate_runtime_environment(service="langgraph", environ=values)
 
 
 def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():

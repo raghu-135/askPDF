@@ -6,22 +6,7 @@ import argparse
 import asyncio
 import json
 
-from langgraph_runtime.bindings import issue_binding
 from langgraph_runtime.checkpointing import delete_agent_checkpoints
-
-
-def migrate_legacy_bindings(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [
-        {
-            "run_id": str(item["run_id"]),
-            "binding_id": issue_binding(
-                checkpoint_thread_id=str(item["checkpoint_thread_id"]),
-                run_id=str(item["run_id"]),
-            ),
-        }
-        for item in items
-        if item.get("run_id") and item.get("checkpoint_thread_id")
-    ]
 
 
 def main() -> int:

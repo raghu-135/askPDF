@@ -176,6 +176,8 @@ def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
+    monkeypatch.setenv("LLM_AUTH_MODE", "none")
+    monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
     from langgraph.checkpoint.memory import InMemorySaver
 
     @asynccontextmanager

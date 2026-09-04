@@ -48,7 +48,7 @@ async def open_agent_checkpointer(*, setup: bool = True) -> AsyncIterator[Any]:
 
     checkpoint_url = _postgres_checkpoint_url()
     if not checkpoint_url:
-        raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL")
+        raise RuntimeError("ASKPDF_AGENT_CHECKPOINTER=postgres requires AGENT_CHECKPOINT_DATABASE_URL")
 
     async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
         if setup and _truthy_env("ASKPDF_AGENT_CHECKPOINTER_SETUP"):

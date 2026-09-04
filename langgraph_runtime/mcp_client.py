@@ -39,6 +39,39 @@ class MCPUnavailableError(RuntimeError):
         }
 
 
+def _decode_result(name: str, result: Any, text: str) -> dict[str, Any]:
+    structured = getattr(result, "structuredContent", None)
+    if not isinstance(structured, dict):
+        raise ValueError(f"MCP tool {name!r} returned no structuredContent")
+    required = {"ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"}
+    missing = sorted(required - set(structured))
+    if missing:
+        raise ValueError(f"MCP tool {name!r} returned malformed structuredContent; missing: {', '.join(missing)}")
+    if not isinstance(structured["ok"], bool):
+        raise ValueError(f"MCP tool {name!r} returned malformed structuredContent; ok must be boolean")
+    is_error = getattr(result, "isError", False)
+    if not isinstance(is_error, bool):
+        raise ValueError(f"MCP tool {name!r} returned malformed isError")
+    if structured["ok"] != (not is_error):
+        raise ValueError(f"MCP tool {name!r} returned contradictory success/error envelope")
+    if not isinstance(structured["content"], str):
+        raise ValueError(f"MCP tool {name!r} returned malformed content")
+    if not isinstance(structured["sources"], list) or not all(isinstance(item, dict) for item in structured["sources"]):
+        raise ValueError(f"MCP tool {name!r} returned malformed sources or artifacts")
+    if not isinstance(structured["artifacts"], dict):
+        raise ValueError(f"MCP tool {name!r} returned malformed artifacts")
+    if not isinstance(structured["warnings"], list) or not all(isinstance(item, str) for item in structured["warnings"]):
+        raise ValueError(f"MCP tool {name!r} returned malformed warnings")
+    if not isinstance(structured["metrics"], dict) or not isinstance(structured["trace"], dict):
+        raise ValueError(f"MCP tool {name!r} returned malformed warnings, metrics, or trace")
+    if not structured["ok"] and not isinstance(structured.get("error"), dict):
+        raise ValueError(f"MCP tool {name!r} returned a failure without structured error")
+    payload = dict(structured)
+    if payload.get("content") is None:
+        payload["content"] = text
+    return payload
+
+
 class _OpenArguments(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -121,18 +154,10 @@ async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | N
     except Exception as exc:
         raise MCPUnavailableError(name, cause=exc) from exc
     text = "".join(getattr(item, "text", "") for item in result.content or [] if getattr(item, "type", None) == "text")
-    structured = result.structuredContent if isinstance(result.structuredContent, dict) else {}
-    payload = {
-        "ok": not bool(result.isError),
-        "content": structured.get("content", text),
-        "sources": structured.get("sources", []),
-        "artifacts": structured.get("artifacts", {}),
-        "warnings": structured.get("warnings", []),
-        "metrics": structured.get("metrics", {}),
-        "trace": structured.get("trace", {}),
-    }
-    if structured.get("error") is not None:
-        payload["error"] = structured["error"]
+    try:
+        payload = _decode_result(name, result, text)
+    except ValueError as exc:
+        raise MCPUnavailableError(name, cause=exc, retryable=False) from exc
     return json.dumps(payload, ensure_ascii=False)
 
 

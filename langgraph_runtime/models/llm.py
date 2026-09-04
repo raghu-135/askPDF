@@ -27,12 +27,22 @@ def get_llm(model_name: str, temperature: float = 0.0, *, own_async_transport: b
     base_url = os.getenv("LLM_API_URL", "").strip()
     if not base_url:
         raise RuntimeError("LLM_API_URL is required by langgraph-runtime")
+    auth_mode = os.getenv("LLM_AUTH_MODE", "").strip().lower()
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if auth_mode == "required" and not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
+    if auth_mode == "none":
+        provider = os.getenv("LLM_KEYLESS_PROVIDER", "").strip().lower()
+        if provider not in {"lmstudio", "ollama", "local"}:
+            raise RuntimeError("LLM_KEYLESS_PROVIDER must identify an allowed local provider")
+    elif auth_mode != "required":
+        raise RuntimeError("LLM_AUTH_MODE must be 'required' or 'none'")
     client = httpx.AsyncClient() if own_async_transport else None
     return ChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=base_url,
-        api_key=os.getenv("OPENAI_API_KEY") or "sk-no-key-required",
+        api_key=api_key or "",
         http_async_client=client,
     )
 

@@ -42,7 +42,9 @@ jobs:
           cp .env.ci .env
 
       - name: Build Docker images
-        run: docker compose build
+        run: |
+          docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+          docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml build
 
       - name: Verify framework image boundaries
         run: |

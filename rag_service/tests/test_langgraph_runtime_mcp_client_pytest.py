@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,40 @@ async def test_runtime_mcp_wrapper_preserves_search_arguments(monkeypatch):
 
     assert calls[0][0] == "search_documents"
     assert calls[0][1] == {"query": "external runtime boundary", "max_results": 7}
+
+
+def _result(**overrides):
+    payload = {
+        "ok": True,
+        "content": "evidence",
+        "sources": [],
+        "artifacts": {},
+        "warnings": [],
+        "metrics": {},
+        "trace": {},
+    }
+    payload.update(overrides)
+    return SimpleNamespace(structuredContent=payload, isError=False, content=[])
+
+
+def test_runtime_mcp_decoder_rejects_missing_or_contradictory_envelopes():
+    from langgraph_runtime.mcp_client import _decode_result
+
+    with pytest.raises(ValueError):
+        _decode_result("search_documents", SimpleNamespace(structuredContent=None, isError=False), "")
+    with pytest.raises(ValueError):
+        _decode_result("search_documents", _result(ok=False), "")
+    with pytest.raises(ValueError):
+        _decode_result("search_documents", _result(ok=True, sources={}), "")
+
+
+def test_runtime_mcp_decoder_preserves_valid_success_and_failure_envelopes():
+    from langgraph_runtime.mcp_client import _decode_result
+
+    assert _decode_result("search_documents", _result(), "")["content"] == "evidence"
+    failure = _result(ok=False, error={"code": "tool_failed", "message": "no access"})
+    failure.isError = True
+    assert _decode_result("search_documents", failure, "")["ok"] is False
 
 
 def test_runtime_mcp_wrapper_advertises_required_query_schema():

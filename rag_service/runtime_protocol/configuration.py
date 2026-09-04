@@ -277,6 +277,17 @@ def validate_runtime_environment(
         _deep_agent_budgets("hermes", values, errors)
 
     if service == "langgraph":
+        auth_mode = _required("LLM_AUTH_MODE", values, errors)
+        if auth_mode is not None and auth_mode not in {"required", "none"}:
+            errors.append("LLM_AUTH_MODE must be 'required' or 'none'")
+        keyless_provider = values.get("LLM_KEYLESS_PROVIDER", "").strip().lower()
+        if auth_mode == "none":
+            if not keyless_provider:
+                errors.append("LLM_KEYLESS_PROVIDER is required when LLM_AUTH_MODE=none")
+            elif keyless_provider not in {"lmstudio", "ollama", "local"}:
+                errors.append("LLM_KEYLESS_PROVIDER must be lmstudio, ollama, or local")
+        elif auth_mode == "required" and not values.get("OPENAI_API_KEY", "").strip():
+            errors.append("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
         binding_secret = _required("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
         if binding_secret is not None and len(binding_secret) < 32:
             errors.append("LANGGRAPH_RUNTIME_BINDING_SECRET must contain at least 32 characters")
@@ -288,10 +299,7 @@ def validate_runtime_environment(
             errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'postgres' for the external runtime")
         _boolean("ASKPDF_AGENT_CHECKPOINTER_SETUP", values, errors)
         if checkpoint == "postgres":
-            checkpoint_values = dict(values)
-            if not checkpoint_values.get("AGENT_CHECKPOINT_DATABASE_URL") and checkpoint_values.get("DATABASE_URL"):
-                checkpoint_values["AGENT_CHECKPOINT_DATABASE_URL"] = checkpoint_values["DATABASE_URL"]
-            _database_url("AGENT_CHECKPOINT_DATABASE_URL", checkpoint_values, errors)
+            _database_url("AGENT_CHECKPOINT_DATABASE_URL", values, errors)
         _database_url("AGENT_RUNTIME_EXECUTION_DATABASE_URL", values, errors)
     if service == "control_plane":
         _url("LANGGRAPH_RUNTIME_URL", values, errors)

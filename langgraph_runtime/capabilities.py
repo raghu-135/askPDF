@@ -35,7 +35,7 @@ def _module_available(name: str) -> bool:
 
 def checkpoint_database_url(environ: Mapping[str, str] | None = None) -> str:
     values = environ or os.environ
-    url = values.get("AGENT_CHECKPOINT_DATABASE_URL") or values.get("DATABASE_URL") or ""
+    url = values.get("AGENT_CHECKPOINT_DATABASE_URL") or ""
     if url.startswith("postgresql+asyncpg://"):
         return "postgresql://" + url[len("postgresql+asyncpg://"):]
     return url

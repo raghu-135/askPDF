@@ -23,4 +23,4 @@ Runtime-only settings include `ASKPDF_AGENT_CHECKPOINTER`, `AGENT_CHECKPOINT_DAT
 
 The runtime journal reclaims expired execution leases and replays events by cursor. The control plane deduplicates canonical runtime events and task deltas. An uncertain product outcome is resolved with the remote inspect endpoint; the control plane never queries runtime tables.
 
-Checkpoint deletion is available only through `python -m langgraph_runtime.admin --delete-thread ID --dry-run` followed by the same command with `--confirm`. Legacy checkpoint references can be converted through authenticated `POST /v1/admin/bindings/migrate`; failed conversions must be surfaced for operator intervention rather than restarted.
+Checkpoint deletion is available only through `python -m langgraph_runtime.admin --delete-thread ID --dry-run` followed by the same command with `--confirm`. Product APIs expose only opaque continuation bindings.
