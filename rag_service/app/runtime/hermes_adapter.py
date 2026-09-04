@@ -104,7 +104,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self.transport = RuntimeTransportConnector(
             base_url=configured_base_url,
             framework=self.framework,
-            authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN"),
+            authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN", "API_SERVER_KEY"),
             visualization_id=self.visualization_id,
             replay_by_event_id=True,
             **kwargs,

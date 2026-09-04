@@ -123,6 +123,10 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
             return httpx.Response(200, json={"result": {"capabilities": {"operations": {
                 "run.resume": {"support": "conditional", "owner": "runtime", "enabled": True, "semantics": "resume_from_interrupt"},
+            }, "behavior": {
+                "continuation_semantics": "same_run_safe_boundary", "usage_accounting_owner": "runtime",
+                "preserves_run_id": True, "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True, "required_input_fields": [],
             }}}})
         return httpx.Response(200, json={"result": {"validation": {"valid": True, "issues": []}}})
 

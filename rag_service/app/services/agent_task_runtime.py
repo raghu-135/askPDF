@@ -706,14 +706,19 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     "retryable": False,
                 },
             )
-        if str(run.framework or "") == "langgraph" and runtime_result.orchestration_delta is None:
+        runtime_behavior = dict((runtime_result.runtime_metadata or {}).get("runtime_behavior") or {})
+        if runtime_behavior.get("supports_orchestration_delta") and runtime_result.orchestration_delta is None:
             raise AgentRuntimeError(
                 "runtime_task_delta_missing",
-                "The LangGraph runtime did not return the required task orchestration delta",
+                "The selected runtime did not return the required task orchestration delta",
                 retryable=True,
             )
         if runtime_result.continuation is not None:
             await repository.update_runtime_binding(run.id, runtime_result.continuation)
+        if runtime_result.runtime_metadata.get("runtime_behavior"):
+            await repository.update_run_metadata_fields(run.id, {
+                "runtime_behavior": dict(runtime_result.runtime_metadata["runtime_behavior"]),
+            })
         if runtime_result.checkpoint_boundary_available is not None:
             await repository.update_run_metadata_fields(run.id, {
                 "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
@@ -1011,6 +1016,18 @@ async def run_task_worker(
         if task is not None:
             try:
                 run = await tasks.get_task_run(task.id)
+                # A retry is attached in a separate transaction from the
+                # result-review response.  The worker can therefore claim the
+                # queued task between those transactions and briefly observe
+                # the previous active-run pointer.  Re-read the task and its
+                # exact active run before treating the identity as malformed.
+                if run is None or str(getattr(task, "active_run_id", "") or "") != str(getattr(run, "id", "") or ""):
+                    refreshed_task = await tasks.get_task(task.id)
+                    if refreshed_task is not None:
+                        refreshed_run = await tasks.get_task_run(refreshed_task.id)
+                        if refreshed_run is not None:
+                            task = refreshed_task
+                            run = refreshed_run
                 framework = str(getattr(run, "framework", "") or "").strip() if run is not None else ""
                 builder_id = str(getattr(run, "builder_id", "") or "").strip() if run is not None else ""
                 if (
@@ -1021,16 +1038,15 @@ async def run_task_worker(
                     or not builder_id
                 ):
                     logger.error(
-                        "Claimed task has invalid persisted runtime identity | task_id=%s active_run_id=%s",
+                        "Claimed task has no executable runtime identity; deferring claim | task_id=%s active_run_id=%s",
                         task.id,
                         getattr(task, "active_run_id", None),
                     )
-                    await tasks.complete_task(
-                        task.id,
-                        status=AgentTaskStatus.FAILED.value,
-                        reason="task_runtime_identity_invalid",
-                    )
-                    await tasks.release_task_lease(task.id, worker_id)
+                    # Missing identity is recoverable during run attachment or
+                    # after a concurrent worker restart.  Failing the product
+                    # task here leaves a newly-created retry orphaned and
+                    # prevents its runtime trace from ever being produced.
+                    await tasks.defer_task_lease(task.id, worker_id, retry_seconds=1.0)
                     continue
                 wake_limit = positive_float_value(
                     ((task.config_json or {}).get("limits") or {}).get("wake_limit_seconds"),

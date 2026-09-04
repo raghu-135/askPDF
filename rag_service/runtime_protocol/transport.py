@@ -356,10 +356,21 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
     deployment = value.get("deployment") or {}
     if not isinstance(deployment, Mapping):
         raise ValueError("runtime capabilities deployment must be an object")
+    behavior = value.get("behavior") or {}
+    if not isinstance(behavior, Mapping):
+        raise ValueError("runtime capabilities behavior must be an object")
+    required_behavior = {
+        "continuation_semantics", "usage_accounting_owner", "preserves_run_id",
+        "artifact_inheritance", "supports_orchestration_delta", "required_input_fields",
+    }
+    if not required_behavior.issubset(behavior):
+        missing = sorted(required_behavior - set(behavior))
+        raise ValueError(f"runtime capabilities behavior is missing: {', '.join(missing)}")
     return RuntimeCapabilities(
         operations=operations,
         features=features,
         deployment=dict(deployment),
+        behavior=dict(behavior),
         protocol_version=protocol_version,
         minimum_compatible_version=minimum_compatible_version,
     )

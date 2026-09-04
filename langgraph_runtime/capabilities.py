@@ -222,4 +222,14 @@ def langgraph_capabilities(
         operations=operations,
         features=_deep_agents_features(definition) if definition is not None else {},
         deployment=profile.deployment_metadata(),
+        behavior={
+            "continuation_semantics": "same_run_safe_boundary",
+            "usage_accounting_owner": "runtime",
+            "preserves_run_id": True,
+            "artifact_inheritance": "valid_artifacts",
+            "supports_orchestration_delta": True,
+            "required_input_fields": ["task_context", "resolved_spec", "embedding_model"],
+            "supports_pause_resume": bool(checkpoint),
+            "supports_course_correction": bool(checkpoint),
+        },
     )

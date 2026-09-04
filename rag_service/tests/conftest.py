@@ -25,6 +25,15 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from httpx import ASGITransport, AsyncClient
 
+
+@pytest.fixture(autouse=True)
+def configure_langgraph_test_limits():
+    """Explicitly configure runtime-only limits for direct component tests."""
+    from langgraph_runtime.models.llm import configure_runtime_limits
+
+    configure_runtime_limits(dict(os.environ))
+    yield
+
 os.environ.setdefault("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
 os.environ.setdefault("LANGGRAPH_RUNTIME_BINDING_SECRET", "test-langgraph-binding-secret-32-characters")
 os.environ.setdefault("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")

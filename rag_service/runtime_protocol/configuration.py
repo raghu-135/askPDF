@@ -271,9 +271,11 @@ def validate_runtime_environment(
         _boolean("MCP_OTEL_ENABLED", values, errors)
 
         transport = _required("MCP_TRANSPORT", values, errors)
-        if transport is not None and transport not in {"in_process", "loopback_http"}:
-            errors.append("MCP_TRANSPORT must be 'in_process' or 'loopback_http'")
-        if transport == "loopback_http":
+        allowed_transports = {"in_process", "loopback_http"} if service == "control_plane" else {"loopback_http"}
+        if transport is not None and transport not in allowed_transports:
+            expected = "'loopback_http'" if service in {"langgraph", "hermes"} else "'in_process' or 'loopback_http'"
+            errors.append(f"MCP_TRANSPORT must be {expected} for {service}")
+        if transport == "loopback_http" or service in {"langgraph", "hermes"}:
             _url("MCP_LOOPBACK_URL", values, errors)
 
     if service == "hermes_profile":

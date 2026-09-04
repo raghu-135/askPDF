@@ -156,8 +156,8 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         return "projected"
     if (
         task is not None
-        and definition.framework == "hermes"
         and isinstance(result, Mapping)
+        and (result.get("runtime_metadata") or {}).get("runtime_behavior", {}).get("continuation_semantics") == "linked_run"
     ):
         from app.services.agent_task_runtime_projection import apply_neutral_task_completion
         from runtime_protocol.transport import result_from_dict
@@ -194,7 +194,8 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         return "projected"
     if (
         task is not None and str(task.status) != "cancelling"
-        and definition.framework == "langgraph" and isinstance(result, Mapping)
+        and isinstance(result, Mapping)
+        and bool((result.get("runtime_metadata") or {}).get("runtime_behavior", {}).get("supports_orchestration_delta"))
     ):
         projection.update({
             "reconciliation_status": "manual_required",

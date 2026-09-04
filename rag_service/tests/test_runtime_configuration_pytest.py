@@ -34,7 +34,8 @@ def _environment() -> dict[str, str]:
         "AGENT_RUNTIME_RECOVERY_LOOP_ENABLED": "true",
         "MCP_OTEL_ENABLED": "false",
         "MCP_REQUEST_TIMEOUT_SECONDS": "600",
-        "MCP_TRANSPORT": "in_process",
+        "MCP_TRANSPORT": "loopback_http",
+        "MCP_LOOPBACK_URL": "http://rag-service:8000/internal/mcp/",
         "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "2000",
         "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "2000",
         "ASKPDF_AGENT_CHECKPOINTER": "postgres",
@@ -212,6 +213,20 @@ def test_langgraph_checkpoint_database_never_falls_back_to_product_database():
     with pytest.raises(RuntimeConfigurationError) as caught:
         validate_runtime_environment(service="langgraph", environ=values)
     assert "AGENT_CHECKPOINT_DATABASE_URL" in str(caught.value)
+
+
+@pytest.mark.parametrize("service", ["langgraph", "hermes"])
+def test_external_runtime_requires_loopback_mcp_transport(service):
+    values = _environment()
+    values["MCP_TRANSPORT"] = "in_process"
+    with pytest.raises(RuntimeConfigurationError, match="MCP_TRANSPORT must be 'loopback_http'"):
+        validate_runtime_environment(service=service, environ=values)
+
+
+def test_control_plane_may_use_in_process_mcp_transport():
+    values = _environment()
+    values["MCP_TRANSPORT"] = "in_process"
+    validate_runtime_environment(service="control_plane", environ=values)
 
 
 @pytest.mark.parametrize(

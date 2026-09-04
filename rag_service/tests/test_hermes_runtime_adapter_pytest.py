@@ -20,6 +20,13 @@ from hermes_runtime.pinned_contract import HERMES_REVISION
 from hermes_runtime.execution_store import HermesExecutionStore
 
 
+@pytest.fixture(autouse=True)
+def external_hermes_transport_environment(monkeypatch):
+    """Hermes runtime tests exercise the external service contract."""
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_has_independent_identity():
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
@@ -66,7 +73,12 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
         "capabilities": {
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
-            }
+            },
+            "behavior": {
+                "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
+                "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True, "required_input_fields": [],
+            },
         }
     })
 

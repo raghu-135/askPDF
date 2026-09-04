@@ -33,19 +33,14 @@ def load_runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimit
     )
 
 
-_RUNTIME_LIMITS: LangGraphLimits | None = None
-
-
 def configure_runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
-    global _RUNTIME_LIMITS
-    _RUNTIME_LIMITS = load_runtime_limits(environ)
-    return _RUNTIME_LIMITS
+    """Validate and return limits for an explicit process/bootstrap boundary."""
+    return load_runtime_limits(environ)
 
 
-def runtime_limits() -> LangGraphLimits:
-    if _RUNTIME_LIMITS is None:
-        raise RuntimeError("LangGraph runtime limits have not been configured")
-    return _RUNTIME_LIMITS
+def runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
+    """Load immutable limits for a runtime operation; never retain global state."""
+    return load_runtime_limits(environ)
 
 
 def provider_configuration(base_url_override: str | None = None) -> tuple[str, dict[str, str], str]:

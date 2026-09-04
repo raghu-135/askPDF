@@ -19,6 +19,7 @@ from langgraph_runtime import router_runtime
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import builder_for_definition
 from langgraph_runtime.workflows.deep_research_execution import (
+    RuntimeBudgetMeter,
     runtime_execution_services_factory,
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder
@@ -82,6 +83,16 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
 
 
 def _deep_config(*, runtime: bool = False, **configurable) -> dict:
+    configurable.setdefault("runtime_budget_meter", RuntimeBudgetMeter({
+        "tranche_limits": {
+            "model_calls": 10000,
+            "model_tokens": 500000,
+            "tool_calls": 100,
+            "elapsed_active_ms": 7200000,
+        },
+        "tranche_usage": {},
+        "lifetime_usage": {},
+    }, {}))
     return {"configurable": {
         "deep_research_services_factory": runtime_execution_services_factory,
         "cancellation_checker": lambda: False,
@@ -805,11 +816,13 @@ def test_deep_research_builtin_is_valid_and_compilable():
 
 def test_environment_budget_is_snapshotted_and_continuation_preserves_lifetime(monkeypatch):
     monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "3")
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS", "3")
     state = initial_budget_state(apply_deep_agent_env_overrides({"max_model_calls": 99}, "langgraph"))
     assert state["tranche_limits"]["model_calls"] == 3
     state["tranche_usage"]["model_calls"] = 3
     state["lifetime_usage"]["model_calls"] = 3
     monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "7")
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS", "7")
     normalized = normalize_budget_state(state, {"max_model_calls": 99})
     assert normalized["tranche_limits"]["model_calls"] == 3
     continued = reset_tranche(normalized)
@@ -2397,7 +2410,6 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     )
     monkeypatch.setattr(agent_task_maintenance, "get_content_store", lambda: store)
     monkeypatch.setattr(agent_task_maintenance.tasks, "expire_stale_tasks", AsyncMock(return_value=2))
-    monkeypatch.setattr(agent_task_maintenance.tasks, "backfill_legacy_course_corrections", AsyncMock(return_value=1))
     monkeypatch.setattr(agent_task_maintenance.tasks, "release_stale_task_leases", AsyncMock(return_value=1))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_pending_task_deletions", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_expired_artifacts", AsyncMock(return_value=[]))
@@ -2415,7 +2427,6 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)
 
     assert result["expired_tasks"] == 2
-    assert result["migrated_course_corrections"] == 1
     assert result["recovered_leases"] == 1
     assert result["orphaned_content"] == 1
     assert result["deleted_checkpoints"] == 1
@@ -2506,18 +2517,39 @@ async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_fails_claim_without_persisted_runtime_identity(monkeypatch):
     task = SimpleNamespace(id="task-1", active_run_id="run-1")
-    complete = AsyncMock()
-    release = AsyncMock()
+    defer = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=None))
-    monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", complete)
-    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", release)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime.tasks, "defer_task_lease", defer)
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True)
 
-    complete.assert_awaited_once_with(task.id, status="failed", reason="task_runtime_identity_invalid")
-    release.assert_awaited_once()
+    defer.assert_awaited_once()
+    assert defer.await_args.args[0] == task.id
+    assert defer.await_args.kwargs == {"retry_seconds": 1.0}
     execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_reloads_run_after_concurrent_retry_attachment(monkeypatch):
+    claimed = SimpleNamespace(id="task-1", active_run_id="old-run")
+    refreshed = SimpleNamespace(id="task-1", active_run_id="new-run")
+    run = SimpleNamespace(
+        id="new-run", task_id="task-1", framework="langgraph", builder_id="langgraph_graph",
+    )
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[claimed, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(side_effect=[None, run]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=refreshed))
+    monkeypatch.setattr(agent_task_runtime.tasks, "defer_task_lease", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", AsyncMock())
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    agent_task_runtime.execute_claimed_task.assert_awaited_once()
+    assert agent_task_runtime.execute_claimed_task.await_args.args[0] == "task-1"

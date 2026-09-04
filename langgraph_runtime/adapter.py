@@ -279,7 +279,19 @@ def _result_from_graph(
             if isinstance(value, Mapping)
         ),
         usage=_public_value(dict(result.get("usage") or result.get("metrics") or {})),
-        runtime_metadata={key: result[key] for key in ("agent_run_id", "agent_workflow_id") if key in result},
+        runtime_metadata={
+            **{key: result[key] for key in ("agent_run_id", "agent_workflow_id") if key in result},
+            "runtime_behavior": {
+                "continuation_semantics": "same_run_safe_boundary",
+                "usage_accounting_owner": "runtime",
+                "preserves_run_id": True,
+                "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True,
+                "required_input_fields": ["task_context", "resolved_spec", "embedding_model"],
+                "supports_pause_resume": True,
+                "supports_course_correction": True,
+            },
+        },
         continuation=continuation,
         error=_public_value(result.get("agent_error")) if isinstance(result.get("agent_error"), Mapping) else None,
         checkpoint_boundary_available=(

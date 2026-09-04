@@ -223,8 +223,8 @@ services:
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
-      - MCP_TRANSPORT=${MCP_TRANSPORT:?MCP_TRANSPORT must be set in .env}
-      - MCP_LOOPBACK_URL=${MCP_LOOPBACK_URL:?MCP_LOOPBACK_URL must be set in .env}
+      - MCP_TRANSPORT=loopback_http
+      - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
       - MCP_REQUEST_TIMEOUT_SECONDS=${MCP_REQUEST_TIMEOUT_SECONDS:?MCP_REQUEST_TIMEOUT_SECONDS must be set in .env}
       - MCP_OTEL_ENABLED=${MCP_OTEL_ENABLED:?MCP_OTEL_ENABLED must be set in .env}
       - AGENT_RUNTIME_LEASE_SECONDS=${AGENT_RUNTIME_LEASE_SECONDS:?AGENT_RUNTIME_LEASE_SECONDS must be set in .env}

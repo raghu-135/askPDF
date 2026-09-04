@@ -547,6 +547,8 @@ class RuntimeCapabilities:
     operations: Mapping[RuntimeOperationId, RuntimeOperationDescriptor] = field(default_factory=dict)
     features: Mapping[RuntimeFeatureId, RuntimeFeatureDescriptor] = field(default_factory=dict)
     deployment: Mapping[str, Any] = field(default_factory=dict)
+    # Neutral orchestration semantics supplied by the selected adapter.
+    behavior: Mapping[str, Any] = field(default_factory=dict)
     protocol_version: str = RUNTIME_PROTOCOL_VERSION
     minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
@@ -564,7 +566,7 @@ class RuntimeCapabilities:
 
     def to_dict(self) -> Dict[str, Any]:
         ordered_operations = sorted(self.operations.items(), key=lambda item: item[0].value)
-        return {
+        value = {
             "protocol_version": self.protocol_version,
             "minimum_compatible_version": self.minimum_compatible_version,
             "operations": {
@@ -577,6 +579,9 @@ class RuntimeCapabilities:
             },
             "deployment": dict(self.deployment),
         }
+        if self.behavior:
+            value["behavior"] = dict(self.behavior)
+        return value
 
 
 def native(

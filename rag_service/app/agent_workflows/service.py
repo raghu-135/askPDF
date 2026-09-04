@@ -869,7 +869,7 @@ class AgentRunService:
 
         try:
             embedding_model = None
-            if definition.framework == "langgraph":
+            if "embedding_model" in set(resolution.capabilities.behavior.get("required_input_fields", ())):
                 try:
                     embedding_context = await require_thread_embedding_ready(resolution.run.thread_id)
                     embedding_model = embedding_context.embedding_model

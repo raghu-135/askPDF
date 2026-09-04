@@ -1055,9 +1055,9 @@ async def defer_task_lease(task_id: str, worker_id: str, *, retry_seconds: float
 async def _accrue_active_runtime(session: Any, task: AgentTask, *, now: Any, cap_ms: int) -> int:
     if task.active_run_id:
         active_run = await session.get(AgentRun, task.active_run_id)
-        if active_run is not None and active_run.framework == "langgraph":
-            # External LangGraph execution meters active time in checkpointed
-            # graph state and projects the cumulative value at each boundary.
+        behavior = dict((active_run.run_metadata_json or {}).get("runtime_behavior") or {}) if active_run is not None else {}
+        if active_run is not None and behavior.get("usage_accounting_owner") == "runtime":
+            # Runtime-owned accounting is projected at runtime boundaries.
             # Product heartbeats only own the lease and must not double count.
             return 0
     previous = task.heartbeat_at
@@ -2191,8 +2191,8 @@ async def create_budget_review(
                 "title": "Research budget reached",
                 "allowed_actions": ["continue", "accept_partial", "steer"],
                 "boundary_strategy": "safe_atomic_boundary",
-                "continuation_semantics": "linked_run" if str(run.framework or "") == "hermes" else "checkpoint_same_run",
-                "preserves_run_id": str(run.framework or "") != "hermes",
+                "continuation_semantics": "linked_run",
+                "preserves_run_id": False,
                 "artifact_inheritance": "valid_artifacts",
                 "safe_boundary_latency": "after_active_workers",
                 "provisional_answer": str(provisional_answer or "").strip(),
@@ -2354,56 +2354,6 @@ async def pending_course_corrections(
             task = (await session.execute(
                 select(AgentTask).where(AgentTask.id == task_id).with_for_update()
             )).scalar_one_or_none()
-            legacy = [
-                dict(value) for value in ((task.config_json or {}).get("course_corrections") or [])
-                if isinstance(value, dict) and value.get("status") == "pending"
-            ] if task is not None else []
-            legacy_run = await session.get(AgentRun, task.active_run_id) if task is not None and task.active_run_id else None
-            legacy_delivery_mode = (
-                "same_run_safe_boundary"
-                if legacy_run is not None
-                and str(legacy_run.framework or "") == "langgraph"
-                and legacy_run.status not in TERMINAL_TASK_RUN_STATUSES
-                else "linked_run"
-            )
-            for correction in legacy:
-                correction_id = str(correction.get("correction_id") or correction.get("id") or uuid.uuid4())
-                key = str(correction.get("idempotency_key") or f"legacy:{correction_id}")
-                existing = (await session.execute(select(AgentTaskCommand).where(
-                    AgentTaskCommand.task_id == task_id,
-                    AgentTaskCommand.action == "steer",
-                    AgentTaskCommand.idempotency_key == key,
-                ))).scalar_one_or_none()
-                if existing is not None:
-                    continue
-                correction.update({
-                    "id": correction_id,
-                    "correction_id": correction_id,
-                    "operation_id": correction_id,
-                    "scope": correction.get("scope") or "remaining_work",
-                    "source_run_id": correction.get("source_run_id") or task.active_run_id,
-                })
-                command = AgentTaskCommand(
-                    task_id=task_id,
-                    action="steer",
-                    idempotency_key=key,
-                    expected_version=max(1, int(task.version or 1)),
-                    status="accepted",
-                )
-                session.add(command)
-                await session.flush()
-                correction.update({"command_id": command.id, "operation_id": command.id})
-                replace_jsonb_field(command, "result_json", {
-                    "correction": correction,
-                    "delivery_mode": legacy_delivery_mode,
-                    "delivery_state": "accepted",
-                    "source_run_id": correction.get("source_run_id"),
-                    "migrated_from_config": True,
-                })
-            if task is not None and "course_corrections" in (task.config_json or {}):
-                config = dict(task.config_json or {})
-                config.pop("course_corrections", None)
-                replace_jsonb_field(task, "config_json", config)
         commands = list((await session.execute(
             select(AgentTaskCommand).where(
                 AgentTaskCommand.task_id == task_id,
@@ -2422,20 +2372,6 @@ async def pending_course_corrections(
             for command in commands
         ]
         return [value for value in values if delivery_mode is None or value.get("delivery_mode") == delivery_mode]
-
-
-async def backfill_legacy_course_corrections(*, limit: int = 100) -> int:
-    """Move bounded legacy config queues into the durable command outbox."""
-
-    async with async_session_maker() as session:
-        task_ids = list((await session.execute(
-            select(AgentTask.id).where(
-                AgentTask.config_json.op("?")("course_corrections")
-            ).order_by(AgentTask.updated_at, AgentTask.id).limit(max(1, min(limit, 500)))
-        )).scalars().all())
-    for task_id in task_ids:
-        await pending_course_corrections(str(task_id))
-    return len(task_ids)
 
 
 async def mark_course_corrections_runtime_applied(

@@ -454,7 +454,7 @@ class TestAgentCheckpointing:
         monkeypatch.delenv("AGENT_CHECKPOINT_DATABASE_URL", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
 
-        with pytest.raises(RuntimeError, match="requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL"):
+        with pytest.raises(RuntimeError, match="requires AGENT_CHECKPOINT_DATABASE_URL"):
             async with open_agent_checkpointer():
                 pass
 

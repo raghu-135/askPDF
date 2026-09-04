@@ -503,17 +503,18 @@ async def resolve_run_capability_resolution(
                     operations[operation], RuntimeCapabilityDisabledReason.RECOVERY_REQUIRED,
                 )
     budget_review = operations.get(RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND)
+    behavior = capabilities.behavior
     if budget_review is not None:
         operations[RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND] = replace(
             budget_review,
-            preserves_run_id=definition.framework == "langgraph",
+            preserves_run_id=bool(behavior.get("preserves_run_id")),
             preserves_session_id=True,
         )
     course_correction = operations.get(RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT)
     if course_correction is not None:
         course_correction = replace(
             course_correction,
-            preserves_run_id=definition.framework == "langgraph" and status not in TERMINAL_RUN_STATES,
+            preserves_run_id=bool(behavior.get("preserves_run_id")) and status not in TERMINAL_RUN_STATES,
             preserves_session_id=True,
         )
         if task_status not in {

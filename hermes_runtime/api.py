@@ -663,6 +663,16 @@ def create_app() -> FastAPI:
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                 },
+                "behavior": {
+                    "continuation_semantics": "linked_run",
+                    "usage_accounting_owner": "runtime",
+                    "preserves_run_id": False,
+                    "artifact_inheritance": "valid_artifacts",
+                    "supports_orchestration_delta": True,
+                    "required_input_fields": ["task_context", "resolved_spec"],
+                    "supports_pause_resume": False,
+                    "supports_course_correction": True,
+                },
             }},
         )
 
@@ -920,6 +930,16 @@ def create_app() -> FastAPI:
                         "mcp_server": managed_mcp.get("server"),
                         "allowed_tool_ids": list(managed_mcp.get("allowed_tool_ids") or []),
                         "policy_fingerprint": managed_profile.get("profile_id"),
+                        "runtime_behavior": {
+                            "continuation_semantics": "linked_run",
+                            "usage_accounting_owner": "runtime",
+                            "preserves_run_id": False,
+                            "artifact_inheritance": "valid_artifacts",
+                            "supports_orchestration_delta": True,
+                            "required_input_fields": ["task_context", "resolved_spec"],
+                            "supports_pause_resume": False,
+                            "supports_course_correction": True,
+                        },
                     },
                     "continuation": continuation,
                     "error": event_payload.get("error"),
