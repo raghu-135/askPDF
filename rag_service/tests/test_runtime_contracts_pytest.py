@@ -55,6 +55,17 @@ from langgraph_runtime.workflows.deep_research_execution import (
     RuntimeExecutionServices,
     runtime_execution_services_factory,
 )
+
+
+def _runtime_budget_snapshot(limits):
+    dimensions = {
+        "model_calls": int(limits.get("max_model_calls", 10)),
+        "model_tokens": int(limits.get("max_model_tokens", 1000)),
+        "tool_calls": int(limits.get("max_tool_calls", 10)),
+        "elapsed_active_ms": int(limits.get("max_active_runtime_ms", 1000)),
+    }
+    zero = {key: 0 for key in dimensions}
+    return {"tranche_index": 1, "tranche_limits": dimensions, "tranche_usage": zero, "lifetime_usage": dict(zero)}
 from langgraph_runtime.workflows.deep_research_nodes import deep_task_scheduler
 from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.workflows import deep_research_nodes
@@ -283,13 +294,9 @@ def test_incompatible_runtime_protocol_is_rejected_before_execution():
 
 @pytest.mark.asyncio
 async def test_runtime_budget_meter_accumulates_parallel_usage_without_lost_updates():
+    limits = {"max_model_calls": 50, "max_model_tokens": 1000, "max_tool_calls": 50, "max_active_runtime_ms": 1000}
     meter = RuntimeBudgetMeter(
-        {
-            "tranche_index": 1,
-            "tranche_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0},
-            "lifetime_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0, "artifact_bytes": 0},
-        },
-        {"max_model_calls": 50, "max_model_tokens": 1000, "max_tool_calls": 50, "max_active_runtime_ms": 1000},
+        _runtime_budget_snapshot(limits), limits,
     )
 
     await asyncio.gather(*(
@@ -313,13 +320,13 @@ async def test_scheduler_stops_at_runtime_budget_boundary_and_returns_checkpoint
         "max_concurrency": 1,
         "max_fanout": 1,
     }
-    meter = RuntimeBudgetMeter({}, limits)
+    meter = RuntimeBudgetMeter(_runtime_budget_snapshot(limits), limits)
     await meter.consume(model_calls=1)
     state = {
         "agent_task_id": "task-1",
         "agent_run_id": "run-1",
         "task_limits": limits,
-        "task_budget_usage": {},
+        "task_budget_usage": _runtime_budget_snapshot({}),
         "task_todos": [{
             "id": "todo-1", "title": "Remaining research", "status": "pending",
             "priority": 1, "required": True, "profile_id": "document_researcher",
@@ -342,8 +349,8 @@ async def test_scheduler_stops_at_runtime_budget_boundary_and_returns_checkpoint
 async def test_runtime_artifact_bytes_are_present_in_boundary_budget_snapshot():
     state = {
         "agent_task_id": "task-1",
-        "task_limits": {},
-        "task_budget_usage": {},
+        "task_limits": {"max_model_calls": 10, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 1000},
+        "task_budget_usage": _runtime_budget_snapshot({}),
         "runtime_artifacts": [],
     }
     configurable = {"cancellation_checker": lambda: False}
@@ -382,8 +389,8 @@ async def test_budget_review_interrupt_exposes_research_so_far_and_retry_choices
         "task_incomplete_reasons": ["todo-remaining"],
         "task_evidence_manifest": [],
         "warnings": [],
-        "task_limits": {},
-        "task_budget_usage": {},
+        "task_limits": {"max_model_calls": 10, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 1000},
+        "task_budget_usage": _runtime_budget_snapshot({}),
     }
 
     result = await deep_research_nodes.evidence_critic(state, {"configurable": {
@@ -401,12 +408,14 @@ async def test_budget_review_interrupt_exposes_research_so_far_and_retry_choices
 async def test_resumed_runtime_uses_product_authorized_reset_tranche():
     exhausted = {
         "tranche_index": 1,
+        "tranche_limits": {"model_calls": 1, "model_tokens": 1000, "tool_calls": 10, "elapsed_active_ms": 1000},
         "tranche_usage": {"model_calls": 1},
         "lifetime_usage": {"model_calls": 1},
         "boundary": {"status": "requested", "dimensions": ["model_calls"], "tranche_index": 1},
     }
     reset = {
         "tranche_index": 2,
+        "tranche_limits": {"model_calls": 1, "model_tokens": 1000, "tool_calls": 10, "elapsed_active_ms": 1000},
         "tranche_usage": {"model_calls": 0},
         "lifetime_usage": {"model_calls": 1},
         "boundary": None,

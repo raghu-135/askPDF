@@ -43,6 +43,7 @@ UNIT_TEST_FILES = [
     "test_runtime_http_adapter_pytest.py",
     "test_langgraph_boundary_gaps_pytest.py",
     "test_runtime_contracts_pytest.py",
+    "test_runtime_hardening_pytest.py",
     "test_runtime_configuration_pytest.py",
     "test_runtime_events_pytest.py",
     "test_runtime_capability_gate_pytest.py",

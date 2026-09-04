@@ -9,7 +9,7 @@ from .protocol import (
     structured_error,
     validate_event_mapping,
 )
-from .configuration import RuntimeConfigurationError, RuntimeEnvironment, validate_runtime_environment
+from .configuration import RuntimeConfigurationError, RuntimeEnvironment, parse_bounded_ratio, validate_runtime_environment
 from .contracts import RUNTIME_MINIMUM_COMPATIBLE_VERSION, RUNTIME_PROTOCOL_VERSION
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "validate_event_mapping",
     "RuntimeConfigurationError",
     "RuntimeEnvironment",
+    "parse_bounded_ratio",
     "validate_runtime_environment",
     "RUNTIME_PROTOCOL_VERSION",
     "RUNTIME_MINIMUM_COMPATIBLE_VERSION",

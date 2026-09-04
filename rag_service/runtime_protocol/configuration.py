@@ -94,17 +94,25 @@ def _positive_float(name: str, values: Mapping[str, str], errors: list[str]) -> 
     return parsed
 
 
+def parse_bounded_ratio(value: str | float, *, name: str, minimum: float = 0.0, maximum: float = 0.5) -> float:
+    """Parse a finite inclusive ratio without silently clamping it."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite ratio between {minimum:g} and {maximum:g}") from exc
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
+        raise ValueError(f"{name} must be a finite ratio between {minimum:g} and {maximum:g}")
+    return parsed
+
+
 def _jitter_ratio(name: str, values: Mapping[str, str], errors: list[str]) -> float | None:
     value = _required(name, values, errors)
     if value is None:
         return None
     try:
-        parsed = float(value)
-    except ValueError:
-        errors.append(f"{name} must be a finite ratio between 0 and 0.5")
-        return None
-    if not math.isfinite(parsed) or not 0 <= parsed <= 0.5:
-        errors.append(f"{name} must be a finite ratio between 0 and 0.5")
+        parsed = parse_bounded_ratio(value, name=name)
+    except ValueError as exc:
+        errors.append(str(exc))
         return None
     return parsed
 
@@ -303,6 +311,9 @@ def validate_runtime_environment(
         _database_url("AGENT_RUNTIME_EXECUTION_DATABASE_URL", values, errors)
     if service == "control_plane":
         _url("LANGGRAPH_RUNTIME_URL", values, errors)
+        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        if runtime_token is not None and len(runtime_token) < 32:
+            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
 
     if hermes_enabled:
         if service == "hermes":

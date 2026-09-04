@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.workflows.enums import PlannerRiskLevel, PlannerRoute, PLANNER_ROUTES, ToolContractId, WorkflowNodeType
 from langgraph_runtime.workflows.trace import compact_preview
 
@@ -240,15 +241,6 @@ def ordered_plan_steps(steps: List[str], worker_nodes: Any = None) -> List[str]:
     return [node_id for node_id in available_worker_node_ids(worker_nodes) if node_id in ordered_ids]
 
 
-def fallback_clarification_options(question: Optional[str] = None) -> List[str]:
-    original = compact_preview(str(question or "my original question").strip(), limit=180).rstrip(" ?!.,;:")
-    return [
-        f'Based on the uploaded documents, what is the answer to "{original}"?',
-        f'Based on our earlier conversation, what is the answer to "{original}"?',
-        f'Based on the thread timeline, what is the answer to "{original}"?',
-    ]
-
-
 def normalize_clarification_options(value: Any, *, limit: int = 4, chars: int = 240) -> List[str]:
     """Return distinct, bounded questions that are not meta-framed clarification prompts."""
 
@@ -318,7 +310,12 @@ def normalize_execution_plan(
     if route == PlannerRoute.CLARIFY.value:
         clarification_options = normalize_clarification_options(clarification_options)
         if len(clarification_options) < 2:
-            clarification_options = fallback_clarification_options(question)
+            raise AgentRuntimeError(
+                "planner_output_invalid",
+                "The planner returned insufficient clarification choices",
+                retryable=True,
+                details={"field": "clarification_options", "minimum": 2},
+            )
     return {
         "route": route,
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),

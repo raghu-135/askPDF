@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
 
 from langgraph_runtime.runtime_support.cancellation import race_with_cancellation
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 T = TypeVar("T")
@@ -201,9 +202,31 @@ class RuntimeBudgetMeter:
     """
 
     def __init__(self, budget: Mapping[str, Any] | None, limits: Mapping[str, Any] | None):
-        self._limits = dict(limits or {})
         source = copy.deepcopy(dict(budget or {}))
         tranche_limits = dict(source.get("tranche_limits") or {})
+        required = {"model_calls": "max_model_calls", "model_tokens": "max_model_tokens", "tool_calls": "max_tool_calls", "elapsed_active_ms": "max_active_runtime_ms"}
+        if set(tranche_limits) & set(required) != set(required):
+            raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget snapshot is missing required tranche limits", details={"missing_dimensions": sorted(set(required) - set(tranche_limits))})
+        for dimension in required:
+            value = tranche_limits.get(dimension)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value or value <= 0:
+                raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget snapshot contains an invalid tranche limit", details={"dimension": dimension})
+        ordinary_limits = dict(limits or {})
+        try:
+            contradictory = [dimension for dimension, ordinary_name in required.items() if ordinary_name in ordinary_limits and ordinary_limits[ordinary_name] is not None and int(ordinary_limits[ordinary_name]) != int(tranche_limits[dimension])]
+        except (TypeError, ValueError):
+            raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget configuration contains an invalid ordinary limit", details={"field": "task_limits"}) from None
+        if contradictory:
+            raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget configuration contains contradictory limits", details={"contradictory_dimensions": contradictory})
+        self._limits = tranche_limits
+        for field_name in ("tranche_usage", "lifetime_usage"):
+            usage = source.get(field_name)
+            if not isinstance(usage, Mapping):
+                raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget snapshot is missing usage counters", details={"field": field_name})
+            for dimension in required:
+                value = usage.get(dimension, 0)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value or value < 0:
+                    raise AgentRuntimeError("budget_snapshot_invalid", "The runtime budget snapshot contains an invalid usage counter", details={"field": field_name, "dimension": dimension})
         self._budget = {
             **source,
             "tranche_index": max(1, int(source.get("tranche_index") or 1)),
@@ -238,9 +261,7 @@ class RuntimeBudgetMeter:
                 >= max(
                     1,
                     int(
-                        self._limits.get(limit_name)
-                        or (self._budget.get("tranche_limits") or {}).get(key)
-                        or 1_000_000_000
+                        self._limits[key]
                     ),
                 )
             ]
@@ -379,7 +400,7 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         current_run_id = str(self.state.get("agent_run_id") or "")
         manifests = [dict(value) for value in self.state.get("runtime_artifact_manifest") or self.state.get("task_artifact_manifest") or [] if isinstance(value, Mapping)]
         artifacts = [dict(value) for value in self.state.get("runtime_artifacts") or [] if isinstance(value, Mapping)]
-        by_id = {str(value.get("artifact_id") or value.get("id")): value for value in [*artifacts, *manifests]}
+        by_id = {str(value.get("artifact_id") or value.get("id")): value for value in [*manifests, *artifacts] if str(value.get("artifact_id") or value.get("id") or "").strip()}
         completed_ids = {
             str(artifact_id)
             for todo in self.state.get("task_todos") or []
@@ -387,15 +408,24 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
             for artifact_id in todo.get("artifact_ids") or []
         }
         selected = [by_id[value] for value in completed_ids if value in by_id]
-        evidence_manifest = [{
-            "id": str(value.get("artifact_id") or value.get("id")),
-            "kind": value.get("kind"), "sha256": value.get("sha256"),
-            "byte_size": value.get("byte_size") or len(str(value.get("content") or "").encode()),
-            "summary": value.get("summary") or {}, "todo_id": value.get("todo_id"),
-            "plan_revision": int((value.get("provenance") or {}).get("plan_revision") or 0),
-            "origin_run_id": current_run_id, "origin_attempt": 1,
-            "inherited": False, "validity": "valid",
-        } for value in selected if value.get("kind") in {"tool_output", "intermediate_report", "context_summary"}]
+        evidence_manifest = []
+        for value in selected:
+            artifact_id = str(value.get("artifact_id") or value.get("id") or "").strip()
+            if not artifact_id or value.get("kind") not in {"tool_output", "intermediate_report", "context_summary"}:
+                continue
+            provenance = dict(value.get("provenance") or {}) if isinstance(value.get("provenance"), Mapping) else {}
+            inherited = bool(value.get("inherited", provenance.get("inherited", False)))
+            evidence_manifest.append({
+                **dict(value), "id": artifact_id, "kind": value.get("kind"),
+                "sha256": value.get("sha256"), "byte_size": value.get("byte_size"),
+                "summary": value.get("summary") or {}, "todo_id": value.get("todo_id"),
+                "plan_revision": int(provenance.get("plan_revision") or value.get("plan_revision") or 0),
+                "origin_run_id": provenance.get("origin_run_id", value.get("origin_run_id", current_run_id if not inherited else None)),
+                "origin_attempt": provenance.get("origin_attempt", value.get("origin_attempt", 1 if not inherited else None)),
+                "inherited": inherited,
+                "validity": value.get("validity", provenance.get("validity", "valid")),
+                "provenance": provenance,
+            })
         return {
             "runtime_artifacts": artifacts,
             "task_artifact_manifest": evidence_manifest,
@@ -413,8 +443,23 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
     async def report_contents(self, context: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         artifacts = [value for value in self.state.get("runtime_artifacts") or [] if isinstance(value, Mapping)]
         contents = dict(self.state.get("runtime_artifact_contents") or {})
-        contents.update({str(value.get("artifact_id") or value.get("id")): str(value.get("content") or "") for value in artifacts})
-        reports = [contents.get(str(value.get("id")), "")[:20_000] for value in context.get("task_evidence_manifest") or []]
+        contents.update({str(value.get("artifact_id") or value.get("id")): value.get("content") for value in artifacts if value.get("content") is not None})
+        reports: list[str] = []
+        for manifest in context.get("task_evidence_manifest") or []:
+            artifact_id = str(manifest.get("id") or "").strip()
+            content = contents.get(artifact_id)
+            if not artifact_id or not isinstance(content, str):
+                raise AgentRuntimeError("evidence_content_missing", "Required evidence content is unavailable to the runtime", details={"artifact_id": artifact_id or None})
+            encoded_size = len(content.encode("utf-8"))
+            expected_digest = str(manifest.get("sha256") or "").strip()
+            digest_match = bool(expected_digest) and hashlib.sha256(content.encode("utf-8")).hexdigest() == expected_digest
+            try:
+                size_match = manifest.get("byte_size") is not None and int(manifest["byte_size"]) == encoded_size
+            except (TypeError, ValueError):
+                size_match = False
+            if not digest_match or not size_match:
+                raise AgentRuntimeError("artifact_packet_invalid", "Evidence content failed integrity validation", details={"artifact_id": artifact_id, "digest_match": digest_match, "byte_size_match": size_match})
+            reports.append(content[:20_000])
         return reports, [str(value) for value in context.get("task_evidence_gaps") or []]
 
 

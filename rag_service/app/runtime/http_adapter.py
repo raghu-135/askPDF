@@ -150,6 +150,8 @@ class RuntimeTransportConnector:
         )
         self._output_delta_flush_seconds = required_positive_float("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS")
         self._output_delta_flush_bytes = required_positive_int("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES")
+        if self.framework == "langgraph" and not any(os.getenv(name, "").strip() for name in self.authorization_envs):
+            raise RuntimeError("runtime_configuration_invalid", "LANGGRAPH_RUNTIME_TOKEN is required for the external LangGraph runtime")
 
     async def _client_for_request(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -186,6 +188,8 @@ class RuntimeTransportConnector:
             if token:
                 headers["authorization"] = f"Bearer {token}"
                 break
+        if self.framework == "langgraph" and "authorization" not in headers:
+            raise RuntimeError("runtime_configuration_invalid", "LANGGRAPH_RUNTIME_TOKEN is required for the external LangGraph runtime")
         return headers
 
     async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:

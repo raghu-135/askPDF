@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import httpx
 
 from langgraph_runtime.limits import required_positive_float
+from runtime_protocol.configuration import parse_bounded_ratio
 from langgraph_runtime.models.llm import provider_configuration
 
 
@@ -89,7 +90,13 @@ class DependencyMonitor:
         self.interval = required_positive_float("AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS")
         self.timeout = required_positive_float("AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS")
         self.stale_after = max(self.interval, required_positive_float("AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS"))
-        self.jitter = min(0.5, required_positive_float("AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO"))
+        try:
+            self.jitter = parse_bounded_ratio(
+                os.getenv("AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO", ""),
+                name="AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO",
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         self._configured = {
             "mcp": os.getenv("MCP_LOOPBACK_URL", "").strip(),
             "provider": os.getenv("LLM_API_URL", "").strip(),

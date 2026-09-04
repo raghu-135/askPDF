@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime_protocol.configuration import RuntimeConfigurationError, validate_runtime_environment
+from runtime_protocol.configuration import RuntimeConfigurationError, parse_bounded_ratio, validate_runtime_environment
 
 
 def _environment() -> dict[str, str]:
@@ -79,6 +79,24 @@ def test_framework_budget_aliases_resolve_and_explicit_override_wins():
     validated = validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
     assert validated.get("DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS") == "250"
+
+
+def test_control_plane_requires_langgraph_runtime_token():
+    values = _environment()
+    values.pop("LANGGRAPH_RUNTIME_TOKEN")
+    with pytest.raises(RuntimeConfigurationError, match="LANGGRAPH_RUNTIME_TOKEN"):
+        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+
+
+@pytest.mark.parametrize("value", ["0", "0.5"])
+def test_jitter_ratio_accepts_inclusive_bounds(value):
+    assert parse_bounded_ratio(value, name="jitter") == float(value)
+
+
+@pytest.mark.parametrize("value", ["-0.01", "0.51", "nan", "inf", ""])
+def test_jitter_ratio_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="finite ratio"):
+        parse_bounded_ratio(value, name="jitter")
 
 
 @pytest.mark.parametrize(
