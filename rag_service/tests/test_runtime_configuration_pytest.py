@@ -77,13 +77,14 @@ def _environment() -> dict[str, str]:
     return values
 
 
-def test_framework_budget_aliases_resolve_and_explicit_override_wins():
+def test_control_plane_ignores_framework_runtime_budget_variables():
     values = _environment()
-    values["DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS"] = "250"
+    values.pop("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS")
+    values.pop("DEEP_AGENT_HERMES_MAX_MODEL_CALLS")
 
     validated = validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
-    assert validated.get("DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS") == "250"
+    assert "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS" not in validated.values
 
 
 def test_control_plane_requires_langgraph_runtime_token():
@@ -154,7 +155,7 @@ def test_invalid_runtime_configuration_is_rejected(name: str, value: str):
     values[name] = value
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+        validate_runtime_environment(service="langgraph", environ=values)
 
     assert name in str(caught.value)
 
@@ -163,16 +164,13 @@ def test_missing_values_are_aggregated_without_secret_values():
     values = _environment()
     values.pop("DEEP_AGENT_MAX_MODEL_CALLS")
     values.pop("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
-    values["HERMES_MCP_CONTEXT_SECRET"] = "secret-value"
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": "hermes"})
+        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
     message = str(caught.value)
-    assert "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS" in message
     assert "AGENT_RUNTIME_READ_TIMEOUT_SECONDS" in message
-    assert "HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters" in message
-    assert "secret-value" not in message
+    assert "DEEP_AGENT_MAX_MODEL_CALLS" not in message
 
 
 @pytest.mark.parametrize(
@@ -188,7 +186,7 @@ def test_invalid_deep_agent_references_fail_startup(mutations):
     values.update(mutations)
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+        validate_runtime_environment(service="langgraph", environ=values)
 
     assert "DEEP_AGENT_MAX_TOOL_CALLS" in str(caught.value)
 

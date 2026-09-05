@@ -311,7 +311,7 @@ def validate_runtime_environment(
         if provider_name != "lmstudio" and not values.get("OPENAI_API_KEY", "").strip():
             errors.append("OPENAI_API_KEY is required for the selected Hermes provider")
 
-    if service in {"control_plane", "langgraph"}:
+    if service == "langgraph":
         for name in LANGGRAPH_LIMIT_NAMES:
             _positive_int(name, values, errors)
         _deep_agent_budgets("langgraph", values, errors)
@@ -319,7 +319,7 @@ def validate_runtime_environment(
         service == "control_plane"
         and "hermes" in {item.strip().lower() for item in values.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
     )
-    if hermes_enabled:
+    if service == "hermes":
         _deep_agent_budgets("hermes", values, errors)
 
     if service == "langgraph":
@@ -400,9 +400,10 @@ def validate_runtime_environment(
     if errors:
         raise RuntimeConfigurationError(sorted(set(errors)))
     resolved_values = dict(values)
-    for name in values:
-        if name.startswith("DEEP_AGENT_"):
-            resolved = _raw(name, values)
-            if resolved is not None:
-                resolved_values[name] = resolved.strip()
+    if service in {"langgraph", "hermes"}:
+        for name in values:
+            if name.startswith("DEEP_AGENT_"):
+                resolved = _raw(name, values)
+                if resolved is not None:
+                    resolved_values[name] = resolved.strip()
     return RuntimeEnvironment(resolved_values)

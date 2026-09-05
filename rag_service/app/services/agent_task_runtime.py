@@ -1048,8 +1048,14 @@ async def run_task_worker(
                     # prevents its runtime trace from ever being produced.
                     await tasks.defer_task_lease(task.id, worker_id, retry_seconds=1.0)
                     continue
+                limits = ((getattr(task, "config_json", None) or {}).get("limits") or {})
+                wake_limit_value = limits.get("wake_limit_seconds")
+                if wake_limit_value is None:
+                    # Legacy tasks created before the neutral control-plane
+                    # wake deadline was persisted must remain runnable.
+                    wake_limit_value = os.getenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS")
                 wake_limit = positive_float_value(
-                    ((task.config_json or {}).get("limits") or {}).get("wake_limit_seconds"),
+                    wake_limit_value,
                     name="wake_limit_seconds",
                 )
                 await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)

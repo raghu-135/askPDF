@@ -11,7 +11,6 @@ from typing import Any, Mapping
 
 from app.runtime.adapter import RuntimeInvocationContext
 from app.runtime.builder import BuilderCapabilities, BuilderCatalog, BuilderTestContext
-from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeValidationResult
 
@@ -84,7 +83,9 @@ class LangGraphBuilderProvider:
         )
 
     def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:
-        return apply_deep_agent_env_overrides(limits, self.framework)
+        # Product limits are already snapshotted in the request. LangGraph
+        # execution safety limits belong exclusively to langgraph-runtime.
+        return dict(limits)
 
     def filter_request_overrides(self, definition: AgentDefinition, overrides: Mapping[str, Any] | None, *, reject_unsupported: bool) -> Mapping[str, Any]:
         return {

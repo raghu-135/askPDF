@@ -45,6 +45,7 @@ from runtime_protocol.contracts import (
     validated_disabled_operation_ids,
 )
 from runtime_protocol.transport import result_from_dict
+from runtime_protocol.validation import RuntimeProtocolValidationError
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 from app.runtime.product_capabilities import project_public_capabilities
@@ -724,6 +725,38 @@ def test_runtime_task_result_preserves_text_when_optional_structure_is_invalid()
     assert result.warnings[0]["code"] == "structured_output_invalid"
     assert result.framework_details == {"framework": "langgraph"}
     assert runtime_task_result_summary(result)["output_shape"] == "text"
+
+
+@pytest.mark.parametrize("value", [
+    {"text": "answer"},
+    {"status": "not-a-status", "text": "answer"},
+    {"status": 1, "text": "answer"},
+])
+def test_control_plane_runtime_result_rejects_missing_or_unknown_status(value):
+    with pytest.raises(RuntimeProtocolValidationError):
+        normalize_runtime_task_result(value)
+
+
+@pytest.mark.parametrize("value", [
+    {"status": "completed", "text": "answer"},
+    {"status": "completed_with_warnings", "text": "answer", "warnings": [{"code": "W1"}]},
+    {"status": "failed", "text": "partial"},
+    {"status": "timed_out", "text": "partial"},
+    {"status": "cancelled", "text": "partial"},
+])
+def test_result_parser_accepts_each_declared_task_result_status(value):
+    result = normalize_runtime_task_result(value)
+    restored = result_from_dict(AgentRuntimeResult(status="completed", task_result=result).to_dict())
+    assert restored.task_result is not None
+    assert restored.task_result.status.value == value["status"]
+
+
+def test_result_parser_requires_status_on_wire_envelopes():
+    with pytest.raises(RuntimeProtocolValidationError):
+        result_from_dict(AgentRuntimeResult(status="completed").to_dict() | {"status": None})
+
+    with pytest.raises(RuntimeProtocolValidationError):
+        result_from_dict({"status": "completed", "task_result": {"text": "answer"}})
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled", "timed_out"])

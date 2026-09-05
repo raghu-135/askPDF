@@ -30,6 +30,7 @@ from .tool_contract import (
     normalize_tool_result,
     validate_tool_result_payload,
 )
+from .validation import RuntimeProtocolValidationError, validate_runtime_result_envelope
 
 __all__ = [
     "CANONICAL_RUNTIME_EVENT_KINDS",
@@ -56,6 +57,8 @@ __all__ = [
     "ToolWarningCode",
     "normalize_tool_result",
     "validate_tool_result_payload",
+    "RuntimeProtocolValidationError",
+    "validate_runtime_result_envelope",
     "MAX_TOOL_RESULT_BYTES",
     "MAX_TOOL_RESULT_COLLECTION_ITEMS",
     "MAX_TOOL_RESULT_STRING_LENGTH",

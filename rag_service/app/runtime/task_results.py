@@ -10,6 +10,7 @@ from runtime_protocol.contracts import (
     RuntimeTaskResult,
     RuntimeTaskResultStatus,
 )
+from runtime_protocol.validation import validate_runtime_result_envelope
 
 
 _CANONICAL_TEXT_KEYS = ("text", "summary", "answer")
@@ -95,7 +96,11 @@ def normalize_runtime_task_result(
     """
 
     data = dict(value) if isinstance(value, Mapping) else {}
-    raw_status = str(data.get("status") or "completed")
+    if isinstance(value, Mapping):
+        # Raw strings remain supported as internal model projections. Every
+        # runtime result envelope, however, must carry an explicit status.
+        validate_runtime_result_envelope({"status": value.get("status"), "task_result": value})
+    raw_status = str(data["status"]) if isinstance(value, Mapping) else "completed"
     canonical_text_value = next(
         (data.get(key) for key in _CANONICAL_TEXT_KEYS if data.get(key) is not None),
         value if isinstance(value, str) else None,
@@ -146,11 +151,7 @@ def normalize_runtime_task_result(
             "message": "The requested structured output was not returned; usable text was preserved.",
         })
 
-    try:
-        status = RuntimeTaskResultStatus(raw_status)
-    except ValueError:
-        status = RuntimeTaskResultStatus.COMPLETED if (text or structured or artifacts) else RuntimeTaskResultStatus.FAILED
-        warnings.append({"code": "runtime_status_unknown", "details": {"status": raw_status}})
+    status = RuntimeTaskResultStatus(raw_status)
 
     usable = bool(text or structured or artifacts)
     if status in {RuntimeTaskResultStatus.FAILED, RuntimeTaskResultStatus.TIMED_OUT, RuntimeTaskResultStatus.CANCELLED} and usable:

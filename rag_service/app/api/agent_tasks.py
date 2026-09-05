@@ -282,7 +282,15 @@ async def create_agent_task(
             if req.limits is not None
             else dict(task_policy.get("limits") or {})
         )
-        config["limits"] = dict(builder.normalize_task_limits(requested_limits))
+        config_limits = dict(builder.normalize_task_limits(requested_limits))
+        # The task worker needs a product-side wake deadline before it can
+        # invoke either remote runtime. This is transport/orchestration
+        # policy, not a framework execution safety limit.
+        config_limits.setdefault(
+            "wake_limit_seconds",
+            required_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS"),
+        )
+        config["limits"] = config_limits
         resolved = await builder.resolve(
             definition,
             spec,

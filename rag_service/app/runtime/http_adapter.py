@@ -17,7 +17,6 @@ from typing import Any, Mapping
 import httpx
 
 from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeInvocationContext
-from app.runtime.budgets import deep_agent_budgets
 from app.runtime.catalog import definition_metadata_from_spec
 from runtime_protocol.contracts import (
     AgentDefinition,
@@ -144,7 +143,9 @@ class RuntimeTransportConnector:
             connect=connect_timeout or required_positive_float("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS"),
             write=required_positive_float("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS"),
         )
-        self._execution_timeout = float(deep_agent_budgets(self.framework)["max_duration_seconds"])
+        # The control plane owns transport/reconnect deadlines only. Runtime
+        # execution limits are enforced by the remote framework service.
+        self._execution_timeout = required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
         self._reconnect_attempts = required_positive_int("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS")
         self._reconnect_backoff = required_positive_float("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS")
         self._reconnect_deadline = min(

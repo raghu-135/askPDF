@@ -44,6 +44,7 @@ from runtime_protocol.contracts import (
     require_protocol_fields,
 )
 from runtime_protocol.events import create_runtime_event
+from runtime_protocol.validation import validate_runtime_result_envelope
 
 
 def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
@@ -161,6 +162,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
 
 def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
     protocol_version, minimum_compatible_version = require_protocol_fields(value)
+    validate_runtime_result_envelope(value)
     task_value = value.get("task_result") if isinstance(value.get("task_result"), Mapping) else None
     task_usage = dict(task_value.get("usage") or {}) if task_value is not None else {}
     if task_usage:
@@ -218,7 +220,7 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         ),
     ) if delta_value is not None else None
     return AgentRuntimeResult(
-        status=str(value.get("status") or "failed"),
+        status=str(value["status"]),
         output=value.get("output"),
         task_result=task_result,
         clarification=dict(value["clarification"]) if isinstance(value.get("clarification"), Mapping) else None,
