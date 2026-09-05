@@ -12,6 +12,7 @@ from app.mcp.execution_context_token import issue_execution_context_token
 from app.runtime.hermes_builder import HermesBuilderProvider
 from app.tools.context import ToolInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
+from runtime_protocol.protocol import versioned_payload
 from hermes_test_helpers import RUNTIME_URL, read_sse
 
 
@@ -68,7 +69,7 @@ async def _recovery_payload() -> dict:
         spec,
         request_overrides={"llm_model": TEST_MODEL, "context_window": context_window},
     )
-    return {"request": request.to_dict(), "context": {"resolved_spec": resolved}}
+    return versioned_payload({"request": request.to_dict(), "context": {"resolved_spec": resolved}})
 
 
 @pytest.mark.asyncio

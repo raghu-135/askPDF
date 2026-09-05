@@ -113,7 +113,10 @@ services:
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: ${HERMES_PROFILE_UID:-10000}
       HERMES_PROFILE_GID: ${HERMES_PROFILE_GID:-10000}
-      MCP_TRANSPORT: ${MCP_TRANSPORT:-loopback_http}
+      # Hermes runtime is a separate container; it must always reach the
+      # control-plane MCP endpoint over HTTP. Never inherit the control-plane
+      # MCP_TRANSPORT value (which may legitimately be in_process).
+      MCP_TRANSPORT: loopback_http
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: ${MCP_REQUEST_TIMEOUT_SECONDS:-600}
       MCP_OTEL_ENABLED: ${MCP_OTEL_ENABLED:-false}

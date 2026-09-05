@@ -21,7 +21,6 @@ from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.workflow_runtime import (
-    ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
     workflow_is_chat_eligible,
     workflow_supports_replans,
@@ -1238,10 +1237,8 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
         for source in (thread_settings or {}, req.overrides or {}):
-            for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
-                value = source.get(key) if isinstance(source, dict) else None
-                if value is not None:
-                    candidate_config[key] = value
+            if isinstance(source, dict):
+                candidate_config.update({key: value for key, value in source.items() if value is not None})
         candidate["config"] = candidate_config
         validation = await provider.validate(definition, candidate)
         report = _validation_payload(validation)

@@ -13,6 +13,8 @@ from typing import Any, AsyncIterator, Mapping
 from runtime_protocol.contracts import (
     CANONICAL_RUNTIME_EVENT_KINDS,
     TERMINAL_RUNTIME_EVENT_KINDS,
+    RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+    RUNTIME_PROTOCOL_VERSION,
 )
 
 
@@ -25,12 +27,25 @@ def json_envelope(
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
+        "protocol_version": RUNTIME_PROTOCOL_VERSION,
+        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "request_id": request_id,
         "status": status,
         "result": dict(result or {}),
         "error": dict(error or {}),
         "runtime_metadata": dict(runtime_metadata or {}),
     }
+
+
+def versioned_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Serialize an outgoing cross-service operation with explicit negotiation."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime protocol payload must be an object")
+    payload = dict(value)
+    payload["protocol_version"] = RUNTIME_PROTOCOL_VERSION
+    payload["minimum_compatible_version"] = RUNTIME_MINIMUM_COMPATIBLE_VERSION
+    return payload
 
 
 def structured_error(
@@ -49,9 +64,15 @@ def structured_error(
 
 
 def validate_event_mapping(value: Mapping[str, Any]) -> None:
-    required = {"event_id", "run_id", "sequence", "kind"}
+    required = {
+        "event_id", "run_id", "sequence", "kind",
+        "protocol_version", "minimum_compatible_version",
+    }
     if not isinstance(value, Mapping) or not required.issubset(value):
         raise ValueError("runtime event has an incomplete canonical shape")
+    from runtime_protocol.contracts import require_protocol_fields
+
+    require_protocol_fields(value)
     if not isinstance(value["event_id"], str) or not value["event_id"].strip():
         raise ValueError("runtime event event_id must be a non-empty string")
     if not isinstance(value["run_id"], str) or not value["run_id"].strip():
@@ -77,9 +98,16 @@ def validate_event_mapping(value: Mapping[str, Any]) -> None:
 def sse_encode(event: Mapping[str, Any] | Any, *, result: Mapping[str, Any] | Any | None = None) -> str:
     event_value = event.to_dict() if hasattr(event, "to_dict") else dict(event)
     result_value = result.to_dict() if hasattr(result, "to_dict") else result
-    payload: dict[str, Any] = {"event": event_value}
+    validate_event_mapping(event_value)
+    payload: dict[str, Any] = {
+        "protocol_version": RUNTIME_PROTOCOL_VERSION,
+        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+        "event": event_value,
+    }
     if result_value is not None:
-        payload["result"] = dict(result_value)
+        # Result payloads are independently parsed by the receiver; keep the
+        # negotiation fields on that object as well as on the SSE envelope.
+        payload["result"] = versioned_payload(dict(result_value))
     return f"id: {event_value['event_id']}\nevent: {event_value['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
 
 
@@ -90,7 +118,11 @@ async def iter_sse(response: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     async for line in response.aiter_lines():
         if line == "":
             if data:
-                yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}
+                value = json.loads("\n".join(data))
+                from runtime_protocol.contracts import require_protocol_fields
+
+                require_protocol_fields(value)
+                yield event_name, {"event_id": event_id, "data": value}
             event_id, event_name, data = "", "message", []
             continue
         if line.startswith("id:"):
@@ -100,4 +132,8 @@ async def iter_sse(response: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         elif line.startswith("data:"):
             data.append(line[5:].lstrip())
     if data:
-        yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}
+        value = json.loads("\n".join(data))
+        from runtime_protocol.contracts import require_protocol_fields
+
+        require_protocol_fields(value)
+        yield event_name, {"event_id": event_id, "data": value}

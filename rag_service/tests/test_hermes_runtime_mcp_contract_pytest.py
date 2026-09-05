@@ -15,8 +15,74 @@ from hermes_runtime.api import (
 )
 
 
+@pytest.fixture(autouse=True)
+def hermes_runtime_configuration(monkeypatch):
+    """Give direct Hermes app tests the same strict config as the image."""
+
+    values = {
+        "API_SERVER_KEY": "test-hermes-server-key",
+        "HERMES_API_TOKEN": "test-hermes-api-token",
+        "ASKPDF_MCP_URL": "http://rag-service:8000/internal/mcp/",
+        "ASKPDF_MCP_HEALTH_URL": "http://rag-service:8000/health",
+        "ASKPDF_MCP_REQUIRED": "false",
+        "HERMES_MCP_CONTEXT_SECRET": "test-hermes-mcp-context-secret-32-characters",
+        "HERMES_MODEL_CONTEXT_LENGTH": "32768",
+        "HERMES_MODEL_PROVIDER": "lmstudio",
+        "HERMES_RUNTIME_EVENT_ID_MODE": "durable",
+        "HERMES_RUNTIME_VERSION": "test",
+        "HERMES_RUN_PROFILE_MAX_AGE_SECONDS": "86400",
+        "HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS": "60",
+        "HERMES_UPSTREAM_REVISION": "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894",
+        "HERMES_RUNTIME_STATE_PATH": "/tmp/hermes-runtime-state.json",
+        "HERMES_RUNTIME_STORAGE_BACKEND": "file",
+        "HERMES_PROFILE_ROOT": "/tmp/hermes-profiles",
+        "HERMES_PROFILE_UID": "10000",
+        "HERMES_PROFILE_GID": "10000",
+        "HERMES_RUNTIME_WORKERS": "1",
+        "MCP_TRANSPORT": "loopback_http",
+        "MCP_LOOPBACK_URL": "http://rag-service:8000/internal/mcp/",
+        "MCP_REQUEST_TIMEOUT_SECONDS": "120",
+        "MCP_OTEL_ENABLED": "false",
+        "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "2000",
+        "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "2000",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    for name, value in {
+        "AGENT_RUNTIME_LEASE_SECONDS": "120",
+        "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
+        "AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS": "300",
+        "AGENT_RUNTIME_READ_TIMEOUT_SECONDS": "600",
+        "AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS": "10",
+        "AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS": "1",
+        "AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS": "600",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS": "0.5",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES": "8192",
+        "AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS": "120",
+        "AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS": "120",
+        "AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS": "120",
+        "AGENT_EVENT_POLL_INTERVAL_SECONDS": "1",
+        "AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS": "12",
+        "AGENT_CANCELLATION_POLL_INTERVAL_SECONDS": "0.5",
+        "AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS": "30",
+        "AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS": "60",
+        "AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS": "180",
+        "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO": "0.1",
+        "AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS": "30",
+        "AGENT_RUNTIME_RECOVERY_BATCH_SIZE": "100",
+    }.items():
+        monkeypatch.setenv(name, value)
+    for suffix in (
+        "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT", "WAKE_LIMIT_SECONDS",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
+
+
 def _payload(allowed_tools):
     return {
+        "protocol_version": "1.4",
+        "minimum_compatible_version": "1.4",
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
         "spec": {
             "schema_version": 1,

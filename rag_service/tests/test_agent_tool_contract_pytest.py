@@ -11,10 +11,11 @@ from app.agent.tool_contract import (
     tool_started,
 )
 from app.rag.agent_tools import search_durable_memory
+from runtime_protocol import MAX_TOOL_RESULT_STRING_LENGTH, validate_tool_result_payload
 
 
 class TestAskPdfToolContract:
-    def test_make_tool_result_records_trace_metrics_and_legacy_fields(self):
+    def test_make_tool_result_records_trace_metrics_without_legacy_fields(self):
         config = {
             "configurable": {
                 "agent_run_id": "run-1",
@@ -32,33 +33,38 @@ class TestAskPdfToolContract:
             started=started,
             sources=[{"file_hash": "file-1"}],
             artifacts={"document_sources": [{"file_hash": "file-1"}]},
-        ).to_json(legacy_fields={"__document_sources__": [{"file_hash": "file-1"}]})
+        ).to_json()
         payload = normalize_tool_result(raw, tool_name="search_documents", config=config)
 
         assert payload["ok"] is True
         assert payload["content"] == "Evidence"
-        assert payload["__document_sources__"] == [{"file_hash": "file-1"}]
+        assert payload["artifacts"]["document_sources"] == [{"file_hash": "file-1"}]
+        assert all(not key.startswith("__") for key in payload)
         assert payload["trace"]["agent_run_id"] == "run-1"
         assert payload["trace"]["caller_node"] == "retrieval_worker"
         assert payload["metrics"]["result_chars"] == len("Evidence")
 
-    def test_normalize_tool_result_accepts_legacy_json_and_plain_strings(self):
-        legacy = normalize_tool_result(
-            '{"content":"Memory","__used_chat_ids__":["turn-1"]}',
-            tool_name="search_thread_conversation_history",
-        )
-        plain = normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
-
-        assert legacy["content"] == "Memory"
-        assert legacy["__used_chat_ids__"] == ["turn-1"]
-        assert plain["content"] == "No thread context found."
-        assert plain["ok"] is True
+    def test_normalize_tool_result_rejects_legacy_json_and_plain_strings(self):
+        with pytest.raises(ValueError, match="legacy"):
+            normalize_tool_result(
+                {"content": "Memory", "_" * 2 + "used_chat_ids": ["turn-1"]},
+                tool_name="search_thread_conversation_history",
+            )
+        with pytest.raises(ValueError, match="non-canonical"):
+            normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
 
     def test_normalize_tool_result_warns_for_missing_content(self):
         payload = normalize_tool_result({"ok": True}, tool_name="bad_tool")
 
         assert payload["content"] == ""
         assert ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT in payload["warnings"]
+
+    def test_tool_result_bounds_reject_oversized_canonical_payloads(self):
+        with pytest.raises(ValueError, match="maximum length"):
+            validate_tool_result_payload({
+                "ok": True,
+                "content": "x" * (MAX_TOOL_RESULT_STRING_LENGTH + 1),
+            })
 
     def test_make_tool_error_result_is_recoverable_and_compact(self):
         config = {"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}}

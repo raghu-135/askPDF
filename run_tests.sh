@@ -9,6 +9,7 @@
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
 #   ./run_tests.sh --langgraph-runtime                # Run isolated LangGraph runtime integration checks
+#   ./run_tests.sh --external-runtime                 # Alias for isolated external runtime checks
 #   ./run_tests.sh --langgraph-runtime-real           # Run LangGraph runtime against a configured real provider
 #   ./run_tests.sh --hermes-runtime                 # Run deterministic Hermes runtime proof
 #   ./run_tests.sh --schema                 # Run schema validation tests
@@ -44,7 +45,7 @@ EXTERNAL_RUNTIME_COMPOSE_ARGS=(-p "$EXTERNAL_RUNTIME_PROJECT_NAME" -f docker-com
 
 args=("$@")
 for arg in "${args[@]}"; do
-    if [ "$arg" = "--langgraph-runtime" ]; then
+    if [ "$arg" = "--langgraph-runtime" ] || [ "$arg" = "--external-runtime" ]; then
         RUN_LANGGRAPH_RUNTIME=1
     fi
     if [ "$arg" = "--langgraph-runtime-real" ]; then
@@ -78,8 +79,9 @@ run_frontend_tests() {
 external_runtime_diagnostics() {
     echo "External runtime failed; collecting bounded service diagnostics..." >&2
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" ps || true
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" logs --tail=200 langgraph-runtime rag-service || true
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" logs --tail=100 fake-llm || true
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" logs --tail=200 \
+        rag-service langgraph-runtime db-migrate runtime-db-migrate \
+        postgresql runtime-checkpoint-db-init fake-llm weaviate || true
 }
 
 external_runtime_test() {
@@ -87,6 +89,31 @@ external_runtime_test() {
         external_runtime_diagnostics
         return 1
     fi
+}
+
+wait_for_external_job() {
+    local service="$1"
+    local label="$2"
+    for attempt in $(seq 1 120); do
+        local container_id
+        container_id=$("${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" ps --all -q "$service" 2>/dev/null || true)
+        if [ -n "$container_id" ]; then
+            local state
+            state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$container_id" 2>/dev/null || true)
+            if [ "$state" = "exited 0" ]; then
+                return 0
+            fi
+            if [[ "$state" = "exited "* ]] || [[ "$state" = "dead "* ]]; then
+                echo "$label failed: $state" >&2
+                external_runtime_diagnostics
+                return 1
+            fi
+        fi
+        sleep 1
+    done
+    echo "$label timed out after 120 seconds" >&2
+    external_runtime_diagnostics
+    return 1
 }
 
 if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
@@ -102,18 +129,50 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     fi
     echo "Starting isolated LangGraph runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate fake-llm rag-service langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql db-migrate runtime-checkpoint-db-init runtime-db-migrate weaviate fake-llm rag-service langgraph-runtime
+    wait_for_external_job db-migrate "Product database migration"
+    wait_for_external_job runtime-checkpoint-db-init "Runtime checkpoint database initialization"
+    wait_for_external_job runtime-db-migrate "Runtime database migration"
     control_plane_ready=0
-    for attempt in $(seq 1 45); do
+    for attempt in $(seq 1 120); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
-            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)); assert health["status"] == "ok"'; then
+            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)); assert health["status"] == "ok"' 2>/dev/null; then
             control_plane_ready=1
             break
         fi
         sleep 1
     done
     if [ "$control_plane_ready" != "1" ]; then
-        echo "Control plane did not become healthy" >&2
+        echo "Control plane readiness timed out after 120 seconds" >&2
+        external_runtime_diagnostics
+        exit 1
+    fi
+    runtime_started=0
+    for attempt in $(seq 1 120); do
+        if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+            'import json, urllib.request; startup=json.load(urllib.request.urlopen("http://127.0.0.1:8100/startupz", timeout=5)); assert startup["status"] == "ok"' 2>/dev/null; then
+            runtime_started=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$runtime_started" != "1" ]; then
+        echo "LangGraph runtime startup readiness timed out after 120 seconds" >&2
+        external_runtime_diagnostics
+        exit 1
+    fi
+    runtime_ready=0
+    for attempt in $(seq 1 120); do
+        if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+            'import json, urllib.request; ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=5)); assert ready["status"] == "ok"' 2>/dev/null; then
+            runtime_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$runtime_ready" != "1" ]; then
+        echo "LangGraph runtime work readiness timed out after 120 seconds" >&2
+        external_runtime_diagnostics
         exit 1
     fi
     echo "Verifying the immutable production control-plane image..."
@@ -130,8 +189,8 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     else
         external_runtime_test -e EXTERNAL_RUNTIME_SMOKE=true -e EXTERNAL_RUNTIME_LLM_MODEL=external_runtime-deterministic test-runner --file test_external_runtime_smoke_pytest.py
     fi
-    external_runtime_test test-runner --file test_runtime_service_execution_pytest.py
-    external_runtime_test test-runner --file test_runtime_service_lifecycle_pytest.py
+    external_runtime_test test-runner --agent-checkpoint --file test_runtime_service_execution_pytest.py
+    external_runtime_test test-runner --agent-checkpoint --file test_runtime_service_lifecycle_pytest.py
     external_runtime_test test-runner --file test_agent_runtime_reconciliation_pytest.py
     external_runtime_test test-runner --file test_control_plane_import_boundary_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
@@ -141,20 +200,24 @@ except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 40
     echo "Verifying dependency outage isolation and admission recovery..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" stop rag-service fake-llm
     dependencies_degraded=0
-    for attempt in $(seq 1 30); do
+    for attempt in $(seq 1 45); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
-            'import json, os, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready=json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3)); protected=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", headers={"Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}); dependencies=json.load(urllib.request.urlopen(protected, timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and ready["status"] == "ok"; assert dependencies["mcp"]["state"] in {"degraded", "unavailable"} and dependencies["provider"]["state"] in {"degraded", "unavailable"}'; then
+            'import json, os, urllib.error, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8100/healthz", timeout=3)); ready_status=200
+try: json.load(urllib.request.urlopen("http://127.0.0.1:8100/readyz", timeout=3))
+except urllib.error.HTTPError as exc: ready_status=exc.code
+protected=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", headers={"Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}); dependencies=json.load(urllib.request.urlopen(protected, timeout=3))["result"]["dependencies"]; assert health["status"] == "ok" and ready_status == 503; assert dependencies["mcp"]["state"] in {"degraded", "unavailable"} and dependencies["provider"]["state"] in {"degraded", "unavailable"}'; then
             dependencies_degraded=1
             break
         fi
         sleep 1
     done
     if [ "$dependencies_degraded" != "1" ]; then
-        echo "Runtime dependencies did not become degraded while readiness remained healthy" >&2
+        echo "Runtime dependencies did not become unavailable and readiness did not fail closed" >&2
         exit 1
     fi
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
         'import json, os, urllib.error, urllib.request; payload={"operation_id":"external-runtime-dependency-outage:start","request":{"run_id":"external_runtime-dependency-outage","thread_id":"external_runtime-thread","definition_id":"router_rag_agent","framework":"langgraph","builder_id":"langgraph_graph","input":{"question":"test"},"options":{"llm_model":"external_runtime-deterministic","embedding_model":"external_runtime-deterministic-embedding"}},"context":{"embedding_model":"external_runtime-deterministic-embedding","resolved_spec":{"config":{"allowed_tool_ids":["document_evidence"]}}}}; request=urllib.request.Request("http://127.0.0.1:8100/v1/runs/start", data=json.dumps(payload).encode(), headers={"content-type":"application/json", "Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}, method="POST");
+payload["protocol_version"] = "1.4"; payload["minimum_compatible_version"] = "1.4"; payload["request"]["protocol_version"] = "1.4"; payload["request"]["minimum_compatible_version"] = "1.4"; request.data = json.dumps(payload).encode()
 try: urllib.request.urlopen(request, timeout=3); raise AssertionError("dependent run was admitted")
 except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 503 and body["error"]["code"] == "runtime_dependency_unavailable" and body["error"]["retryable"] is True'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" start fake-llm rag-service
@@ -188,7 +251,7 @@ except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 50
         exit 1
     fi
     echo "Verifying execution recovery after restart and lease expiry..."
-    external_runtime_test -e AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=true test-runner --file test_runtime_service_lifecycle_pytest.py --test test_recovery_loop_reclaims_a_lease_after_restart
+    external_runtime_test -e AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=true test-runner --agent-checkpoint --file test_runtime_service_lifecycle_pytest.py --test test_recovery_loop_reclaims_a_lease_after_restart
     trap - ERR
     exit 0
 fi

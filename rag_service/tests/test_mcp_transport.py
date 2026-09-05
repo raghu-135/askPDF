@@ -59,7 +59,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
             assert all("_askpdf_context_token" not in tool["inputSchema"].get("properties", {}) for tool in listed["tools"])
             accepted = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
             assert accepted["isError"] is False
-            assert accepted["structuredContent"]["result_count"] == 1
+            assert len(accepted["structuredContent"]["sources"]) == 1
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
             rejected = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})

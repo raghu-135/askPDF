@@ -41,7 +41,7 @@ from runtime_protocol.contracts import (
     TaskOrchestrationDelta,
     RUNTIME_MINIMUM_COMPATIBLE_VERSION,
     RUNTIME_PROTOCOL_VERSION,
-    ensure_protocol_compatible,
+    require_protocol_fields,
 )
 from runtime_protocol.events import create_runtime_event
 
@@ -56,11 +56,7 @@ def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
 
 
 def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
-    protocol_version = str(value.get("protocol_version") or RUNTIME_PROTOCOL_VERSION)
-    minimum_compatible_version = str(
-        value.get("minimum_compatible_version") or RUNTIME_MINIMUM_COMPATIBLE_VERSION
-    )
-    ensure_protocol_compatible(protocol_version, minimum_compatible_version)
+    protocol_version, minimum_compatible_version = require_protocol_fields(value)
     return AgentRuntimeRequest(
         run_id=str(value["run_id"]),
         thread_id=str(value["thread_id"]),
@@ -81,6 +77,7 @@ def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
 
 
 def course_correction_from_dict(value: Mapping[str, Any]) -> RuntimeCourseCorrection:
+    protocol_version, minimum_compatible_version = require_protocol_fields(value)
     return RuntimeCourseCorrection(
         correction_id=str(value["correction_id"]),
         operation_id=str(value["operation_id"]),
@@ -89,10 +86,8 @@ def course_correction_from_dict(value: Mapping[str, Any]) -> RuntimeCourseCorrec
         observed_task_version=int(value.get("observed_task_version") or 0),
         observed_plan_revision=int(value.get("observed_plan_revision") or 0),
         submitted_at=value.get("submitted_at"),
-        protocol_version=str(value.get("protocol_version") or RUNTIME_PROTOCOL_VERSION),
-        minimum_compatible_version=str(
-            value.get("minimum_compatible_version") or RUNTIME_MINIMUM_COMPATIBLE_VERSION
-        ),
+        protocol_version=protocol_version,
+        minimum_compatible_version=minimum_compatible_version,
     )
 
 
@@ -165,6 +160,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
 
 
 def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
+    protocol_version, minimum_compatible_version = require_protocol_fields(value)
     task_value = value.get("task_result") if isinstance(value.get("task_result"), Mapping) else None
     task_usage = dict(task_value.get("usage") or {}) if task_value is not None else {}
     if task_usage:
@@ -234,10 +230,13 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         error=dict(value["error"]) if isinstance(value.get("error"), Mapping) else None,
         checkpoint_boundary_available=value.get("checkpoint_boundary_available"),
         orchestration_delta=orchestration_delta,
+        protocol_version=protocol_version,
+        minimum_compatible_version=minimum_compatible_version,
     )
 
 
 def validation_from_dict(value: Mapping[str, Any]) -> RuntimeValidationResult:
+    protocol_version, minimum_compatible_version = require_protocol_fields(value)
     return RuntimeValidationResult(
         valid=bool(value.get("valid")),
         issues=tuple(
@@ -254,15 +253,13 @@ def validation_from_dict(value: Mapping[str, Any]) -> RuntimeValidationResult:
         normalized_spec=value.get("normalized_spec"),
         runtime_metadata=dict(value.get("runtime_metadata") or {}),
         diagnostics=dict(value.get("diagnostics") or {}),
+        protocol_version=protocol_version,
+        minimum_compatible_version=minimum_compatible_version,
     )
 
 
 def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
-    protocol_version = str(value.get("protocol_version") or RUNTIME_PROTOCOL_VERSION)
-    minimum_compatible_version = str(
-        value.get("minimum_compatible_version") or RUNTIME_MINIMUM_COMPATIBLE_VERSION
-    )
-    ensure_protocol_compatible(protocol_version, minimum_compatible_version)
+    protocol_version, minimum_compatible_version = require_protocol_fields(value)
     if not isinstance(value, Mapping):
         raise ValueError("runtime capabilities must be an object")
     raw_operations = value.get("operations")
@@ -383,9 +380,13 @@ class ServerEnvelope:
     result: Mapping[str, Any] | None = None
     error: Mapping[str, Any] | None = None
     runtime_metadata: Mapping[str, Any] | None = None
+    protocol_version: str = RUNTIME_PROTOCOL_VERSION
+    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "protocol_version": self.protocol_version,
+            "minimum_compatible_version": self.minimum_compatible_version,
             "status": self.status,
             "request_id": self.request_id,
             "result": dict(self.result or {}),

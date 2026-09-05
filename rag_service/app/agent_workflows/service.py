@@ -27,7 +27,11 @@ from app.runtime.catalog import (
     result_to_product_payload,
 )
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
-from app.runtime.capability_resolver import pending_interrupt_response_operation, require_capability
+from app.runtime.capability_resolver import (
+    pending_interrupt_response_operation,
+    require_capability,
+    resolve_run_capability_resolution,
+)
 from runtime_protocol.errors import RuntimeError as RuntimeContractError
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
 from app.runtime.operational_limits import validate_bounded_json
@@ -341,16 +345,11 @@ class AgentRunService:
         definition = definition_from_workflow(workflow)
         try:
             provider = builder_for_definition(definition)
-            provider_request_overrides = provider.filter_request_overrides(
-                definition,
-                request_overrides,
-                reject_unsupported=False,
-            )
             resolved_spec = await provider.resolve(
                 definition,
                 workflow.spec_json,
                 thread_settings=thread_settings,
-                request_overrides=provider_request_overrides,
+                request_overrides=request_overrides,
             )
             stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
         except ValueError as exc:
@@ -843,7 +842,23 @@ class AgentRunService:
             )
 
         definition = definition_from_run(resolution.run)
+        registry = get_runtime_registry()
         adapter = adapter_for_definition(definition)
+        capability_resolution = await resolve_run_capability_resolution(
+            definition,
+            registry=registry,
+            run=resolution.run,
+            adapter=adapter,
+        )
+        if capability_resolution.error is not None:
+            error = capability_resolution.error
+            raise RuntimeContractError(
+                str(error.get("code") or "runtime_capability_unavailable"),
+                str(error.get("safe_message") or "The runtime deployment is unavailable"),
+                retryable=bool(error.get("retryable")),
+                details=dict(error.get("details") or {}),
+            )
+        effective_capabilities = capability_resolution.capabilities
         lifecycle_repository = self.repository_factory()
         runtime_request = AgentRuntimeRequest(
             run_id=resolution.run.id,
@@ -869,7 +884,7 @@ class AgentRunService:
 
         try:
             embedding_model = None
-            if "embedding_model" in set(resolution.capabilities.behavior.get("required_input_fields", ())):
+            if "embedding_model" in set(effective_capabilities.behavior.get("required_input_fields", ())):
                 try:
                     embedding_context = await require_thread_embedding_ready(resolution.run.thread_id)
                     embedding_model = embedding_context.embedding_model

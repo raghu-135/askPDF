@@ -216,20 +216,15 @@ class MCPServer:
                 tool_name=name, result=result,
                 payload={"failure_stage": "handler"} if not result.ok or result.error is not None else None,
             )
-            structured = result.structured(
-                contract_id=config["id"],
-                contract_version=config.get("contract_version", "1"),
-            )
+            # MCP structuredContent is the shared runtime_protocol tool
+            # envelope.  Registry and transport metadata belongs in the
+            # descriptor/context, not in the canonical result object; adding
+            # arbitrary top-level keys here makes remote runtimes reject an
+            # otherwise valid result as a different wire contract.
+            structured = result.to_payload()
             trace = structured.setdefault("trace", {})
             trace.setdefault("mcp_request_id", context.mcp_request_id)
             trace.setdefault("tool_call_id", context.tool_call_id)
-            structured["result_count"] = len(result.sources)
-            structured.update({
-                "mcp_server": config.get("mcp_server"),
-                "mcp_contract_version": config.get("contract_version", "1"),
-                "transport": mcp_transport(),
-                "mcp_mode": mcp_mode(),
-            })
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=result.content)],
                 structuredContent=structured,

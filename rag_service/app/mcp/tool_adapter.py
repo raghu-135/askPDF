@@ -74,24 +74,8 @@ def _serialized_tool_result(result: dict[str, Any], text: str) -> str:
         "metrics": structured.get("metrics", {}),
         "trace": structured.get("trace", {}),
     }
-    for key in ("transport", "mcp_mode", "mcp_server", "mcp_contract_version"):
-        if structured.get(key) is not None:
-            payload[key] = structured[key]
     if structured.get("error") is not None:
         payload["error"] = structured["error"]
-    artifacts = payload["artifacts"] if isinstance(payload["artifacts"], dict) else {}
-    for key, legacy_key in {
-        "document_sources": "__document_sources__",
-        "web_sources": "__web_sources__",
-        "used_chat_ids": "__used_chat_ids__",
-        "timeline_events": "__timeline_events__",
-    }.items():
-        if key in artifacts:
-            payload[legacy_key] = artifacts[key]
-    if payload["warnings"]:
-        payload["__warnings__"] = payload["warnings"]
-    if artifacts:
-        payload["__artifacts__"] = artifacts
     return json.dumps(payload, ensure_ascii=False)
 
 

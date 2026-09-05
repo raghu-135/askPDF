@@ -8,10 +8,35 @@ import httpx
 import pytest
 
 from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeCourseCorrection, RuntimeTaskContext
+from runtime_protocol.contracts import (
+    AgentDefinition,
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+    RUNTIME_PROTOCOL_VERSION,
+    RuntimeCourseCorrection,
+    RuntimeTaskContext,
+)
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
 from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import result_to_product_payload
+from runtime_protocol.transport import request_from_dict
+
+
+def _wire(value: dict) -> dict:
+    return {
+        "protocol_version": RUNTIME_PROTOCOL_VERSION,
+        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+        **value,
+    }
+
+
+def _event(value: dict) -> dict:
+    return _wire(value)
+
+
+def _envelope(result: dict) -> dict:
+    return _wire({"result": result})
 
 
 def _request() -> AgentRuntimeRequest:
@@ -34,6 +59,34 @@ def test_runtime_error_is_raiseable_and_keeps_wire_shape():
         assert caught.code == "runtime_timeout"
         assert caught.retryable is True
         assert caught.to_dict()["safe_message"] == "Agent runtime timed out"
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("protocol_version", None),
+        ("minimum_compatible_version", None),
+        ("protocol_version", ""),
+        ("minimum_compatible_version", " "),
+        ("protocol_version", "not-semver"),
+        ("minimum_compatible_version", "1"),
+        ("protocol_version", "1.3"),
+        ("minimum_compatible_version", "1.5"),
+    ],
+)
+def test_request_parser_rejects_malformed_protocol_metadata_but_allows_missing_metadata(field, value):
+    payload = _request().to_dict()
+    if value is None:
+        payload.pop(field)
+    else:
+        payload[field] = value
+    if value is None:
+        request = request_from_dict(payload)
+        assert request.protocol_version == RUNTIME_PROTOCOL_VERSION
+        assert request.minimum_compatible_version == RUNTIME_MINIMUM_COMPATIBLE_VERSION
+    else:
+        with pytest.raises(ValueError, match="protocol|minimum_compatible_version"):
+            request_from_dict(payload)
 
 
 def test_typed_projection_keeps_absent_interaction_fields_null():
@@ -80,7 +133,8 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
     from app.mcp.execution_context_token import decode_execution_context_token
 
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    # LangGraph task context windows are independent of the Hermes model limit.
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     adapter = HttpLangGraphRuntimeAdapter("http://runtime")
     prepared = await adapter.prepare_request(
         _request(),
@@ -121,14 +175,16 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
         if request.url.path == "/v1/capabilities":
             assert request.method == "POST"
             assert json.loads(request.content)["definition"]["definition_id"] == "router"
-            return httpx.Response(200, json={"result": {"capabilities": {"operations": {
+            capabilities = _wire({"operations": {
                 "run.resume": {"support": "conditional", "owner": "runtime", "enabled": True, "semantics": "resume_from_interrupt"},
             }, "behavior": {
                 "continuation_semantics": "same_run_safe_boundary", "usage_accounting_owner": "runtime",
                 "preserves_run_id": True, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
-            }}}})
-        return httpx.Response(200, json={"result": {"validation": {"valid": True, "issues": []}}})
+            }})
+            return httpx.Response(200, json=_envelope({"capabilities": capabilities}))
+        validation = _wire({"valid": True, "issues": []})
+        return httpx.Response(200, json=_envelope({"validation": validation}))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -147,13 +203,13 @@ async def test_http_adapter_submits_typed_course_correction():
         assert request.url.path == "/v1/runs/run-1/course-corrections"
         body = json.loads(request.content)
         assert body["correction"]["operation_id"] == "operation-1"
-        return httpx.Response(200, json={"result": {
+        return httpx.Response(200, json=_envelope({
             "correction_id": "correction-1",
             "operation_id": "operation-1",
             "status": "accepted",
             "run_id": "run-1",
             "run_status": "running",
-        }})
+        }))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -189,6 +245,41 @@ async def test_http_adapter_rejects_bare_success_responses_at_the_wire_boundary(
     await client.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_field", ["protocol_version", "minimum_compatible_version"])
+async def test_http_adapter_accepts_missing_response_negotiation_before_error_handling(missing_field):
+    response = _wire({"error": {"code": "runtime_dependency_unavailable", "safe_message": "unavailable", "retryable": True}})
+    response.pop(missing_field)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(503, json=response)))
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.cancel(_request())
+    assert caught.value.code == "runtime_dependency_unavailable"
+    assert caught.value.retryable is True
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_accepts_unversioned_runtime_errors_in_dev():
+    response = {
+        "detail": {
+            "code": "runtime_configuration_invalid",
+            "safe_message": "Deep Agent configuration is invalid",
+            "retryable": False,
+        }
+    }
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(400, json=response))
+    )
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+    with pytest.raises(RuntimeError, match="Deep Agent configuration is invalid") as caught:
+        await adapter.cancel(_request())
+    assert caught.value.code == "runtime_configuration_invalid"
+    assert caught.value.retryable is False
+    await client.aclose()
+
+
 def test_event_parser_rejects_alias_kinds_and_bare_event_shapes():
     from runtime_protocol.transport import event_from_dict
 
@@ -218,8 +309,8 @@ def test_capability_parser_rejects_flat_or_malformed_payloads():
 @pytest.mark.asyncio
 async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_terminal_internal():
     request = _request()
-    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}}
-    terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    event = _event({"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}})
+    terminal = _event({"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True})
 
     def handler(http_request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(http_request.content)
@@ -229,8 +320,8 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
         assert definition["builder_id"] == "langgraph_graph"
         assert definition["capabilities"] == {}
         def body():
-            yield f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': event})}\n\n".encode()
-            yield f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'ok'}})}\n\n".encode()
+            yield f"id: evt-1\nevent: operation.started\ndata: {json.dumps(_wire({'event': event}))}\n\n".encode()
+            yield f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'ok'})}))}\n\n".encode()
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b"".join(body()))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -252,14 +343,14 @@ async def test_http_adapter_preserves_nonterminal_identity_and_keeps_transport_t
 async def test_http_adapter_coalesces_output_deltas_before_product_delivery():
     request = _request()
     deltas = [
-        {"event_id": f"delta-{index}", "run_id": request.run_id, "sequence": index, "kind": "output.delta", "payload": {"delta": value}}
+        _event({"event_id": f"delta-{index}", "run_id": request.run_id, "sequence": index, "kind": "output.delta", "payload": {"delta": value}})
         for index, value in enumerate(("one ", "two ", "three"), start=1)
     ]
-    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 4, "kind": "run.completed", "payload": {}, "terminal": True}
+    terminal = _event({"event_id": "terminal", "run_id": request.run_id, "sequence": 4, "kind": "run.completed", "payload": {}, "terminal": True})
 
     def handler(_request):
-        frames = [f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps({'event': event})}\n\n" for event in deltas]
-        frames.append(f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'one two three'}})}\n\n")
+        frames = [f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps(_wire({'event': event}))}\n\n" for event in deltas]
+        frames.append(f"id: terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'one two three'})}))}\n\n")
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="".join(frames).encode())
 
     received = []
@@ -283,14 +374,14 @@ async def test_http_adapter_flushes_output_delta_on_time_while_stream_is_open(mo
     monkeypatch.setenv("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS", "0.05")
     request = _request()
     flushed = asyncio.Event()
-    delta = {"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial"}}
-    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    delta = _event({"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial"}})
+    terminal = _event({"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True})
 
     class DelayedStream(httpx.AsyncByteStream):
         async def __aiter__(self):
-            yield f"id: delta-1\nevent: output.delta\ndata: {json.dumps({'event': delta})}\n\n".encode()
+            yield f"id: delta-1\nevent: output.delta\ndata: {json.dumps(_wire({'event': delta}))}\n\n".encode()
             await asyncio.wait_for(flushed.wait(), timeout=0.5)
-            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'partial'}})}\n\n".encode()
+            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'partial'})}))}\n\n".encode()
 
     def handler(_request):
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=DelayedStream())
@@ -311,17 +402,17 @@ async def test_http_adapter_flushes_output_delta_on_time_while_stream_is_open(mo
 @pytest.mark.asyncio
 async def test_recovery_deadline_starts_after_long_initial_stream(monkeypatch):
     request = _request()
-    progress = {"event_id": "progress", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial "}}
-    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    progress = _event({"event_id": "progress", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "partial "}})
+    terminal = _event({"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True})
     calls = []
 
     def handler(http_request):
         calls.append(http_request.method)
         if http_request.method == "POST":
             time.sleep(1.05)
-            body = f"id: progress\nevent: output.delta\ndata: {json.dumps({'event': progress})}\n\n"
+            body = f"id: progress\nevent: output.delta\ndata: {json.dumps(_wire({'event': progress}))}\n\n"
         else:
-            body = f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+            body = f"id: terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'recovered'})}))}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "1")
@@ -337,13 +428,13 @@ async def test_recovery_deadline_starts_after_long_initial_stream(monkeypatch):
 @pytest.mark.asyncio
 async def test_healthy_replay_may_run_longer_than_recovery_deadline(monkeypatch):
     request = _request()
-    terminal = {"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    terminal = _event({"event_id": "terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True})
     calls: list[str] = []
 
     class SlowReplay(httpx.AsyncByteStream):
         async def __aiter__(self):
             await asyncio.sleep(0.06)
-            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n".encode()
+            yield f"id: terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'recovered'})}))}\n\n".encode()
 
     def handler(http_request: httpx.Request) -> httpx.Response:
         calls.append(http_request.method)
@@ -366,14 +457,14 @@ async def test_identical_runtime_binding_is_persisted_once():
     request = _request()
     binding = {"binding_type": "session", "payload": {"session_id": "upstream-1"}}
     events = [
-        {"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "one"}, "continuation": binding},
-        {"event_id": "delta-2", "run_id": request.run_id, "sequence": 2, "kind": "output.delta", "payload": {"delta": " two"}, "continuation": binding},
-        {"event_id": "terminal", "run_id": request.run_id, "sequence": 3, "kind": "run.completed", "payload": {}, "terminal": True, "continuation": binding},
+        _event({"event_id": "delta-1", "run_id": request.run_id, "sequence": 1, "kind": "output.delta", "payload": {"delta": "one"}, "continuation": binding}),
+        _event({"event_id": "delta-2", "run_id": request.run_id, "sequence": 2, "kind": "output.delta", "payload": {"delta": " two"}, "continuation": binding}),
+        _event({"event_id": "terminal", "run_id": request.run_id, "sequence": 3, "kind": "run.completed", "payload": {}, "terminal": True, "continuation": binding}),
     ]
 
     def handler(_request: httpx.Request) -> httpx.Response:
         body = "".join(
-            f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps({'event': event, **({'result': {'status': 'completed', 'output': 'one two'}} if event.get('terminal') else {})})}\n\n"
+            f"id: {event['event_id']}\nevent: {event['kind']}\ndata: {json.dumps(_wire({'event': event, **({'result': _wire({'status': 'completed', 'output': 'one two'})} if event.get('terminal') else {})}))}\n\n"
             for event in events
         )
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
@@ -401,7 +492,7 @@ async def test_http_adapter_preserves_dependency_admission_error():
     request = _request()
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, json={
+        return httpx.Response(503, json=_wire({
             "status": "failed",
             "error": {
                 "code": "runtime_dependency_unavailable",
@@ -410,7 +501,7 @@ async def test_http_adapter_preserves_dependency_admission_error():
                 "details": {"dependency": "mcp", "missing_capability_ids": ["document_evidence"]},
             },
             "runtime_metadata": {"framework": "langgraph"},
-        })
+        }))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -435,7 +526,7 @@ async def test_http_adapter_preserves_structured_json_http_errors(status, payloa
     request = _request()
 
     def handler(http_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, json=_wire(payload))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -458,7 +549,7 @@ async def test_http_adapter_preserves_structured_stream_http_errors(status, payl
     request = _request()
 
     def handler(http_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, json=_wire(payload))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -508,7 +599,7 @@ async def test_http_adapter_does_not_retry_structured_stream_conflict():
 
     def handler(http_request: httpx.Request) -> httpx.Response:
         calls.append(http_request.method + " " + http_request.url.path)
-        return httpx.Response(409, json={"detail": {"code": "runtime_operation_conflict", "safe_message": "conflict", "retryable": False}})
+        return httpx.Response(409, json=_wire({"detail": {"code": "runtime_operation_conflict", "safe_message": "conflict", "retryable": False}}))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
@@ -524,15 +615,15 @@ async def test_http_adapter_maps_no_continuation_to_none():
     request = _request()
 
     def handler(http_request: httpx.Request) -> httpx.Response:
-        event = {
+        event = _event({
             "event_id": "terminal",
             "run_id": request.run_id,
             "sequence": 1,
             "kind": "run.completed",
             "payload": {"status": "no_continuation"},
             "terminal": True,
-        }
-        body = f"id: terminal\nevent: run.completed\ndata: {json.dumps({'event': event, 'result': {'status': 'no_continuation'}})}\n\n"
+        })
+        body = f"id: terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': event, 'result': _wire({'status': 'no_continuation'})}))}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -544,13 +635,13 @@ async def test_http_adapter_maps_no_continuation_to_none():
 @pytest.mark.asyncio
 async def test_http_adapter_rejects_conflicting_duplicate_event_ids():
     request = _request()
-    first = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}}
+    first = _event({"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {"node": "router"}})
     conflicting = {**first, "payload": {"node": "planner"}}
 
     def handler(_request: httpx.Request) -> httpx.Response:
         body = (
-            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': first})}\n\n"
-            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': conflicting})}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps(_wire({'event': first}))}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps(_wire({'event': conflicting}))}\n\n"
         )
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
@@ -564,10 +655,10 @@ async def test_http_adapter_rejects_conflicting_duplicate_event_ids():
 @pytest.mark.asyncio
 async def test_http_adapter_rejects_result_on_nonterminal_event():
     request = _request()
-    event = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}}
+    event = _event({"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}})
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        body = f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': event, 'result': {'status': 'completed'}})}\n\n"
+        body = f"id: evt-1\nevent: operation.started\ndata: {json.dumps(_wire({'event': event, 'result': _wire({'status': 'completed'})}))}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -581,16 +672,16 @@ async def test_http_adapter_rejects_result_on_nonterminal_event():
 async def test_http_adapter_replays_after_transport_disconnect_before_terminal():
     request = _request()
     calls: list[str] = []
-    progress = {"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}}
-    terminal = {"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True}
+    progress = _event({"event_id": "evt-1", "run_id": request.run_id, "sequence": 1, "kind": "operation.started", "payload": {}})
+    terminal = _event({"event_id": "evt-terminal", "run_id": request.run_id, "sequence": 2, "kind": "run.completed", "payload": {}, "terminal": True})
 
     def handler(http_request: httpx.Request) -> httpx.Response:
         calls.append(http_request.method + " " + http_request.url.path)
         if http_request.method == "POST":
             raise httpx.ReadError("subscriber disconnected", request=http_request)
         body = (
-            f"id: evt-1\nevent: operation.started\ndata: {json.dumps({'event': progress})}\n\n"
-            f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+            f"id: evt-1\nevent: operation.started\ndata: {json.dumps(_wire({'event': progress}))}\n\n"
+            f"id: evt-terminal\nevent: run.completed\ndata: {json.dumps(_wire({'event': terminal, 'result': _wire({'status': 'completed', 'output': 'recovered'})}))}\n\n"
         )
         assert http_request.url.params["after_sequence"] == "0"
         assert "last-event-id" not in http_request.headers

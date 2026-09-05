@@ -47,6 +47,12 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert services["rag-service"]["env_file"][0]["path"] == ".env"
 
 
+def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
+    services = _compose("docker-compose.dev.yml")["services"]
+    assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"
+    assert services["hermes-runtime"]["environment"]["MCP_LOOPBACK_URL"] == "http://rag-service:8000/internal/mcp/"
+
+
 def test_hermes_bootstrap_has_explicit_complete_environment():
     services = _compose("docker-compose.yml")["services"]
     bootstrap = services["hermes-config-init"]

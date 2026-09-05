@@ -18,6 +18,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from langgraph_runtime.limits import required_positive_int
+from runtime_protocol.contracts import (
+    RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+    RUNTIME_PROTOCOL_VERSION,
+)
 
 
 TERMINAL_STATUSES = frozenset({"completed", "clarification_required", "failed", "cancelled", "no_continuation"})
@@ -62,6 +66,11 @@ def _event_row_to_dict(row: Any) -> dict[str, Any]:
     item["payload"] = _json_object(item.get("payload")) or {}
     item["continuation"] = _json_object(item.get("continuation"))
     item["result"] = _json_object(item.get("result"))
+    # Protocol negotiation is not a separate database column.  Runtime event
+    # rows are serialized here as complete canonical envelopes so replay has
+    # the same strict shape as a newly emitted event.
+    item["protocol_version"] = RUNTIME_PROTOCOL_VERSION
+    item["minimum_compatible_version"] = RUNTIME_MINIMUM_COMPATIBLE_VERSION
     return item
 
 
@@ -632,6 +641,8 @@ class ExecutionStore:
                     "kind": "course_correction.accepted", "occurred_at": _now(),
                     "payload": {"correction_id": correction_id, "operation_id": operation_id},
                     "terminal": False, "result": None,
+                    "protocol_version": RUNTIME_PROTOCOL_VERSION,
+                    "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
                 }
                 record.next_sequence += 1
                 record.updated_at = _now()

@@ -16,6 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field
 
 from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from runtime_protocol.tool_contract import normalize_tool_result
 
 
 class MCPUnavailableError(RuntimeError):
@@ -66,10 +67,10 @@ def _decode_result(name: str, result: Any, text: str) -> dict[str, Any]:
         raise ValueError(f"MCP tool {name!r} returned malformed warnings, metrics, or trace")
     if not structured["ok"] and not isinstance(structured.get("error"), dict):
         raise ValueError(f"MCP tool {name!r} returned a failure without structured error")
-    payload = dict(structured)
-    if payload.get("content") is None:
-        payload["content"] = text
-    return payload
+    # Validate the exact shared envelope as the final boundary check.  The
+    # human-readable MCP content is deliberately not used as a fallback:
+    # structuredContent is the only canonical result representation.
+    return normalize_tool_result(structured, tool_name=name)
 
 
 class _OpenArguments(BaseModel):

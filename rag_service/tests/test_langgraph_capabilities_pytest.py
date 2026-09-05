@@ -19,6 +19,7 @@ from langgraph_runtime.adapter import LangGraphRuntimeAdapter
 from app.runtime.capability_resolver import capabilities_for_definition, resolve_capabilities
 from app.runtime.registry import RuntimeRegistry
 from langgraph_runtime.api import create_app
+from runtime_protocol.protocol import versioned_payload
 
 
 def _definition(**kwargs):
@@ -174,7 +175,8 @@ def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
     monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", "postgresql://db/runtime")
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER_SETUP", "false")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
     monkeypatch.setenv("LLM_AUTH_MODE", "none")
     monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
@@ -186,7 +188,7 @@ def test_external_runtime_capabilities_use_the_same_profile(monkeypatch):
 
     monkeypatch.setattr("langgraph_runtime.checkpointing.open_agent_checkpointer", injected_test_checkpointer)
     with TestClient(create_app(require_auth=False)) as client:
-        response = client.post("/v1/capabilities", json={"definition": _definition().to_dict()})
+        response = client.post("/v1/capabilities", json=versioned_payload({"definition": _definition().to_dict()}))
 
     assert response.status_code == 200
     payload = response.json()["result"]["capabilities"]

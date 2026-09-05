@@ -16,26 +16,6 @@ RUNTIME_TEXT_FIELDS = {
     "success_context",
     "failure_context",
 }
-ALLOWED_WORKFLOW_CONFIG_KEYS = {
-    "use_web_search",
-    "use_reranker",
-    "system_role",
-    "tool_instructions",
-    "custom_instructions",
-    "allowed_tool_ids",
-    "prefetch_policy",
-    "hitl_policy",
-    "replans",
-    "graph",
-    "context_policy",
-    "loop_policy",
-    "builder_ui",
-    "parallel_policy",
-    "corrective_policy",
-    "task_policy",
-}
-
-
 def default_agent_workflow_key() -> str:
     return os.getenv(DEFAULT_AGENT_WORKFLOW_KEY_ENV, DEFAULT_AGENT_WORKFLOW_KEY).strip() or DEFAULT_AGENT_WORKFLOW_KEY
 

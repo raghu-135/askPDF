@@ -129,9 +129,9 @@ docker compose up --build
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      Docker Compose                                         │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────┬─────────────────────┤
-│    Frontend     │   RAG Service   │  Browser Capture│   PostgreSQL    │      Weaviate       │
-│   (Next.js)     │    (FastAPI)    │   (Selenium)    │   (Primary DB)  │   (Vector DB)       │
-│   Port: 3000    │   Port: 8000    │   Port: 8090    │   Port: 5432    │   Port: 8080        │
+│    Frontend     │   RAG Service   │ LangGraph runtime│ Hermes runtime │ Browser Capture      │
+│   (Next.js)     │ control plane   │  (FastAPI/SSE)   │  (HTTP gateway)│   (Selenium)         │
+│   Port: 3000    │   Port: 8000    │   Port: 8100      │   Port: 8200   │   Port: 8090          │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴─────────────────────┘
                                                    │
                                                    ▼
@@ -147,17 +147,20 @@ docker compose up --build
 | Service | Port | Description |
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
-| **RAG Service** | 8000 | FastAPI server for PDF processing, indexing, chat, and the integrated durable agent-task worker |
+| **RAG Service** | 8000 | Product/control-plane APIs for PDF processing, indexing, chat, task orchestration, artifacts, MCP, and trace projection |
+| **LangGraph runtime** | 8100 | External LangGraph validation, graph compilation, Deep Agent execution, checkpoints, dependency discovery, and framework HITL |
+| **Hermes runtime** | 8200 | Separate Hermes execution gateway for Hermes-backed task runs |
 | **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
-The current deployment runs `rag-service` as one Uvicorn process. Its integrated
-agent-task worker shares the service's PostgreSQL pool and uses database leases
-and checkpoints for restart recovery. Do not enable multiple Uvicorn/Gunicorn
-worker processes until agent execution is extracted into its planned dedicated
-service; each server process would otherwise start another task worker.
+The control plane and execution runtimes are separate services. The control
+plane owns product databases, task state, artifacts, MCP authorization, and
+debug projections. `langgraph-runtime` owns graph execution and checkpoint
+storage; `hermes-runtime` owns native Hermes execution. Runtime calls use the
+versioned `runtime_protocol` over HTTP/SSE, and product APIs expose only opaque
+continuations—not framework checkpoint identifiers.
 
 </details>
 
@@ -165,7 +168,7 @@ service; each server process would otherwise start another task worker.
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Agent Workflow Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with persisted run metadata
+- **Agent Workflow Runtime**: External LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with product-projected run metadata
 - **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
 - **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
 - **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
@@ -186,17 +189,23 @@ service; each server process would otherwise start another task worker.
 <details>
 <summary>🛠️ Technology Stack</summary>
 
-### RAG Service
+### RAG Service / Control Plane
 | Technology | Purpose |
 |------------|---------|
 | **FastAPI** | Web framework |
-| **LangChain** | LLM/Embedding integration |
-| **LangGraph** | Stateful multi-agent workflow |
+| **LangChain** | Product-side LLM/embedding integration where required |
 | **Weaviate Client** | Vector database operations |
 | **SQLModel** | ORM built on SQLAlchemy |
 | **SQLAlchemy** | Async database operations |
 | **Alembic** | Database migration management |
 | **asyncpg** | Async PostgreSQL driver |
+
+### LangGraph Runtime
+| Technology | Purpose |
+|------------|---------|
+| **FastAPI + HTTP/SSE** | External runtime protocol and event streaming |
+| **LangGraph / LangChain** | Graph compilation and stateful Deep Agent execution |
+| **Checkpoint store** | Runtime-owned pause, resume, and restart recovery |
 
 ### Browser Capture Service
 | Technology | Purpose |

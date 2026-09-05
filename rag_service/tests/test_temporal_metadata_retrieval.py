@@ -519,9 +519,9 @@ def test_web_context_exposes_search_performed_time():
     )
 
     assert "Web result from search performed at 2026-06-25T19:15:00Z" in payload["content"]
-    assert payload["__web_sources__"][0]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
-    assert payload["__web_sources__"][0]["timeline_event_at"] == "2026-06-25T19:15:00Z"
-    assert payload["__web_sources__"][0]["timeline_event_type"] == "web_search_performed"
+    assert payload["artifacts"]["web_sources"][0]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
+    assert payload["artifacts"]["web_sources"][0]["timeline_event_at"] == "2026-06-25T19:15:00Z"
+    assert payload["artifacts"]["web_sources"][0]["timeline_event_type"] == "web_search_performed"
 
 
 def test_thread_events_tool_replaces_topic_anchor():
@@ -547,7 +547,7 @@ def test_collect_tool_sources_preserves_timeline_events():
     collect_tool_sources(
         json.dumps(
             {
-                "__timeline_events__": [
+                "artifacts": {"timeline_events": [
                     {
                         "source_type": "conversation",
                         "message_id": "msg-1",
@@ -574,7 +574,7 @@ def test_collect_tool_sources_preserves_timeline_events():
                         "timeline_event_at": "2026-06-25T19:15:00Z",
                         "timeline_event_type": "web_search_performed",
                     },
-                ]
+                ]}
             }
         ),
         document_sources,
@@ -788,7 +788,7 @@ async def test_search_thread_events_returns_sorted_mixed_source_events(monkeypat
         services=FakeServices(),
     )
     payload = normalize_tool_result(raw, tool_name="search_thread_events")
-    events = payload["__timeline_events__"]
+    events = payload["artifacts"]["timeline_events"]
 
     assert payload["ok"] is True
     assert payload["trace"]["tool_name"] == "search_thread_events"

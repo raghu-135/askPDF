@@ -10,18 +10,10 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from app.runtime.adapter import RuntimeInvocationContext
-from app.runtime.builder import BuilderCapabilities, BuilderCatalog, BuilderTestContext, UnsupportedRequestOverrideError
+from app.runtime.builder import BuilderCapabilities, BuilderCatalog, BuilderTestContext
 from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, RuntimeValidationResult
-
-
-_ALLOWED_WORKFLOW_CONFIG_KEYS = frozenset({
-    "use_web_search", "use_reranker", "system_role", "tool_instructions",
-    "custom_instructions", "allowed_tool_ids", "prefetch_policy", "hitl_policy",
-    "replans", "graph", "context_policy", "loop_policy", "builder_ui",
-    "parallel_policy", "corrective_policy", "task_policy",
-})
 
 
 class _BuilderEventSink:
@@ -37,6 +29,39 @@ class LangGraphBuilderProvider:
     framework = "langgraph"
     builder_id = "langgraph_graph"
     _task_web_tool_ids = frozenset({"live_web_recon"})
+
+    @staticmethod
+    def _runtime_thread_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]:
+        """Project product thread settings onto the runtime config surface.
+
+        ``get_thread_settings`` returns the complete product settings document.
+        It includes the selected workflow, memory consent, and the product's
+        configured replan ceiling.  Those values are control-plane concerns;
+        sending them as runtime overrides makes the runtime treat them as
+        unknown LangGraph configuration.  The selected workflow is already
+        represented by ``definition`` and memory is materialized into the task
+        context before execution.  Only canonical runtime-owned settings may
+        cross the builder boundary.
+        """
+
+        source = settings if isinstance(settings, Mapping) else {}
+        runtime_keys = (
+            "llm_model",
+            "context_window",
+            "web_search_mode",
+            "hitl_web_approval",
+            "use_web_search",
+            "use_reranker",
+            "system_role",
+            "tool_instructions",
+            "custom_instructions",
+            "replans",
+        )
+        return {
+            key: source[key]
+            for key in runtime_keys
+            if key in source and source[key] is not None
+        }
 
     def __init__(self, *, adapter: HttpLangGraphRuntimeAdapter | None = None) -> None:
         self._adapter = adapter
@@ -62,11 +87,11 @@ class LangGraphBuilderProvider:
         return apply_deep_agent_env_overrides(limits, self.framework)
 
     def filter_request_overrides(self, definition: AgentDefinition, overrides: Mapping[str, Any] | None, *, reject_unsupported: bool) -> Mapping[str, Any]:
-        supplied = {str(key): value for key, value in dict(overrides or {}).items() if value is not None}
-        unsupported = set(supplied) - _ALLOWED_WORKFLOW_CONFIG_KEYS
-        if unsupported and reject_unsupported:
-            raise UnsupportedRequestOverrideError(unsupported)
-        return {key: value for key, value in supplied.items() if key in _ALLOWED_WORKFLOW_CONFIG_KEYS}
+        return {
+            str(key): value
+            for key, value in dict(overrides or {}).items()
+            if value is not None
+        }
 
     async def capabilities(self, definition: AgentDefinition) -> BuilderCapabilities:
         runtime = await self._runtime().capabilities(definition)
@@ -87,9 +112,11 @@ class LangGraphBuilderProvider:
         )
 
     async def resolve(self, definition: AgentDefinition, spec: Mapping[str, Any], *, thread_settings: Mapping[str, Any] | None = None, request_overrides: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-        filtered = self.filter_request_overrides(definition, request_overrides, reject_unsupported=False)
         return await self._runtime().resolve_definition(
-            definition, spec, thread_settings=thread_settings or {}, request_overrides=filtered,
+            definition,
+            spec,
+            thread_settings=self._runtime_thread_settings(thread_settings),
+            request_overrides=dict(request_overrides or {}),
         )
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog:

@@ -8,6 +8,25 @@ from app.runtime.hermes_builder import HermesBuilderProvider
 from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
 
+@pytest.fixture(autouse=True)
+def hermes_budget_configuration(monkeypatch):
+    """Keep direct builder tests explicit about required Hermes deployment limits."""
+
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    for suffix in (
+        "MAX_MODEL_CALLS",
+        "MAX_MODEL_TOKENS",
+        "MAX_TOOL_CALLS",
+        "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS",
+        "MAX_OUTPUT_CHARS",
+        "MAX_EVENT_COUNT",
+        "WAKE_LIMIT_SECONDS",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
+
+
 def _definition() -> AgentDefinition:
     return AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent", category="deep")
 
@@ -88,7 +107,7 @@ def test_langgraph_provider_retains_owned_request_overrides():
         {"use_web_search": True, "replans": 2, "unknown": "drop", "use_reranker": None},
         reject_unsupported=False,
     )
-    assert filtered == {"use_web_search": True, "replans": 2}
+    assert filtered == {"use_web_search": True, "replans": 2, "unknown": "drop"}
 
 
 @pytest.mark.asyncio

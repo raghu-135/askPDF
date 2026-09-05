@@ -17,6 +17,10 @@ RUNTIME_TEXT_FIELDS = {
     "failure_context",
 }
 ALLOWED_WORKFLOW_CONFIG_KEYS = {
+    "llm_model",
+    "context_window",
+    "web_search_mode",
+    "hitl_web_approval",
     "use_web_search",
     "use_reranker",
     "system_role",

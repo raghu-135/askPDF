@@ -181,6 +181,21 @@ class DependencyMonitor:
                 }
         return None
 
+    def unavailable_configured(self) -> dict[str, Any] | None:
+        """Return the first configured dependency that cannot accept work."""
+
+        snapshots = self.snapshot()
+        for dependency, url in self._configured.items():
+            if not url:
+                continue
+            value = snapshots.get(dependency) or {}
+            if value.get("state") != "available":
+                return {
+                    "dependency": dependency,
+                    "reason": value.get("reason") or "unavailable",
+                }
+        return None
+
 
 def langgraph_dependency_requirements(payload: Mapping[str, Any]) -> dict[str, set[str]]:
     request = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}

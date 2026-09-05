@@ -14,6 +14,7 @@ from app.runtime.catalog import definition_from_workflow
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
 from runtime_protocol.errors import RuntimeError
+from runtime_protocol.protocol import versioned_payload
 from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
 from hermes_runtime.pinned_contract import HERMES_REVISION
@@ -70,7 +71,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._json = AsyncMock(return_value={
-        "capabilities": {
+        "capabilities": versioned_payload({
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
             },
@@ -79,7 +80,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
                 "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
             },
-        }
+        }),
     })
 
     deployment = await adapter.deployment_capabilities()
@@ -173,7 +174,7 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     state_path = tmp_path / "state.json"
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
-    payload = {
+    payload = versioned_payload({
         "request": {
             "run_id": "run-conflict",
             "definition_id": "hermes_rag_agent",
@@ -183,7 +184,7 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
             "options": {},
         },
         "context": {"resolved_spec": {"config": {}}},
-    }
+    })
     store = HermesExecutionStore(str(state_path))
     store.create("run-conflict", payload)
     continuation = {
@@ -486,7 +487,7 @@ async def test_upstream_stop_rejects_a_malformed_acknowledgement(monkeypatch):
 
 
 def _cancel_payload():
-    return {
+    return versioned_payload({
         "continuation": {
             "binding_type": "hermes_session",
             "payload": {
@@ -495,7 +496,7 @@ def _cancel_payload():
                 "runtime_profile": "askpdf-run-profile-1",
             },
         },
-    }
+    })
 
 
 def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monkeypatch, tmp_path):
@@ -631,11 +632,11 @@ async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
     def handler(http_request: httpx.Request) -> httpx.Response:
         calls.append(http_request.method)
         if http_request.method == "POST":
-            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps({'event': progress})}\n\n"
+            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps(versioned_payload({'event': versioned_payload(progress)}))}\n\n"
         else:
             assert http_request.url.params["after_event_id"] == "run-1:346"
             assert "after_sequence" not in http_request.url.params
-            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps(versioned_payload({'event': versioned_payload(terminal), 'result': versioned_payload({'status': 'completed', 'output': 'recovered'})}))}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))

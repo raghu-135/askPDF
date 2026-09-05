@@ -5,6 +5,7 @@ import httpx
 import time
 import pytest
 from runtime_protocol.contracts import AgentRuntimeResult
+from runtime_protocol.protocol import RUNTIME_MINIMUM_COMPATIBLE_VERSION, RUNTIME_PROTOCOL_VERSION
 from langgraph_runtime.execution_store import ExecutionStore
 
 from langgraph_runtime.api import create_app
@@ -56,6 +57,7 @@ async def test_provider_readiness_requires_a_models_list():
 
 def test_runtime_healthz_is_liveness_only(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:
@@ -66,6 +68,7 @@ def test_runtime_healthz_is_liveness_only(monkeypatch):
 
 def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:
@@ -82,6 +85,7 @@ def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monk
 
 def test_runtime_startup_and_dependency_endpoints_are_separate(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:
@@ -92,9 +96,55 @@ def test_runtime_startup_and_dependency_endpoints_are_separate(monkeypatch):
     assert dependencies["provider"]["state"] == "not_configured"
 
 
-def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(monkeypatch):
+def test_runtime_accepts_missing_outer_protocol_metadata(monkeypatch):
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("LLM_API_URL", "")
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post(
+            "/v1/capabilities",
+            json={
+                "definition": {
+                    "definition_id": "router_rag_agent",
+                    "framework": "langgraph",
+                    "builder_id": "langgraph_graph",
+                },
+            },
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["protocol_version"] == RUNTIME_PROTOCOL_VERSION
+    assert payload["minimum_compatible_version"] == RUNTIME_MINIMUM_COMPATIBLE_VERSION
+    assert "capabilities" in payload["result"]
+
+
+def test_runtime_definition_errors_are_versioned_for_control_plane_parsing(monkeypatch):
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("LLM_API_URL", "")
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post(
+            "/v1/resolve",
+            json={
+                "protocol_version": RUNTIME_PROTOCOL_VERSION,
+                "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+            },
+        )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["protocol_version"] == RUNTIME_PROTOCOL_VERSION
+    assert payload["minimum_compatible_version"] == RUNTIME_MINIMUM_COMPATIBLE_VERSION
+    assert payload["error"]["code"] == "runtime_definition_invalid"
+    assert "detail" not in payload
+
+
+def test_dependency_outage_marks_readiness_unavailable_but_blocks_required_run(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "http://unavailable/mcp")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
     monkeypatch.setenv("LLM_API_URL", "")
 
     async def unavailable_probe(*_args, **_kwargs):
@@ -102,8 +152,12 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
 
     monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", unavailable_probe)
     payload = {
+        "protocol_version": RUNTIME_PROTOCOL_VERSION,
+        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "operation_id": "dependency-blocked:start",
         "request": {
+            "protocol_version": RUNTIME_PROTOCOL_VERSION,
+            "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
             "run_id": "dependency-blocked",
             "thread_id": "thread-1",
             "definition_id": "router_rag_agent",
@@ -125,11 +179,22 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
         },
     }
     with TestClient(create_app(require_auth=False)) as client:
-        assert client.get("/readyz").status_code == 200
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/startupz").status_code == 200
+        readiness = client.get("/readyz")
+        assert readiness.status_code == 503
+        assert readiness.json()["checks"]["configured_dependencies"]["dependency"] == "mcp"
         response = client.post("/v1/runs/start", json=payload)
-        cancel_response = client.post("/v1/runs/dependency-blocked/cancel", json={"request": payload["request"]})
+        cancel_response = client.post(
+            "/v1/runs/dependency-blocked/cancel",
+            json={
+                "protocol_version": RUNTIME_PROTOCOL_VERSION,
+                "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
+                "request": payload["request"],
+            },
+        )
         assert cancel_response.status_code == 404
-        assert cancel_response.json()["detail"]["code"] == "runtime_run_not_found"
+        assert cancel_response.json()["error"]["code"] == "runtime_run_not_found"
     assert response.status_code == 503
     error = response.json()["error"]
     assert error["code"] == "runtime_dependency_unavailable"
@@ -140,6 +205,7 @@ def test_dependency_outage_does_not_change_readiness_but_blocks_required_run(mon
 
 def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "")
     monkeypatch.setenv("LLM_API_URL", "")
     monkeypatch.setenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true")
@@ -155,6 +221,8 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
     store = ExecutionStore(database_url="")
     request = {
+        "protocol_version": RUNTIME_PROTOCOL_VERSION,
+        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "run_id": "restart-recovery",
         "thread_id": "thread-1",
         "definition_id": "router_rag_agent",

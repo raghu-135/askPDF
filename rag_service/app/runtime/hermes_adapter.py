@@ -23,6 +23,7 @@ from runtime_protocol.contracts import (
     RuntimeValidationResult,
 )
 from runtime_protocol.errors import RuntimeError
+from runtime_protocol.protocol import versioned_payload
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.http_runtime_adapter import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -208,11 +209,11 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         value = await self.transport._json(
             "POST",
             "/v1/validate",
-            json={
+            json=versioned_payload({
                 "definition": definition.to_dict(),
                 "spec": dict(spec),
                 "options": dict(options or {}),
-            },
+            }),
         )
         from runtime_protocol.transport import validation_from_dict
         return validation_from_dict(value["validation"])
@@ -235,7 +236,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/cancel",
             request=request,
-            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+            json=versioned_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
         return dict(value or {})
 
@@ -252,11 +253,11 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/approval",
             request=request,
-            json={
+            json=versioned_payload({
                 "request": request.to_dict(),
                 "continuation": request.continuation.to_dict(),
                 "response": {"choice": choice, "resolve_all": choice in {"session", "always"}},
-            },
+            }),
         )
         return dict(value or {})
 
@@ -268,6 +269,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/inspect",
             request=request,
-            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+            json=versioned_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
         return dict(value or {})

@@ -11,10 +11,12 @@ from types import SimpleNamespace
 from typing import Any, AsyncIterator, Mapping
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from langgraph_runtime.context import RuntimeExecutionContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta, protocol_error_details, require_protocol_fields
 from runtime_protocol.events import create_runtime_event
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.transport import (
@@ -26,7 +28,8 @@ from runtime_protocol.transport import (
     sse_encode,
     json_envelope,
 )
-from langgraph_runtime.capabilities import langgraph_capabilities, langgraph_deployment_capabilities
+from runtime_protocol.protocol import versioned_payload
+from langgraph_runtime.capabilities import LangGraphDeploymentProfile, langgraph_capabilities, langgraph_deployment_capabilities
 from langgraph_runtime.budgets import deep_agent_budgets
 from langgraph_runtime.models.llm import configure_runtime_limits
 from runtime_protocol.configuration import validate_runtime_environment
@@ -51,13 +54,98 @@ def _definition_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RuntimeError):
         detail = exc.to_dict()
     else:
+        message = str(exc)[:2000] or "Agent definition is invalid"
+        code = (
+            "runtime_configuration_invalid"
+            if "unknown config keys:" in message
+            or "unsupported runtime configuration overrides:" in message
+            else "runtime_definition_invalid"
+        )
         detail = {
-            "code": "runtime_definition_invalid",
-            "safe_message": str(exc)[:2000] or "Agent definition is invalid",
+            "code": code,
+            "safe_message": message,
             "retryable": False,
-            "details": {},
+            "details": {"configuration": message} if code == "runtime_configuration_invalid" else {},
         }
     return HTTPException(status_code=400, detail=detail)
+
+
+def _request_from_payload(payload: Mapping[str, Any]) -> Any:
+    """Parse an incoming request and expose negotiation failures as 4xx errors."""
+
+    _require_payload_protocol(payload)
+    request_value = payload.get("request") if isinstance(payload, Mapping) else None
+    try:
+        return request_from_dict(request_value)
+    except (TypeError, ValueError) as exc:
+        if "protocol" in str(exc).lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "runtime_protocol_error",
+                    "safe_message": "Runtime protocol negotiation failed",
+                    "retryable": False,
+                    "details": protocol_error_details(request_value or {}, exc),
+                },
+            ) from exc
+        raise
+
+
+def _require_payload_protocol(payload: Mapping[str, Any]) -> None:
+    """Reject an operation before any nested definition/request is parsed."""
+
+    try:
+        require_protocol_fields(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "runtime_protocol_error",
+                "safe_message": "Runtime protocol negotiation failed",
+                "retryable": False,
+                "details": protocol_error_details(payload if isinstance(payload, Mapping) else {}, exc),
+            },
+        ) from exc
+
+
+def _cross_service_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: Any,
+    code: str = "runtime_request_rejected",
+) -> JSONResponse:
+    """Serialize every ``/v1`` rejection as a negotiated runtime envelope.
+
+    FastAPI's default exception handlers return ``{"detail": ...}``.  That is
+    suitable for browser-facing endpoints, but it is not a valid runtime
+    response: the control-plane connector must be able to negotiate and parse
+    every cross-service response, including admission and validation errors.
+    """
+
+    if isinstance(detail, Mapping):
+        error = dict(detail)
+        error.setdefault("code", code)
+        error.setdefault("safe_message", "Runtime request was rejected")
+        error.setdefault("retryable", status_code >= 500)
+        error.setdefault("details", {})
+    else:
+        message = str(detail)[:2000] if detail is not None else "Runtime request was rejected"
+        error = {
+            "code": code,
+            "safe_message": message,
+            "retryable": status_code >= 500,
+            "details": {},
+        }
+    return JSONResponse(
+        status_code=status_code,
+        content=json_envelope(
+            status="failed",
+            request_id=request.headers.get("x-request-id"),
+            error=error,
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        ),
+    )
 
 
 def _namespace(value: Any) -> Any:
@@ -206,8 +294,32 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         validation_environment["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
         validation_environment["LLM_AUTH_MODE"] = validation_environment.get("LLM_AUTH_MODE") or "none"
         validation_environment["LLM_KEYLESS_PROVIDER"] = validation_environment.get("LLM_KEYLESS_PROVIDER") or "local"
+        # ``require_auth=False`` is the injected, in-process test app.  It is
+        # intentionally allowed to validate against a production-shaped
+        # external-runtime configuration even when the developer's .env still
+        # contains the control-plane-only ``in_process`` transport setting.
+        # This does not alter the real process environment or relax production
+        # startup validation.
+        if validation_environment.get("MCP_TRANSPORT", "").strip() not in {"", "loopback_http"}:
+            validation_environment["MCP_TRANSPORT"] = "loopback_http"
+            validation_environment["MCP_LOOPBACK_URL"] = (
+                validation_environment.get("MCP_LOOPBACK_URL")
+                or "http://127.0.0.1:8000/internal/mcp/"
+            )
     validate_runtime_environment(service="langgraph", environ=validation_environment)
     configure_runtime_limits(validation_environment)
+    # Direct tests use an injected in-memory checkpointer and deliberately do
+    # not model the production environment.  Use the already validated test
+    # environment for capability admission so those tests exercise execution
+    # rather than being rejected because the developer .env selects a
+    # different checkpointer backend.
+    capability_profile = LangGraphDeploymentProfile.from_environment(
+        validation_environment if not require_auth else None
+    )
+
+    def effective_capabilities(definition: AgentDefinition | None) -> Any:
+        return langgraph_capabilities(definition, profile=capability_profile)
+
     runtime_state: dict[str, Any] = {
         "draining": False,
         "started": False,
@@ -376,6 +488,82 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             status_code=503,
         )
 
+    @app.exception_handler(HTTPException)
+    async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse | Any:
+        # Health/liveness endpoints intentionally remain ordinary operational
+        # endpoints.  Only the cross-service API requires a negotiated error
+        # envelope.
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+        return _cross_service_error_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse | Any:
+        # This also covers framework-generated 404/405 responses for unknown
+        # runtime routes, which must not fall back to an unversioned Starlette
+        # ``detail`` body.
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return _cross_service_error_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
+
+    @app.exception_handler(RuntimeError)
+    async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            raise exc
+        return _cross_service_error_response(
+            request,
+            status_code=503 if exc.retryable else 400,
+            detail=exc.to_dict(),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        return _cross_service_error_response(
+            request,
+            status_code=422,
+            detail={
+                "code": "runtime_request_invalid",
+                "safe_message": "Runtime request validation failed",
+                "retryable": False,
+                "details": {
+                    "issues": [
+                        {
+                            "location": list(issue.get("loc") or ()),
+                            "message": str(issue.get("msg") or "invalid request"),
+                            "type": str(issue.get("type") or "value_error"),
+                        }
+                        for issue in exc.errors()[:20]
+                    ]
+                },
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def cross_service_exception_handler(request: Request, exc: Exception) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            raise exc
+        logger.exception("Unhandled LangGraph runtime API error | path=%s", request.url.path)
+        return _cross_service_error_response(
+            request,
+            status_code=500,
+            detail={
+                "code": "runtime_internal_error",
+                "safe_message": "Agent runtime failed while handling the request",
+                "retryable": True,
+                "details": {},
+            },
+        )
+
     def get_adapter() -> Any:
         """Load the concrete execution implementation only when needed."""
         nonlocal adapter
@@ -390,7 +578,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         record = await execution_store.get(run_id)
         if record is None or record.status not in TERMINAL_STATUSES:
             return
-        request = request_from_dict(payload["request"])
+        request = _request_from_payload(payload)
         fingerprint = operation_fingerprint(operation, request.to_dict(), payload)
         existing = record.request_fingerprint or request_fingerprint(record.operation, record.request)
         if fingerprint != existing:
@@ -436,6 +624,12 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             }
         except Exception as exc:
             checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}
+        dependency_failure = dependency_monitor.unavailable_configured()
+        checks["configured_dependencies"] = (
+            {"status": "failed", **dependency_failure}
+            if dependency_failure
+            else {"status": "ok"}
+        )
         healthy = all(value.get("status") == "ok" for value in checks.values())
         runtime_state["readiness"] = checks
         return JSONResponse({"status": "ok" if healthy else "not_ready", "checks": checks}, status_code=200 if healthy else 503)
@@ -451,6 +645,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/capabilities")
     async def capabilities(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -458,7 +653,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         return json_envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
-            result={"capabilities": langgraph_capabilities(definition).to_dict()},
+            result={"capabilities": effective_capabilities(definition).to_dict()},
             runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
         )
 
@@ -473,6 +668,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/validate")
     async def validate(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             value = await get_adapter().validate(definition, payload.get("spec") or {}, options=payload.get("options") or {})
@@ -482,6 +678,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/prompt-preview")
     async def prompt_preview(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             spec = payload.get("spec") or {}
@@ -500,6 +697,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def resolve(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
         """Resolve and materialize a LangGraph definition inside the runtime boundary."""
 
+        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             spec = payload.get("spec") or {}
@@ -538,6 +736,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def catalog(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
         """Return only framework-owned compiler and graph catalog metadata."""
 
+        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             from langgraph_runtime.workflows.corrective_contracts import corrective_policy_catalog
@@ -570,7 +769,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     "parallel_policy": parallel_policy_catalog(),
                     "corrective_policy": corrective_policy_catalog(),
                 },
-                "runtime_capabilities": langgraph_capabilities(definition).to_dict(),
+                "runtime_capabilities": effective_capabilities(definition).to_dict(),
             }
             return json_envelope(
                 status="ok",
@@ -811,7 +1010,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         operation_id: str | None = None,
         source_attempt: int | None = None,
     ) -> AsyncIterator[str]:
-        request = request_from_dict(payload["request"])
+        request = _request_from_payload(payload)
         operation_id_by_endpoint = {
             "start": RuntimeOperationId.RUN_START,
             "resume": RuntimeOperationId.RUN_RESUME,
@@ -820,7 +1019,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         capability_id = operation_id_by_endpoint.get(operation)
         if capability_id and allow_start:
             definition = definition_from_dict(payload["definition"])
-            descriptor = langgraph_capabilities(definition).operations.get(capability_id)
+            descriptor = effective_capabilities(definition).operations.get(capability_id)
             if descriptor is None or not descriptor.enabled:
                 raise HTTPException(
                     status_code=409,
@@ -940,7 +1139,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/start")
     async def start(payload: Mapping[str, Any]) -> StreamingResponse:
-        request = request_from_dict(payload["request"])
+        request = _request_from_payload(payload)
         await _preflight_operation(request.run_id, payload, "start")
         _admit_dependencies(payload)
         return StreamingResponse(stream_operation(payload, "start", operation_id=payload.get("operation_id")), media_type="text/event-stream")
@@ -950,7 +1149,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         record = await execution_store.get(run_id)
         if record is None:
             raise HTTPException(status_code=404, detail="runtime run not found")
-        payload = {"request": record.request, "context": record.payload.get("context") or {}}
+        payload = versioned_payload({"request": record.request, "context": record.payload.get("context") or {}})
         return StreamingResponse(
             stream_operation(
                 payload,
@@ -977,6 +1176,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/{run_id}/retry")
     async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        _require_payload_protocol(payload)
         request_payload = dict(payload.get("request") or {})
         if str(request_payload.get("run_id") or run_id) != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
@@ -998,7 +1198,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
-        runtime_request = request_from_dict(payload["request"])
+        runtime_request = _request_from_payload(payload)
         if runtime_request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         outcome = await execution_store.request_cancel(runtime_request.run_id)
@@ -1029,7 +1229,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/{run_id}/pause")
     async def pause(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
-        runtime_request = request_from_dict(payload["request"])
+        runtime_request = _request_from_payload(payload)
         if runtime_request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         outcome = await execution_store.request_pause(run_id)
@@ -1047,7 +1247,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         payload: Mapping[str, Any],
         request_context: Request,
     ) -> dict[str, Any]:
-        runtime_request = request_from_dict(payload["request"])
+        runtime_request = _request_from_payload(payload)
         if runtime_request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         correction = course_correction_from_dict(payload.get("correction") or {})
@@ -1105,7 +1305,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
-        request = request_from_dict(payload["request"])
+        request = _request_from_payload(payload)
         if request.run_id != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         durable = await execution_store.get(run_id)
@@ -1131,6 +1331,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        _require_payload_protocol(payload)
         from runtime_protocol.transport import _binding
 
         continuation = _binding(payload.get("continuation"))

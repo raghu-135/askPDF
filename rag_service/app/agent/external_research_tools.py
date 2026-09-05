@@ -44,7 +44,15 @@ def _format_web_context(
     for url, group in web_groups.items():
         prefix = f"Web result from search performed at {web_search_performed_at}:\n" if web_search_performed_at else ""
         content.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n' + "\n".join(group["texts"]))
-    return {"content": "\n\n".join(content), "__web_sources__": web_sources}
+    return {
+        "ok": True,
+        "content": "\n\n".join(content),
+        "sources": web_sources,
+        "artifacts": {"web_sources": web_sources},
+        "warnings": [],
+        "metrics": {"source_count": len(web_sources)},
+        "trace": {"tool_name": "search_web"},
+    }
 
 
 def get_external_research_tools() -> list[MCPToolAdapter]:

@@ -776,8 +776,15 @@ class TestThreadEndpoints:
         assert {"system_role", "tool_instructions", "custom_instructions"} <= set(data["defaults"])
         assert "reasoning_mode" not in data["defaults"]
 
-    def test_prompt_preview(self, client):
+    def test_prompt_preview(self, client, monkeypatch):
         """Test getting prompt preview."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Router Node Prompt\n# Final Answer Prompt"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -794,8 +801,15 @@ class TestThreadEndpoints:
         assert "# Router Node Prompt" in data["prompt"]
         assert "# Final Answer Prompt" in data["prompt"]
 
-    def test_prompt_preview_supports_plan_execute_pattern(self, client):
+    def test_prompt_preview_supports_plan_execute_pattern(self, client, monkeypatch):
         """Prompt preview should use selected agent workflow runtime prompts."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Planner Node Prompt\nexecution_plan"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={

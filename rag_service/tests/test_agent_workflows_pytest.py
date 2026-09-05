@@ -2698,10 +2698,10 @@ class TestRouterRagGraphToolConsumers:
                 self.payload = payload
 
             async def ainvoke(self, _args, config=None):
-                assert "__document_sources__" not in self.payload
-                assert "__web_sources__" not in self.payload
-                assert "__used_chat_ids__" not in self.payload
-                assert "__timeline_events__" not in self.payload
+                assert "_" * 2 + "document_sources" not in self.payload
+                assert "_" * 2 + "web_sources" not in self.payload
+                assert "_" * 2 + "used_chat_ids" not in self.payload
+                assert "_" * 2 + "timeline_events" not in self.payload
                 return self.payload
 
         registry = NodeRegistry()
@@ -6634,11 +6634,11 @@ class TestRouterRagRuntime:
 
         document_payload = {
             "content": "Document worker evidence.",
-            "__document_sources__": [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}],
+            "artifacts": {"document_sources": [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}]},
         }
         memory_payload = {
             "content": "Memory worker evidence.",
-            "__used_chat_ids__": ["turn-1"],
+            "artifacts": {"used_chat_ids": ["turn-1"]},
         }
         long_term_memory_payload = {
             "content": "Long-term memory worker evidence.",
@@ -6652,11 +6652,11 @@ class TestRouterRagRuntime:
         }
         timeline_payload = {
             "content": "Timeline worker evidence.",
-            "__timeline_events__": [{"timeline_event_type": "document_added", "timeline_event_at": "2026-07-01T00:00:00Z"}],
+            "artifacts": {"timeline_events": [{"timeline_event_type": "document_added", "timeline_event_at": "2026-07-01T00:00:00Z"}]},
         }
         web_payload = {
             "content": "Web worker evidence.",
-            "__web_sources__": [{"url": "https://example.com", "title": "Example"}],
+            "artifacts": {"web_sources": [{"url": "https://example.com", "title": "Example"}]},
         }
         fake_llm = FakeLlm()
 
@@ -6672,9 +6672,6 @@ class TestRouterRagRuntime:
         async def fake_mcp_call(name, _arguments, _config=None):
             payload = mcp_payloads.get(name, {"content": "[THREAD SHAPE]"})
             artifacts = dict(payload.get("artifacts") or {})
-            for key, legacy in (("document_sources", "__document_sources__"), ("web_sources", "__web_sources__"), ("used_chat_ids", "__used_chat_ids__"), ("timeline_events", "__timeline_events__")):
-                if legacy in payload:
-                    artifacts[key] = payload[legacy]
             content = payload.get("content", "")
             caller_node = "context_loader" if name == "get_thread_shape" else {
                 "search_documents": "retrieval_worker",

@@ -138,7 +138,9 @@ class WorkflowValidator:
         )
         lowered = message.lower()
         code = (
-            "incomplete_conditional_routes" if "missing route labels" in lowered
+            "runtime_configuration_invalid" if "unsupported runtime configuration overrides:" in lowered
+            else "runtime_configuration_invalid" if lowered.startswith("unknown config keys:")
+            else "incomplete_conditional_routes" if "missing route labels" in lowered
             else "invalid_route_target" if lowered.startswith("route ") and "must target" in lowered
             else "ambiguous_outgoing_flow" if "outgoing edges" in lowered
             else "non_terminating_path" if "no path to end" in lowered
@@ -207,6 +209,21 @@ class WorkflowResolver:
     ) -> Dict[str, Any]:
         resolved = deepcopy(spec)
         config = dict(resolved.get("config") or {})
+
+        explicit_overrides = {
+            str(key): value
+            for source in (thread_settings or {}, request_overrides or {})
+            for key, value in source.items()
+            if value is not None
+        }
+        unknown_overrides = sorted(
+            set(explicit_overrides) - ALLOWED_WORKFLOW_CONFIG_KEYS
+        )
+        if unknown_overrides:
+            raise WorkflowValidationError(
+                "unsupported runtime configuration overrides: "
+                + ", ".join(unknown_overrides)
+            )
 
         for source in (thread_settings or {}, request_overrides or {}):
             for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
