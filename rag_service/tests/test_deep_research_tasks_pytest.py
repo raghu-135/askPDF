@@ -508,7 +508,7 @@ async def test_deep_planner_fails_closed_with_bounded_validation_diagnostics(mon
     assert call_model.await_count == 3
     assert [call.args[0] for call in sink.emit.await_args_list] == [
         "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
-        "planner.repair_started", "planner.validation_failed",
+        "planner.repair_started", "planner.validation_failed", "planner.failed",
     ]
     diagnostics = json.dumps([call.args[1] for call in sink.emit.await_args_list])
     assert secret_marker not in diagnostics

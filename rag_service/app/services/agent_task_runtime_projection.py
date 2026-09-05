@@ -180,13 +180,21 @@ def _merge_budget(
         raise RuntimeTaskProjectionConflict("runtime budget tranche is stale or skips a tranche")
     if new_tranche > old_tranche and not authorized_tranche_increment:
         raise RuntimeTaskProjectionConflict("runtime budget tranche increment is not product-authorized")
+    # Runtime budget payloads are cumulative snapshots. A late event or a
+    # terminal result can legitimately carry an older snapshot than one that
+    # was already projected, especially after a failed graph invocation. Do
+    # not regress product accounting in that case; merge counters
+    # component-wise by maximum. Identity, task-version, plan-revision, and
+    # tranche-transition conflicts remain strict guards above.
+    lifetime = dict(candidate.get("lifetime_usage") or {})
     for key, old_value in (existing.get("lifetime_usage") or {}).items():
-        if int((candidate.get("lifetime_usage") or {}).get(key) or 0) < int(old_value or 0):
-            raise RuntimeTaskProjectionConflict(f"runtime lifetime budget counter regressed: {key}")
+        lifetime[key] = max(int(old_value or 0), int(lifetime.get(key) or 0))
+    candidate["lifetime_usage"] = lifetime
     if new_tranche == old_tranche:
+        tranche = dict(candidate.get("tranche_usage") or {})
         for key, old_value in (existing.get("tranche_usage") or {}).items():
-            if int((candidate.get("tranche_usage") or {}).get(key) or 0) < int(old_value or 0):
-                raise RuntimeTaskProjectionConflict(f"runtime tranche budget counter regressed: {key}")
+            tranche[key] = max(int(old_value or 0), int(tranche.get(key) or 0))
+        candidate["tranche_usage"] = tranche
     candidate["tranche_limits"] = existing["tranche_limits"]
     return candidate
 

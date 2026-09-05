@@ -19,6 +19,7 @@ from app.services import agent_task_repository as repository
 from app.services.agent_task_budgets import initial_budget_state
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
+    _merge_budget,
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
@@ -138,6 +139,41 @@ def _delta(
         pending_interrupt=interrupt,
         result={"status": "awaiting_human" if interrupt.get("operation") == "set" else "completed"},
     )
+
+
+def test_budget_projection_merges_late_cumulative_snapshots_monotonically():
+    current = initial_budget_state({"max_model_calls": 10})
+    current["tranche_usage"]["elapsed_active_ms"] = 1_000
+    current["lifetime_usage"]["elapsed_active_ms"] = 1_000
+    incoming = initial_budget_state({"max_model_calls": 10})
+    incoming["tranche_usage"]["elapsed_active_ms"] = 400
+    incoming["lifetime_usage"]["elapsed_active_ms"] = 400
+
+    merged = _merge_budget(current, incoming, {"max_model_calls": 10})
+
+    assert merged["tranche_usage"]["elapsed_active_ms"] == 1_000
+    assert merged["lifetime_usage"]["elapsed_active_ms"] == 1_000
+
+
+def test_budget_projection_resets_tranche_but_preserves_lifetime_snapshot():
+    current = initial_budget_state({"max_model_calls": 10})
+    current["tranche_index"] = 1
+    current["tranche_usage"]["elapsed_active_ms"] = 1_000
+    current["lifetime_usage"]["elapsed_active_ms"] = 1_000
+    incoming = initial_budget_state({"max_model_calls": 10})
+    incoming["tranche_index"] = 2
+    incoming["tranche_usage"]["elapsed_active_ms"] = 100
+    incoming["lifetime_usage"]["elapsed_active_ms"] = 1_100
+
+    merged = _merge_budget(
+        current,
+        incoming,
+        {"max_model_calls": 10},
+        authorized_tranche_increment=True,
+    )
+
+    assert merged["tranche_usage"]["elapsed_active_ms"] == 100
+    assert merged["lifetime_usage"]["elapsed_active_ms"] == 1_100
 
 
 @pytest.mark.asyncio
