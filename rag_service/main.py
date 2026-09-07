@@ -79,11 +79,17 @@ async def _probe_runtime_readiness() -> None:
     async def probe(adapter: object) -> None:
         identity = registry.deployment_id(adapter)  # type: ignore[arg-type]
         try:
-            capabilities = await adapter.deployment_capabilities()  # type: ignore[attr-defined]
+            readiness = await adapter.readiness()  # type: ignore[attr-defined]
+            if not isinstance(readiness, Mapping) or readiness.get("status") != "ok":
+                results[identity] = {
+                    "status": "unavailable",
+                    "reason": "runtime_not_ready",
+                    "checks": dict(readiness.get("checks") or {}) if isinstance(readiness, Mapping) else {},
+                }
+                return
             results[identity] = {
                 "status": "ready",
-                "protocol_version": capabilities.protocol_version,
-                "minimum_compatible_version": capabilities.minimum_compatible_version,
+                "checks": dict(readiness.get("checks") or {}),
             }
         except Exception as exc:
             results[identity] = {

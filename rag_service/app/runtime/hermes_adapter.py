@@ -199,6 +199,12 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
 
+    async def readiness(self) -> Mapping[str, Any]:
+        if not hermes_runtime_enabled():
+            return {"status": "not_ready", "reason": "runtime_disabled"}
+        self._ensure_enabled()
+        return await self.transport._readiness()
+
     async def validate(
         self,
         definition: AgentDefinition,

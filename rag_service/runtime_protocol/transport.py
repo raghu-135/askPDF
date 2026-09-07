@@ -48,6 +48,29 @@ from runtime_protocol.events import create_runtime_event
 from runtime_protocol.validation import validate_runtime_result_envelope
 
 
+def _object_list(value: Any, *, field: str) -> tuple[dict[str, Any], ...]:
+    """Parse a JSON object collection without silently dropping entries."""
+
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array")
+    parsed: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field}[{index}] must be an object")
+        parsed.append(dict(item))
+    return tuple(parsed)
+
+
+def _optional_object(value: Any, *, field: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return dict(value)
+
+
 def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
     if not value:
         return None
@@ -164,7 +187,7 @@ def event_from_dict(value: Mapping[str, Any]) -> AgentRuntimeEvent:
 def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
     protocol_version, minimum_compatible_version = require_protocol_fields(value)
     validate_runtime_result_envelope(value)
-    task_value = value.get("task_result") if isinstance(value.get("task_result"), Mapping) else None
+    task_value = _optional_object(value.get("task_result"), field="task_result")
     task_usage = dict(task_value.get("usage") or {}) if task_value is not None else {}
     if task_usage:
         task_usage = RuntimeUsageSnapshot.from_mapping(
@@ -175,19 +198,18 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         status=RuntimeTaskResultStatus(str(task_value.get("status"))),
         text=task_value.get("text"),
         structured_output=dict(task_value["structured_output"]) if isinstance(task_value.get("structured_output"), Mapping) else None,
-        artifacts=tuple(RuntimeArtifact(**dict(item)) for item in task_value.get("artifacts") or [] if isinstance(item, Mapping)),
-        warnings=tuple(dict(item) for item in task_value.get("warnings") or [] if isinstance(item, Mapping)),
+        artifacts=tuple(RuntimeArtifact(**item) for item in _object_list(task_value.get("artifacts"), field="task_result.artifacts")),
+        warnings=_object_list(task_value.get("warnings"), field="task_result.warnings"),
         gaps=tuple(str(item) for item in task_value.get("gaps") or []),
         usage=task_usage,
-        error=dict(task_value["error"]) if isinstance(task_value.get("error"), Mapping) else None,
+        error=_optional_object(task_value.get("error"), field="task_result.error"),
         framework_details=dict(task_value.get("framework_details") or {}),
         correction_outcomes=tuple(
             course_correction_outcome_from_dict(item)
-            for item in task_value.get("correction_outcomes") or []
-            if isinstance(item, Mapping)
+            for item in _object_list(task_value.get("correction_outcomes"), field="task_result.correction_outcomes")
         ),
     ) if task_value is not None else None
-    delta_value = value.get("orchestration_delta") if isinstance(value.get("orchestration_delta"), Mapping) else None
+    delta_value = _optional_object(value.get("orchestration_delta"), field="orchestration_delta")
     orchestration_delta = TaskOrchestrationDelta(
         event_id=str(delta_value["event_id"]),
         attempt_id=str(delta_value["attempt_id"]),
@@ -205,19 +227,18 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
                 plan=dict(item.get("plan") or {}),
                 correction_ids=tuple(str(value) for value in item.get("correction_ids") or []),
             )
-            for item in delta_value.get("plan_changes") or [] if isinstance(item, Mapping)
+            for item in _object_list(delta_value.get("plan_changes"), field="orchestration_delta.plan_changes")
         ),
-        todo_changes=tuple(dict(item) for item in delta_value.get("todo_changes") or [] if isinstance(item, Mapping)),
-        subagent_changes=tuple(dict(item) for item in delta_value.get("subagent_changes") or [] if isinstance(item, Mapping)),
+        todo_changes=_object_list(delta_value.get("todo_changes"), field="orchestration_delta.todo_changes"),
+        subagent_changes=_object_list(delta_value.get("subagent_changes"), field="orchestration_delta.subagent_changes"),
         budget_usage=dict(delta_value.get("budget_usage") or {}),
-        web_access=dict(delta_value["web_access"]) if isinstance(delta_value.get("web_access"), Mapping) else None,
-        artifacts=tuple(dict(item) for item in delta_value.get("artifacts") or [] if isinstance(item, Mapping)),
-        pending_interrupt=dict(delta_value["pending_interrupt"]) if isinstance(delta_value.get("pending_interrupt"), Mapping) else None,
-        result=dict(delta_value["result"]) if isinstance(delta_value.get("result"), Mapping) else None,
+        web_access=_optional_object(delta_value.get("web_access"), field="orchestration_delta.web_access"),
+        artifacts=_object_list(delta_value.get("artifacts"), field="orchestration_delta.artifacts"),
+        pending_interrupt=_optional_object(delta_value.get("pending_interrupt"), field="orchestration_delta.pending_interrupt"),
+        result=_optional_object(delta_value.get("result"), field="orchestration_delta.result"),
         correction_outcomes=tuple(
             course_correction_outcome_from_dict(item)
-            for item in delta_value.get("correction_outcomes") or []
-            if isinstance(item, Mapping)
+            for item in _object_list(delta_value.get("correction_outcomes"), field="orchestration_delta.correction_outcomes")
         ),
     ) if delta_value is not None else None
     runtime_metadata = dict(value.get("runtime_metadata") or {})
@@ -229,13 +250,13 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         status=str(value["status"]),
         output=value.get("output"),
         task_result=task_result,
-        clarification=dict(value["clarification"]) if isinstance(value.get("clarification"), Mapping) else None,
-        interruption=dict(value["interruption"]) if isinstance(value.get("interruption"), Mapping) else None,
-        artifacts=tuple(dict(item) for item in value.get("artifacts") or [] if isinstance(item, Mapping)),
+        clarification=_optional_object(value.get("clarification"), field="clarification"),
+        interruption=_optional_object(value.get("interruption"), field="interruption"),
+        artifacts=_object_list(value.get("artifacts"), field="artifacts"),
         usage=dict(value.get("usage") or {}),
         runtime_metadata=runtime_metadata,
         continuation=_binding(value.get("continuation")),
-        error=dict(value["error"]) if isinstance(value.get("error"), Mapping) else None,
+        error=_optional_object(value.get("error"), field="error"),
         checkpoint_boundary_available=value.get("checkpoint_boundary_available"),
         orchestration_delta=orchestration_delta,
         protocol_version=protocol_version,

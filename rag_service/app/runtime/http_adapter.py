@@ -43,6 +43,7 @@ from runtime_protocol.transport import (
     iter_sse,
 )
 from runtime_protocol.protocol import versioned_payload
+from runtime_protocol.validation import validate_runtime_result_for_event
 
 
 def _safe_json(value: Any) -> Any:
@@ -250,6 +251,24 @@ class RuntimeTransportConnector:
         if "result" not in payload or not isinstance(payload["result"], Mapping):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response envelope")
         return payload["result"]
+
+    async def _readiness(self, path: str = "/readyz") -> Mapping[str, Any]:
+        """Read a plain health response; readiness is not a capability envelope."""
+        try:
+            response = await (await self._client_for_request()).request(
+                "GET", self.base_url + path, headers=self._headers()
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_timeout", retryable=True, safe_message="Agent runtime timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned invalid readiness JSON", retryable=False) from exc
+        if not isinstance(payload, Mapping) or payload.get("status") not in {"ok", "not_ready"}:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed readiness", retryable=False)
+        return dict(payload)
 
     async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
         resolved_spec = context.resolved_spec if isinstance(context.resolved_spec, Mapping) else {}
@@ -481,6 +500,12 @@ class RuntimeTransportConnector:
                         if terminal_event_id is not None and event.event_id != terminal_event_id:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal result")
                         candidate = result_from_dict(envelope["result"])
+                        validate_runtime_result_for_event(
+                            event.kind,
+                            candidate.to_dict(),
+                            terminal=event.terminal,
+                            event_payload=event.payload,
+                        )
                         candidate_hash = hashlib.sha256(json.dumps(candidate.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
                         if terminal_hash is not None and candidate_hash != terminal_hash:
                             raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting terminal results")
@@ -661,6 +686,9 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         value = await self.transport._json("GET", "/v1/capabilities")
         return capabilities_from_dict(value["capabilities"])
+
+    async def readiness(self) -> Mapping[str, Any]:
+        return await self.transport._readiness()
 
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self.transport._json("POST", "/v1/validate", json=versioned_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})}))

@@ -79,6 +79,10 @@ class AgentRuntimeAdapter(ABC):
             )
         )
 
+    async def readiness(self) -> Mapping[str, Any]:
+        """Return operational readiness independently of capability metadata."""
+        return {"status": "not_ready", "reason": "readiness_not_implemented"}
+
     @abstractmethod
     async def validate(
         self,
