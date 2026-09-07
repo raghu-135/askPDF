@@ -9,6 +9,7 @@ from runtime_protocol.contracts import RuntimeEventKind, RuntimeTaskResultStatus
 
 RUNTIME_RESULT_STATUSES = frozenset({
     "completed",
+    "completed_with_warnings",
     "no_continuation",
     "clarification_required",
     "awaiting_human",
@@ -19,7 +20,11 @@ RUNTIME_RESULT_STATUSES = frozenset({
 })
 
 _EVENT_RESULT_STATUSES: dict[str, frozenset[str]] = {
-    RuntimeEventKind.RUN_COMPLETED.value: frozenset({"completed", "no_continuation"}),
+    RuntimeEventKind.RUN_COMPLETED.value: frozenset({
+        "completed",
+        "completed_with_warnings",
+        "no_continuation",
+    }),
     RuntimeEventKind.RUN_CLARIFICATION.value: frozenset({"clarification_required"}),
     RuntimeEventKind.RUN_FAILED.value: frozenset({"failed", "timed_out"}),
     RuntimeEventKind.RUN_CANCELLED.value: frozenset({"cancelled"}),

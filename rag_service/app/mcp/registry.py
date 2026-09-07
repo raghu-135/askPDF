@@ -24,7 +24,7 @@ ToolHandler = Callable[..., Awaitable[ToolResult]]
 
 TOOL_RESULT_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"],
+    "required": ["ok", "content", "sources", "artifacts", "warnings", "error", "metrics", "trace"],
     "properties": {
         "ok": {"type": "boolean"},
         "content": {"type": "string"},

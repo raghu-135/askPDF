@@ -30,10 +30,13 @@ class ToolWarningCode(str, Enum):
     TOOL_OUTPUT_SOURCES_INVALID = "tool_output_sources_invalid"
     WEB_SEARCH_DISABLED = "web_search_disabled"
     WEB_SEARCH_FAILED = "search_web_failed"
+    RESPONSE_TRUNCATED = "tool_response_truncated"
 
 
 class ToolErrorCode(str, Enum):
     TOOL_FAILED_SUFFIX = "failed"
+    RESULT_TOO_LARGE = "tool_result_size_exceeded"
+    PROTOCOL_ERROR = "mcp_protocol_error"
 
     @staticmethod
     def failed(tool_name: str) -> str:
@@ -93,7 +96,8 @@ class ToolResult(BaseModel):
         return self.content
 
     def to_payload(self) -> Dict[str, Any]:
-        value = self.model_dump(mode="json", exclude_none=True)
+        value = self.model_dump(mode="json", exclude_none=False)
+        validate_tool_result_envelope(value)
         validate_tool_result_payload(value)
         return value
 
@@ -101,8 +105,48 @@ class ToolResult(BaseModel):
         return json.dumps(self.to_payload(), ensure_ascii=False)
 
 
+CANONICAL_TOOL_RESULT_FIELDS = frozenset(
+    {"ok", "content", "sources", "artifacts", "warnings", "error", "metrics", "trace"}
+)
+
+
+def validate_tool_result_envelope(value: Dict[str, Any]) -> Dict[str, Any]:
+    """Strictly validate the wire shape; trusted factories use ``ToolResult``."""
+
+    if not isinstance(value, dict):
+        raise ValueError("tool result must be an object envelope")
+    missing = sorted(CANONICAL_TOOL_RESULT_FIELDS - set(value))
+    if missing:
+        raise ValueError(f"tool result is missing canonical fields: {', '.join(missing)}")
+    try:
+        validated = ToolResult.model_validate(value, strict=True)
+    except Exception as exc:
+        raise ValueError("tool result has invalid canonical field types") from exc
+    if validated.ok and validated.error is not None:
+        raise ValueError("successful tool result cannot contain an error")
+    if not validated.ok and validated.error is None:
+        raise ValueError("failed tool result must contain a structured error")
+    if validated.error is not None and (not validated.error.code or not validated.error.message):
+        raise ValueError("tool result error requires code and message")
+    return value
+
+
+def tool_result_size(value: Dict[str, Any]) -> Dict[str, int]:
+    """Return the shared response-budget measurements for a canonical payload."""
+
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return {
+        "content_chars": len(value.get("content") or ""),
+        "source_count": len(value.get("sources") or []),
+        "warning_count": len(value.get("warnings") or []),
+        "serialized_bytes": len(encoded.encode("utf-8")),
+    }
+
+
 def validate_tool_result_payload(value: Dict[str, Any]) -> Dict[str, Any]:
     """Reject oversized neutral tool results instead of truncating them."""
+
+    validate_tool_result_envelope(value)
 
     if len(value.get("content") or "") > MAX_TOOL_RESULT_STRING_LENGTH:
         raise ValueError("tool result content exceeds the maximum length")
@@ -110,7 +154,10 @@ def validate_tool_result_payload(value: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("tool result contains too many sources")
     if len(value.get("warnings") or []) > MAX_TOOL_RESULT_COLLECTION_ITEMS:
         raise ValueError("tool result contains too many warnings")
-    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("tool result contains non-JSON values") from exc
     if len(encoded.encode("utf-8")) > MAX_TOOL_RESULT_BYTES:
         raise ValueError("tool result exceeds the maximum serialized size")
     return value
@@ -132,9 +179,5 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
     if legacy:
         raise ValueError(f"tool {tool_name} returned legacy fields: {', '.join(legacy)}")
     value = dict(raw)
-    if "content" not in value:
-        value["warnings"] = [
-            *list(value.get("warnings") or []),
-            ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT.value,
-        ]
-    return ToolResult.model_validate(value).to_payload()
+    validate_tool_result_envelope(value)
+    return ToolResult.model_validate(value, strict=True).to_payload()

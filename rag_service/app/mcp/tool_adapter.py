@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from app.mcp.context_codec import RUNTIME_CONTEXT_KEY, encode_context
 from app.mcp.discovery import discover_tool, request_model_for_tool
-from app.mcp.errors import MCPUnavailableError, classify_mcp_failure
+from app.mcp.errors import MCPProtocolError, MCPUnavailableError, classify_mcp_failure
 from app.mcp.telemetry import inject_trace_context
 from app.mcp.transport import get_mcp_client
 from app.tools.context import ToolInvocationContext
@@ -73,9 +73,8 @@ def _serialized_tool_result(result: dict[str, Any], text: str) -> str:
         "warnings": structured.get("warnings", []),
         "metrics": structured.get("metrics", {}),
         "trace": structured.get("trace", {}),
+        "error": structured.get("error"),
     }
-    if structured.get("error") is not None:
-        payload["error"] = structured["error"]
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -100,6 +99,8 @@ async def call_mcp_tool(name: str, arguments: dict[str, Any], config: Mapping[st
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if isinstance(exc, (RuntimeError, ValueError)) and str(exc).startswith(("MCP tool", "structuredContent")):
+            raise MCPProtocolError(name, cause=exc) from exc
         category, retryable = classify_mcp_failure(exc)
         raise MCPUnavailableError(
             name,
@@ -124,34 +125,30 @@ async def call_mcp_tool(name: str, arguments: dict[str, Any], config: Mapping[st
     except Exception as exc:
         category, retryable = classify_mcp_failure(exc)
         raise MCPUnavailableError(
-            name,
-            category=category,
-            cause=exc,
-            retryable=retryable,
-            mcp_request_id=context.mcp_request_id,
-            tool_call_id=context.tool_call_id,
-            run_id=context.run_id,
-            thread_id=context.thread_id,
+            name, category=category, cause=exc, retryable=retryable,
+            mcp_request_id=context.mcp_request_id, tool_call_id=context.tool_call_id,
+            run_id=context.run_id, thread_id=context.thread_id,
         ) from exc
     try:
         text = "".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
         structured = result.get("structuredContent")
-        required = {"ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"}
+        required = {"ok", "content", "sources", "artifacts", "warnings", "error", "metrics", "trace"}
         if not isinstance(structured, dict):
             if result.get("isError"):
                 return json.dumps({
                     "ok": False,
-                    "content": text,
+                    "content": "",
                     "sources": [],
                     "artifacts": {},
-                    "warnings": [],
-                    "metrics": {},
-                    "trace": {},
+                    "warnings": ["mcp_protocol_error"],
+                    "metrics": {"elapsed_ms": 0.0, "result_chars": 0, "source_count": 0, "warning_count": 1},
+                    "trace": {"tool_name": name},
                     "error": {
                         "code": "mcp_protocol_error",
-                        "message": "MCP returned an error without structuredContent",
+                        "message": str(text or "MCP returned an error without structuredContent")[:700],
                         "type": "MCPProtocolError",
                         "retryable": False,
+                        "evidence_gap": False,
                     },
                 }, ensure_ascii=False)
             raise RuntimeError(f"MCP tool {name!r} returned no structuredContent")
@@ -166,20 +163,15 @@ async def call_mcp_tool(name: str, arguments: dict[str, Any], config: Mapping[st
                 f"MCP tool {name!r} returned contradictory success/error envelope: "
                 f"structuredContent.ok={structured['ok']!r}, isError={is_error!r}"
             )
-        return _serialized_tool_result(result, text)
+        payload = json.loads(_serialized_tool_result(result, text))
+        from runtime_protocol.tool_contract import normalize_tool_result
+        return json.dumps(normalize_tool_result(payload, tool_name=name), ensure_ascii=False)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        category, retryable = classify_mcp_failure(exc)
-        raise MCPUnavailableError(
-            name,
-            category=category,
-            cause=exc,
-            retryable=retryable,
-            mcp_request_id=context.mcp_request_id,
-            tool_call_id=context.tool_call_id,
-            run_id=context.run_id,
-            thread_id=context.thread_id,
+        raise MCPProtocolError(
+            name, cause=exc, mcp_request_id=context.mcp_request_id,
+            tool_call_id=context.tool_call_id, run_id=context.run_id, thread_id=context.thread_id,
         ) from exc
 
 

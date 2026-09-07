@@ -39,7 +39,7 @@ async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
             calls.append((method, params))
             if method == "tools/list":
                 return {"tools": [{"name": "get_thread_shape", "description": "Thread shape", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "thread_shape", "com.askpdf/contract-version": "1"}}]}
-            return {"content": [{"type": "text", "text": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages"}], "structuredContent": {"ok": True, "content": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}}, "isError": False}
+            return {"content": [{"type": "text", "text": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages"}], "structuredContent": {"ok": True, "content": "[THREAD SHAPE]\\n1. paper.pdf | 12 pages", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}}, "isError": False}
 
     monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
     thread_shape = tool_adapter.create_thread_shape_tool()
@@ -70,7 +70,7 @@ async def test_mcp_request_id_is_unique_per_call(monkeypatch):
             )
             return {
                 "content": [{"type": "text", "text": "ok"}],
-                "structuredContent": {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}},
+                "structuredContent": {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}},
                 "isError": False,
             }
 
@@ -99,7 +99,7 @@ async def test_mcp_descriptor_is_cached_per_transport_client(monkeypatch):
                 return {"tools": [{"name": "wikipedia", "description": "Wikipedia", "inputSchema": {"type": "object"}, "outputSchema": {"required": ["ok"]}, "_meta": {"com.askpdf/contract-id": "wikipedia_reference", "com.askpdf/contract-version": "1"}}]}
             return {
                 "content": [{"type": "text", "text": "ok"}],
-                "structuredContent": {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}},
+                "structuredContent": {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}},
                 "isError": False,
             }
 
@@ -132,7 +132,7 @@ async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
                     "content": "Wikipedia unavailable",
                     "sources": [],
                     "warnings": ["wikipedia_lookup_failed"],
-                    "error": {"code": "wikipedia_lookup_failed"},
+                    "error": {"code": "wikipedia_lookup_failed", "message": "Wikipedia unavailable", "type": "ToolError", "retryable": True, "evidence_gap": True},
                     "artifacts": {"source": "wikipedia"},
                     "metrics": {}, "trace": {},
                 },
@@ -159,7 +159,7 @@ async def test_mcp_adapter_never_invokes_legacy_tool(monkeypatch):
             assert params["name"] == "wikipedia"
             return {
                 "content": [{"type": "text", "text": "MCP result"}],
-                "structuredContent": {"ok": True, "content": "MCP result", "sources": [], "artifacts": {}, "warnings": [], "metrics": {}, "trace": {}},
+                "structuredContent": {"ok": True, "content": "MCP result", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}},
                 "isError": False,
             }
 

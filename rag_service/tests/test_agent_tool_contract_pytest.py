@@ -11,7 +11,13 @@ from app.agent.tool_contract import (
     tool_started,
 )
 from app.rag.agent_tools import search_durable_memory
-from runtime_protocol import MAX_TOOL_RESULT_STRING_LENGTH, validate_tool_result_payload
+from runtime_protocol import (
+    MAX_TOOL_RESULT_BYTES,
+    MAX_TOOL_RESULT_STRING_LENGTH,
+    ToolResult,
+    normalize_tool_result,
+    validate_tool_result_payload,
+)
 
 
 class TestAskPdfToolContract:
@@ -53,18 +59,51 @@ class TestAskPdfToolContract:
         with pytest.raises(ValueError, match="non-canonical"):
             normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
 
-    def test_normalize_tool_result_warns_for_missing_content(self):
-        payload = normalize_tool_result({"ok": True}, tool_name="bad_tool")
-
-        assert payload["content"] == ""
-        assert ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT in payload["warnings"]
+    def test_normalize_tool_result_rejects_missing_canonical_fields(self):
+        with pytest.raises(ValueError, match="missing canonical fields"):
+            normalize_tool_result({"ok": True}, tool_name="bad_tool")
 
     def test_tool_result_bounds_reject_oversized_canonical_payloads(self):
         with pytest.raises(ValueError, match="maximum length"):
             validate_tool_result_payload({
                 "ok": True,
                 "content": "x" * (MAX_TOOL_RESULT_STRING_LENGTH + 1),
+                "sources": [], "artifacts": {}, "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 0, "source_count": 0, "warning_count": 0},
+                "trace": {"tool_name": "bad_tool"},
             })
+
+    def test_tool_result_size_policy_handles_utf8_and_serialized_bytes(self):
+        exact = ToolResult(content="x" * MAX_TOOL_RESULT_STRING_LENGTH).to_payload()
+        assert len(exact["content"]) == MAX_TOOL_RESULT_STRING_LENGTH
+        with pytest.raises(ValueError, match="serialized size"):
+            ToolResult(artifacts={"blob": "x" * MAX_TOOL_RESULT_BYTES}).to_payload()
+        with pytest.raises(ValueError, match="serialized size"):
+            ToolResult(artifacts={"blob": "é" * MAX_TOOL_RESULT_BYTES}).to_payload()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"ok": True, "content": "ok"},
+            {"ok": "true", "content": "ok"},
+            {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": {"code": "bad", "message": "bad"}, "metrics": {}, "trace": {}},
+            {"ok": False, "content": "failed", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}},
+        ],
+    )
+    def test_normalizer_rejects_invalid_envelopes(self, payload):
+        with pytest.raises(ValueError):
+            normalize_tool_result(payload)
+
+    def test_normalizer_round_trips_success_and_failure_without_repair(self):
+        success = ToolResult(content="ok").to_payload()
+        failure = ToolResult(
+            ok=False,
+            content="failed",
+            error={"code": "tool_failed", "message": "failed", "type": "ToolError", "retryable": False, "evidence_gap": True},
+        ).to_payload()
+        assert normalize_tool_result(success) == success
+        assert normalize_tool_result(failure) == failure
 
     def test_make_tool_error_result_is_recoverable_and_compact(self):
         config = {"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}}

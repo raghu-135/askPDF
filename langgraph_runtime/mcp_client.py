@@ -20,31 +20,58 @@ from runtime_protocol.tool_contract import normalize_tool_result
 
 
 class MCPUnavailableError(RuntimeError):
-    def __init__(self, tool_name: str, *, cause: BaseException | None = None, retryable: bool = True, **_: Any) -> None:
-        super().__init__(f"MCP tool {tool_name!r} is unavailable")
+    def __init__(self, tool_name: str, *, cause: BaseException | None = None, retryable: bool = True, category: str = "connection", **_: Any) -> None:
+        super().__init__(f"MCP {category} failure for tool {tool_name!r}")
         self.tool_name = tool_name
         self.cause = cause
         self.retryable = retryable
+        self.category = category
 
     def as_dict(self) -> dict[str, Any]:
         """Return the bounded runtime-local error shape consumed by workflows."""
 
         cause = str(self.cause or "MCP request failed")[:700]
         return {
-            "code": "mcp_unavailable",
+            "code": "mcp_protocol_error" if self.category == "protocol" else "mcp_unavailable",
             "type": type(self).__name__,
             "message": str(self)[:700],
             "raw_message": cause,
             "retryable": self.retryable,
             "tool_name": self.tool_name,
+            "category": self.category,
         }
+
+
+class MCPProtocolError(MCPUnavailableError):
+    """A non-retryable malformed MCP response, distinct from connectivity."""
+
+    def __init__(self, tool_name: str, *, cause: BaseException) -> None:
+        super().__init__(tool_name, cause=cause, retryable=False, category="protocol")
+
+    def as_dict(self) -> dict[str, Any]:
+        value = super().as_dict()
+        value["code"] = "mcp_protocol_error"
+        value["category"] = "protocol"
+        return value
 
 
 def _decode_result(name: str, result: Any, text: str) -> dict[str, Any]:
     structured = getattr(result, "structuredContent", None)
     if not isinstance(structured, dict):
+        if getattr(result, "isError", False):
+            diagnostic = str(text or "MCP tool returned an error")[:700]
+            return normalize_tool_result({
+                "ok": False,
+                "content": "",
+                "sources": [],
+                "artifacts": {},
+                "warnings": ["mcp_protocol_error"],
+                "error": {"code": "mcp_protocol_error", "message": diagnostic, "type": "MCPProtocolError", "retryable": False, "evidence_gap": False},
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 0, "source_count": 0, "warning_count": 1},
+                "trace": {"tool_name": name},
+            }, tool_name=name)
         raise ValueError(f"MCP tool {name!r} returned no structuredContent")
-    required = {"ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"}
+    required = {"ok", "content", "sources", "artifacts", "warnings", "error", "metrics", "trace"}
     missing = sorted(required - set(structured))
     if missing:
         raise ValueError(f"MCP tool {name!r} returned malformed structuredContent; missing: {', '.join(missing)}")
@@ -153,12 +180,13 @@ async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | N
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        raise MCPUnavailableError(name, cause=exc) from exc
+        category, retryable = classify_mcp_failure(exc)
+        raise MCPUnavailableError(name, cause=exc, category=category, retryable=retryable) from exc
     text = "".join(getattr(item, "text", "") for item in result.content or [] if getattr(item, "type", None) == "text")
     try:
         payload = _decode_result(name, result, text)
     except ValueError as exc:
-        raise MCPUnavailableError(name, cause=exc, retryable=False) from exc
+        raise MCPProtocolError(name, cause=exc) from exc
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -181,4 +209,8 @@ def create_mcp_langchain_tool(tool_name: str, request_model: type[Any] | None = 
 
 
 def classify_mcp_failure(exc: BaseException) -> tuple[str, bool]:
-    return ("timeout", True) if isinstance(exc, TimeoutError) else ("unavailable", True)
+    if isinstance(exc, TimeoutError):
+        return "timeout", True
+    if isinstance(exc, (OSError, ConnectionError)):
+        return "connection", True
+    return "protocol", False

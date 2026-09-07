@@ -46,7 +46,11 @@ from runtime_protocol.contracts import (
     validated_disabled_operation_ids,
 )
 from runtime_protocol.transport import result_from_dict
-from runtime_protocol.validation import RuntimeProtocolValidationError
+from runtime_protocol.validation import (
+    RuntimeProtocolValidationError,
+    validate_runtime_result_envelope,
+    validate_runtime_result_for_event,
+)
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.interrupts import AgentRunInterruptError, normalize_pending_interrupt_payload
 from app.runtime.product_capabilities import project_public_capabilities
@@ -816,6 +820,13 @@ def test_result_parser_accepts_each_declared_task_result_status(value):
     restored = result_from_dict(AgentRuntimeResult(status="completed", task_result=result).to_dict())
     assert restored.task_result is not None
     assert restored.task_result.status.value == value["status"]
+
+
+def test_completed_with_warnings_is_valid_for_completed_runtime_events():
+    result = {"status": "completed_with_warnings", "text": "partial answer", "warnings": [{"code": "W1"}]}
+
+    validate_runtime_result_envelope({"status": "completed_with_warnings", "task_result": result})
+    validate_runtime_result_for_event("run.completed", result)
 
 
 def test_result_parser_requires_status_on_wire_envelopes():

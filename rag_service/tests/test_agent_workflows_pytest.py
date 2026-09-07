@@ -2727,7 +2727,7 @@ class TestRouterRagGraphToolConsumers:
                 "search_web": {"content": "Web evidence.", "artifacts": {"web_sources": [{"url": "https://example.com", "title": "Example"}]}},
             }
             payload = payloads[name]
-            return json.dumps({"ok": True, "content": json.dumps(payload), "sources": [], "artifacts": payload.get("artifacts", {}), "warnings": [], "metrics": {}, "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"}})
+            return json.dumps({"ok": True, "content": json.dumps(payload), "sources": [], "artifacts": payload.get("artifacts", {}), "warnings": [], "error": None, "metrics": {}, "trace": {"tool_name": name, "tool_call_id": f"test:{name}", "mcp_request_id": f"mcp:{name}"}})
 
         monkeypatch.setattr("app.mcp.tool_adapter.call_mcp_tool", fake_mcp_call)
 

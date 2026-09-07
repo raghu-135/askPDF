@@ -12,7 +12,7 @@ async def test_runtime_mcp_wrapper_preserves_search_arguments(monkeypatch):
 
     async def fake_call(name, arguments, config):
         calls.append((name, arguments, config))
-        return json.dumps({"ok": True, "content": "ok"})
+        return json.dumps({"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}})
 
     monkeypatch.setattr(mcp_client, "_call", fake_call)
     tool = mcp_client.create_mcp_langchain_tool("search_documents")
@@ -32,6 +32,7 @@ def _result(**overrides):
         "sources": [],
         "artifacts": {},
         "warnings": [],
+        "error": None,
         "metrics": {},
         "trace": {},
     }

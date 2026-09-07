@@ -547,6 +547,8 @@ def test_collect_tool_sources_preserves_timeline_events():
     collect_tool_sources(
         json.dumps(
             {
+                "ok": True,
+                "content": "Timeline evidence",
                 "artifacts": {"timeline_events": [
                     {
                         "source_type": "conversation",
@@ -575,6 +577,9 @@ def test_collect_tool_sources_preserves_timeline_events():
                         "timeline_event_type": "web_search_performed",
                     },
                 ]}
+                ,"sources": [], "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 16, "source_count": 0, "warning_count": 0},
+                "trace": {"tool_name": "search_thread_events"}
             }
         ),
         document_sources,
@@ -608,6 +613,8 @@ def test_collect_tool_sources_accepts_tool_contract_envelope():
                     "used_chat_ids": ["msg-1"],
                 },
                 "trace": {"tool_name": "search_documents"},
+                "sources": [], "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 8, "source_count": 0, "warning_count": 0},
             }
         ),
         document_sources,
@@ -658,6 +665,8 @@ def test_collect_tool_sources_uses_artifact_timeline_events_without_legacy_alias
                     ],
                 },
                 "trace": {"tool_name": "search_thread_events"},
+                "sources": [], "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 16, "source_count": 0, "warning_count": 0},
             }
         ),
         document_sources,
@@ -720,6 +729,9 @@ async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
                         "indexing_status": "completed",
                     }
                 },
+                "sources": [], "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 16, "source_count": 0, "warning_count": 0},
+                "trace": {"tool_name": "search_thread_events"},
             }
         ),
     )

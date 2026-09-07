@@ -10,6 +10,7 @@ from app.tools.contracts import QueryRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
 from app.tools.background_tasks import register_background_task
+from app.rag.retrieval import bounded_retrieval_text
 
 
 async def search_web(request: QueryRequest, context: ToolInvocationContext, *, services: DefaultToolServices | None = None):
@@ -38,9 +39,19 @@ async def search_web(request: QueryRequest, context: ToolInvocationContext, *, s
                 context.cancellation_scope_id,
                 asyncio.create_task(index_web_search_for_thread(thread_id=context.thread_id, query=request.query, texts=texts, urls=urls, titles=titles, embedding_model=context.embedding_model, web_search_performed_at=performed_at)),
             )
-        web_sources = [{"text": text[:200] + "...", "url": urls[i], "title": titles[i], **({"score": scores[i]} if scores and i < len(scores) else {}), "web_search_performed_at": performed_at, "timeline_event_at": performed_at} for i, text in enumerate(texts)]
-        content = "\n\n".join(f'[Source: Internet Search — "{titles[i] or urls[i]}" | {urls[i]}]\n{text}' for i, text in enumerate(texts))
-        return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=web_sources, artifacts={"web_sources": web_sources, "evidence_segments": [s for i, text in enumerate(texts) if (s := evidence_segment(kind="web", content=text, source={"url": urls[i], "title": titles[i], "web_search_performed_at": performed_at}, raw_score=scores[i] if scores and i < len(scores) else None))]})
+        selected: list[int] = []
+        parts: list[str] = []
+        for i, text in enumerate(texts):
+            candidate = f'[Source: Internet Search — "{titles[i] or urls[i]}" | {urls[i]}]\n{text}'
+            bounded, truncated = bounded_retrieval_text([*parts, candidate])
+            if truncated:
+                break
+            parts.append(candidate)
+            selected.append(i)
+        web_sources = [{"text": texts[i][:200] + "...", "url": urls[i], "title": titles[i], **({"score": scores[i]} if scores and i < len(scores) else {}), "web_search_performed_at": performed_at, "timeline_event_at": performed_at} for i in selected]
+        content = "\n\n".join(parts)
+        warnings = [ToolWarningCode.RESPONSE_TRUNCATED] if len(selected) < len(texts) else []
+        return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=web_sources, artifacts={"web_sources": web_sources, "evidence_segments": [s for i in selected if (s := evidence_segment(kind="web", content=texts[i][:1000], source={"url": urls[i], "title": titles[i], "web_search_performed_at": performed_at}, raw_score=scores[i] if scores and i < len(scores) else None))]}, warnings=warnings)
     except Exception as exc:
         return make_tool_error_result(
             tool_name=tool_name,
