@@ -1,11 +1,27 @@
 """Static guards for the external-only framework boundary."""
 
 import ast
+import os
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY_ROOT = ROOT.parent
+REPOSITORY_ROOT = Path(
+    os.getenv("ASKPDF_REPO_DIR", str(ROOT.parent))
+).resolve()
+ROOT = REPOSITORY_ROOT / "rag_service"
+
+
+def _source_files(relative_path: str, *suffixes: str) -> list[Path]:
+    directory = REPOSITORY_ROOT / relative_path
+    assert directory.is_dir(), f"expected source directory does not exist: {directory}"
+    files = sorted(
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and path.suffix in suffixes
+    )
+    assert files, f"expected source files under {directory}"
+    return files
 
 
 def _imports(path: Path) -> set[str]:
@@ -23,7 +39,7 @@ def _imports(path: Path) -> set[str]:
 
 def test_control_plane_has_no_langgraph_or_runtime_imports():
     forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
-    for path in (ROOT / "app").rglob("*.py"):
+    for path in _source_files("rag_service/app", ".py"):
         assert not any(
             name == prefix or name.startswith(prefix + ".")
             for name in _imports(path) for prefix in forbidden
@@ -31,13 +47,13 @@ def test_control_plane_has_no_langgraph_or_runtime_imports():
 
 
 def test_runtime_has_no_control_plane_imports():
-    for path in (REPOSITORY_ROOT / "langgraph_runtime").rglob("*.py"):
+    for path in _source_files("langgraph_runtime", ".py"):
         assert not any(name == "app" or name.startswith("app.") for name in _imports(path)), path
 
 
 def test_runtime_protocol_is_dependency_neutral():
     forbidden = ("app", "langgraph", "langchain", "sqlalchemy", "sqlmodel")
-    for path in (ROOT / "runtime_protocol").rglob("*.py"):
+    for path in _source_files("rag_service/runtime_protocol", ".py"):
         assert not any(
             name == prefix or name.startswith(prefix + ".")
             for name in _imports(path) for prefix in forbidden
@@ -76,9 +92,8 @@ def test_control_plane_has_no_framework_execution_symbols():
 
 def test_frontend_and_product_api_do_not_expose_checkpoint_identity():
     product_sources = [
-        *(ROOT / "app").rglob("*.py"),
-        *(REPOSITORY_ROOT / "frontend/src").rglob("*.ts"),
-        *(REPOSITORY_ROOT / "frontend/src").rglob("*.tsx"),
+        *_source_files("rag_service/app", ".py"),
+        *_source_files("frontend/src", ".ts", ".tsx"),
     ]
     offenders = [
         path for path in product_sources

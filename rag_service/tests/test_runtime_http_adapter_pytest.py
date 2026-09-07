@@ -143,6 +143,7 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
             resolved_spec={
                 "config": {
                     "context_window": 8192,
+                    "use_reranker": False,
                     "allowed_tool_ids": ["thread_shape", "document_evidence"],
                 }
             },
@@ -150,8 +151,26 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
     )
 
     token = prepared.input["mcp_execution_context_token"]
-    assert decode_execution_context_token(token, tool_name="get_thread_shape").run_id == "run-1"
+    context = decode_execution_context_token(token, tool_name="get_thread_shape")
+    assert context.run_id == "run-1"
+    assert context.use_reranker is False
     assert decode_execution_context_token(token, tool_name="search_documents").run_id == "run-1"
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, "false"])
+async def test_http_adapter_rejects_missing_or_malformed_reranker_setting(setting):
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+    config = {"context_window": 8192, "allowed_tool_ids": []}
+    if setting is not None:
+        config["use_reranker"] = setting
+
+    with pytest.raises(RuntimeError, match="use_reranker"):
+        await adapter.prepare_request(
+            _request(),
+            context=RuntimeInvocationContext(resolved_spec={"config": config}),
+        )
     await adapter.aclose()
 
 

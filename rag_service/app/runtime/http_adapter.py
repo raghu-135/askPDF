@@ -631,6 +631,13 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
 
         spec = dict(context.resolved_spec or {})
         config = dict(spec.get("config") or {})
+        use_reranker = config.get("use_reranker")
+        if not isinstance(use_reranker, bool):
+            raise RuntimeError(
+                "runtime_configuration_invalid",
+                "Resolved workflow configuration must provide boolean use_reranker",
+                retryable=False,
+            )
         configured_tool_ids = {
             str(value) for value in config.get("allowed_tool_ids") or [] if value
         }
@@ -655,7 +662,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 embedding_model=context.embedding_model,
                 context_window=int(config.get("context_window") or 32_768),
                 use_web_search=bool(config.get("use_web_search")),
-                use_reranker=True,
+                use_reranker=use_reranker,
                 extensions={"task_id": task_id, "llm_model": config.get("llm_model")},
             ),
             task_id=task_id,
