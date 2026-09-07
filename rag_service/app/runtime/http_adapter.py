@@ -690,6 +690,16 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     async def readiness(self) -> Mapping[str, Any]:
         return await self.transport._readiness()
 
+    async def startup_readiness(self) -> Mapping[str, Any]:
+        """Probe runtime process/core initialization without its CP callback.
+
+        The runtime's full ``/readyz`` also checks the control-plane MCP
+        callback.  Using it during control-plane startup would deadlock the
+        two services; request admission and the ongoing readiness loop still
+        use the full readiness endpoint.
+        """
+        return await self.transport._readiness("/startupz")
+
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
         value = await self.transport._json("POST", "/v1/validate", json=versioned_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})}))
         return validation_from_dict(value["validation"])

@@ -51,7 +51,6 @@ from app.runtime.task_results import normalize_runtime_task_result
 from app.runtime.behavior import (
     continuation_is_linked,
     product_owns_budget_boundary,
-    product_owns_grounding,
     snapshot_runtime_behavior,
     supports_course_correction,
 )
@@ -761,10 +760,24 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             })
         result = result_to_product_payload(runtime_result)
         canonical_task_result = dict(result.get("runtime_task_result") or {})
+        # Some adapters expose usage on the neutral result envelope while
+        # older/native bridges only put it on task_result.  Product budget
+        # accounting must see the same measured counters in either shape.
+        runtime_usage = dict(runtime_result.usage or {})
+        task_usage = dict(canonical_task_result.get("usage") or {})
+        if runtime_usage:
+            measured = list(dict.fromkeys([
+                *[str(value) for value in task_usage.get("measured_dimensions") or []],
+                *[str(value) for value in runtime_usage.get("measured_dimensions") or []],
+            ]))
+            canonical_task_result["usage"] = {
+                **runtime_usage,
+                **task_usage,
+                "measured_dimensions": measured,
+            }
         evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
         if (
             canonical_task_result
-            and product_owns_grounding(run)
             and str(result.get("status") or "") == AgentRunStatus.COMPLETED.value
             and evidence_policy == "document_when_available"
         ):
@@ -798,23 +811,62 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 delta = runtime_result.orchestration_delta
                 if delta is not None and isinstance(delta.result, Mapping):
                     delta_result = dict(delta.result)
+                    # The outer result metadata and the canonical task result
+                    # are one neutral contract.  Keep them synchronized after
+                    # product-owned grounding evaluation so projection does
+                    # not reject a valid Hermes/LangGraph result as malformed.
                     delta_result["task_result"] = dict(canonical_task_result)
+                    delta_result["result_outcome"] = canonical_task_result["status"]
+                    delta_result["incomplete_reasons"] = list(
+                        dict.fromkeys(str(value) for value in canonical_task_result.get("gaps") or [])
+                    )[:50]
+                    delta_result["warnings"] = [
+                        dict(value) for value in canonical_task_result.get("warnings") or []
+                        if isinstance(value, Mapping)
+                    ][:50]
                     runtime_result = replace(
                         runtime_result,
                         orchestration_delta=replace(delta, result=delta_result),
                     )
-        if canonical_task_result:
-            result["warnings"] = [
+        # Keep the neutral delta authoritative for both runtime envelope
+        # shapes.  In particular, Hermes reports measured usage at the
+        # envelope level, while some runtimes repeat it inside task_result.
+        # Project the union once so product budget accounting cannot silently
+        # fall back to zero counters.
+        if canonical_task_result and runtime_result.orchestration_delta is not None:
+            delta = runtime_result.orchestration_delta
+            delta_result = dict(delta.result or {})
+            delta_result["task_result"] = dict(canonical_task_result)
+            delta_result["result_outcome"] = str(canonical_task_result.get("status") or delta_result.get("result_outcome") or runtime_result.status)
+            delta_result["incomplete_reasons"] = list(
+                dict.fromkeys(str(value) for value in canonical_task_result.get("gaps") or [])
+            )[:50]
+            delta_result["warnings"] = [
                 dict(value) for value in canonical_task_result.get("warnings") or []
                 if isinstance(value, Mapping)
-            ]
-            result["task_incomplete_reasons"] = [
-                str(value) for value in canonical_task_result.get("gaps") or []
-                if str(value).strip()
-            ]
-            if canonical_task_result.get("text"):
-                result["final_answer"] = str(canonical_task_result["text"])
-                result["answer"] = str(canonical_task_result["text"])
+            ][:50]
+            budget_usage = dict(delta.budget_usage or {})
+            if runtime_usage:
+                budget_usage = {**budget_usage, **runtime_usage}
+            runtime_result = replace(
+                runtime_result,
+                orchestration_delta=replace(delta, budget_usage=budget_usage, result=delta_result),
+            )
+            result["orchestration_delta"] = runtime_result.orchestration_delta.to_dict()
+        if canonical_task_result:
+                result["warnings"] = [
+                    dict(value) for value in canonical_task_result.get("warnings") or []
+                    if isinstance(value, Mapping)
+                ]
+                result["task_incomplete_reasons"] = [
+                    str(value) for value in canonical_task_result.get("gaps") or []
+                    if str(value).strip()
+                ]
+                if canonical_task_result.get("usage"):
+                    result["usage"] = dict(canonical_task_result["usage"])
+                if canonical_task_result.get("text"):
+                    result["final_answer"] = str(canonical_task_result["text"])
+                    result["answer"] = str(canonical_task_result["text"])
         await runtime_event_sink.flush()
         terminal_statuses = {
             AgentRunStatus.COMPLETED.value,

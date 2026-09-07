@@ -12,6 +12,7 @@ import os
 import asyncio
 import time
 from contextlib import asynccontextmanager, suppress
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -71,21 +72,27 @@ RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS = 30
 MCP_HTTP_APP = get_http_app()
 
 
-async def _probe_runtime_readiness() -> None:
-    """Refresh product readiness without making startup depend on runtimes."""
+async def _probe_runtime_readiness(*, startup: bool = False) -> None:
+    """Refresh runtime readiness, optionally enforcing the startup gate."""
     registry = get_runtime_registry()
     results: dict[str, dict[str, object]] = {}
 
     async def probe(adapter: object) -> None:
         identity = registry.deployment_id(adapter)  # type: ignore[arg-type]
         try:
-            readiness = await adapter.readiness()  # type: ignore[attr-defined]
+            probe = getattr(adapter, "startup_readiness", None) if startup else None
+            readiness = await (probe() if probe is not None else adapter.readiness())  # type: ignore[attr-defined]
             if not isinstance(readiness, Mapping) or readiness.get("status") != "ok":
                 results[identity] = {
                     "status": "unavailable",
                     "reason": "runtime_not_ready",
                     "checks": dict(readiness.get("checks") or {}) if isinstance(readiness, Mapping) else {},
                 }
+                if startup and getattr(adapter, "framework", "") == "langgraph":
+                    raise RuntimeError(
+                        f"LangGraph runtime is not ready: {identity} "
+                        f"({results[identity].get('reason')})"
+                    )
                 return
             results[identity] = {
                 "status": "ready",
@@ -96,6 +103,8 @@ async def _probe_runtime_readiness() -> None:
                 "status": "unavailable",
                 "reason": type(exc).__name__,
             }
+            if startup and getattr(adapter, "framework", "") == "langgraph":
+                raise RuntimeError(f"LangGraph runtime startup probe failed: {type(exc).__name__}") from exc
 
     adapters = [
         adapter for adapter in registry.adapters()
@@ -195,6 +204,11 @@ async def lifespan(app: FastAPI):
             logger.info("Weaviate collection initialization complete.")
         except Exception:
             logger.exception("Failed to initialize Weaviate collections")
+
+        # Do not start workers against a missing external executor.  The
+        # initial gate probes the runtime core (/startupz); the background
+        # loop below continues to track full dependency readiness (/readyz).
+        await _probe_runtime_readiness(startup=True)
 
         memory_maintenance_stop = asyncio.Event()
         memory_maintenance_task = asyncio.create_task(

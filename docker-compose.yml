@@ -53,6 +53,8 @@ services:
         condition: service_completed_successfully
       weaviate:
         condition: service_healthy
+      langgraph-runtime:
+        condition: service_healthy
     volumes:
       - ./rag_service:/app
       - ./data:/data
@@ -135,7 +137,7 @@ services:
       runtime-db-migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8100/startupz"]
       interval: 10s
       timeout: 5s
       retries: 12

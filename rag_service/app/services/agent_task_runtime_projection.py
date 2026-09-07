@@ -174,6 +174,27 @@ def _merge_budget(
     authorized_tranche_increment: bool = False,
 ) -> dict[str, Any]:
     existing = normalize_budget_state(current, limits)
+    # Hermes returns a per-operation usage snapshot rather than the
+    # LangGraph-style cumulative budget envelope.  Normalize that neutral
+    # shape here, at the product boundary, so measured runtime counters are
+    # still owned and accounted for by the control plane.
+    if "tranche_usage" not in incoming and "lifetime_usage" not in incoming:
+        dimension_map = {
+            "model_tokens": "model_tokens",
+            "model_calls": "model_calls",
+            "tool_calls": "tool_calls",
+            "active_runtime_ms": "elapsed_active_ms",
+        }
+        for source_key in incoming.get("measured_dimensions") or ():
+            target_key = dimension_map.get(str(source_key))
+            value = incoming.get(source_key)
+            if target_key is None or value is None:
+                continue
+            amount = max(0, int(value or 0))
+            existing["tranche_usage"][target_key] = int(existing["tranche_usage"].get(target_key) or 0) + amount
+            existing["lifetime_usage"][target_key] = int(existing["lifetime_usage"].get(target_key) or 0) + amount
+        existing["boundary"] = None
+        return existing
     candidate = normalize_budget_state(incoming, limits)
     old_tranche, new_tranche = int(existing.get("tranche_index") or 1), int(candidate.get("tranche_index") or 1)
     if new_tranche < old_tranche or new_tranche > old_tranche + 1:

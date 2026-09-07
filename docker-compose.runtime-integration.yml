@@ -87,6 +87,8 @@ services:
         condition: service_completed_successfully
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
+      langgraph-runtime:
+        condition: service_healthy
       weaviate:
         condition: service_healthy
     volumes:
@@ -205,7 +207,7 @@ services:
         condition: service_healthy
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8100/startupz"]
       interval: 10s
       timeout: 5s
       retries: 12
