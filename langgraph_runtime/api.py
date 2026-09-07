@@ -1007,7 +1007,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         *,
         operation_id: str | None = None,
         source_attempt: int | None = None,
-    ) -> tuple[Any, Any]:
+    ) -> tuple[Any, Any, int | None]:
         """Admit and, when appropriate, launch an operation before SSE starts."""
         request = _request_from_payload(payload)
         operation_id_by_endpoint = {
@@ -1067,6 +1067,14 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     if correction["correction_id"] and correction["operation_id"]:
                         await execution_store.request_course_correction(request.run_id, correction)
 
+            # Capture the checkpoint event boundary before the worker can
+            # append resumed events.  The initial resume stream must skip the
+            # event that caused the pause, but a later GET replay must honor
+            # its caller-provided cursor and must not use this boundary.
+            resume_boundary_sequence = (
+                int(record.next_sequence) - 1 if operation == "resume" else None
+            )
+
             task = runtime_state["active"].get(request.run_id)
             should_start = not record.replay_only and (
                 record.status == "queued"
@@ -1094,7 +1102,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                         runtime_state["active"].pop(request.run_id, None)
 
                 task.add_done_callback(_remove_finished)
-        return request, record
+        return request, record, resume_boundary_sequence
 
     async def stream_operation(
         payload: Mapping[str, Any],
@@ -1104,6 +1112,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         *,
         allow_start: bool = True,
         record: Any | None = None,
+        resume_boundary_sequence: int | None = None,
     ) -> AsyncIterator[str]:
         request = _request_from_payload(payload)
         if expected_run_id and request.run_id != expected_run_id:
@@ -1122,9 +1131,10 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         # A resume continues the same attempt after the previously delivered
         # checkpoint event. Do not replay that event as the result of the new
         # resume request before the resumed graph has a chance to run.
-        if operation == "resume":
-            last_sequence = max(last_sequence, int(record.next_sequence) - 1)
+        if operation == "resume" and resume_boundary_sequence is not None:
+            last_sequence = max(last_sequence, resume_boundary_sequence)
         terminal_seen = False
+        terminal_status_observed = False
         while True:
             events = await execution_store.events_after(request.run_id, last_sequence, attempt=attempt)
             for item in events:
@@ -1149,6 +1159,15 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     return
             record = await execution_store.get(request.run_id)
             if record and record.status in TERMINAL_STATUSES:
+                # Finalization persists the terminal event and terminal status
+                # as one logical operation, but an in-memory store can expose
+                # the status to this subscriber one scheduler turn before the
+                # event becomes visible. Give the journal one immediate retry
+                # so the stream cannot end before delivering that event.
+                if not terminal_status_observed:
+                    terminal_status_observed = True
+                    await asyncio.sleep(0)
+                    continue
                 return
             yield ": keep-alive\n\n"
             from langgraph_runtime.limits import required_positive_float
@@ -1160,7 +1179,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         request = _request_from_payload(payload)
         await _preflight_operation(request.run_id, payload, "start")
         _admit_dependencies(payload)
-        _, record = await _admit_operation(payload, "start", operation_id=payload.get("operation_id"))
+        _, record, _ = await _admit_operation(payload, "start", operation_id=payload.get("operation_id"))
         return StreamingResponse(stream_operation(payload, "start", record=record), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")
@@ -1184,14 +1203,23 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "resume")
         _admit_dependencies(payload)
-        _, record = await _admit_operation(payload, "resume", run_id, operation_id=payload.get("operation_id"))
-        return StreamingResponse(stream_operation(payload, "resume", run_id, record=record), media_type="text/event-stream")
+        _, record, resume_boundary_sequence = await _admit_operation(payload, "resume", run_id, operation_id=payload.get("operation_id"))
+        return StreamingResponse(
+            stream_operation(
+                payload,
+                "resume",
+                run_id,
+                record=record,
+                resume_boundary_sequence=resume_boundary_sequence,
+            ),
+            media_type="text/event-stream",
+        )
 
     @app.post("/v1/runs/{run_id}/continue")
     async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "continue_run")
         _admit_dependencies(payload)
-        _, record = await _admit_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id"))
+        _, record, _ = await _admit_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id"))
         return StreamingResponse(stream_operation(payload, "continue_run", run_id, record=record), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/retry")
@@ -1211,7 +1239,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             "retry_request": request_payload,
         }
         _admit_dependencies(retry_payload)
-        _, record = await _admit_operation(
+        _, record, _ = await _admit_operation(
             retry_payload, "retry", run_id,
             operation_id=attempt_id, source_attempt=int(source_attempt),
         )

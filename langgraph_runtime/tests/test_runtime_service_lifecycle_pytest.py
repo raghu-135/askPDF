@@ -57,9 +57,12 @@ async def test_provider_readiness_requires_a_models_list():
 
 def test_runtime_healthz_is_liveness_only(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
+    async def healthy_probe(*_args, **_kwargs):
+        return {"ok": True, "capability_ids": []}
+    monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", healthy_probe)
     with TestClient(create_app(require_auth=False)) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
@@ -68,9 +71,12 @@ def test_runtime_healthz_is_liveness_only(monkeypatch):
 
 def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
+    async def healthy_probe(*_args, **_kwargs):
+        return {"ok": True, "capability_ids": []}
+    monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", healthy_probe)
     with TestClient(create_app(require_auth=False)) as client:
         response = client.get("/readyz")
     assert response.status_code == 200
@@ -78,28 +84,31 @@ def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monk
     assert payload["status"] == "ok"
     assert payload["checks"]["checkpoint_store"]["backend"] == "memory"
     assert payload["checks"]["execution_store"]["status"] == "ok"
-    assert "mcp" not in payload["checks"]
+    assert payload["checks"]["configured_dependencies"]["status"] == "ok"
     assert "provider" not in payload["checks"]
     assert "DATABASE_URL" not in response.text
 
 
 def test_runtime_startup_and_dependency_endpoints_are_separate(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
+    async def healthy_probe(*_args, **_kwargs):
+        return {"ok": True, "capability_ids": []}
+    monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", healthy_probe)
     with TestClient(create_app(require_auth=False)) as client:
         assert client.get("/startupz").json() == {"status": "ok"}
         dependency_response = client.get("/v1/dependencies")
     dependencies = dependency_response.json()["result"]["dependencies"]
-    assert dependencies["mcp"]["state"] == "not_configured"
+    assert dependencies["mcp"]["state"] == "available"
     assert dependencies["provider"]["state"] == "not_configured"
 
 
 def test_runtime_accepts_missing_outer_protocol_metadata(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:
         response = client.post(
@@ -121,8 +130,8 @@ def test_runtime_accepts_missing_outer_protocol_metadata(monkeypatch):
 
 def test_runtime_definition_errors_are_versioned_for_control_plane_parsing(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
     with TestClient(create_app(require_auth=False)) as client:
         response = client.post(
@@ -205,8 +214,8 @@ def test_dependency_outage_marks_readiness_unavailable_but_blocks_required_run(m
 
 def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-    monkeypatch.setenv("MCP_TRANSPORT", "")
-    monkeypatch.setenv("MCP_LOOPBACK_URL", "")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
     monkeypatch.setenv("LLM_API_URL", "")
     monkeypatch.setenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "true")
     monkeypatch.setenv("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS", "1")

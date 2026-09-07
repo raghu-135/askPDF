@@ -37,6 +37,10 @@ def configure_runtime_test_environment():
         "AGENT_RUNTIME_RECOVERY_LOOP_ENABLED": "false",
         "MCP_REQUEST_TIMEOUT_SECONDS": "30",
         "MCP_OTEL_ENABLED": "false",
+        "MCP_TRANSPORT": "loopback_http",
+        "MCP_LOOPBACK_URL": "http://mcp.test/internal/mcp/",
+        "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "1000",
+        "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "1000",
         "LLM_AUTH_MODE": "none",
         "LLM_KEYLESS_PROVIDER": "local",
     }

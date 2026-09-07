@@ -728,6 +728,29 @@ def test_langgraph_result_quality_is_identical_in_result_and_delta():
     assert delta_result["task_result"] == result.task_result.to_dict()
 
 
+@pytest.mark.parametrize("count", [50, 51, 100])
+def test_langgraph_result_quality_uses_one_bounded_envelope(count):
+    warnings = [{"code": f"warning-{index}"} for index in range(count)]
+    gaps = [f"gap-{index}" for index in range(count)]
+    result = _result_from_graph({
+        "status": "completed",
+        "agent_task_id": "task-quality-boundary",
+        "agent_run_id": "run-quality-boundary",
+        "final_answer": "A usable answer.",
+        "task_result_warnings": warnings,
+        "task_result_gaps": gaps,
+    }, operation_id="quality-boundary")
+
+    assert result.task_result is not None
+    assert result.orchestration_delta is not None
+    delta_result = result.orchestration_delta.result or {}
+    assert delta_result["warnings"] == list(result.task_result.warnings)
+    assert delta_result["incomplete_reasons"] == list(result.task_result.gaps)
+    assert len(delta_result["warnings"]) == count
+    assert len(delta_result["incomplete_reasons"]) == count
+    assert delta_result["task_result"] == result.task_result.to_dict()
+
+
 def test_runtime_task_result_preserves_text_when_optional_structure_is_invalid():
     result = normalize_runtime_task_result(
         "A useful provisional answer",

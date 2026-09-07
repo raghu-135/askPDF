@@ -223,8 +223,8 @@ def _result_from_graph(
             ),
             "result": {
                 "status": status,
-                "incomplete_reasons": gaps[:50],
-                "warnings": warnings[:50],
+                "incomplete_reasons": gaps,
+                "warnings": warnings,
                 "result_outcome": task_result.status.value if task_result is not None else str(result.get("result_outcome") or "") or None,
                 "task_result": task_result.to_dict() if task_result is not None else None,
                 "final_artifact_id": str(result.get("final_artifact_id") or "") or None,

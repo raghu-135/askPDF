@@ -219,6 +219,55 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
 
 
 @pytest.mark.asyncio
+async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeAdapter(_FakeAdapter):
+        async def resume(self, request, *, interrupt, context, event_sink=None):
+            await event_sink.emit_runtime_event(AgentRuntimeEvent(
+                event_id=f"{request.run_id}:resume-progress",
+                run_id=request.run_id,
+                sequence=0,
+                kind="run.progress",
+                payload={"step": "resumed"},
+            ))
+            return AgentRuntimeResult(status="completed", output={"answer": "resumed"})
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    store = ExecutionStore()
+    run_id = "run-resume-replay-cursor"
+    request = _request(run_id)
+    await store.create(run_id, "start", request, _payload(run_id), operation_id="start")
+    await store.append(
+        run_id,
+        AgentRuntimeEvent(
+            event_id=f"{run_id}:paused",
+            run_id=run_id,
+            sequence=0,
+            kind="run.paused",
+            payload={},
+        ).to_dict(),
+    )
+    await store.set_status(run_id, "awaiting_human")
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        resumed = await _read_events(
+            client,
+            "POST",
+            f"/v1/runs/{run_id}/resume",
+            json={**_payload(run_id), "operation_id": "resume-cursor", "interrupt": {"decision": "approve"}},
+        )
+        replay = await _read_events(
+            client,
+            "GET",
+            f"/v1/runs/{run_id}/events?after_sequence=1",
+        )
+
+    assert [item["event"]["sequence"] for item in resumed] == [2, 3]
+    assert [item["event"]["sequence"] for item in replay] == [2, 3]
+    assert replay[-1]["event"]["terminal"] is True
+
+
+@pytest.mark.asyncio
 async def test_two_simultaneous_subscribers_start_one_execution(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
     started = asyncio.Event()
@@ -298,7 +347,7 @@ async def test_conflicting_continue_is_rejected_before_sse_starts() -> None:
         )
 
     assert response.status_code == 409
-    detail = response.json()["detail"]
+    detail = response.json()["error"]
     assert detail["code"] == "runtime_operation_conflict"
     assert "active execution" in detail["safe_message"]
 

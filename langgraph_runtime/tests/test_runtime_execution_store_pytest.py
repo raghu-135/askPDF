@@ -330,7 +330,7 @@ async def test_resume_replay_does_not_clear_newer_pause_request() -> None:
         "run-resume-replay", "resume", request, payload,
         operation_id="resume-replay", clear_pause_request_on_accept=True,
     )
-    await store.set_status("run-resume-replay", "awaiting_human")
+    await store.set_status("run-resume-replay", "running")
     await store.request_pause("run-resume-replay")
 
     replay = await store.create(
