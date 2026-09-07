@@ -41,22 +41,7 @@ class MCPUnavailableError(RuntimeError):
 
 
 def _decode_result(name: str, result: Any, text: str) -> dict[str, Any]:
-    # The MCP Python SDK has exposed this wire field with both camel-case
-    # and snake-case model attributes across releases.  Prefer the native
-    # field, then accept the equivalent alias.
     structured = getattr(result, "structuredContent", None)
-    if structured is None:
-        structured = getattr(result, "structured_content", None)
-    # Some streamable-HTTP SDK/server combinations preserve the canonical
-    # envelope only as a JSON text content item. Decode it without accepting
-    # arbitrary prose as a successful tool result.
-    if structured is None and text:
-        try:
-            decoded = json.loads(text)
-        except (TypeError, json.JSONDecodeError):
-            decoded = None
-        if isinstance(decoded, dict):
-            structured = decoded
     if not isinstance(structured, dict):
         raise ValueError(f"MCP tool {name!r} returned no structuredContent")
     required = {"ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"}

@@ -59,30 +59,6 @@ def test_runtime_mcp_decoder_preserves_valid_success_and_failure_envelopes():
     assert _decode_result("search_documents", failure, "")["ok"] is False
 
 
-def test_runtime_mcp_decoder_accepts_sdk_alias_and_json_text_envelopes():
-    from langgraph_runtime.mcp_client import _decode_result
-
-    payload = {
-        "ok": True,
-        "content": "evidence",
-        "sources": [],
-        "artifacts": {},
-        "warnings": [],
-        "metrics": {},
-        "trace": {},
-    }
-    assert _decode_result(
-        "search_documents",
-        SimpleNamespace(structured_content=payload, isError=False),
-        "",
-    )["content"] == "evidence"
-    assert _decode_result(
-        "search_documents",
-        SimpleNamespace(structuredContent=None, isError=False),
-        json.dumps(payload),
-    )["content"] == "evidence"
-
-
 def test_runtime_mcp_wrapper_advertises_required_query_schema():
     from langgraph_runtime.mcp_client import create_mcp_langchain_tool
 
