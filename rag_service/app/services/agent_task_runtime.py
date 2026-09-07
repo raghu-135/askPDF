@@ -6,6 +6,7 @@ import os
 import socket
 import time
 from contextlib import suppress
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -790,6 +791,18 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     "status": "completed_with_warnings", "warnings": warnings, "gaps": gaps,
                 })
                 result["runtime_task_result"] = canonical_task_result
+                # Grounding is product-owned, so its disposition must be part
+                # of the delta that the product projector applies.  Do not
+                # mutate the runtime-owned terminal status: the neutral result
+                # remains completed while its task result requests review.
+                delta = runtime_result.orchestration_delta
+                if delta is not None and isinstance(delta.result, Mapping):
+                    delta_result = dict(delta.result)
+                    delta_result["task_result"] = dict(canonical_task_result)
+                    runtime_result = replace(
+                        runtime_result,
+                        orchestration_delta=replace(delta, result=delta_result),
+                    )
         if canonical_task_result:
             result["warnings"] = [
                 dict(value) for value in canonical_task_result.get("warnings") or []

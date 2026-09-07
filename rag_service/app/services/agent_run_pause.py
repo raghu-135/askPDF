@@ -36,10 +36,6 @@ async def request_task_pause(
     definition = definition_from_run(run)
     await require_capability(definition, RuntimeOperationId.TASK_PAUSE, registry=selected, run=run)
     adapter = selected.get(definition)
-    # In-process LangGraph observes the control-plane task row directly. The
-    # HTTP deployment needs the explicit runtime control request below.
-    if not bool(getattr(adapter, "supports_external_task_pause", False)):
-        return {"status": "pause_requested", "task_id": str(task.id), "run_id": str(run.id), "runtime_confirmation": "local"}
     try:
         result = await adapter.pause(_request(task, run))
     except RuntimeError:

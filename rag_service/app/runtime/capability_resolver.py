@@ -503,7 +503,11 @@ async def resolve_run_capability_resolution(
                     operations[operation], RuntimeCapabilityDisabledReason.RECOVERY_REQUIRED,
                 )
     budget_review = operations.get(RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND)
-    behavior = capabilities.behavior
+    behavior = (
+        capabilities.behavior.to_dict()
+        if hasattr(capabilities.behavior, "to_dict")
+        else dict(capabilities.behavior)
+    )
     if budget_review is not None:
         operations[RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND] = replace(
             budget_review,

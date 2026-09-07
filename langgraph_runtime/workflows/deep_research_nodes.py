@@ -295,6 +295,7 @@ def _response_text(response: Any) -> str:
 async def _call_model(
     state: Mapping[str, Any], config: RunnableConfig, node: str, messages: list[Any], *,
     meter_research: bool = True, structured_schema: Any = None,
+    structured_output_strategy: str | None = None,
 ) -> tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
     model_name = str(state.get("llm_model") or "")
@@ -306,7 +307,43 @@ async def _call_model(
     model = get_llm(model_name, own_async_transport=True)
     try:
         invoke = model.ainvoke
-        if structured_schema is not None and hasattr(model, "with_structured_output"):
+        resolved_config = state.get("resolved_spec") if isinstance(state.get("resolved_spec"), Mapping) else {}
+        resolved_options = resolved_config.get("config") if isinstance(resolved_config, Mapping) else {}
+        configured_strategy = (
+            state.get("structured_output_strategy")
+            or (resolved_options.get("structured_output_strategy") if isinstance(resolved_options, Mapping) else None)
+        )
+        strategy = structured_output_strategy or configured_strategy or (
+            "plain_text" if structured_schema is None else "provider_json_schema"
+        )
+        if strategy not in {"plain_text", "prompt_validated_json", "provider_json_schema"}:
+            raise AgentRuntimeError(
+                "structured_output_strategy_invalid",
+                "The runtime received an unsupported structured-output strategy.",
+                details={"strategy": strategy},
+            )
+        if strategy == "plain_text" and structured_schema is not None:
+            raise AgentRuntimeError(
+                "structured_output_strategy_invalid",
+                "plain_text strategy cannot be used with a structured schema.",
+            )
+        if strategy == "prompt_validated_json" and structured_schema is None:
+            raise AgentRuntimeError(
+                "structured_output_strategy_invalid",
+                "prompt_validated_json strategy requires a structured schema.",
+            )
+        if strategy == "provider_json_schema" and structured_schema is None:
+            raise AgentRuntimeError(
+                "structured_output_strategy_invalid",
+                "provider_json_schema strategy requires a structured schema.",
+            )
+        if strategy == "provider_json_schema":
+            if not hasattr(model, "with_structured_output"):
+                raise AgentRuntimeError(
+                    "structured_output_setup_failed",
+                    "The selected model does not support provider structured output.",
+                    retryable=False,
+                )
             # Ask the provider to enforce the schema before the runtime's own
             # structural and policy validation. ``include_raw`` preserves the
             # provider response for usage/trace accounting and lets the
@@ -317,35 +354,31 @@ async def _call_model(
                     method="json_schema",
                     include_raw=True,
                 )
-            except (NotImplementedError, TypeError, ValueError):
-                # Some OpenAI-compatible development servers do not advertise
-                # native structured output. Preserve the strict JSON prompt
-                # and validator in that case; do not accept or normalize an
-                # invalid response.
-                structured_model = None
-            if structured_model is not None:
-                invoke = structured_model.ainvoke
-        response = await run_cancellable(
-            invoke_llm_for_node(
-                invoke,
-                messages,
-                state=state,
-                config=config,
-                node=node,
-                started=started,
-                retry_observer=observer,
-                retry_attempts=attempts,
-                model_name=model_name,
-            ),
-            services.cancellation,
-        )
+            except (NotImplementedError, TypeError, ValueError) as exc:
+                raise AgentRuntimeError(
+                    "structured_output_setup_failed",
+                    "The selected model could not be configured for provider structured output.",
+                    retryable=False,
+                    details={"exception_type": type(exc).__name__},
+                ) from exc
+            invoke = structured_model.ainvoke
+        async with services.execution_span(enabled=meter_research):
+            response = await run_cancellable(
+                invoke_llm_for_node(
+                    invoke,
+                    messages,
+                    state=state,
+                    config=config,
+                    node=node,
+                    started=started,
+                    retry_observer=observer,
+                    retry_attempts=attempts,
+                    model_name=model_name,
+                ),
+                services.cancellation,
+            )
     finally:
         await close_model_client(model)
-        if meter_research:
-            await services.consume_budget(
-                task_id,
-                elapsed_active_ms=max(1, int((time.perf_counter() - started) * 1000)),
-            )
     raw_response = response.get("raw") if isinstance(response, Mapping) and "raw" in response else response
     metadata = llm_result_metadata(raw_response, model_name=model_name, retry_attempts=attempts)
     token_counts = metadata.get("token_counts") if isinstance(metadata.get("token_counts"), dict) else {}
@@ -637,6 +670,7 @@ Do not create parallel or scheduling structure; runtime-owned scheduling will ha
         DEEP_NODE_PLANNER,
         [SystemMessage(content=_deep_system("You are askPDF's bounded research planner.")), HumanMessage(content=prompt)],
         structured_schema=DeepResearchPlanProposal,
+        structured_output_strategy="provider_json_schema",
     )
     max_todos = int(limits.get("max_todos", 50))
     attempts: list[dict[str, Any]] = []
@@ -688,6 +722,7 @@ Previous candidate (untrusted, bounded): {candidate[:12000]}
                 DEEP_NODE_PLANNER,
                 [SystemMessage(content=_deep_system("You are a strict JSON plan repairer. Never claim a plan is valid; return only the repaired object.")), HumanMessage(content=repair_prompt)],
                 structured_schema=DeepResearchPlanProposal,
+                structured_output_strategy="provider_json_schema",
             )
 
         validation = _decode_research_plan(
@@ -1017,15 +1052,10 @@ Select only a permitted tool and finish as soon as enough evidence is available.
         started = time.perf_counter()
         await services.consume_budget(str(state.get("agent_task_id") or ""), tool_calls=1)
         tool_runtime = tool_config_for_node(state, config, caller_node=DEEP_NODE_SUBAGENT, tool_name=tool_name, started=started)
-        try:
+        async with services.execution_span():
             raw = await run_cancellable(
                 invoke_tool_for_node(tool_name, tool_input, state=state, config=tool_runtime, node=DEEP_NODE_SUBAGENT, started=started),
                 services.cancellation,
-            )
-        finally:
-            await services.consume_budget(
-                str(state.get("agent_task_id") or ""),
-                elapsed_active_ms=max(1, int((time.perf_counter() - started) * 1000)),
             )
         normalized = normalize_tool_result(raw, tool_name=tool_name, config=tool_runtime)
         append_tool_event_for_node(

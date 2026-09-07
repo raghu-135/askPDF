@@ -17,6 +17,100 @@ RUNTIME_PROTOCOL_VERSION = "1.4"
 RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.4"
 
 
+class RuntimeContinuationSemantics(str, Enum):
+    LINKED_RUN = "linked_run"
+    SAME_RUN_SAFE_BOUNDARY = "same_run_safe_boundary"
+    CHECKPOINT_SAME_RUN = "checkpoint_same_run"
+
+
+class RuntimeArtifactInheritance(str, Enum):
+    VALID_ARTIFACTS = "valid_artifacts"
+
+
+class RuntimeBehaviorOwner(str, Enum):
+    PRODUCT = "product"
+    RUNTIME = "runtime"
+
+
+@dataclass(frozen=True)
+class RuntimeBehaviorDescriptor:
+    """Strict, framework-neutral orchestration behavior negotiated at the wire boundary."""
+
+    continuation_semantics: RuntimeContinuationSemantics
+    usage_accounting_owner: RuntimeBehaviorOwner
+    preserves_run_id: bool
+    artifact_inheritance: RuntimeArtifactInheritance
+    supports_orchestration_delta: bool
+    required_input_fields: tuple[str, ...]
+    supports_pause_resume: bool
+    supports_course_correction: bool
+    budget_boundary_owner: RuntimeBehaviorOwner
+    grounding_owner: RuntimeBehaviorOwner
+
+    def __post_init__(self) -> None:
+        for name in ("preserves_run_id", "supports_orchestration_delta", "supports_pause_resume", "supports_course_correction"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be a bool")
+        if not isinstance(self.continuation_semantics, RuntimeContinuationSemantics):
+            raise ValueError("continuation_semantics must be a RuntimeContinuationSemantics value")
+        if not isinstance(self.artifact_inheritance, RuntimeArtifactInheritance):
+            raise ValueError("artifact_inheritance must be a RuntimeArtifactInheritance value")
+        for name in ("usage_accounting_owner", "budget_boundary_owner", "grounding_owner"):
+            if not isinstance(getattr(self, name), RuntimeBehaviorOwner):
+                raise ValueError(f"{name} must be a RuntimeBehaviorOwner value")
+        if not isinstance(self.required_input_fields, tuple) or any(
+            type(item) is not str or not item.strip() for item in self.required_input_fields
+        ):
+            raise TypeError("required_input_fields must be a tuple of non-empty strings")
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "RuntimeBehaviorDescriptor":
+        if not isinstance(value, Mapping):
+            raise TypeError("runtime behavior must be an object")
+        required = {
+            "continuation_semantics", "usage_accounting_owner", "preserves_run_id",
+            "artifact_inheritance", "supports_orchestration_delta", "required_input_fields",
+            "supports_pause_resume", "supports_course_correction", "budget_boundary_owner",
+            "grounding_owner",
+        }
+        missing = sorted(required - set(value))
+        if missing:
+            raise ValueError("runtime behavior is missing: " + ", ".join(missing))
+        unknown = sorted(set(value) - required)
+        if unknown:
+            raise ValueError("runtime behavior contains unsupported fields: " + ", ".join(unknown))
+        fields = dict(value)
+        raw_inputs = fields["required_input_fields"]
+        if not isinstance(raw_inputs, (list, tuple)):
+            raise TypeError("required_input_fields must be an array")
+        return cls(
+            continuation_semantics=RuntimeContinuationSemantics(fields["continuation_semantics"]),
+            usage_accounting_owner=RuntimeBehaviorOwner(fields["usage_accounting_owner"]),
+            preserves_run_id=fields["preserves_run_id"],
+            artifact_inheritance=RuntimeArtifactInheritance(fields["artifact_inheritance"]),
+            supports_orchestration_delta=fields["supports_orchestration_delta"],
+            required_input_fields=tuple(raw_inputs),
+            supports_pause_resume=fields["supports_pause_resume"],
+            supports_course_correction=fields["supports_course_correction"],
+            budget_boundary_owner=RuntimeBehaviorOwner(fields["budget_boundary_owner"]),
+            grounding_owner=RuntimeBehaviorOwner(fields["grounding_owner"]),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "continuation_semantics": self.continuation_semantics.value,
+            "usage_accounting_owner": self.usage_accounting_owner.value,
+            "preserves_run_id": self.preserves_run_id,
+            "artifact_inheritance": self.artifact_inheritance.value,
+            "supports_orchestration_delta": self.supports_orchestration_delta,
+            "required_input_fields": list(self.required_input_fields),
+            "supports_pause_resume": self.supports_pause_resume,
+            "supports_course_correction": self.supports_course_correction,
+            "budget_boundary_owner": self.budget_boundary_owner.value,
+            "grounding_owner": self.grounding_owner.value,
+        }
+
+
 def ensure_protocol_compatible(
     protocol_version: str,
     minimum_compatible_version: str,
@@ -588,7 +682,7 @@ class RuntimeCapabilities:
     features: Mapping[RuntimeFeatureId, RuntimeFeatureDescriptor] = field(default_factory=dict)
     deployment: Mapping[str, Any] = field(default_factory=dict)
     # Neutral orchestration semantics supplied by the selected adapter.
-    behavior: Mapping[str, Any] = field(default_factory=dict)
+    behavior: RuntimeBehaviorDescriptor | Mapping[str, Any] = field(default_factory=dict)
     protocol_version: str = RUNTIME_PROTOCOL_VERSION
     minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
@@ -620,7 +714,7 @@ class RuntimeCapabilities:
             "deployment": dict(self.deployment),
         }
         if self.behavior:
-            value["behavior"] = dict(self.behavior)
+            value["behavior"] = self.behavior.to_dict() if isinstance(self.behavior, RuntimeBehaviorDescriptor) else dict(self.behavior)
         return value
 
 

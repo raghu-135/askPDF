@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
 
@@ -112,6 +114,10 @@ class DeepResearchExecutionServices:
         if self.budgets is None:
             return {}
         return await self.budgets.consume(task_id, **usage)
+
+    @asynccontextmanager
+    async def execution_span(self, *, enabled: bool = True):
+        yield
 
     async def resolve_memory(self, *, thread_id: str, limit: int) -> Mapping[str, Any]:
         if self.memory is None:
@@ -235,6 +241,33 @@ class RuntimeBudgetMeter:
             "lifetime_usage": dict(source.get("lifetime_usage") or {}),
         }
         self._lock = asyncio.Lock()
+        self._clock_lock = asyncio.Lock()
+        self._active_operations = 0
+        self._active_started_at: float | None = None
+
+    @asynccontextmanager
+    async def execution_span(self):
+        """Measure the union of active runtime intervals, once per invocation.
+
+        Parallel LangGraph workers share this meter. A reference count keeps
+        overlapping operations from charging their durations twice, while the
+        checkpointed budget remains the only persisted clock state.
+        """
+        async with self._clock_lock:
+            if self._active_operations == 0:
+                self._active_started_at = time.perf_counter()
+            self._active_operations += 1
+        try:
+            yield
+        finally:
+            elapsed_ms = 0
+            async with self._clock_lock:
+                self._active_operations -= 1
+                if self._active_operations == 0 and self._active_started_at is not None:
+                    elapsed_ms = max(0, int((time.perf_counter() - self._active_started_at) * 1000))
+                    self._active_started_at = None
+            if elapsed_ms:
+                await self.consume(elapsed_active_ms=elapsed_ms)
 
     async def consume(self, **usage: int) -> Mapping[str, Any]:
         async with self._lock:
@@ -285,6 +318,19 @@ class RuntimeBudgetMeter:
 
 
 class RuntimeExecutionServices(DeepResearchExecutionServices):
+    @asynccontextmanager
+    async def execution_span(self, *, enabled: bool = True):
+        if not enabled:
+            yield
+            return
+        if self.runtime_budget_meter is None:
+            self.runtime_budget_meter = RuntimeBudgetMeter(
+                self.state.get("task_budget_usage") if isinstance(self.state, Mapping) else None,
+                self.state.get("task_limits") if isinstance(self.state, Mapping) else None,
+            )
+        async with self.runtime_budget_meter.execution_span():
+            yield
+
     async def consume_budget(self, task_id: str, **usage: int) -> Mapping[str, Any]:
         if self.runtime_budget_meter is None:
             self.runtime_budget_meter = RuntimeBudgetMeter(
@@ -525,12 +571,15 @@ def runtime_execution_services_factory(
 ) -> DeepResearchExecutionServices:
     meter = configurable.get("runtime_budget_meter")
     if not isinstance(meter, RuntimeBudgetMeter):
-        meter = RuntimeBudgetMeter(
-            state.get("task_budget_usage") if isinstance(state, Mapping) else None,
-            state.get("task_limits") if isinstance(state, Mapping) else None,
+        budget = state.get("task_budget_usage") if isinstance(state, Mapping) else None
+        meter = (
+            RuntimeBudgetMeter(budget, state.get("task_limits") if isinstance(state, Mapping) else None)
+            if budget is not None
+            else None
         )
         if isinstance(configurable, dict):
-            configurable["runtime_budget_meter"] = meter
+            if meter is not None:
+                configurable["runtime_budget_meter"] = meter
     return RuntimeExecutionServices(
         budgets=None, memory=None,
         runtime_budget_meter=meter,

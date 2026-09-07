@@ -573,7 +573,6 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     # The external runtime exposes a durable pause request protocol backed by
     # its execution store and LangGraph checkpointer.
     supports_task_pause = True
-    supports_external_task_pause = True
     framework = "langgraph"
     builder_id = "langgraph_graph"
     implemented_operations = frozenset({

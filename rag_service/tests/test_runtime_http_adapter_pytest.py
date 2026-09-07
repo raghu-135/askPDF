@@ -181,6 +181,8 @@ async def test_http_adapter_round_trips_capabilities_and_validation():
                 "continuation_semantics": "same_run_safe_boundary", "usage_accounting_owner": "runtime",
                 "preserves_run_id": True, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
+                "supports_pause_resume": True, "supports_course_correction": True,
+                "budget_boundary_owner": "runtime", "grounding_owner": "runtime",
             }})
             return httpx.Response(200, json=_envelope({"capabilities": capabilities}))
         validation = _wire({"valid": True, "issues": []})

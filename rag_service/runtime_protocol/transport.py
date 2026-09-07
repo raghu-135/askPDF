@@ -18,6 +18,7 @@ from runtime_protocol.contracts import (
     RuntimeCapabilitySemantics,
     RuntimeCancellationMode,
     RuntimeCapabilities,
+    RuntimeBehaviorDescriptor,
     RuntimeConfirmationMode,
     RuntimeFeatureId,
     RuntimeFeatureDescriptor,
@@ -219,6 +220,11 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
             if isinstance(item, Mapping)
         ),
     ) if delta_value is not None else None
+    runtime_metadata = dict(value.get("runtime_metadata") or {})
+    if "runtime_behavior" in runtime_metadata:
+        runtime_metadata["runtime_behavior"] = RuntimeBehaviorDescriptor.from_mapping(
+            runtime_metadata["runtime_behavior"]
+        ).to_dict()
     return AgentRuntimeResult(
         status=str(value["status"]),
         output=value.get("output"),
@@ -227,7 +233,7 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         interruption=dict(value["interruption"]) if isinstance(value.get("interruption"), Mapping) else None,
         artifacts=tuple(dict(item) for item in value.get("artifacts") or [] if isinstance(item, Mapping)),
         usage=dict(value.get("usage") or {}),
-        runtime_metadata=dict(value.get("runtime_metadata") or {}),
+        runtime_metadata=runtime_metadata,
         continuation=_binding(value.get("continuation")),
         error=dict(value["error"]) if isinstance(value.get("error"), Mapping) else None,
         checkpoint_boundary_available=value.get("checkpoint_boundary_available"),
@@ -355,21 +361,12 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
     deployment = value.get("deployment") or {}
     if not isinstance(deployment, Mapping):
         raise ValueError("runtime capabilities deployment must be an object")
-    behavior = value.get("behavior") or {}
-    if not isinstance(behavior, Mapping):
-        raise ValueError("runtime capabilities behavior must be an object")
-    required_behavior = {
-        "continuation_semantics", "usage_accounting_owner", "preserves_run_id",
-        "artifact_inheritance", "supports_orchestration_delta", "required_input_fields",
-    }
-    if not required_behavior.issubset(behavior):
-        missing = sorted(required_behavior - set(behavior))
-        raise ValueError(f"runtime capabilities behavior is missing: {', '.join(missing)}")
+    behavior = RuntimeBehaviorDescriptor.from_mapping(value.get("behavior"))
     return RuntimeCapabilities(
         operations=operations,
         features=features,
         deployment=dict(deployment),
-        behavior=dict(behavior),
+        behavior=behavior,
         protocol_version=protocol_version,
         minimum_compatible_version=minimum_compatible_version,
     )

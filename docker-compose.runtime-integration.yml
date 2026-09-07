@@ -477,8 +477,8 @@ services:
       LOG_LEVEL: INFO
       RUN_RUNTIME_DB_MIGRATIONS: "false"
       RUNTIME_TEST_TARGET: /app/langgraph_runtime/tests
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql+asyncpg://postgres:postgres@runtime-checkpoint-db:5432/runtime_checkpoints
-      AGENT_CHECKPOINT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@runtime-checkpoint-db:5432/runtime_checkpoints
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      AGENT_CHECKPOINT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       ASKPDF_AGENT_CHECKPOINTER: postgres
       ASKPDF_AGENT_CHECKPOINTER_SETUP: "true"
       MCP_TRANSPORT: loopback_http

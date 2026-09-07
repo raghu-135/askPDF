@@ -40,6 +40,7 @@ from runtime_protocol.contracts import (
     RuntimeTaskResult,
     RuntimeTaskResultStatus,
     RuntimeUsageSnapshot,
+    RuntimeBehaviorDescriptor,
     TaskOrchestrationDelta,
     ensure_protocol_compatible,
     validated_disabled_operation_ids,
@@ -78,11 +79,38 @@ def test_runtime_behavior_snapshot_requires_all_neutral_ownership_fields():
         "usage_accounting_owner": "runtime",
         "budget_boundary_owner": "product",
         "grounding_owner": "product",
+        "preserves_run_id": True,
+        "artifact_inheritance": "valid_artifacts",
+        "required_input_fields": [],
+        "supports_pause_resume": True,
     }
 
     assert snapshot_runtime_behavior(behavior) == behavior
     with pytest.raises(ValueError, match="grounding_owner"):
         snapshot_runtime_behavior({key: value for key, value in behavior.items() if key != "grounding_owner"})
+
+
+def test_runtime_behavior_snapshot_rejects_coercion_and_unknown_values():
+    behavior = {
+        "continuation_semantics": "same_run_safe_boundary",
+        "supports_course_correction": True,
+        "supports_orchestration_delta": True,
+        "usage_accounting_owner": "runtime",
+        "budget_boundary_owner": "product",
+        "grounding_owner": "product",
+        "preserves_run_id": True,
+        "artifact_inheritance": "valid_artifacts",
+        "required_input_fields": [],
+        "supports_pause_resume": True,
+    }
+    with pytest.raises(TypeError):
+        snapshot_runtime_behavior({**behavior, "supports_course_correction": "false"})
+    with pytest.raises(ValueError):
+        snapshot_runtime_behavior({**behavior, "continuation_semantics": "same_run"})
+    with pytest.raises(ValueError):
+        snapshot_runtime_behavior({**behavior, "unexpected": True})
+
+
 from langgraph_runtime.workflows.deep_research_nodes import deep_task_scheduler
 from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.workflows import deep_research_nodes

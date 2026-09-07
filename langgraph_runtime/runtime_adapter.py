@@ -53,7 +53,6 @@ class AgentRuntimeAdapter(ABC):
     framework: str
     builder_id: str
     supports_task_pause: bool = False
-    supports_external_task_pause: bool = False
     implemented_operations: frozenset[RuntimeOperationId] = frozenset()
 
     async def prepare_request(

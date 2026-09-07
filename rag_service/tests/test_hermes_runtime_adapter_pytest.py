@@ -79,6 +79,8 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
                 "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
                 "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
+                "supports_pause_resume": False, "supports_course_correction": True,
+                "budget_boundary_owner": "product", "grounding_owner": "product",
             },
         }),
     })

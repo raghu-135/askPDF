@@ -940,8 +940,8 @@ def create_app() -> FastAPI:
                 }
                 task_metadata = task_context.get("metadata") if isinstance(task_context, Mapping) else {}
                 task_metadata = task_metadata if isinstance(task_metadata, Mapping) else {}
-                boundary_event_id = f"{run_id}:task-result:{operation_id}"
                 attempt_id = str(task_metadata.get("attempt_id") or f"{run_id}:attempt:1")
+                boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
                 orchestration_delta = {
                     "event_id": boundary_event_id,
                     "attempt_id": attempt_id,
