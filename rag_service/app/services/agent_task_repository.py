@@ -1515,6 +1515,56 @@ async def complete_task(task_id: str, *, status: str, reason: Optional[str] = No
         return task
 
 
+async def fail_invalid_runtime_claim(
+    task_id: str,
+    *,
+    code: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> AgentTask:
+    """Terminalize a claimed task whose persisted runtime identity is invalid.
+
+    This is deliberately separate from lease deferral: malformed persisted
+    identity cannot be repaired by reclaiming the same task repeatedly.
+    """
+    error = {
+        "code": code,
+        "retryable": False,
+        "details": dict(details or {}),
+    }
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(
+                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
+            )).scalar_one()
+            if task.status in TERMINAL_TASK_STATUSES:
+                return task
+            if task.active_run_id:
+                run = (await session.execute(
+                    select(AgentRun).where(AgentRun.id == task.active_run_id).with_for_update()
+                )).scalar_one_or_none()
+                if run is not None and run.status not in TERMINAL_TASK_RUN_STATUSES:
+                    run.status = AgentRunStatus.FAILED.value
+                    run.completed_at = utc_now()
+                    run.error_json = error
+            task.status = AgentTaskStatus.FAILED.value
+            task.current_phase = AgentTaskStatus.FAILED.value
+            task.terminal_reason = code
+            task.completed_at = utc_now()
+            task.expires_at = None
+            task.lease_owner = None
+            task.lease_expires_at = None
+            task.version += 1
+            await _append_event(
+                session,
+                task,
+                "task.failed",
+                agent_run_id=task.active_run_id,
+                payload={"reason": code, "error": error, "version": task.version},
+            )
+        await session.refresh(task)
+        return task
+
+
 async def finalize_task_run(
     task_id: str,
     run_id: str,

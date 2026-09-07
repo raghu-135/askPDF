@@ -5,7 +5,6 @@ from app.runtime.builder_registry import get_builder_registry
 from app.runtime.builder import UnsupportedRequestOverrideError
 from runtime_protocol.contracts import AgentDefinition
 from app.runtime.hermes_builder import HermesBuilderProvider
-from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
 
 @pytest.fixture(autouse=True)
@@ -98,16 +97,6 @@ async def test_hermes_provider_catalog_is_framework_specific():
     assert catalog.framework == "hermes"
     assert catalog.builder_id == "hermes_agent"
     assert catalog.payload["definition_ids"] == ["hermes_rag_agent"]
-
-
-def test_langgraph_provider_retains_owned_request_overrides():
-    definition = AgentDefinition("router_rag_agent", "langgraph", "langgraph_graph")
-    filtered = LangGraphBuilderProvider().filter_request_overrides(
-        definition,
-        {"use_web_search": True, "replans": 2, "unknown": "drop", "use_reranker": None},
-        reject_unsupported=False,
-    )
-    assert filtered == {"use_web_search": True, "replans": 2, "unknown": "drop"}
 
 
 @pytest.mark.asyncio

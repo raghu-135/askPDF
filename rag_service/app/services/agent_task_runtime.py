@@ -1141,26 +1141,46 @@ async def run_task_worker(
                     or not builder_id
                 ):
                     logger.error(
-                        "Claimed task has no executable runtime identity; deferring claim | task_id=%s active_run_id=%s",
+                        "Claimed task has invalid executable runtime identity; failing claim | task_id=%s active_run_id=%s",
                         task.id,
                         getattr(task, "active_run_id", None),
                     )
-                    # Missing identity is recoverable during run attachment or
-                    # after a concurrent worker restart.  Failing the product
-                    # task here leaves a newly-created retry orphaned and
-                    # prevents its runtime trace from ever being produced.
-                    await tasks.defer_task_lease(task.id, worker_id, retry_seconds=1.0)
+                    await tasks.fail_invalid_runtime_claim(
+                        task.id,
+                        code="runtime_task_identity_invalid",
+                        details={
+                            "active_run_id": getattr(task, "active_run_id", None),
+                            "run_id": getattr(run, "id", None),
+                            "run_task_id": getattr(run, "task_id", None),
+                            "framework_present": bool(framework),
+                            "builder_present": bool(builder_id),
+                        },
+                    )
                     continue
                 limits = ((getattr(task, "config_json", None) or {}).get("limits") or {})
                 wake_limit_value = limits.get("wake_limit_seconds")
                 if wake_limit_value is None:
-                    # Legacy tasks created before the neutral control-plane
-                    # wake deadline was persisted must remain runnable.
-                    wake_limit_value = os.getenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS")
-                wake_limit = positive_float_value(
-                    wake_limit_value,
-                    name="wake_limit_seconds",
-                )
+                    await tasks.fail_invalid_runtime_claim(
+                        task.id,
+                        code="runtime_task_configuration_invalid",
+                        details={"missing": "limits.wake_limit_seconds"},
+                    )
+                    continue
+                try:
+                    wake_limit = positive_float_value(
+                        wake_limit_value,
+                        name="wake_limit_seconds",
+                    )
+                except (TypeError, ValueError) as exc:
+                    await tasks.fail_invalid_runtime_claim(
+                        task.id,
+                        code="runtime_task_configuration_invalid",
+                        details={
+                            "field": "limits.wake_limit_seconds",
+                            "message": str(exc),
+                        },
+                    )
+                    continue
                 await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)
             except asyncio.TimeoutError:
                 await tasks.requeue_after_wake(

@@ -2517,20 +2517,43 @@ async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_task_worker_fails_claim_without_persisted_runtime_identity(monkeypatch):
     task = SimpleNamespace(id="task-1", active_run_id="run-1")
-    defer = AsyncMock()
+    fail_claim = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
-    monkeypatch.setattr(agent_task_runtime.tasks, "defer_task_lease", defer)
+    monkeypatch.setattr(agent_task_runtime.tasks, "fail_invalid_runtime_claim", fail_claim)
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True)
 
-    defer.assert_awaited_once()
-    assert defer.await_args.args[0] == task.id
-    assert defer.await_args.kwargs == {"retry_seconds": 1.0}
+    fail_claim.assert_awaited_once()
+    assert fail_claim.await_args.args[0] == task.id
+    assert fail_claim.await_args.kwargs["code"] == "runtime_task_identity_invalid"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_fails_claim_without_persisted_wake_limit(monkeypatch):
+    task = SimpleNamespace(
+        id="task-1",
+        active_run_id="run-1",
+        config_json={"limits": {}},
+    )
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
+    fail_claim = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_task_runtime.tasks, "fail_invalid_runtime_claim", fail_claim)
+    execute = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    fail_claim.assert_awaited_once()
+    assert fail_claim.await_args.kwargs["code"] == "runtime_task_configuration_invalid"
     execute.assert_not_awaited()
 
 

@@ -209,8 +209,21 @@ def create_mcp_langchain_tool(tool_name: str, request_model: type[Any] | None = 
 
 
 def classify_mcp_failure(exc: BaseException) -> tuple[str, bool]:
-    if isinstance(exc, TimeoutError):
+    """Classify failures without confusing transport faults with bad payloads.
+
+    Exception groups are unwrapped because any transport member means the
+    request may be retried.  Response decoding and schema errors are raised by
+    ``_decode_result`` and remain protocol failures.
+    """
+    if isinstance(exc, (ExceptionGroup, BaseExceptionGroup)):
+        children = getattr(exc, "exceptions", ())
+        classifications = [classify_mcp_failure(child) for child in children]
+        for category, retryable in classifications:
+            if retryable and category in {"timeout", "connection"}:
+                return category, True
+        return "protocol", False
+    if isinstance(exc, httpx.TimeoutException) or isinstance(exc, TimeoutError):
         return "timeout", True
-    if isinstance(exc, (OSError, ConnectionError)):
+    if isinstance(exc, httpx.TransportError) or isinstance(exc, (OSError, ConnectionError)):
         return "connection", True
     return "protocol", False
