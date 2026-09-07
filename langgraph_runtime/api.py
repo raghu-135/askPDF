@@ -1000,16 +1000,15 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             except asyncio.CancelledError:
                 pass
 
-    async def stream_operation(
+    async def _admit_operation(
         payload: Mapping[str, Any],
         operation: str,
         expected_run_id: str | None = None,
-        after_sequence: int = 0,
         *,
-        allow_start: bool = True,
         operation_id: str | None = None,
         source_attempt: int | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> tuple[Any, Any]:
+        """Admit and, when appropriate, launch an operation before SSE starts."""
         request = _request_from_payload(payload)
         operation_id_by_endpoint = {
             "start": RuntimeOperationId.RUN_START,
@@ -1017,7 +1016,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             "retry": RuntimeOperationId.RUN_START,
         }
         capability_id = operation_id_by_endpoint.get(operation)
-        if capability_id and allow_start:
+        if capability_id:
             definition = definition_from_dict(payload["definition"])
             descriptor = effective_capabilities(definition).operations.get(capability_id)
             if descriptor is None or not descriptor.enabled:
@@ -1029,51 +1028,47 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             raise HTTPException(status_code=400, detail="run_id does not match request path")
         if runtime_state["draining"]:
             raise HTTPException(status_code=503, detail="runtime is draining")
+        effective_operation_id = str(operation_id or payload.get("operation_id") or "").strip()
+        if not effective_operation_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "runtime_operation_id_required", "safe_message": "operation_id is required", "retryable": False},
+            )
         async with execution_start_lock:
-            # Event subscriptions are observers.  They must never create or
-            # replace a durable execution record, especially after terminal
-            # completion or after a process restart.
-            if allow_start:
-                effective_operation_id = str(operation_id or payload.get("operation_id") or "").strip()
-                if not effective_operation_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "code": "runtime_operation_id_required",
-                            "safe_message": "operation_id is required",
-                            "retryable": False,
-                        },
-                    )
-                try:
-                    record = await execution_store.create(
-                        request.run_id,
-                        operation,
-                        request.to_dict(),
-                        payload,
-                        operation_id=effective_operation_id,
-                        source_attempt=source_attempt,
-                    )
-                except ExecutionConflictError as exc:
-                    raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": str(exc), "retryable": False}) from exc
-                if operation == "start":
-                    context_payload = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
-                    task_context = context_payload.get("task_context") if isinstance(context_payload.get("task_context"), Mapping) else {}
-                    task_metadata = task_context.get("metadata") if isinstance(task_context.get("metadata"), Mapping) else {}
-                    for value in task_metadata.get("course_corrections") or []:
-                        if not isinstance(value, Mapping):
-                            continue
-                        correction = dict(value)
-                        correction["correction_id"] = str(correction.get("correction_id") or correction.get("id") or "")
-                        correction["operation_id"] = str(correction.get("operation_id") or correction.get("command_id") or correction["correction_id"])
-                        if correction["correction_id"] and correction["operation_id"]:
-                            await execution_store.request_course_correction(request.run_id, correction)
-            else:
-                record = await execution_store.get(request.run_id)
-                if record is None:
-                    raise HTTPException(status_code=404, detail="runtime run not found")
+            try:
+                record = await execution_store.create(
+                    request.run_id,
+                    operation,
+                    request.to_dict(),
+                    payload,
+                    operation_id=effective_operation_id,
+                    source_attempt=source_attempt,
+                    clear_pause_request_on_accept=operation == "resume",
+                )
+            except ExecutionConflictError as exc:
+                logger.warning(
+                    "Runtime operation conflict | run_id=%s operation=%s operation_id=%s reason=%s",
+                    request.run_id, operation, effective_operation_id, str(exc),
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "runtime_operation_conflict", "safe_message": str(exc), "retryable": False},
+                ) from exc
+            if operation == "start":
+                context_payload = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
+                task_context = context_payload.get("task_context") if isinstance(context_payload.get("task_context"), Mapping) else {}
+                task_metadata = task_context.get("metadata") if isinstance(task_context.get("metadata"), Mapping) else {}
+                for value in task_metadata.get("course_corrections") or []:
+                    if not isinstance(value, Mapping):
+                        continue
+                    correction = dict(value)
+                    correction["correction_id"] = str(correction.get("correction_id") or correction.get("id") or "")
+                    correction["operation_id"] = str(correction.get("operation_id") or correction.get("command_id") or correction["correction_id"])
+                    if correction["correction_id"] and correction["operation_id"]:
+                        await execution_store.request_course_correction(request.run_id, correction)
 
             task = runtime_state["active"].get(request.run_id)
-            should_start = allow_start and not record.replay_only and (
+            should_start = not record.replay_only and (
                 record.status == "queued"
                 or operation == "resume" and record.status in {"awaiting_human", "paused"}
             )
@@ -1099,7 +1094,30 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                         runtime_state["active"].pop(request.run_id, None)
 
                 task.add_done_callback(_remove_finished)
-            attempt = record.attempt
+        return request, record
+
+    async def stream_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        expected_run_id: str | None = None,
+        after_sequence: int = 0,
+        *,
+        allow_start: bool = True,
+        record: Any | None = None,
+    ) -> AsyncIterator[str]:
+        request = _request_from_payload(payload)
+        if expected_run_id and request.run_id != expected_run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        if runtime_state["draining"]:
+            raise HTTPException(status_code=503, detail="runtime is draining")
+        if allow_start:
+            if record is None:
+                raise RuntimeError("runtime_internal_error", "An admitted execution record is required")
+        else:
+            record = await execution_store.get(request.run_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="runtime run not found")
+        attempt = record.attempt
         last_sequence = after_sequence
         # A resume continues the same attempt after the previously delivered
         # checkpoint event. Do not replay that event as the result of the new
@@ -1142,7 +1160,8 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         request = _request_from_payload(payload)
         await _preflight_operation(request.run_id, payload, "start")
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "start", operation_id=payload.get("operation_id")), media_type="text/event-stream")
+        _, record = await _admit_operation(payload, "start", operation_id=payload.get("operation_id"))
+        return StreamingResponse(stream_operation(payload, "start", record=record), media_type="text/event-stream")
 
     @app.get("/v1/runs/{run_id}/events")
     async def events(run_id: str, after_sequence: int = 0) -> StreamingResponse:
@@ -1164,15 +1183,16 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     @app.post("/v1/runs/{run_id}/resume")
     async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "resume")
-        await execution_store.clear_pause_request(run_id)
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "resume", run_id, operation_id=payload.get("operation_id")), media_type="text/event-stream")
+        _, record = await _admit_operation(payload, "resume", run_id, operation_id=payload.get("operation_id"))
+        return StreamingResponse(stream_operation(payload, "resume", run_id, record=record), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/continue")
     async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
         await _preflight_operation(run_id, payload, "continue_run")
         _admit_dependencies(payload)
-        return StreamingResponse(stream_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id")), media_type="text/event-stream")
+        _, record = await _admit_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id"))
+        return StreamingResponse(stream_operation(payload, "continue_run", run_id, record=record), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/retry")
     async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
@@ -1191,8 +1211,12 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             "retry_request": request_payload,
         }
         _admit_dependencies(retry_payload)
+        _, record = await _admit_operation(
+            retry_payload, "retry", run_id,
+            operation_id=attempt_id, source_attempt=int(source_attempt),
+        )
         return StreamingResponse(
-            stream_operation(retry_payload, "retry", run_id, operation_id=attempt_id, source_attempt=int(source_attempt)),
+            stream_operation(retry_payload, "retry", run_id, record=record),
             media_type="text/event-stream",
         )
 

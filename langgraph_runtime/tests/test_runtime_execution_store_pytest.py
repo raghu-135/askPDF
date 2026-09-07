@@ -299,6 +299,50 @@ async def test_resume_operation_replaces_boundary_identity_and_fingerprints_deci
 
 
 @pytest.mark.asyncio
+async def test_rejected_resume_does_not_clear_pause_request() -> None:
+    store = ExecutionStore()
+    request = {"run_id": "run-resume-paused"}
+    await store.create("run-resume-paused", "start", request, {"request": request})
+    await store.request_pause("run-resume-paused")
+
+    with pytest.raises(ExecutionConflictError, match="checkpointed"):
+        await store.create(
+            "run-resume-paused",
+            "resume",
+            request,
+            {"request": request, "interrupt": {"decision": "approve"}},
+            operation_id="resume-rejected",
+            clear_pause_request_on_accept=True,
+        )
+
+    assert await store.is_pause_requested("run-resume-paused") is True
+
+
+@pytest.mark.asyncio
+async def test_resume_replay_does_not_clear_newer_pause_request() -> None:
+    store = ExecutionStore()
+    request = {"run_id": "run-resume-replay"}
+    await store.create("run-resume-replay", "start", request, {"request": request})
+    await store.set_status("run-resume-replay", "awaiting_human")
+    payload = {"request": request, "interrupt": {"decision": "approve"}}
+
+    await store.create(
+        "run-resume-replay", "resume", request, payload,
+        operation_id="resume-replay", clear_pause_request_on_accept=True,
+    )
+    await store.set_status("run-resume-replay", "awaiting_human")
+    await store.request_pause("run-resume-replay")
+
+    replay = await store.create(
+        "run-resume-replay", "resume", request, payload,
+        operation_id="resume-replay", clear_pause_request_on_accept=True,
+    )
+
+    assert replay.replay_only is True
+    assert await store.is_pause_requested("run-resume-replay") is True
+
+
+@pytest.mark.asyncio
 async def test_resume_transport_retry_is_read_only_after_terminal_completion() -> None:
     store = ExecutionStore()
     await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})

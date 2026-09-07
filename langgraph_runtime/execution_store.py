@@ -215,6 +215,7 @@ class ExecutionStore:
         *,
         operation_id: str | None = None,
         source_attempt: int | None = None,
+        clear_pause_request_on_accept: bool = False,
     ) -> ExecutionRecord:
         # The operation payload carries continuation decisions and immutable
         # task context in addition to the neutral request.  Both participate
@@ -278,6 +279,8 @@ class ExecutionStore:
                     existing.lease_expires_at = None
                     existing.heartbeat_at = None
                     existing.updated_at = _now()
+                    if clear_pause_request_on_accept:
+                        existing.payload.pop("pause_requested", None)
                     if operation_id:
                         self._operations[(run_id, operation_id)] = {
                             "attempt": existing.attempt,
@@ -349,9 +352,10 @@ class ExecutionStore:
                 elif existing is not None and operation == "resume":
                     if existing["status"] not in {"awaiting_human", "paused"}:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
+                    payload_expression = "$4::jsonb - 'pause_requested'" if clear_pause_request_on_accept else "$4::jsonb"
                     await connection.execute(
-                        """update runtime_executions
-                           set operation=$2, request=$3::jsonb, payload=$4::jsonb,
+                        f"""update runtime_executions
+                           set operation=$2, request=$3::jsonb, payload={payload_expression},
                                status='queued', request_fingerprint=$5,
                                last_operation_id=$6, owner_id=null,
                                lease_expires_at=null, heartbeat_at=null, updated_at=now()
@@ -572,18 +576,6 @@ class ExecutionStore:
     async def is_pause_requested(self, run_id: str) -> bool:
         record = await self.get(run_id)
         return bool(record and record.payload.get("pause_requested") is True)
-
-    async def clear_pause_request(self, run_id: str) -> None:
-        if self._pool is None:
-            record = self._records.get(run_id)
-            if record is not None:
-                record.payload.pop("pause_requested", None)
-                record.updated_at = _now()
-            return
-        await self._pool.execute(
-            "update runtime_executions set payload=payload - 'pause_requested', updated_at=now() where run_id=$1",
-            run_id,
-        )
 
     @staticmethod
     def _correction_fingerprint(correction: Mapping[str, Any]) -> str:

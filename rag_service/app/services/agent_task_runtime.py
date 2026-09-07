@@ -75,10 +75,15 @@ def _task_runtime_operation_id(task: Any, run: Any) -> str:
             pending.get("resume_version")
             or decision.get("action_version")
             or pending.get("interrupt_id")
-            or task.version
+            or decision.get("idempotency_key")
+            or getattr(run, "task_attempt", None)
+            or run.id
         )
         return f"task:{task.id}:run:{run.id}:resume:{discriminator}"
-    return f"task:{task.id}:run:{run.id}:continue:{task.version}"
+    # Task versions change as runtime events are projected. They are not a
+    # continuation boundary, so they must not participate in transport
+    # idempotency for an already-existing run.
+    return f"task:{task.id}:run:{run.id}:continue:{getattr(run, 'task_attempt', None) or run.id}"
 
 
 async def _invoke_task_runtime(

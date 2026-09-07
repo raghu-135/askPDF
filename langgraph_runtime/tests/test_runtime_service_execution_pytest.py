@@ -278,6 +278,32 @@ async def test_resume_after_a_terminal_start_requires_explicit_retry(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_conflicting_continue_is_rejected_before_sse_starts() -> None:
+    store = ExecutionStore()
+    run_id = "run-conflicting-continue"
+    request = _request(run_id)
+    await store.create(
+        run_id,
+        "continue_run",
+        request,
+        _payload(run_id),
+        operation_id="first-continue",
+    )
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        response = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={**_payload(run_id), "operation_id": "second-continue"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "runtime_operation_conflict"
+    assert "active execution" in detail["safe_message"]
+
+
+@pytest.mark.asyncio
 async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 

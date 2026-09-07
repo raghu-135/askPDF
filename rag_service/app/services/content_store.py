@@ -119,22 +119,25 @@ class SharedVolumeContentStore(ContentStore):
 
         def create() -> tuple[bool, ContentStat]:
             target = self._resolve(key, create_parents=True)
+            fd, temporary_name = tempfile.mkstemp(prefix=".content-", dir=target.parent)
             try:
-                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
-            except FileExistsError:
-                return False, self._stat_sync(key)
-            try:
+                os.fchmod(fd, 0o640)
                 with os.fdopen(fd, "wb") as output:
                     output.write(body)
                     output.flush()
                     os.fsync(output.fileno())
+                try:
+                    # Hard-linking the completed temporary file publishes it
+                    # atomically while preserving no-overwrite semantics.
+                    os.link(temporary_name, target)
+                except FileExistsError:
+                    return False, self._stat_sync(key)
                 return True, ContentStat(size=len(body), sha256=actual)
             except Exception:
-                try:
-                    target.unlink()
-                except FileNotFoundError:
-                    pass
                 raise
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
 
         return await asyncio.to_thread(create)
 
