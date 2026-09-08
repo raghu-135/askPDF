@@ -80,8 +80,8 @@ async def prune_runtime_continuations_for_runs_before(
             query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
         )
         runs = list(result.scalars().all())
-    from app.runtime.cleanup import delete_run_continuations
-    return await delete_run_continuations(runs)
+    from app.runtime.cleanup import cleanup_runs
+    return await cleanup_runs(runs)
 
 
 async def fail_stale_running_runs(

@@ -31,7 +31,7 @@ async def test_continuation_cleanup_rejects_non_langgraph_frameworks(monkeypatch
     from app.runtime.registry import RuntimeRegistry
 
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: RuntimeRegistry([adapter]))
-    outcome = await cleanup.delete_run_continuation(run)
+    outcome = await cleanup.cleanup_run(run)
 
     assert outcome.status == "unsupported"
     assert outcome.cleaned is False
@@ -55,7 +55,7 @@ async def test_continuation_cleanup_accepts_explicit_runtime_status(monkeypatch)
     from app.runtime.registry import RuntimeRegistry
 
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: RuntimeRegistry([adapter]))
-    outcome = await cleanup.delete_run_continuation(run)
+    outcome = await cleanup.cleanup_run(run)
 
     assert outcome.cleaned is True
     adapter.cleanup_run.assert_awaited_once_with("run-1")
@@ -80,7 +80,7 @@ async def test_langgraph_cleanup_rejects_non_success_envelopes(monkeypatch, resp
     registry = SimpleNamespace(get=lambda definition: adapter)
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: registry)
 
-    outcome = await cleanup.delete_run_continuation(run)
+    outcome = await cleanup.cleanup_run(run)
 
     assert outcome.status == "failed"
     assert outcome.cleaned is False
@@ -105,7 +105,7 @@ async def test_langgraph_cleanup_accepts_only_explicit_success_statuses(monkeypa
     registry = SimpleNamespace(get=lambda definition: adapter)
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: registry)
 
-    outcome = await cleanup.delete_run_continuation(run)
+    outcome = await cleanup.cleanup_run(run)
 
     assert outcome.status == status
     assert outcome.cleaned is True

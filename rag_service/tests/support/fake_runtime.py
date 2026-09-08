@@ -44,6 +44,16 @@ class FakeRuntimeServer:
             return json_payload({"result": {"status": "pause_requested"}})
         if path.endswith("/cancel"):
             return json_payload({"result": {"status": "cancelled"}})
+        if request.method == "DELETE" and path.startswith("/v1/runs/"):
+            run_id = path.rsplit("/", 1)[-1]
+            return json_payload({
+                "result": {
+                    "run_id": run_id,
+                    "status": "cleaned",
+                    "checkpoint": {"status": "not_bound"},
+                    "execution_store": {"status": "cleaned"},
+                }
+            })
         if path.endswith("/continue") or path.endswith("/resume") or path.endswith("/retry"):
             return json_payload({"result": {"status": "completed", "output": {}}})
         if path.endswith("/start"):

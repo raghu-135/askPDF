@@ -2393,10 +2393,10 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     runtime_run = SimpleNamespace(id="run-1")
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_terminal_task_runtime_runs_before", AsyncMock(return_value=[runtime_run]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "clear_task_runtime_bindings", AsyncMock(return_value=1))
-    from app.runtime.cleanup import ContinuationCleanupOutcome
+    from app.runtime.cleanup import RunCleanupOutcome
     monkeypatch.setattr(
-        "app.runtime.cleanup.delete_run_continuations",
-        AsyncMock(return_value=[ContinuationCleanupOutcome(run_id="run-1", status="cleaned")]),
+        "app.runtime.cleanup.cleanup_runs",
+        AsyncMock(return_value=[RunCleanupOutcome(run_id="run-1", status="cleaned")]),
     )
 
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)

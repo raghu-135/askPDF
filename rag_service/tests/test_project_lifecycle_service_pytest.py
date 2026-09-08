@@ -273,12 +273,12 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         delete_document_vectors_by_file_hash_and_model=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(project_lifecycle_service, "get_vector_db", lambda: vector_db)
-    from app.runtime.cleanup import ContinuationCleanupOutcome
+    from app.runtime.cleanup import RunCleanupOutcome
     checkpoint_cleanup = AsyncMock(return_value=[
-        ContinuationCleanupOutcome(run_id="terminal-run", status="cleaned")
+        RunCleanupOutcome(run_id="terminal-run", status="cleaned")
     ])
     monkeypatch.setattr(
-        "app.runtime.cleanup.delete_run_continuations",
+        "app.runtime.cleanup.cleanup_runs",
         checkpoint_cleanup,
     )
     delete_artifacts = AsyncMock(return_value=None)

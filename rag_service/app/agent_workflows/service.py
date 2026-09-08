@@ -26,7 +26,7 @@ from app.runtime.catalog import (
     definition_from_workflow,
     result_to_product_payload,
 )
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeOperationId, RuntimeSteeringInput
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeCleanupResult, RuntimeCleanupStatus, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.capability_resolver import (
     pending_interrupt_response_operation,
     require_capability,
@@ -146,13 +146,29 @@ class AgentRunService:
         self.repository_factory = repository_factory or AgentWorkflowRepository
         self.projection = AgentRuntimeProjection()
 
-    async def _delete_continuation(self, adapter: Any, binding: Any) -> Any:
-        try:
-            return await adapter.delete_continuation(binding)
-        except Exception as exc:
-            if getattr(exc, "code", None) == "runtime_capability_unsupported":
-                return {"status": "unsupported", "code": exc.code}
-            raise
+    async def _cleanup_run(self, adapter: Any, run_id: str) -> RuntimeCleanupResult:
+        result = await adapter.cleanup_run(run_id)
+        if not isinstance(result, RuntimeCleanupResult):
+            raise RuntimeContractError(
+                "runtime_cleanup_invalid_result",
+                "Agent runtime returned an invalid cleanup result",
+                retryable=True,
+            )
+        status = result.status.value if isinstance(result.status, RuntimeCleanupStatus) else str(result.status)
+        if status not in {"cleaned", "already_cleaned", "not_bound"}:
+            raise RuntimeContractError(
+                "runtime_cleanup_failed",
+                "Agent runtime did not confirm run cleanup",
+                retryable=True,
+                details={"status": status, "run_id": run_id},
+            )
+        if result.run_id != run_id:
+            raise RuntimeContractError(
+                "runtime_cleanup_invalid_result",
+                "Agent runtime returned cleanup for a different run",
+                retryable=False,
+            )
+        return result
 
     async def cancel_agent_run(self, run_id: str, *, thread_id: str) -> Any:
         run = await self.repository.get_run(run_id)
@@ -506,7 +522,7 @@ class AgentRunService:
                     metrics_json=metrics,
                     error_json=error_json,
                 )
-                await self._delete_continuation(adapter, continuation_from_run(run))
+                await self._cleanup_run(adapter, run.id)
                 result.update(
                     {
                         "agent_run_id": run.id,
@@ -532,34 +548,16 @@ class AgentRunService:
                     )
                 return result
             if status == CLARIFICATION_REQUIRED_STATUS:
-                # Keep a terminal record only as a cleanup fallback. The normal path removes
-                # both checkpoint state and the exact run before returning clarification.
-                try:
-                    await self.repository.complete_run(
-                        run.id,
-                        status=AgentRunStatus.CLARIFICATION.value,
-                        metrics_json=metrics,
-                        error_json=error_json,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Could not mark temporary clarification run terminal before cleanup | "
-                        "thread_id=%s run_id=%s",
-                        thread_id,
-                        run.id,
-                    )
-                try:
-                    await self._delete_continuation(adapter, continuation_from_run(run))
-                    deleted = await self.repository.delete_run(run.id)
-                    if not deleted:
-                        raise RuntimeError(f"Clarification agent run {run.id} was not found during cleanup")
-                except Exception:
-                    logger.exception(
-                        "Clarification cleanup failed; terminal run remains eligible for pruning | "
-                        "thread_id=%s run_id=%s",
-                        thread_id,
-                        run.id,
-                    )
+                await self.repository.complete_run(
+                    run.id,
+                    status=AgentRunStatus.CLARIFICATION.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                await self._cleanup_run(adapter, run.id)
+                deleted = await self.repository.delete_run(run.id)
+                if not deleted:
+                    raise RuntimeError(f"Clarification agent run {run.id} was not found during cleanup")
                 result.update(
                     {
                         "agent_run_id": None,

@@ -11,7 +11,6 @@ from runtime_protocol.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
-    ContinuationBinding,
     RuntimeApprovalResponse,
     RuntimeCapabilities,
     RuntimeSteeringInput,
@@ -218,9 +217,6 @@ class AgentRuntimeAdapter(ABC):
 
     async def list_artifacts(self, request: AgentRuntimeRequest) -> list[Mapping[str, Any]]:
         self._unsupported("artifact.list", "This runtime does not expose runtime artifacts")
-
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        self._unsupported("run.cleanup", "This runtime does not expose run cleanup")
 
     async def project_trace(
         self,

@@ -791,12 +791,6 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             projected.append(event_from_dict(value))
         return projected
 
-    async def delete_continuation(self, continuation: Any) -> Any:
-        binding_id = str(continuation.payload.get("binding_id") or "")
-        if not binding_id:
-            raise RuntimeError("runtime_binding_invalid", "Runtime continuation is missing its opaque binding ID")
-        return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json=json_payload({"continuation": continuation.to_dict()}))
-
     async def cleanup_run(self, run_id: str) -> Any:
         value = await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})
         try:

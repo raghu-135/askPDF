@@ -1411,14 +1411,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             })
         return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=runtime_inspection)
 
-    @app.delete("/v1/continuations/{binding_id}")
-    async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        from runtime_protocol.transport import _binding
-
-        continuation = _binding(payload.get("continuation"))
-        result = await get_adapter().delete_continuation(continuation)
-        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=result if isinstance(result, Mapping) else {"value": result})
-
     @app.delete("/v1/runs/{run_id}")
     async def cleanup_run(run_id: str, request: Request) -> dict[str, Any]:
         claim_result: Mapping[str, Any] | None = None
@@ -1438,9 +1430,14 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             claim = str(claim_result.get("claim") or "")
             if not claim:
                 raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup claim is missing")
-            checkpoint_result = await get_adapter().cleanup_run(run_id)
+            checkpoint_result = (
+                {"status": "already_cleaned"}
+                if bool(claim_result.get("checkpoint_deleted"))
+                else await get_adapter().cleanup_run(run_id)
+            )
             if not isinstance(checkpoint_result, Mapping) or str(checkpoint_result.get("status") or "") not in {"cleaned", "already_cleaned", "not_bound"}:
                 raise RuntimeError("runtime_cleanup_invalid_result", "Runtime checkpoint cleanup returned an invalid outcome")
+            await execution_store.mark_cleanup_checkpoint_complete(run_id, claim)
             store_result = await execution_store.cleanup_run(run_id, claim=claim)
             if not isinstance(store_result, Mapping) or str(store_result.get("status") or "") not in {"cleaned", "already_cleaned"}:
                 raise RuntimeError("runtime_cleanup_invalid_result", "Runtime execution-store cleanup returned an invalid outcome")

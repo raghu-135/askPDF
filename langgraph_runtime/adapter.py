@@ -720,14 +720,6 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "metadata": dict(getattr(snapshot, "metadata", {}) or {}),
         }
 
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        from langgraph_runtime import checkpointing
-
-        if continuation is None:
-            return []
-        checkpoint_id = resolve_binding(str(continuation.payload.get("binding_id") or ""))
-        return await checkpointing.delete_agent_checkpoints([str(checkpoint_id)]) if checkpoint_id else []
-
     async def cleanup_run(self, run_id: str) -> Any:
         from langgraph_runtime import checkpointing
         deleted = await checkpointing.delete_agent_checkpoints([run_id])

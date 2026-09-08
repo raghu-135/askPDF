@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -697,3 +698,41 @@ async def test_cleanup_run_removes_execution_operations_and_events_idempotently(
     assert first["operations_deleted"] == 1
     assert second["status"] == "already_cleaned"
     assert await store.get(run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_claim_expires_and_is_reclaimed_after_restart() -> None:
+    first = ExecutionStore(database_url="")
+    await first.create("cleanup-restart", "start", {"run_id": "cleanup-restart"}, {})
+    await first.set_status("cleanup-restart", "completed")
+    claim = await first.begin_cleanup("cleanup-restart")
+    record = await first.get("cleanup-restart")
+    record.payload["cleanup"]["lease_expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+
+    second = ExecutionStore(database_url="")
+    second._records = first._records
+    second._events = first._events
+    second._operations = first._operations
+    reclaimed = await second.begin_cleanup("cleanup-restart")
+
+    assert reclaimed["claim"] != claim["claim"]
+    assert reclaimed["fencing_token"] == claim["fencing_token"] + 1
+    with pytest.raises(Exception):
+        await first.cleanup_run("cleanup-restart", claim=claim["claim"])
+
+
+@pytest.mark.asyncio
+async def test_cleanup_resumes_after_checkpoint_deletion_before_execution_deletion() -> None:
+    store = ExecutionStore(database_url="")
+    await store.create("cleanup-boundary", "start", {"run_id": "cleanup-boundary"}, {})
+    await store.append("cleanup-boundary", {"event_id": "e1", "kind": "run.progress", "payload": {}})
+    record = await store.get("cleanup-boundary")
+    record.status = "completed"
+    claim = await store.begin_cleanup("cleanup-boundary")
+    await store.mark_cleanup_checkpoint_complete("cleanup-boundary", claim["claim"])
+
+    resumed = await store.cleanup_run("cleanup-boundary", claim=claim["claim"])
+
+    assert resumed["status"] == "cleaned"
+    assert await store.get("cleanup-boundary") is None
+    assert await store.begin_cleanup("cleanup-boundary") == {"status": "already_cleaned", "run_id": "cleanup-boundary"}

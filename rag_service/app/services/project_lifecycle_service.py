@@ -673,8 +673,8 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             raise ProjectCleanupError(f"Failed to delete memory vectors for {scope_type}:{scope_id}")
     if runtime_runs:
         try:
-            from app.runtime.cleanup import delete_run_continuations
-            outcomes = await delete_run_continuations(runtime_runs)
+            from app.runtime.cleanup import cleanup_runs
+            outcomes = await cleanup_runs(runtime_runs)
             if any(not outcome.owner_deletion_allowed for outcome in outcomes):
                 raise ProjectCleanupError("Runtime continuation cleanup was not confirmed")
         except Exception as exc:

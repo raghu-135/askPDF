@@ -190,6 +190,4 @@ class LangGraphBuilderProvider:
         )
 
     async def cleanup_transient_test(self, request: AgentRuntimeRequest) -> Any:
-        if request.continuation is None:
-            return []
-        return await self._runtime().delete_continuation(request.continuation)
+        return await self._runtime().cleanup_run(request.run_id)
