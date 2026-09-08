@@ -256,6 +256,15 @@ def normalize_clarification_options(value: Any, *, limit: int = 4, chars: int = 
     return normalized
 
 
+def clarification_contract_errors(parsed: Dict[str, Any]) -> List[str]:
+    """Validate clarification output before the bounded repair attempt."""
+    if parsed.get("route") != PlannerRoute.CLARIFY.value:
+        return []
+    if len(normalize_clarification_options(parsed.get("clarification_options"))) < 2:
+        return ["clarification_options must contain at least two distinct questions when route is clarify"]
+    return []
+
+
 def normalize_execution_plan(
     parsed: Dict[str, Any],
     *,

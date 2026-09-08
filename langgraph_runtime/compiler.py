@@ -256,6 +256,60 @@ class WorkflowMaterializer:
             node.pop("_materialized_order", None)
         return {**graph_spec, "nodes": nodes}
 
+    def _with_pause_gates(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Put manual pause interrupts in their own checkpointed LangGraph task."""
+        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        node_ids = {str(node.get("id")) for node in nodes if node.get("id")}
+        dynamic_targets = {
+            str(edge.get("to"))
+            for edge in graph_spec.get("edges", [])
+            if isinstance(edge, dict) and edge.get("dynamic") is True and edge.get("to")
+        }
+        dynamic_route_functions = {
+            RouteFunctionId.PARALLEL_DISPATCH.value,
+            RouteFunctionId.SERIAL_DISPATCH.value,
+            RouteFunctionId.DEEP_TASK_DISPATCH.value,
+        }
+        for edge in graph_spec.get("edges", []):
+            if not isinstance(edge, dict) or edge.get("route_fn") not in dynamic_route_functions:
+                continue
+            dynamic_targets.update(
+                str(value)
+                for value in (edge.get("routes") or {}).values()
+                if value
+            )
+        gate_for: Dict[str, str] = {}
+        for node_id in sorted(node_ids - dynamic_targets - {"task_pause_gate"}):
+            gate_id = f"__task_pause_gate__{node_id}"
+            gate_for[node_id] = gate_id
+            nodes.append({
+                "id": gate_id,
+                "type": "task_pause_gate",
+                "target_node_id": node_id,
+                "synthetic": True,
+            })
+
+        edges = []
+        for raw_edge in graph_spec.get("edges", []):
+            if not isinstance(raw_edge, dict) or raw_edge.get("dynamic") is True:
+                edges.append(dict(raw_edge) if isinstance(raw_edge, dict) else raw_edge)
+                continue
+            edge = dict(raw_edge)
+            target = str(edge.get("to") or "")
+            if edge.get("conditional") and isinstance(edge.get("routes"), dict):
+                edge["routes"] = {
+                    label: gate_for.get(str(value), value)
+                    for label, value in dict(edge["routes"]).items()
+                }
+            elif target in gate_for:
+                edge["to"] = gate_for[target]
+            edges.append(edge)
+        edges.extend(
+            {"from": gate_id, "to": node_id}
+            for node_id, gate_id in gate_for.items()
+        )
+        return {**graph_spec, "nodes": nodes, "edges": edges, "pause_gates_compiled": True}
+
 
 class WorkflowCompiler(WorkflowMaterializer):
     """Compile validated v2 workflow specs into LangGraph StateGraph instances."""
@@ -280,6 +334,7 @@ class WorkflowCompiler(WorkflowMaterializer):
             WorkflowValidator().validate(spec)
             spec = self.materialize_spec(spec)
             graph_spec = (spec.get("config") or {}).get("graph") or {}
+        graph_spec = self._with_pause_gates(graph_spec)
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
         outgoing_route_labels: Dict[str, list[str]] = {

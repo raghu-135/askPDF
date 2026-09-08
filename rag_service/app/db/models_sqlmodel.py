@@ -387,6 +387,8 @@ class AgentRun(SQLModel, table=True):
         sa_column=Column(JSONB, default=dict)
     )
     status: str = Field(default=AgentRunStatus.RUNNING.value, index=True)
+    # Retained for development-branch schema compatibility; runtime bindings
+    # and product responses must never populate or expose this field.
     checkpoint_thread_id: Optional[str] = None
     task_id: Optional[str] = Field(
         default=None,

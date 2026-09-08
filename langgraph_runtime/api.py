@@ -205,6 +205,8 @@ def _context(
     *,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    pause_token_reader: Any = None,
+    pause_consumer: Any = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     operation_id: str | None = None,
@@ -242,6 +244,8 @@ def _context(
         task_context=_task_context(value.get("task_context")),
         cancellation_checker=cancellation_checker,
         pause_checker=pause_checker,
+        pause_token_reader=pause_token_reader,
+        pause_consumer=pause_consumer,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         operation_id=operation_id,
@@ -576,6 +580,16 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def _preflight_operation(run_id: str, payload: Mapping[str, Any], operation: str) -> None:
         """Return an HTTP conflict before opening an SSE response."""
         record = await execution_store.get(run_id)
+        if operation == "resume" and record is not None and record.status in {"awaiting_human", "paused"}:
+            supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
+            stored_result = record.result if isinstance(record.result, Mapping) else {}
+            current = stored_result.get("pending_interrupt") or stored_result.get("interruption")
+            if not isinstance(current, Mapping) or not isinstance(supplied, Mapping):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The checkpoint has no matching pending interrupt", "retryable": False})
+            if str(supplied.get("interrupt_id") or "") != str(current.get("interrupt_id") or ""):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt does not match the checkpoint", "retryable": False})
+            if str(supplied.get("type") or "") != str(current.get("type") or ""):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt type does not match the checkpoint", "retryable": False})
         if record is None or record.status not in TERMINAL_STATUSES:
             return
         request = _request_from_payload(payload)
@@ -802,6 +816,12 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         async def pause_probe() -> bool:
             return await execution_store.is_pause_requested(run_id)
 
+        async def pause_token_probe() -> str | None:
+            return await execution_store.pause_request_token(run_id)
+
+        async def pause_consumer(token: str | None) -> bool:
+            return await execution_store.consume_pause_request(run_id, token)
+
         async def correction_reader() -> list[dict[str, Any]]:
             return await execution_store.pending_course_corrections(run_id)
 
@@ -930,6 +950,8 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     request,
                     cancellation_checker=cancellation_probe,
                     pause_checker=pause_probe,
+                    pause_token_reader=pause_token_probe,
+                    pause_consumer=pause_consumer,
                     course_correction_reader=correction_reader,
                     course_correction_acknowledger=correction_acknowledger,
                     operation_id=operation_id,
@@ -1043,7 +1065,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     payload,
                     operation_id=effective_operation_id,
                     source_attempt=source_attempt,
-                    clear_pause_request_on_accept=operation == "resume",
                 )
             except ExecutionConflictError as exc:
                 logger.warning(

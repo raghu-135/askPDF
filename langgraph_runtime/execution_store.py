@@ -215,7 +215,6 @@ class ExecutionStore:
         *,
         operation_id: str | None = None,
         source_attempt: int | None = None,
-        clear_pause_request_on_accept: bool = False,
     ) -> ExecutionRecord:
         # The operation payload carries continuation decisions and immutable
         # task context in addition to the neutral request.  Both participate
@@ -279,8 +278,6 @@ class ExecutionStore:
                     existing.lease_expires_at = None
                     existing.heartbeat_at = None
                     existing.updated_at = _now()
-                    if clear_pause_request_on_accept:
-                        existing.payload.pop("pause_requested", None)
                     if operation_id:
                         self._operations[(run_id, operation_id)] = {
                             "attempt": existing.attempt,
@@ -352,7 +349,7 @@ class ExecutionStore:
                 elif existing is not None and operation == "resume":
                     if existing["status"] not in {"awaiting_human", "paused"}:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
-                    payload_expression = "$4::jsonb - 'pause_requested'" if clear_pause_request_on_accept else "$4::jsonb"
+                    payload_expression = "$4::jsonb"
                     await connection.execute(
                         f"""update runtime_executions
                            set operation=$2, request=$3::jsonb, payload={payload_expression},
@@ -552,6 +549,7 @@ class ExecutionStore:
             if record.status in {"awaiting_human", "paused"}:
                 return {"status": "already_paused", "run_id": run_id, "run_status": record.status}
             record.payload["pause_requested"] = True
+            record.payload["pause_request_id"] = uuid.uuid4().hex
             record.updated_at = _now()
             return {"status": "pause_requested", "run_id": run_id, "run_status": record.status}
         async with self._pool.acquire() as connection:
@@ -568,14 +566,43 @@ class ExecutionStore:
                 if status in {"awaiting_human", "paused"}:
                     return {"status": "already_paused", "run_id": run_id, "run_status": status}
                 await connection.execute(
-                    "update runtime_executions set payload=payload || '{\"pause_requested\": true}'::jsonb, updated_at=now() where run_id=$1",
+                    "update runtime_executions set payload=payload || $2::jsonb, updated_at=now() where run_id=$1",
                     run_id,
+                    json.dumps({"pause_requested": True, "pause_request_id": uuid.uuid4().hex}),
                 )
                 return {"status": "pause_requested", "run_id": run_id, "run_status": status}
 
     async def is_pause_requested(self, run_id: str) -> bool:
         record = await self.get(run_id)
         return bool(record and record.payload.get("pause_requested") is True)
+
+    async def pause_request_token(self, run_id: str) -> str | None:
+        record = await self.get(run_id)
+        if not record or record.payload.get("pause_requested") is not True:
+            return None
+        token = str(record.payload.get("pause_request_id") or "")
+        return token or None
+
+    async def consume_pause_request(self, run_id: str, token: str | None) -> bool:
+        if not token:
+            raise ExecutionConflictError("pause request token is required")
+        if self._pool is None:
+            record = self._records.get(run_id)
+            if not record or record.payload.get("pause_request_id") != token:
+                raise ExecutionConflictError("pause request is missing or superseded")
+            record.payload.pop("pause_requested", None)
+            record.payload.pop("pause_request_id", None)
+            record.updated_at = _now()
+            return True
+        async with self._pool.acquire() as connection:
+            result = await connection.execute(
+                "update runtime_executions set payload=payload - 'pause_requested' - 'pause_request_id', updated_at=now() where run_id=$1 and (payload->>'pause_requested') = 'true' and payload->>'pause_request_id' = $2",
+                run_id,
+                token,
+            )
+            if result.endswith("0"):
+                raise ExecutionConflictError("pause request is missing or superseded")
+            return True
 
     @staticmethod
     def _correction_fingerprint(correction: Mapping[str, Any]) -> str:

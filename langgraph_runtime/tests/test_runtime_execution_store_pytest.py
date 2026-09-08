@@ -312,7 +312,6 @@ async def test_rejected_resume_does_not_clear_pause_request() -> None:
             request,
             {"request": request, "interrupt": {"decision": "approve"}},
             operation_id="resume-rejected",
-            clear_pause_request_on_accept=True,
         )
 
     assert await store.is_pause_requested("run-resume-paused") is True
@@ -328,14 +327,14 @@ async def test_resume_replay_does_not_clear_newer_pause_request() -> None:
 
     await store.create(
         "run-resume-replay", "resume", request, payload,
-        operation_id="resume-replay", clear_pause_request_on_accept=True,
+        operation_id="resume-replay",
     )
     await store.set_status("run-resume-replay", "running")
     await store.request_pause("run-resume-replay")
 
     replay = await store.create(
         "run-resume-replay", "resume", request, payload,
-        operation_id="resume-replay", clear_pause_request_on_accept=True,
+        operation_id="resume-replay",
     )
 
     assert replay.replay_only is True

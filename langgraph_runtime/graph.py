@@ -74,6 +74,7 @@ from langgraph_runtime.workflows.planning import (
     current_replan_count as _current_replan_count,
     infer_required_plan_steps,
     normalize_clarification_options as _normalize_clarification_options,
+    clarification_contract_errors,
     normalize_evaluator_report,
     normalize_execution_plan,
     normalize_replanner_execution_plan as _normalize_replanner_execution_plan,
@@ -222,6 +223,40 @@ class NodeRegistry:
     def get_for_spec(self, node_spec: Dict[str, Any], *, route_labels: list[str] | None = None) -> Callable[..., Any]:
         node_type = str(node_spec.get("type") or "")
         node_id = str(node_spec.get("id") or node_type)
+        if node_type == "task_pause_gate" or node_id == "task_pause_gate":
+            async def _task_pause_gate(state: RouterRagState, config: RunnableConfig, runtime: Runtime | None = None) -> Dict[str, Any]:
+                del runtime
+                configurable = (config or {}).get("configurable") or {}
+                checker = configurable.get("pause_checker")
+                if checker is None or not await checker():
+                    return {}
+                token_reader = configurable.get("pause_token_reader")
+                token = await token_reader() if token_reader is not None else None
+                if not token:
+                    raise AgentRuntimeError("pause_request_missing", "The runtime pause request disappeared before the checkpoint gate ran")
+                decision = interrupt({
+                    "gate_id": "task_pause_gate",
+                    "node_id": "task_pause_gate",
+                    "target_node_id": str(node_spec.get("target_node_id") or ""),
+                    "type": "task_pause",
+                    "kind": "pause",
+                    "response_operation": "run.resume",
+                    "allowed_actions": ["approve", "resume", "reject"],
+                    "default_action": "approve",
+                    "checkpoint_resume": True,
+                })
+                action = str((decision or {}).get("action") if isinstance(decision, dict) else decision or "")
+                if action not in {"approve", "resume", "reject"}:
+                    raise AgentRuntimeError("runtime_interrupt_mismatch", "The task pause gate requires an approve or resume decision")
+                consumer = configurable.get("pause_consumer")
+                if consumer is None:
+                    raise AgentRuntimeError("pause_consumer_missing", "The runtime pause consumer is unavailable")
+                return {
+                    "task_pause_requested": False,
+                    "task_pause_consumed_token": token,
+                    "hitl_gate_route": "approve" if action == "resume" else action,
+                }
+            return _task_pause_gate
         metadata = get_node_type_metadata(node_type)
         capabilities = list(metadata.get("capabilities") or node_type_capabilities(node_type))
         node_impl = self.get(node_type)
@@ -229,7 +264,6 @@ class NodeRegistry:
         async def _bound_node(state: RouterRagState, config: RunnableConfig, runtime: Runtime | None = None) -> Dict[str, Any]:
             cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
             await raise_if_chat_run_cancelled(cancellation_checker, state)
-            pause_checker = ((config or {}).get("configurable") or {}).get("pause_checker")
             parallel_item = state.get("work_item") if isinstance(state.get("work_item"), dict) else None
             task_item = state.get("task_work_item") if isinstance(state.get("task_work_item"), dict) else None
             branch_item = parallel_item or task_item
@@ -249,14 +283,6 @@ class NodeRegistry:
             )
             if runtime is not None:
                 runtime_config.setdefault("configurable", {})["langgraph_runtime"] = runtime
-            if (
-                pause_checker is not None
-                and node_id != "task_pause_gate"
-                and parallel_item is None
-                and task_item is None
-                and await pause_checker()
-            ):
-                await self.hitl_gate(state, runtime_config, node_id="task_pause_gate")
             configurable = runtime_config.get("configurable") or {}
             queue = configurable.get("studio_event_queue")
             execution_event_sink = configurable.get("execution_event_sink")
@@ -627,11 +653,14 @@ class NodeRegistry:
             prompt_summary=prompt_summary,
             invoke_llm_for_node=_invoke_llm_for_node,
             safe_json_object=_safe_json_object,
-            validate=lambda value: worker_decision_contract_errors(
-                value,
-                worker_nodes=state.get("available_worker_nodes"),
-                use_web_search=bool(state.get("use_web_search", False)),
-            ),
+            validate=lambda value: [
+                *worker_decision_contract_errors(
+                    value,
+                    worker_nodes=state.get("available_worker_nodes"),
+                    use_web_search=bool(state.get("use_web_search", False)),
+                ),
+                *clarification_contract_errors(value),
+            ],
             review_when=lambda value: worker_decisions_need_coverage_review(value),
         )
         normalized = normalize_execution_plan(
