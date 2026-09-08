@@ -18,6 +18,7 @@ from app.models.deep_research import (
     AgentTaskCourseCorrectionRequest,
     AgentTaskCreateRequest,
     AgentTaskResultReviewRequest,
+    AgentTaskRetryStartApprovalRequest,
 )
 from app.services import agent_task_repository as repository
 from app.services.agent_task_runtime import (
@@ -475,14 +476,38 @@ async def respond_to_agent_task_result_review(
             followup_input=req.followup_input,
             idempotency_key=idempotency_key,
         )
-        linked_run = None
-        if req.decision == "retry_with_input" and not duplicate:
-            linked_run = await ensure_task_run(task.id)
-            task = await repository.get_task(task.id) or task
         return {
             "task": _task_payload(task),
+            "linked_run": None,
+            "duplicate": duplicate,
+        }
+    except repository.AgentTaskConflict as exc:
+        raise _conflict(exc) from exc
+
+
+@router.post("/agent-tasks/{task_id}/retry-start/responses")
+async def respond_to_agent_task_retry_start(
+    task_id: str,
+    req: AgentTaskRetryStartApprovalRequest,
+    thread_id: str = Query(min_length=1),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    task = await _owned_task(task_id, thread_id)
+    run = await repository.get_task_run(task.id)
+    if run is None or run.id != req.run_id:
+        raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
+    try:
+        task, duplicate, approved = await repository.respond_to_retry_start_approval(
+            task_id, run_id=req.run_id, interrupt_id=req.interrupt_id,
+            expected_version=req.expected_version, decision=req.decision,
+            idempotency_key=idempotency_key,
+        )
+        linked_run = await ensure_task_run(task.id) if approved and not duplicate else None
+        return {
+            "task": _task_payload(await repository.get_task(task.id) or task),
             "linked_run": _run_payload(linked_run) if linked_run is not None else None,
             "duplicate": duplicate,
+            "approved": approved,
         }
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc

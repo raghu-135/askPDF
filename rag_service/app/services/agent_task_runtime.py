@@ -517,6 +517,29 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return
     run = await ensure_task_run(task_id)
     task = await tasks.get_task(task_id)
+    # A result-review redirect can resolve the source run while a worker that
+    # already claimed it is still preparing its request.  Never let that
+    # stale worker send a continuation for the now-terminal source run.  The
+    # redirect path owns the transition to queued and ensure_task_run allocates
+    # the linked run with a new identity.
+    current_run = await tasks.get_task_run(task_id)
+    if (
+        task is not None
+        and current_run is not None
+        and (
+            current_run.id != run.id
+            or (
+                task.status == AgentTaskStatus.QUEUED.value
+                and current_run.status in {
+                    AgentRunStatus.COMPLETED.value,
+                    AgentRunStatus.FAILED.value,
+                    AgentRunStatus.CANCELLED.value,
+                }
+            )
+        )
+    ):
+        run = await ensure_task_run(task_id)
+        task = await tasks.get_task(task_id)
     thread = await get_thread(task.thread_id) if task else None
     if task is None or thread is None:
         await tasks.complete_task(task_id, status=AgentTaskStatus.FAILED.value, reason="task_thread_missing")
@@ -717,6 +740,32 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             task_context=task_context,
         )
         runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+        # Re-read the durable ownership immediately before transport.  A
+        # result-review response may have completed this run while this
+        # worker was assembling context.  Returning here lets the queued
+        # linked run be claimed; calling continue_run would resurrect an
+        # immutable terminal execution and turn a valid redirect into a
+        # runtime_operation_conflict.
+        latest_task = await tasks.get_task(task.id)
+        latest_run = await tasks.get_task_run(task.id)
+        if (
+            latest_task is None
+            or latest_run is None
+            or latest_run.id != run.id
+            or latest_run.status in {
+                AgentRunStatus.COMPLETED.value,
+                AgentRunStatus.FAILED.value,
+                AgentRunStatus.CANCELLED.value,
+            }
+        ):
+            logger.info(
+                "Skipping stale task runtime dispatch after durable run transition | task_id=%s run_id=%s latest_run_id=%s latest_status=%s",
+                task.id,
+                run.id,
+                getattr(latest_run, "id", None),
+                getattr(latest_run, "status", None),
+            )
+            return
         runtime_result = await _invoke_task_runtime(
             adapter=adapter,
             definition=definition,

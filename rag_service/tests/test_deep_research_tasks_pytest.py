@@ -661,10 +661,22 @@ async def test_product_result_review_is_runtime_independent_and_idempotent(
     )
 
     assert duplicate is False
-    assert resolved.status == ("completed" if decision == "accept" else "queued")
+    assert resolved.status == ("completed" if decision == "accept" else "awaiting_approval")
     stored_run = await repository.get_task_run(task.id)
     assert stored_run.status == "completed"
-    assert stored_run.pending_interrupt_json["decision"]["action"] == decision
+    if decision == "retry_with_input":
+        assert stored_run.pending_interrupt_json["type"] == "retry_start_approval"
+        assert stored_run.pending_interrupt_json["status"] == "pending"
+        approved, duplicate, linked = await repository.respond_to_retry_start_approval(
+            task.id, run_id=run.id,
+            interrupt_id=stored_run.pending_interrupt_json["interrupt_id"],
+            expected_version=resolved.version, decision="approve",
+            idempotency_key="retry-start-once",
+        )
+        assert approved.status == "queued" and duplicate is False and linked is True
+        assert (await repository.get_task_run(task.id)).pending_interrupt_json["status"] == "resolved"
+    else:
+        assert stored_run.pending_interrupt_json["decision"]["action"] == decision
     run_events = await AgentWorkflowRepository().list_run_events(run.id)
     assert [(event.kind, event.terminal) for event in run_events if event.terminal] == [("run.completed", True)]
     repeated, duplicate = await repository.respond_to_result_review(

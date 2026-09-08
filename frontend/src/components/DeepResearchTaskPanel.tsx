@@ -26,6 +26,7 @@ import {
   listAgentTasks,
   resumeAgentRun,
   respondToAgentTaskResultReview,
+  respondToAgentTaskRetryStart,
   respondToAgentTaskBudgetReview,
   submitAgentTaskCourseCorrection,
   sendAgentRunFollowup,
@@ -657,6 +658,7 @@ export default function DeepResearchTaskPanel({
   }, [effectiveSelectedRunCapabilities]);
   const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
   const isResultReview = pendingInterrupt?.response_operation === 'task.result_review.respond';
+  const isRetryStartApproval = pendingInterrupt?.response_operation === 'task.retry_start.respond';
   const isBudgetReview = pendingInterrupt?.response_operation === 'task.budget_review.respond';
   const resultReviewAvailability = runtimeOperationAvailability(
     effectiveSelectedRunCapabilities,
@@ -678,6 +680,20 @@ export default function DeepResearchTaskPanel({
         expected_version: task.version,
         decision,
         followup_input: followup?.trim(),
+      });
+      await refresh();
+    } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
+    finally { setDecisionSubmitting(null); }
+  };
+  const respondToRetryStart = async (decision: 'approve' | 'reject') => {
+    if (!task || !selectedRun || !pendingInterrupt) return;
+    setDecisionSubmitting('approve'); setDecisionError('');
+    try {
+      await respondToAgentTaskRetryStart(task.id, threadId, {
+        run_id: selectedRun.id,
+        interrupt_id: pendingInterrupt.interrupt_id,
+        expected_version: task.version,
+        decision,
       });
       await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
@@ -774,7 +790,15 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isRetryStartApproval ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Approve redirected retry'}</Typography>
+      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.body || 'The redirected research is ready to start as a new attempt.'}</Typography>
+      <Stack direction="row" spacing={1}>
+        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting)} onClick={() => void respondToRetryStart('approve')}>Start retry</Button>
+        <Button size="small" color="error" disabled={Boolean(decisionSubmitting)} onClick={() => void respondToRetryStart('reject')}>Do not retry</Button>
+      </Stack>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">Deep research paused</Typography>
       <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume above to continue or Cancel to stop the task.</Typography>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}

@@ -17,6 +17,7 @@ export type RuntimeControlOperation =
   | 'task.cancel'
   | 'task.retry'
   | 'task.result_review.respond'
+  | 'task.retry_start.respond'
   | 'task.budget_review.respond'
   | 'task.course_correction.submit';
 
@@ -34,13 +35,13 @@ export const TASK_CONTROL_CATALOG: ReadonlyArray<{
   { action: 'retry', operation: 'task.retry', label: 'retry' },
 ];
 
-export type RuntimeInterruptResponseOperation = 'run.resume' | 'run.approval.respond' | 'task.budget_review.respond';
+export type RuntimeInterruptResponseOperation = 'run.resume' | 'run.approval.respond' | 'task.budget_review.respond' | 'task.retry_start.respond';
 
 export function runtimeInterruptResponseOperation(
   interrupt: { response_operation?: unknown } | null | undefined,
 ): RuntimeInterruptResponseOperation | undefined {
   const operation = interrupt?.response_operation;
-  return operation === 'run.resume' || operation === 'run.approval.respond' || operation === 'task.budget_review.respond' ? operation : undefined;
+  return operation === 'run.resume' || operation === 'run.approval.respond' || operation === 'task.budget_review.respond' || operation === 'task.retry_start.respond' ? operation : undefined;
 }
 
 export type RuntimeOperationAvailability = {
