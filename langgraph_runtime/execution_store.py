@@ -144,6 +144,10 @@ class ExecutionConflictError(RuntimeError):
     """Raised when an operation conflicts with an immutable terminal record."""
 
 
+class CleanupClaimError(ExecutionConflictError):
+    """Raised when cleanup cannot acquire or use its durable claim."""
+
+
 @dataclass(frozen=True)
 class CancellationOutcome:
     """Atomic result of requesting cancellation for a durable execution."""
@@ -234,6 +238,9 @@ class ExecutionStore:
                     return replace(existing, attempt=int(prior["attempt"]), replay_only=True)
             if run_id in self._records:
                 existing = self._records[run_id]
+                cleanup = existing.payload.get("cleanup") if isinstance(existing.payload, Mapping) else None
+                if isinstance(cleanup, Mapping) and cleanup.get("phase") in {"in_progress", "retryable"}:
+                    raise ExecutionConflictError("runtime cleanup is in progress or awaiting retry")
                 if operation == "retry":
                     if not operation_id:
                         raise ExecutionConflictError("retry requires operation_id")
@@ -317,9 +324,14 @@ class ExecutionStore:
                             raise ExecutionConflictError("operation_id was reused with different input")
                         replay_attempt = int(prior["attempt"])
                 existing = await connection.fetchrow(
-                    "select operation, request, status, attempt, continuation, request_fingerprint from runtime_executions where run_id=$1 for update",
+                    "select operation, request, payload, status, attempt, continuation, request_fingerprint from runtime_executions where run_id=$1 for update",
                     run_id,
                 )
+                if existing is not None and replay_attempt is None:
+                    existing_payload = _json_object(existing["payload"]) or {}
+                    cleanup = existing_payload.get("cleanup")
+                    if isinstance(cleanup, Mapping) and cleanup.get("phase") in {"in_progress", "retryable"}:
+                        raise ExecutionConflictError("runtime cleanup is in progress or awaiting retry")
                 if existing is not None and operation == "retry":
                     if not operation_id:
                         raise ExecutionConflictError("retry requires operation_id")
@@ -439,27 +451,101 @@ class ExecutionStore:
             "result": _json_object(row["result"]),
         }
 
-    async def cleanup_run(self, run_id: str) -> dict[str, Any]:
-        """Delete all durable runtime records for one quiescent run."""
+    async def begin_cleanup(self, run_id: str) -> dict[str, Any]:
+        """Atomically fence execution/recovery before checkpoint deletion."""
+        claim = uuid.uuid4().hex
         if self._pool is None:
-            record = self._records.get(run_id)
-            if record and record.owner_id and record.lease_expires_at and datetime.fromisoformat(record.lease_expires_at) > datetime.now(timezone.utc):
-                raise ExecutionConflictError("active runtime execution cannot be cleaned")
-            existed = record is not None
-            event_count = len(self._events.get(run_id, []))
-            operation_count = sum(1 for key in self._operations if key[0] == run_id)
-            self._records.pop(run_id, None)
-            self._events.pop(run_id, None)
-            for key in [key for key in self._operations if key[0] == run_id]:
-                self._operations.pop(key, None)
-            return {"status": "cleaned" if existed else "already_cleaned", "run_id": run_id, "events_deleted": event_count, "operations_deleted": operation_count}
+            async with self._lock:
+                record = self._records.get(run_id)
+                if record is None:
+                    return {"status": "already_cleaned", "run_id": run_id}
+                cleanup = record.payload.get("cleanup") if isinstance(record.payload, Mapping) else None
+                if isinstance(cleanup, Mapping):
+                    phase = str(cleanup.get("phase") or "")
+                    if phase == "in_progress":
+                        raise CleanupClaimError("cleanup is already in progress")
+                    if phase == "retryable":
+                        claim = str(cleanup.get("claim") or claim)
+                if record.owner_id and record.lease_expires_at and datetime.fromisoformat(record.lease_expires_at) > datetime.now(timezone.utc):
+                    raise CleanupClaimError("active runtime execution cannot be cleaned")
+                if record.status in {"queued", "running", "recovering"}:
+                    raise CleanupClaimError("runtime execution is not quiescent")
+                record.payload["cleanup"] = {"claim": claim, "phase": "in_progress"}
+                record.updated_at = _now()
+                return {"status": "cleanup_claimed", "run_id": run_id, "claim": claim}
         async with self._pool.acquire() as connection:
             async with connection.transaction():
-                record = await connection.fetchrow("select owner_id, lease_expires_at from runtime_executions where run_id=$1 for update", run_id)
-                if record and record["owner_id"] and record["lease_expires_at"] and record["lease_expires_at"] > datetime.now(timezone.utc):
-                    raise ExecutionConflictError("active runtime execution cannot be cleaned")
+                row = await connection.fetchrow(
+                    "select status, payload, owner_id, lease_expires_at from runtime_executions where run_id=$1 for update",
+                    run_id,
+                )
+                if row is None:
+                    return {"status": "already_cleaned", "run_id": run_id}
+                payload = _json_object(row["payload"]) or {}
+                cleanup = payload.get("cleanup") if isinstance(payload.get("cleanup"), Mapping) else None
+                if cleanup:
+                    phase = str(cleanup.get("phase") or "")
+                    if phase == "in_progress":
+                        raise CleanupClaimError("cleanup is already in progress")
+                    if phase == "retryable":
+                        claim = str(cleanup.get("claim") or claim)
+                if row["owner_id"] and row["lease_expires_at"] and row["lease_expires_at"] > datetime.now(timezone.utc):
+                    raise CleanupClaimError("active runtime execution cannot be cleaned")
+                if str(row["status"]) in {"queued", "running", "recovering"}:
+                    raise CleanupClaimError("runtime execution is not quiescent")
+                payload["cleanup"] = {"claim": claim, "phase": "in_progress"}
+                await connection.execute(
+                    "update runtime_executions set payload=$2::jsonb, updated_at=now() where run_id=$1",
+                    run_id, json.dumps(_json_safe(payload)),
+                )
+                return {"status": "cleanup_claimed", "run_id": run_id, "claim": claim}
+
+    async def mark_cleanup_retryable(self, run_id: str, claim: str, error: str) -> None:
+        if not claim:
+            raise CleanupClaimError("cleanup claim is required")
+        if self._pool is None:
+            async with self._lock:
+                record = self._records.get(run_id)
+                cleanup = record.payload.get("cleanup") if record else None
+                if not record or not isinstance(cleanup, Mapping) or cleanup.get("claim") != claim:
+                    raise CleanupClaimError("cleanup claim is invalid")
+                record.payload["cleanup"] = {"claim": claim, "phase": "retryable", "error": str(error)[:1000]}
+                record.updated_at = _now()
+                return
+        async with self._pool.acquire() as connection:
+            updated = await connection.fetchval(
+                "update runtime_executions set payload=jsonb_set(jsonb_set(payload, '{cleanup,phase}', to_jsonb('retryable'::text)), '{cleanup,error}', to_jsonb($3::text)), updated_at=now() where run_id=$1 and payload->'cleanup'->>'claim'=$2 returning run_id",
+                run_id, claim, str(error)[:1000],
+            )
+            if updated is None:
+                raise CleanupClaimError("cleanup claim is invalid")
+
+    async def cleanup_run(self, run_id: str, *, claim: str | None = None) -> dict[str, Any]:
+        """Delete durable runtime records only after a cleanup claim."""
+        if self._pool is None:
+            async with self._lock:
+                record = self._records.get(run_id)
+                if record is not None:
+                    cleanup = record.payload.get("cleanup") if isinstance(record.payload, Mapping) else None
+                    if not isinstance(cleanup, Mapping) or cleanup.get("phase") != "in_progress" or cleanup.get("claim") != claim:
+                        raise CleanupClaimError("cleanup claim is required")
+                existed = record is not None
+                event_count = len(self._events.get(run_id, []))
+                operation_count = sum(1 for key in self._operations if key[0] == run_id)
+                self._records.pop(run_id, None)
+                self._events.pop(run_id, None)
+                for key in [key for key in self._operations if key[0] == run_id]:
+                    self._operations.pop(key, None)
+                return {"status": "cleaned" if existed else "already_cleaned", "run_id": run_id, "events_deleted": event_count, "operations_deleted": operation_count}
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                record = await connection.fetchrow("select payload from runtime_executions where run_id=$1 for update", run_id)
                 if record is None:
                     return {"status": "already_cleaned", "run_id": run_id, "events_deleted": 0, "operations_deleted": 0}
+                payload = _json_object(record["payload"]) or {}
+                cleanup = payload.get("cleanup") if isinstance(payload.get("cleanup"), Mapping) else None
+                if not isinstance(cleanup, Mapping) or cleanup.get("phase") != "in_progress" or cleanup.get("claim") != claim:
+                    raise CleanupClaimError("cleanup claim is required")
                 events = await connection.fetchval("select count(*) from runtime_events where run_id=$1", run_id)
                 operations = await connection.fetchval("select count(*) from runtime_operations where run_id=$1", run_id)
                 await connection.execute("delete from runtime_events where run_id=$1", run_id)
@@ -472,6 +558,10 @@ class ExecutionStore:
         lease_seconds = lease_seconds or self.lease_seconds
         if self._pool is None:
             record = self._records.get(run_id)
+            if record is not None and isinstance(record.payload, Mapping):
+                cleanup = record.payload.get("cleanup")
+                if isinstance(cleanup, Mapping) and cleanup.get("phase") == "in_progress":
+                    return None
             if record is None or record.status in TERMINAL_STATUSES:
                 return None
             now = datetime.now(timezone.utc)
@@ -492,6 +582,7 @@ class ExecutionStore:
                    where run_id=$1
                      and status not in ('completed','clarification_required','failed','cancelled','no_continuation')
                      and (lease_expires_at is null or lease_expires_at < now() or owner_id=$2)
+                     and coalesce(payload->'cleanup'->>'phase', '') <> 'in_progress'
                    returning fencing_token""",
                 run_id, owner_id, lease_seconds,
             )

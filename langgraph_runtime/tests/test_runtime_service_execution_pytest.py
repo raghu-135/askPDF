@@ -240,9 +240,6 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
     request = _request(run_id)
     await store.create(run_id, "start", request, _payload(run_id), operation_id="start")
     fencing_token = await store.claim(run_id)
-    await store.request_pause(run_id)
-    pause_token = await store.pause_request_token(run_id)
-    await store.claim_pause_request(run_id, pause_token)
     await store.checkpoint_execution(
         run_id,
         AgentRuntimeEvent(

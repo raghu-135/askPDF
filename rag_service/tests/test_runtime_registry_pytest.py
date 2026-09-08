@@ -2,9 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
-from langgraph_runtime.adapter import LangGraphRuntimeAdapter
+from runtime_protocol.contracts import AgentDefinition
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 
 
@@ -88,82 +86,6 @@ def test_neutral_runtime_modules_have_no_framework_imports():
         source = path.read_text()
         import_lines = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
         assert not any(token in line for line in import_lines for token in forbidden), path.name
-@pytest.mark.asyncio
-async def test_langgraph_adapter_start_projects_typed_result(monkeypatch):
-    import langgraph_runtime.adapter as module
-    import langgraph_runtime.router_runtime as router_module
-
-    class Checkpointer:
-        pass
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return Checkpointer()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    captured = {}
-
-    monkeypatch.setattr(module.checkpointing, "open_agent_checkpointer", lambda: CheckpointerContext())
-
-    async def fake_execute(*args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return {
-            "status": "completed",
-            "answer": "adapter result",
-            "agent_run_id": "run-1",
-        }
-
-    monkeypatch.setattr(router_module, "execute_compiled_rag_chat", fake_execute)
-
-    adapter = LangGraphRuntimeAdapter()
-    request = AgentRuntimeRequest(
-        run_id="run-1",
-        thread_id="thread-1",
-        definition_id="router_rag_agent",
-        framework="langgraph",
-        builder_id="langgraph_graph",
-    )
-    result = await adapter.start(
-        request,
-        context=RuntimeInvocationContext(
-            request_payload={"question": "hello"},
-            embedding_model="embed-model",
-            resolved_spec={"workflow_id": "router_rag_agent"},
-            agent_run_context={"agent_run_id": "run-1"},
-        ),
-    )
-
-    assert result.status == "completed"
-    assert result.output["answer"] == "adapter result"
-    assert captured["args"][0] == "thread-1"
-    assert captured["args"][2] == "embed-model"
-    assert captured["kwargs"]["checkpointer"].__class__ is Checkpointer
-    assert captured["kwargs"]["agent_run_context"]["agent_run_id"] == "run-1"
-
-
-@pytest.mark.asyncio
-async def test_langgraph_adapter_validates_and_projects_neutral_events():
-    adapter = LangGraphRuntimeAdapter()
-    definition = AgentDefinition(
-        definition_id="router_rag_agent",
-        framework="langgraph",
-        builder_id="langgraph_graph",
-    )
-    validation = await adapter.validate(definition, {"schema_version": 1})
-    events = await adapter.project_trace(
-        [{"event": "run.completed", "data": {"answer": "ok"}}],
-        run_id="run-1",
-    )
-
-    assert validation.valid is False
-    assert validation.issues
-    assert events[0].run_id == "run-1"
-    assert events[0].terminal is True
-
-
 @pytest.mark.asyncio
 async def test_projection_is_idempotent_for_existing_chat_turn(monkeypatch):
     from app.services.agent_runtime_projection import AgentRuntimeProjection

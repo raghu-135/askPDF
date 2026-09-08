@@ -33,7 +33,7 @@ from langgraph_runtime.capabilities import LangGraphDeploymentProfile, langgraph
 from langgraph_runtime.budgets import deep_agent_budgets
 from langgraph_runtime.models.llm import configure_runtime_limits
 from runtime_protocol.configuration import validate_runtime_environment
-from langgraph_runtime.execution_store import ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
+from langgraph_runtime.execution_store import CleanupClaimError, ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
 from langgraph_runtime.dependencies import (
     DependencyMonitor,
     langgraph_dependency_requirements,
@@ -591,6 +591,10 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "operation_id was reused with different input", "retryable": False})
                 return
         record = await execution_store.get(run_id)
+        if record is not None and isinstance(record.payload, Mapping):
+            cleanup = record.payload.get("cleanup")
+            if isinstance(cleanup, Mapping) and str(cleanup.get("phase") or "") == "in_progress":
+                raise HTTPException(status_code=409, detail={"code": "runtime_cleanup_in_progress", "safe_message": "The runtime execution is being cleaned up", "retryable": True})
         if operation == "resume" and record is not None and record.status in {"awaiting_human", "paused"}:
             supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
             stored_result = record.result if isinstance(record.result, Mapping) else {}
@@ -961,12 +965,28 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         context: RuntimeExecutionContext | None = None
         try:
             if operation == "resume":
-                pending_token = await execution_store.pause_request_token(run_id)
-                if pending_token is None:
-                    pending_token = await execution_store.handled_pause_request_token(run_id)
-                if pending_token is None:
-                    raise RuntimeError("pause_request_missing", "A resume requires a pending pause request token")
-                claimed_pause_token = await execution_store.claim_pause_request(run_id, pending_token)
+                execution_record = await execution_store.get(run_id)
+                resume_result = execution_record.result if execution_record is not None and isinstance(execution_record.result, Mapping) else None
+                if resume_result is None:
+                    checkpoint_events = await execution_store.events_after(run_id, 0)
+                    if checkpoint_events:
+                        candidate_result = checkpoint_events[-1].get("result")
+                        resume_result = candidate_result if isinstance(candidate_result, Mapping) else None
+                pending_interrupt = resume_result.get("pending_interrupt") if isinstance(resume_result, Mapping) else None
+                pending_interrupt = pending_interrupt if isinstance(pending_interrupt, Mapping) else {}
+                interrupt_type = str(pending_interrupt.get("type") or "")
+                if not interrupt_type:
+                    raise RuntimeError("runtime_interrupt_invalid", "A resume requires a typed pending interrupt")
+                # Manual pause is a product-requested pause and is protected by
+                # the durable pause token. Framework-owned HITL interrupts
+                # already have their own persisted interrupt identity.
+                if interrupt_type == "task_pause":
+                    pending_token = await execution_store.pause_request_token(run_id)
+                    if pending_token is None:
+                        pending_token = await execution_store.handled_pause_request_token(run_id)
+                    if pending_token is None:
+                        raise RuntimeError("pause_request_missing", "A manual pause resume requires a pending pause request token")
+                    claimed_pause_token = await execution_store.claim_pause_request(run_id, pending_token)
             context = await runtime_adapter.prepare_execution_context(
                 _context(
                     payload,
@@ -1436,11 +1456,27 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.delete("/v1/runs/{run_id}")
     async def cleanup_run(run_id: str, request: Request) -> dict[str, Any]:
+        claim_result: Mapping[str, Any] | None = None
+        claim: str | None = None
         try:
+            claim_result = await execution_store.begin_cleanup(run_id)
+            if str(claim_result.get("status") or "") == "already_cleaned":
+                return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "checkpoint": {"status": "already_cleaned"}, "execution_store": claim_result})
+            if str(claim_result.get("status") or "") != "cleanup_claimed":
+                raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup returned an invalid claim outcome")
+            claim = str(claim_result.get("claim") or "")
+            if not claim:
+                raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup claim is missing")
             checkpoint_result = await get_adapter().cleanup_run(run_id)
-            store_result = await execution_store.cleanup_run(run_id)
-        except ExecutionConflictError as exc:
+            if not isinstance(checkpoint_result, Mapping) or str(checkpoint_result.get("status") or "") not in {"cleaned", "already_cleaned", "not_bound"}:
+                raise RuntimeError("runtime_cleanup_invalid_result", "Runtime checkpoint cleanup returned an invalid outcome")
+            store_result = await execution_store.cleanup_run(run_id, claim=claim)
+        except CleanupClaimError as exc:
             raise HTTPException(status_code=409, detail={"code": "runtime_active_execution", "safe_message": str(exc), "retryable": True}) from exc
+        except Exception as exc:
+            if claim:
+                await execution_store.mark_cleanup_retryable(run_id, claim, str(exc))
+            raise
         return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "checkpoint": checkpoint_result, "execution_store": store_result})
 
     return app

@@ -730,7 +730,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
 
     async def cleanup_run(self, run_id: str) -> Any:
         from langgraph_runtime import checkpointing
-        return await checkpointing.delete_agent_checkpoints([run_id])
+        deleted = await checkpointing.delete_agent_checkpoints([run_id])
+        return {"status": "cleaned" if deleted else "not_bound", "deleted": deleted}
 
     async def project_trace(
         self,

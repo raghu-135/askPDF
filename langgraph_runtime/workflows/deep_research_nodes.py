@@ -296,7 +296,21 @@ async def _call_model(
     state: Mapping[str, Any], config: RunnableConfig, node: str, messages: list[Any], *,
     meter_research: bool = True, structured_schema: Any = None,
     structured_output_strategy: str | None = None,
+    accounting_phase: str = "research",
 ) -> tuple[str, Dict[str, Any]]:
+    if accounting_phase not in {"research", "partial_synthesis"}:
+        raise AgentRuntimeError(
+            "budget_accounting_phase_invalid",
+            "The runtime received an unsupported model accounting phase.",
+            details={"accounting_phase": accounting_phase},
+            retryable=False,
+        )
+    if accounting_phase == "partial_synthesis" and meter_research:
+        raise AgentRuntimeError(
+            "budget_accounting_phase_invalid",
+            "Partial synthesis cannot be charged to the allocated research budget.",
+            retryable=False,
+        )
     started = time.perf_counter()
     model_name = str(state.get("llm_model") or "")
     task_id = str(state.get("agent_task_id") or "")
@@ -381,6 +395,7 @@ async def _call_model(
         await close_model_client(model)
     raw_response = response.get("raw") if isinstance(response, Mapping) and "raw" in response else response
     metadata = llm_result_metadata(raw_response, model_name=model_name, retry_attempts=attempts)
+    metadata["accounting_phase"] = accounting_phase
     token_counts = metadata.get("token_counts") if isinstance(metadata.get("token_counts"), dict) else {}
     if meter_research:
         await services.consume_budget(task_id, model_tokens=int(token_counts.get("total") or 0))
@@ -1348,6 +1363,7 @@ Artifacts:
             state, config, DEEP_NODE_COORDINATOR,
             [SystemMessage(content="Create a provenance-preserving research context summary."), HumanMessage(content=prompt)],
             meter_research=not bool(state.get("task_budget_boundary")),
+            accounting_phase="partial_synthesis" if state.get("task_budget_boundary") else "research",
         )
 
     return await services.assemble_artifact_context(compact)
@@ -1476,6 +1492,7 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
             state, config, DEEP_NODE_SYNTHESIZER,
             [SystemMessage(content=_deep_system("Synthesize a grounded askPDF deep research report.")), HumanMessage(content=prompt)],
             meter_research=not provisional,
+            accounting_phase="partial_synthesis" if provisional else "research",
         )
     except Exception as exc:
         if not provisional:
@@ -1519,6 +1536,7 @@ Report:\n{answer[:60000]}"""
             state, config, DEEP_NODE_CRITIC,
             [SystemMessage(content=_deep_system("You are a read-only evidence critic.")), HumanMessage(content=prompt)],
             meter_research=not bool(state.get("task_budget_boundary")),
+            accounting_phase="partial_synthesis" if state.get("task_budget_boundary") else "research",
         )
         review = safe_json_object(text)
     issues = [str(value) for value in review.get("issues") or []][:20]

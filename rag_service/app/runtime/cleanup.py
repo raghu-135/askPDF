@@ -18,11 +18,11 @@ class ContinuationCleanupOutcome:
 
     @property
     def cleaned(self) -> bool:
-        return self.status in {"cleaned", "already_cleaned"}
+        return self.status in {"cleaned", "already_cleaned", "not_bound"}
 
     @property
     def owner_deletion_allowed(self) -> bool:
-        return self.status in {"cleaned", "not_bound", "unsupported"}
+        return self.status in {"cleaned", "already_cleaned", "not_bound", "unsupported"}
 
 
 async def delete_run_continuation(
@@ -40,8 +40,12 @@ async def delete_run_continuation(
         result = await adapter.cleanup_run(run_id)
     except Exception as exc:
         return ContinuationCleanupOutcome(run_id=run_id, status="failed", error=str(exc))
-    result_status = str(result.get("status")) if isinstance(result, dict) else "cleaned"
-    return ContinuationCleanupOutcome(run_id=run_id, status="already_cleaned" if result_status == "already_cleaned" else "cleaned", adapter_result=result)
+    if not isinstance(result, dict):
+        return ContinuationCleanupOutcome(run_id=run_id, status="failed", error="runtime cleanup response must be an object")
+    result_status = str(result.get("status") or "")
+    if result_status not in {"cleaned", "already_cleaned", "not_bound"}:
+        return ContinuationCleanupOutcome(run_id=run_id, status="failed", error="runtime cleanup response has an unexpected status", adapter_result=result)
+    return ContinuationCleanupOutcome(run_id=run_id, status=result_status, adapter_result=result)
 
 
 async def delete_run_continuations(

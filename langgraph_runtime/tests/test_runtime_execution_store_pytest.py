@@ -688,8 +688,10 @@ async def test_cleanup_run_removes_execution_operations_and_events_idempotently(
     run_id = "cleanup-run"
     await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}}, operation_id="start")
     await store.append(run_id, {"event_id": "progress", "kind": "run.progress", "payload": {}, "terminal": False})
-    first = await store.cleanup_run(run_id)
-    second = await store.cleanup_run(run_id)
+    await store.set_status(run_id, "completed")
+    claim = await store.begin_cleanup(run_id)
+    first = await store.cleanup_run(run_id, claim=claim["claim"])
+    second = await store.begin_cleanup(run_id)
     assert first["status"] == "cleaned"
     assert first["events_deleted"] == 1
     assert first["operations_deleted"] == 1
