@@ -246,7 +246,9 @@ class ExecutionStore:
                         raise ExecutionConflictError("retry source_attempt does not match the current terminal attempt")
                     existing.operation = str(request.get("retry_operation") or "start")
                     existing.request = dict(request.get("retry_request") or request)
-                    existing.payload = dict(payload)
+                    # Preserve the durable pause token while replacing the
+                    # caller's resume request payload.
+                    existing.payload = {**existing.payload, **dict(payload)}
                     existing.status = "queued"
                     existing.cancel_requested = False
                     existing.attempt += 1
@@ -270,7 +272,7 @@ class ExecutionStore:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
                     existing.operation = operation
                     existing.request = dict(request)
-                    existing.payload = dict(payload)
+                    existing.payload = {**existing.payload, **dict(payload)}
                     existing.status = "queued"
                     existing.request_fingerprint = fingerprint
                     existing.last_operation_id = operation_id
@@ -349,7 +351,7 @@ class ExecutionStore:
                 elif existing is not None and operation == "resume":
                     if existing["status"] not in {"awaiting_human", "paused"}:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
-                    payload_expression = "$4::jsonb"
+                    payload_expression = "payload || $4::jsonb"
                     await connection.execute(
                         f"""update runtime_executions
                            set operation=$2, request=$3::jsonb, payload={payload_expression},
@@ -417,6 +419,53 @@ class ExecutionStore:
             last_operation_id=row.get("last_operation_id") if hasattr(row, "get") else None,
             retry_source_attempt=row.get("retry_source_attempt") if hasattr(row, "get") else None,
         )
+
+    async def get_operation(self, run_id: str, operation_id: str) -> dict[str, Any] | None:
+        """Read an idempotency record before validating mutable run state."""
+        if self._pool is None:
+            value = self._operations.get((run_id, operation_id))
+            return dict(value) if value is not None else None
+        row = await self._pool.fetchrow(
+            "select operation, request_fingerprint, attempt, status, result from runtime_operations where run_id=$1 and operation_id=$2",
+            run_id, operation_id,
+        )
+        if row is None:
+            return None
+        return {
+            "operation": row["operation"],
+            "fingerprint": row["request_fingerprint"],
+            "attempt": int(row["attempt"]),
+            "status": row["status"],
+            "result": _json_object(row["result"]),
+        }
+
+    async def cleanup_run(self, run_id: str) -> dict[str, Any]:
+        """Delete all durable runtime records for one quiescent run."""
+        if self._pool is None:
+            record = self._records.get(run_id)
+            if record and record.owner_id and record.lease_expires_at and datetime.fromisoformat(record.lease_expires_at) > datetime.now(timezone.utc):
+                raise ExecutionConflictError("active runtime execution cannot be cleaned")
+            existed = record is not None
+            event_count = len(self._events.get(run_id, []))
+            operation_count = sum(1 for key in self._operations if key[0] == run_id)
+            self._records.pop(run_id, None)
+            self._events.pop(run_id, None)
+            for key in [key for key in self._operations if key[0] == run_id]:
+                self._operations.pop(key, None)
+            return {"status": "cleaned" if existed else "already_cleaned", "run_id": run_id, "events_deleted": event_count, "operations_deleted": operation_count}
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                record = await connection.fetchrow("select owner_id, lease_expires_at from runtime_executions where run_id=$1 for update", run_id)
+                if record and record["owner_id"] and record["lease_expires_at"] and record["lease_expires_at"] > datetime.now(timezone.utc):
+                    raise ExecutionConflictError("active runtime execution cannot be cleaned")
+                if record is None:
+                    return {"status": "already_cleaned", "run_id": run_id, "events_deleted": 0, "operations_deleted": 0}
+                events = await connection.fetchval("select count(*) from runtime_events where run_id=$1", run_id)
+                operations = await connection.fetchval("select count(*) from runtime_operations where run_id=$1", run_id)
+                await connection.execute("delete from runtime_events where run_id=$1", run_id)
+                await connection.execute("delete from runtime_operations where run_id=$1", run_id)
+                await connection.execute("delete from runtime_executions where run_id=$1", run_id)
+                return {"status": "cleaned", "run_id": run_id, "events_deleted": int(events or 0), "operations_deleted": int(operations or 0)}
 
     async def claim(self, run_id: str, *, owner_id: str | None = None, lease_seconds: int | None = None) -> int | None:
         owner_id = owner_id or self.owner_id

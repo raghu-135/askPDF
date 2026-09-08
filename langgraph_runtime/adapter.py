@@ -396,7 +396,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.RUN_CLEANUP,
         RuntimeOperationId.TRACE_PROJECT,
     })
 
@@ -727,6 +727,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             return []
         checkpoint_id = resolve_binding(str(continuation.payload.get("binding_id") or ""))
         return await checkpointing.delete_agent_checkpoints([str(checkpoint_id)]) if checkpoint_id else []
+
+    async def cleanup_run(self, run_id: str) -> Any:
+        from langgraph_runtime import checkpointing
+        return await checkpointing.delete_agent_checkpoints([run_id])
 
     async def project_trace(
         self,

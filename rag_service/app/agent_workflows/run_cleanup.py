@@ -73,7 +73,6 @@ async def prune_runtime_continuations_for_runs_before(
             select(AgentRun)
             .where(AgentRun.started_at < cutoff)
             .where(AgentRun.status.in_(requested_statuses))
-            .where(AgentRun.runtime_binding_json.isnot(None))
         )
         if thread_id is not None:
             query = query.where(AgentRun.thread_id == thread_id)

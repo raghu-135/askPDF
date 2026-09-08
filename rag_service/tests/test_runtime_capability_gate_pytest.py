@@ -39,7 +39,7 @@ class RecordingAdapter:
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
         RuntimeOperationId.RUN_SEND_FOLLOWUP,
         RuntimeOperationId.RUN_STEER_LIVE,
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.RUN_CLEANUP,
     })
 
     def __init__(self, *, unsupported=()):
@@ -56,7 +56,7 @@ class RecordingAdapter:
             RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
             RuntimeOperationId.RUN_SEND_FOLLOWUP: native(),
             RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
-            RuntimeOperationId.RUN_CONTINUATION_CLEANUP: unsupported(),
+        RuntimeOperationId.RUN_CLEANUP: unsupported(),
         }
         for operation in self.unsupported:
             operations[RuntimeOperationId(operation)] = unsupported()

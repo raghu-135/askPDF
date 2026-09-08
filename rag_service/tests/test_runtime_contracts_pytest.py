@@ -569,7 +569,7 @@ async def test_optional_adapter_methods_have_structured_unsupported_defaults():
         ("subagent.send", lambda: adapter.send_to_subagent(request, "subagent-1", {})),
         ("subagent.cancel", lambda: adapter.cancel_subagent(request, "subagent-1")),
         ("artifact.list", lambda: adapter.list_artifacts(request)),
-        ("run.continuation.cleanup", lambda: adapter.delete_continuation(ContinuationBinding("test", {}))),
+        ("run.cleanup", lambda: adapter.cleanup_run("run-1")),
         ("trace.project", lambda: adapter.project_trace([], run_id="run-1")),
     )
     for operation_id, invoke in operations:

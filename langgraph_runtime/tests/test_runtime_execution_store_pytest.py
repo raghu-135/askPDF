@@ -680,3 +680,18 @@ async def test_course_correction_rejects_conflicting_operation_and_reports_termi
     receipt = await store.request_course_correction("corrected", {**correction, "operation_id": "operation-2"})
     assert receipt["status"] == "terminal"
     assert receipt["run_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_run_removes_execution_operations_and_events_idempotently() -> None:
+    store = ExecutionStore(database_url="")
+    run_id = "cleanup-run"
+    await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}}, operation_id="start")
+    await store.append(run_id, {"event_id": "progress", "kind": "run.progress", "payload": {}, "terminal": False})
+    first = await store.cleanup_run(run_id)
+    second = await store.cleanup_run(run_id)
+    assert first["status"] == "cleaned"
+    assert first["events_deleted"] == 1
+    assert first["operations_deleted"] == 1
+    assert second["status"] == "already_cleaned"
+    assert await store.get(run_id) is None

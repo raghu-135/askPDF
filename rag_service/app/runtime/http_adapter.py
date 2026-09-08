@@ -605,7 +605,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_RESUME,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.RUN_CLEANUP,
         RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
         RuntimeOperationId.TRACE_PROJECT,
     })
@@ -815,3 +815,6 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         if not binding_id:
             raise RuntimeError("runtime_binding_invalid", "Runtime continuation is missing its opaque binding ID")
         return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json=versioned_payload({"continuation": continuation.to_dict()}))
+
+    async def cleanup_run(self, run_id: str) -> Any:
+        return await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})

@@ -202,7 +202,7 @@ def langgraph_capabilities(
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
         ),
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP: conditional(
+        RuntimeOperationId.RUN_CLEANUP: conditional(
             enabled=checkpoint,
             semantics=RuntimeCapabilitySemantics.CHECKPOINT_THREAD_CLEANUP,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,

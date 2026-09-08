@@ -157,7 +157,7 @@ async def test_continuation_cleanup_accepts_opaque_binding_types(monkeypatch) ->
         delete_continuation=deleted,
     )
     capabilities = RuntimeCapabilities(
-        operations={RuntimeOperationId.RUN_CONTINUATION_CLEANUP: native()}
+        operations={RuntimeOperationId.RUN_CLEANUP: native()}
     )
     run = SimpleNamespace(
         id="run-1",

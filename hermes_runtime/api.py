@@ -657,7 +657,7 @@ def create_app() -> FastAPI:
                         "confirmation": "bounded",
                         "terminal_states": ["cancelled"],
                     },
-                    "run.continuation.cleanup": {
+                    "run.cleanup": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },

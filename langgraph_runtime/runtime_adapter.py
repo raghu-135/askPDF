@@ -220,7 +220,7 @@ class AgentRuntimeAdapter(ABC):
         self._unsupported("artifact.list", "This runtime does not expose runtime artifacts")
 
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        self._unsupported("run.continuation.cleanup", "This runtime does not expose continuation cleanup")
+        self._unsupported("run.cleanup", "This runtime does not expose run cleanup")
 
     async def project_trace(
         self,

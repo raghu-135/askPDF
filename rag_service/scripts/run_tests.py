@@ -41,6 +41,7 @@ UNIT_TEST_FILES = [
     "test_runtime_events_pytest.py",
     "test_runtime_capability_gate_pytest.py",
     "test_runtime_capability_resolver_pytest.py",
+    "test_runtime_contracts_neutral_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",

@@ -581,6 +581,15 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     async def _preflight_operation(run_id: str, payload: Mapping[str, Any], operation: str) -> None:
         """Return an HTTP conflict before opening an SSE response."""
+        operation_id = str(payload.get("operation_id") or "").strip()
+        if operation_id:
+            request = _request_from_payload(payload)
+            fingerprint = operation_fingerprint(operation, request.to_dict(), payload)
+            existing_operation = await execution_store.get_operation(run_id, operation_id)
+            if existing_operation is not None:
+                if fingerprint != existing_operation.get("fingerprint"):
+                    raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "operation_id was reused with different input", "retryable": False})
+                return
         record = await execution_store.get(run_id)
         if operation == "resume" and record is not None and record.status in {"awaiting_human", "paused"}:
             supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
@@ -1424,5 +1433,14 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         continuation = _binding(payload.get("continuation"))
         result = await get_adapter().delete_continuation(continuation)
         return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=result if isinstance(result, Mapping) else {"value": result})
+
+    @app.delete("/v1/runs/{run_id}")
+    async def cleanup_run(run_id: str, request: Request) -> dict[str, Any]:
+        try:
+            checkpoint_result = await get_adapter().cleanup_run(run_id)
+            store_result = await execution_store.cleanup_run(run_id)
+        except ExecutionConflictError as exc:
+            raise HTTPException(status_code=409, detail={"code": "runtime_active_execution", "safe_message": str(exc), "retryable": True}) from exc
+        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "checkpoint": checkpoint_result, "execution_store": store_result})
 
     return app

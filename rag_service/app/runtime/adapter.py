@@ -79,6 +79,9 @@ class AgentRuntimeAdapter(ABC):
             )
         )
 
+    async def cleanup_run(self, run_id: str) -> Any:
+        self._unsupported("run.cleanup", "This runtime does not expose run cleanup")
+
     async def readiness(self) -> Mapping[str, Any]:
         """Return operational readiness independently of capability metadata."""
         return {"status": "not_ready", "reason": "readiness_not_implemented"}
@@ -219,7 +222,7 @@ class AgentRuntimeAdapter(ABC):
         self._unsupported("artifact.list", "This runtime does not expose runtime artifacts")
 
     async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        self._unsupported("run.continuation.cleanup", "This runtime does not expose continuation cleanup")
+        self._unsupported("run.cleanup", "This runtime does not expose run cleanup")
 
     async def project_trace(
         self,

@@ -220,8 +220,11 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
 
 @pytest.mark.asyncio
 async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
     class FakeAdapter(_FakeAdapter):
         async def resume(self, request, *, interrupt, context, event_sink=None):
+            nonlocal calls
+            calls += 1
             await event_sink.emit_runtime_event(AgentRuntimeEvent(
                 event_id=f"{request.run_id}:resume-progress",
                 run_id=request.run_id,
@@ -232,11 +235,15 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
             return AgentRuntimeResult(status="completed", output={"answer": "resumed"})
 
     monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
-    store = ExecutionStore()
+    store = ExecutionStore(database_url="")
     run_id = "run-resume-replay-cursor"
     request = _request(run_id)
     await store.create(run_id, "start", request, _payload(run_id), operation_id="start")
-    await store.append(
+    fencing_token = await store.claim(run_id)
+    await store.request_pause(run_id)
+    pause_token = await store.pause_request_token(run_id)
+    await store.claim_pause_request(run_id, pause_token)
+    await store.checkpoint_execution(
         run_id,
         AgentRuntimeEvent(
             event_id=f"{run_id}:paused",
@@ -245,8 +252,12 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
             kind="run.paused",
             payload={},
         ).to_dict(),
+        {"status": "awaiting_human", "pending_interrupt": {"interrupt_id": "interrupt-1", "type": "approval"}},
+        status="awaiting_human",
+        continuation={"binding_type": "langgraph.checkpoint", "payload": {"binding_id": "binding-1"}},
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
     )
-    await store.set_status(run_id, "awaiting_human")
     app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
@@ -254,7 +265,13 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
             client,
             "POST",
             f"/v1/runs/{run_id}/resume",
-            json={**_payload(run_id), "operation_id": "resume-cursor", "interrupt": {"decision": "approve"}},
+            json={**_payload(run_id), "operation_id": "resume-cursor", "interrupt": {"interrupt_id": "interrupt-1", "type": "approval", "decision": "approve"}},
+        )
+        repeated = await _read_events(
+            client,
+            "POST",
+            f"/v1/runs/{run_id}/resume",
+            json={**_payload(run_id), "operation_id": "resume-cursor", "interrupt": {"interrupt_id": "interrupt-1", "type": "approval", "decision": "approve"}},
         )
         replay = await _read_events(
             client,
@@ -263,6 +280,8 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
         )
 
     assert [item["event"]["sequence"] for item in resumed] == [2, 3]
+    assert repeated == []
+    assert calls == 1
     assert [item["event"]["sequence"] for item in replay] == [2, 3]
     assert replay[-1]["event"]["terminal"] is True
 

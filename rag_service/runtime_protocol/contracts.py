@@ -369,7 +369,7 @@ class RuntimeOperationId(str, Enum):
     SUBAGENT_SEND = "subagent.send"
     SUBAGENT_CANCEL = "subagent.cancel"
     ARTIFACT_LIST = "artifact.list"
-    RUN_CONTINUATION_CLEANUP = "run.continuation.cleanup"
+    RUN_CLEANUP = "run.cleanup"
     TRACE_PROJECT = "trace.project"
 
 
