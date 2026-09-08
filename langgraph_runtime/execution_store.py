@@ -583,25 +583,75 @@ class ExecutionStore:
         token = str(record.payload.get("pause_request_id") or "")
         return token or None
 
-    async def consume_pause_request(self, run_id: str, token: str | None) -> bool:
+    async def handled_pause_request_token(self, run_id: str) -> str | None:
+        record = await self.get(run_id)
+        if not record:
+            return None
+        token = str(record.payload.get("pause_request_handled_id") or "")
+        return token or None
+
+    async def claim_pause_request(self, run_id: str, token: str | None) -> str:
+        """Claim a pending pause request, retaining its identity for recovery.
+
+        The claim is intentionally separate from final cleanup.  A resumed
+        graph must stop seeing the request before it executes, while a crash
+        after the claim must still be recoverable and replay-safe.
+        """
         if not token:
             raise ExecutionConflictError("pause request token is required")
         if self._pool is None:
             record = self._records.get(run_id)
-            if not record or record.payload.get("pause_request_id") != token:
+            if not record:
+                raise ExecutionConflictError("pause request is missing or superseded")
+            if record.payload.get("pause_request_handled_id") == token:
+                return token
+            if record.payload.get("pause_requested") is not True or record.payload.get("pause_request_id") != token:
                 raise ExecutionConflictError("pause request is missing or superseded")
             record.payload.pop("pause_requested", None)
             record.payload.pop("pause_request_id", None)
+            record.payload["pause_request_handled_id"] = token
+            record.updated_at = _now()
+            return token
+        async with self._pool.acquire() as connection:
+            result = await connection.execute(
+                "update runtime_executions set payload=(payload - 'pause_requested' - 'pause_request_id') || jsonb_build_object('pause_request_handled_id', $2::text), updated_at=now() where run_id=$1 and (payload->>'pause_requested') = 'true' and payload->>'pause_request_id' = $2",
+                run_id,
+                token,
+            )
+            if not result.endswith("0"):
+                return token
+            row = await connection.fetchrow(
+                "select payload->>'pause_request_handled_id' as handled_id from runtime_executions where run_id=$1",
+                run_id,
+            )
+            if row and row["handled_id"] == token:
+                return token
+            raise ExecutionConflictError("pause request is missing or superseded")
+
+    async def consume_pause_request(self, run_id: str, token: str | None) -> bool:
+        """Return success after claiming an already-known pause token."""
+        await self.claim_pause_request(run_id, token)
+        return True
+
+    async def finalize_pause_request(self, run_id: str, token: str | None) -> bool:
+        """Remove only the exact handled pause request after durable progress."""
+        if not token:
+            raise ExecutionConflictError("pause request token is required")
+        if self._pool is None:
+            record = self._records.get(run_id)
+            if not record or record.payload.get("pause_request_handled_id") != token:
+                raise ExecutionConflictError("handled pause request is missing or superseded")
+            record.payload.pop("pause_request_handled_id", None)
             record.updated_at = _now()
             return True
         async with self._pool.acquire() as connection:
             result = await connection.execute(
-                "update runtime_executions set payload=payload - 'pause_requested' - 'pause_request_id', updated_at=now() where run_id=$1 and (payload->>'pause_requested') = 'true' and payload->>'pause_request_id' = $2",
+                "update runtime_executions set payload=payload - 'pause_request_handled_id', updated_at=now() where run_id=$1 and payload->>'pause_request_handled_id' = $2",
                 run_id,
                 token,
             )
             if result.endswith("0"):
-                raise ExecutionConflictError("pause request is missing or superseded")
+                raise ExecutionConflictError("handled pause request is missing or superseded")
             return True
 
     @staticmethod

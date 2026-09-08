@@ -342,6 +342,42 @@ async def test_resume_replay_does_not_clear_newer_pause_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pause_claim_is_idempotent_and_finalize_is_token_conditional() -> None:
+    store = ExecutionStore()
+    request = {"run_id": "run-pause-lifecycle"}
+    await store.create("run-pause-lifecycle", "start", request, {"request": request})
+    await store.request_pause("run-pause-lifecycle")
+    first_token = await store.pause_request_token("run-pause-lifecycle")
+    assert first_token
+
+    assert await store.claim_pause_request("run-pause-lifecycle", first_token) == first_token
+    assert await store.is_pause_requested("run-pause-lifecycle") is False
+    assert await store.claim_pause_request("run-pause-lifecycle", first_token) == first_token
+
+    await store.request_pause("run-pause-lifecycle")
+    newer_token = await store.pause_request_token("run-pause-lifecycle")
+    assert newer_token and newer_token != first_token
+    await store.finalize_pause_request("run-pause-lifecycle", first_token)
+    assert await store.pause_request_token("run-pause-lifecycle") == newer_token
+
+    with pytest.raises(ExecutionConflictError, match="handled pause request"):
+        await store.finalize_pause_request("run-pause-lifecycle", first_token)
+
+
+@pytest.mark.asyncio
+async def test_pause_claim_fails_fast_for_missing_or_superseded_token() -> None:
+    store = ExecutionStore()
+    request = {"run_id": "run-pause-invalid"}
+    await store.create("run-pause-invalid", "start", request, {"request": request})
+
+    with pytest.raises(ExecutionConflictError, match="required"):
+        await store.claim_pause_request("run-pause-invalid", None)
+    await store.request_pause("run-pause-invalid")
+    with pytest.raises(ExecutionConflictError, match="superseded"):
+        await store.claim_pause_request("run-pause-invalid", "not-the-current-token")
+
+
+@pytest.mark.asyncio
 async def test_resume_transport_retry_is_read_only_after_terminal_completion() -> None:
     store = ExecutionStore()
     await store.create("run-resume", "start", {"run_id": "run-resume"}, {"request": {"run_id": "run-resume"}})

@@ -18,6 +18,7 @@ class _PauseState(TypedDict, total=False):
 async def test_pause_resume_cannot_answer_following_hitl_interrupt() -> None:
     pause = {"token": "pause-1", "requested": True}
     calls: list[str] = []
+    consumed: list[str] = []
 
     async def pause_checker() -> bool:
         return pause["requested"]
@@ -27,6 +28,7 @@ async def test_pause_resume_cannot_answer_following_hitl_interrupt() -> None:
 
     async def pause_consumer(token: str | None) -> bool:
         assert token == pause["token"]
+        consumed.append(token)
         pause["requested"] = False
         return True
 
@@ -65,11 +67,14 @@ async def test_pause_resume_cannot_answer_following_hitl_interrupt() -> None:
     assert first["__interrupt__"][0].value["type"] == "task_pause"
     assert calls == []
 
+    # This is the runtime resume lifecycle: claim the pending pause before
+    # re-entering LangGraph.  The graph must not consume it after execution.
+    await pause_consumer(await pause_token_reader())
     second = await app.ainvoke(Command(resume={"action": "approve"}), config=config)
     assert second["__interrupt__"][0].value["type"] == "tool_approval"
     assert calls == ["business"]
-    await pause_consumer("pause-1")
 
     third = await app.ainvoke(Command(resume={"action": "approve"}), config=config)
     assert third["answer"] == "approve"
-    assert calls == ["business"]
+    assert calls == ["business", "business"]
+    assert consumed == ["pause-1"]

@@ -594,6 +594,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "pause_checker": context.pause_checker,
             "pause_token_reader": context.pause_token_reader,
             "pause_consumer": context.pause_consumer,
+            "claimed_pause_token": context.claimed_pause_token,
             "course_correction_reader": context.course_correction_reader,
             "course_correction_acknowledger": context.course_correction_acknowledger,
         }
@@ -661,6 +662,7 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     pause_checker=context.pause_checker,
                     pause_token_reader=context.pause_token_reader,
                     pause_consumer=context.pause_consumer,
+                    claimed_pause_token=context.claimed_pause_token,
                     course_correction_reader=context.course_correction_reader,
                     course_correction_acknowledger=context.course_correction_acknowledger,
                     mcp_execution_context_token=mcp_token,

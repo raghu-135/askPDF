@@ -248,12 +248,8 @@ class NodeRegistry:
                 action = str((decision or {}).get("action") if isinstance(decision, dict) else decision or "")
                 if action not in {"approve", "resume", "reject"}:
                     raise AgentRuntimeError("runtime_interrupt_mismatch", "The task pause gate requires an approve or resume decision")
-                consumer = configurable.get("pause_consumer")
-                if consumer is None:
-                    raise AgentRuntimeError("pause_consumer_missing", "The runtime pause consumer is unavailable")
                 return {
                     "task_pause_requested": False,
-                    "task_pause_consumed_token": token,
                     "hitl_gate_route": "approve" if action == "resume" else action,
                 }
             return _task_pause_gate

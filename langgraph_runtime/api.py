@@ -207,6 +207,7 @@ def _context(
     pause_checker: Any = None,
     pause_token_reader: Any = None,
     pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     operation_id: str | None = None,
@@ -246,6 +247,7 @@ def _context(
         pause_checker=pause_checker,
         pause_token_reader=pause_token_reader,
         pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         operation_id=operation_id,
@@ -859,6 +861,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
 
         durable_sink = DurableSink()
+        claimed_pause_token: str | None = None
 
         async def finalize(result: AgentRuntimeResult, *, error: Mapping[str, Any] | None = None) -> None:
             if result.status in {"awaiting_human", "paused"}:
@@ -880,6 +883,8 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     owner_id=owner_id,
                     fencing_token=fencing_token,
                 )
+                if claimed_pause_token is not None:
+                    await execution_store.finalize_pause_request(run_id, claimed_pause_token)
                 return
             terminal_kind = (
                 "run.cancelled"
@@ -926,6 +931,8 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     fencing_token=fencing_token,
                 )
             durable_sink.terminal_event_id = str(stored_terminal["event_id"])
+            if claimed_pause_token is not None:
+                await execution_store.finalize_pause_request(run_id, claimed_pause_token)
 
         await execution_store.set_status(run_id, "running", owner_id=owner_id, fencing_token=fencing_token)
         heartbeat_stop = asyncio.Event()
@@ -944,6 +951,13 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         runtime_adapter = get_adapter()
         context: RuntimeExecutionContext | None = None
         try:
+            if operation == "resume":
+                pending_token = await execution_store.pause_request_token(run_id)
+                if pending_token is None:
+                    pending_token = await execution_store.handled_pause_request_token(run_id)
+                if pending_token is None:
+                    raise RuntimeError("pause_request_missing", "A resume requires a pending pause request token")
+                claimed_pause_token = await execution_store.claim_pause_request(run_id, pending_token)
             context = await runtime_adapter.prepare_execution_context(
                 _context(
                     payload,

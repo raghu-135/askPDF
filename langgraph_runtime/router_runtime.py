@@ -132,6 +132,7 @@ def _runtime_config(
     pause_checker: Any = None,
     pause_token_reader: Any = None,
     pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     max_concurrency: int | None = None,
@@ -156,6 +157,8 @@ def _runtime_config(
         configurable["pause_token_reader"] = pause_token_reader
     if pause_consumer is not None:
         configurable["pause_consumer"] = pause_consumer
+    if claimed_pause_token is not None:
+        configurable["claimed_pause_token"] = str(claimed_pause_token)
     if course_correction_reader is not None:
         configurable["course_correction_reader"] = course_correction_reader
     if course_correction_acknowledger is not None:
@@ -308,6 +311,7 @@ async def execute_compiled_rag_chat(
     pause_checker: Any = None,
     pause_token_reader: Any = None,
     pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     mcp_execution_context_token: str | None = None,
@@ -327,6 +331,7 @@ async def execute_compiled_rag_chat(
         pause_checker=pause_checker,
         pause_token_reader=pause_token_reader,
         pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         mcp_execution_context_token=mcp_execution_context_token,
@@ -435,6 +440,7 @@ async def _handle_compiled_rag_chat(
     pause_checker: Any = None,
     pause_token_reader: Any = None,
     pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     mcp_execution_context_token: str | None = None,
@@ -498,6 +504,7 @@ async def _handle_compiled_rag_chat(
         pause_checker=pause_checker,
         pause_token_reader=pause_token_reader,
         pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         max_concurrency=parallel_policy["max_concurrency"] if parallel_enabled else None,
@@ -848,6 +855,7 @@ async def continue_compiled_rag_chat(
     pause_checker: Any = None,
     pause_token_reader: Any = None,
     pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     mcp_execution_context_token: str | None = None,
@@ -884,6 +892,7 @@ async def continue_compiled_rag_chat(
         pause_checker=pause_checker,
         pause_token_reader=pause_token_reader,
         pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
@@ -983,6 +992,9 @@ async def resume_compiled_rag_chat(
     execution_event_sink: Any = None,
     cancellation_checker: Any = None,
     pause_checker: Any = None,
+    pause_token_reader: Any = None,
+    pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
     course_correction_reader: Any = None,
     course_correction_acknowledger: Any = None,
     mcp_execution_context_token: str | None = None,
@@ -1020,6 +1032,7 @@ async def resume_compiled_rag_chat(
         pause_checker=pause_checker,
         pause_token_reader=pause_token_reader,
         pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
         course_correction_reader=course_correction_reader,
         course_correction_acknowledger=course_correction_acknowledger,
         deep_research_services_factory=_deep_research_services_factory(),
@@ -1052,10 +1065,6 @@ async def resume_compiled_rag_chat(
     try:
         result = await _invoke_graph_with_partial_state(app, Command(resume=decision), config)
         await raise_if_chat_run_cancelled(cancellation_checker, result)
-        consumed_token = result.get("task_pause_consumed_token") if isinstance(result, dict) else None
-        if consumed_token:
-            if pause_consumer is None or not await pause_consumer(str(consumed_token)):
-                raise RuntimeError("pause_request_superseded", "The task pause request was replaced before it could be consumed")
     except ChatRunCancellationRequested as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         partial_result = _without_runtime_keys(exc.state or snapshot_values)

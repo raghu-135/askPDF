@@ -19,6 +19,7 @@ class RuntimeExecutionContext:
     pause_checker: Any = None
     pause_token_reader: Any = None
     pause_consumer: Any = None
+    claimed_pause_token: str | None = None
     course_correction_reader: Any = None
     course_correction_acknowledger: Any = None
     task_id: str | None = None
