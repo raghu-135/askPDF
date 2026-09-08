@@ -635,7 +635,7 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             runtime_runs = list((await session.execute(
                 select(AgentRun).where(
                     AgentRun.thread_id.in_(thread_ids),
-                    AgentRun.runtime_binding_json.is_not(None),
+                    AgentRun.framework == "langgraph",
                 )
             )).scalars().all())
         affected_files = set((await session.execute(

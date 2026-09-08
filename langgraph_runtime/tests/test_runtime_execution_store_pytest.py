@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -7,7 +9,144 @@ from types import SimpleNamespace
 
 import pytest
 
-from langgraph_runtime.execution_store import ExecutionConflictError, ExecutionStore, LeaseLostError, _json_safe
+from langgraph_runtime.execution_store import (
+    CLEANUP_INCOMPLETE_PHASES,
+    ExecutionConflictError,
+    ExecutionStore,
+    LeaseLostError,
+    _json_safe,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["in_progress", "checkpoint_deleted", "execution_delete_started", "retryable", "future_phase"])
+async def test_all_unfinished_cleanup_phases_block_admission_and_worker_claim(phase: str) -> None:
+    store = ExecutionStore(database_url="")
+    run_id = f"cleanup-fenced-{phase}"
+    await store.create(run_id, "start", {"run_id": run_id}, {})
+    record = await store.get(run_id)
+    record.status = "awaiting_human"
+    record.payload["cleanup"] = {"phase": phase}
+
+    with pytest.raises(ExecutionConflictError, match="cleanup"):
+        await store.create(
+            run_id,
+            "resume",
+            {"run_id": run_id},
+            {"request": {"run_id": run_id}, "interrupt": {"action": "continue"}},
+            operation_id=f"resume-{phase}",
+        )
+
+    record.status = "completed"
+    with pytest.raises(ExecutionConflictError, match="cleanup"):
+        await store.create(
+            run_id,
+            "retry",
+            {"run_id": run_id, "retry_operation": "start", "retry_request": {"run_id": run_id}},
+            {"request": {"run_id": run_id}},
+            operation_id=f"retry-{phase}",
+            source_attempt=1,
+        )
+
+    record.status = "queued"
+    assert await store.claim(run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_checkpoint_boundary_fences_concurrent_resume_retry_and_claim() -> None:
+    store = ExecutionStore(database_url="")
+    run_id = "cleanup-concurrent-boundary"
+    await store.create(run_id, "start", {"run_id": run_id}, {})
+    record = await store.get(run_id)
+    record.status = "completed"
+    claim = await store.begin_cleanup(run_id)
+    await store.mark_cleanup_checkpoint_complete(run_id, claim["claim"])
+
+    async def attempt_resume() -> str:
+        try:
+            await store.create(
+                run_id,
+                "resume",
+                {"run_id": run_id},
+                {"request": {"run_id": run_id}},
+                operation_id="resume-during-cleanup",
+            )
+        except ExecutionConflictError:
+            return "rejected"
+        return "accepted"
+
+    async def attempt_retry() -> str:
+        try:
+            await store.create(
+                run_id,
+                "retry",
+                {"run_id": run_id, "retry_operation": "start", "retry_request": {"run_id": run_id}},
+                {"request": {"run_id": run_id}},
+                operation_id="retry-during-cleanup",
+                source_attempt=1,
+            )
+        except ExecutionConflictError:
+            return "rejected"
+        return "accepted"
+
+    results = await asyncio.gather(
+        attempt_resume(),
+        attempt_retry(),
+        store.claim(run_id),
+    )
+    assert results[:2] == ["rejected", "rejected"]
+    assert results[2] is None
+
+    cleaned = await store.cleanup_run(run_id, claim=claim["claim"])
+    assert cleaned["status"] == "cleaned"
+    assert await store.get(run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_cleanup_phases_block_admission_and_worker_claim() -> None:
+    database_url = os.getenv("TEST_DATABASE_URL") or os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
+    if not database_url:
+        pytest.skip("PostgreSQL runtime database is not configured")
+    store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    await store.initialize()
+    try:
+        for phase in [*CLEANUP_INCOMPLETE_PHASES, "future_phase"]:
+            run_id = f"cleanup-postgres-fenced-{phase}"
+            await store.create(run_id, "start", {"run_id": run_id}, {})
+            await store._pool.execute(
+                "update runtime_executions set status=$2, payload=jsonb_set(payload, '{cleanup}', $3::jsonb) where run_id=$1",
+                run_id,
+                "awaiting_human",
+                json.dumps({"phase": phase}),
+            )
+
+            with pytest.raises(ExecutionConflictError, match="cleanup"):
+                await store.create(
+                    run_id,
+                    "resume",
+                    {"run_id": run_id},
+                    {"request": {"run_id": run_id}},
+                    operation_id=f"resume-{phase}",
+                )
+
+            await store._pool.execute("update runtime_executions set status='completed' where run_id=$1", run_id)
+            with pytest.raises(ExecutionConflictError, match="cleanup"):
+                await store.create(
+                    run_id,
+                    "retry",
+                    {"run_id": run_id, "retry_operation": "start", "retry_request": {"run_id": run_id}},
+                    {"request": {"run_id": run_id}},
+                    operation_id=f"retry-{phase}",
+                    source_attempt=1,
+                )
+
+            await store._pool.execute("update runtime_executions set status='queued' where run_id=$1", run_id)
+            assert await store.claim(run_id) is None
+            await store._pool.execute("delete from runtime_events where run_id=$1", run_id)
+            await store._pool.execute("delete from runtime_operations where run_id=$1", run_id)
+            await store._pool.execute("delete from runtime_executions where run_id=$1", run_id)
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

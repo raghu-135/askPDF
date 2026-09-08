@@ -325,6 +325,25 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
                 runtime_binding_status="active",
                 completed_at=now,
             ))
+            session.add(AgentRun(
+                id="ordinary-run-without-binding",
+                thread_id="source-thread",
+                workflow_id="workflow-1",
+                framework="langgraph",
+                status="completed",
+                runtime_binding_json=None,
+                completed_at=now,
+            ))
+            session.add(AgentRun(
+                id="hermes-run",
+                thread_id="source-thread",
+                workflow_id="workflow-1",
+                framework="hermes",
+                builder_id="hermes_agent",
+                status="completed",
+                runtime_binding_json={"binding_type": "hermes.session", "payload": {}},
+                completed_at=now,
+            ))
             session.add_all([
                 _memory("project-memory", "project", "source-project", "Project"),
                 _memory("thread-memory", "thread", "source-thread", "Thread"),
@@ -346,7 +365,7 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
 
     vector_db.delete_thread_data.assert_awaited_once_with("source-thread")
     cleanup_runs = checkpoint_cleanup.await_args.args[0]
-    assert [run.id for run in cleanup_runs] == ["terminal-run"]
+    assert [run.id for run in cleanup_runs] == ["terminal-run", "ordinary-run-without-binding"]
     delete_artifacts.assert_awaited_once_with("orphan-file")
 
 

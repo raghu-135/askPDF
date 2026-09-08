@@ -21,6 +21,29 @@ from langgraph_runtime.limits import required_positive_int
 
 
 TERMINAL_STATUSES = frozenset({"completed", "clarification_required", "failed", "cancelled", "no_continuation"})
+CLEANUP_INCOMPLETE_PHASES = frozenset({
+    "in_progress",
+    "checkpoint_deleted",
+    "execution_delete_started",
+    "retryable",
+})
+
+
+def _cleanup_blocks_execution(payload: Mapping[str, Any] | None) -> bool:
+    """Fail closed while a durable cleanup marker is present.
+
+    Cleanup records are deleted with the execution row after the final phase.
+    Therefore every persisted cleanup object represents unfinished cleanup;
+    unknown phases must block admission and leasing rather than being treated
+    as runnable.
+    """
+    cleanup = payload.get("cleanup") if isinstance(payload, Mapping) else None
+    if not isinstance(cleanup, Mapping):
+        return False
+    # There is intentionally no runnable/complete phase while the execution
+    # row exists.  The explicit phase set documents the durable state machine;
+    # any future or malformed phase is blocked by the same fail-closed rule.
+    return True
 
 
 def _now() -> str:
@@ -243,8 +266,7 @@ class ExecutionStore:
                     return replace(existing, attempt=int(prior["attempt"]), replay_only=True)
             if run_id in self._records:
                 existing = self._records[run_id]
-                cleanup = existing.payload.get("cleanup") if isinstance(existing.payload, Mapping) else None
-                if isinstance(cleanup, Mapping) and cleanup.get("phase") in {"in_progress", "retryable"}:
+                if _cleanup_blocks_execution(existing.payload):
                     raise ExecutionConflictError("runtime cleanup is in progress or awaiting retry")
                 if operation == "retry":
                     if not operation_id:
@@ -334,8 +356,7 @@ class ExecutionStore:
                 )
                 if existing is not None and replay_attempt is None:
                     existing_payload = _json_object(existing["payload"]) or {}
-                    cleanup = existing_payload.get("cleanup")
-                    if isinstance(cleanup, Mapping) and cleanup.get("phase") in {"in_progress", "retryable"}:
+                    if _cleanup_blocks_execution(existing_payload):
                         raise ExecutionConflictError("runtime cleanup is in progress or awaiting retry")
                 if existing is not None and operation == "retry":
                     if not operation_id:
@@ -618,10 +639,8 @@ class ExecutionStore:
         lease_seconds = lease_seconds or self.lease_seconds
         if self._pool is None:
             record = self._records.get(run_id)
-            if record is not None and isinstance(record.payload, Mapping):
-                cleanup = record.payload.get("cleanup")
-                if isinstance(cleanup, Mapping) and cleanup.get("phase") == "in_progress":
-                    return None
+            if record is not None and _cleanup_blocks_execution(record.payload):
+                return None
             if record is None or record.status in TERMINAL_STATUSES:
                 return None
             now = datetime.now(timezone.utc)
@@ -642,7 +661,7 @@ class ExecutionStore:
                    where run_id=$1
                      and status not in ('completed','clarification_required','failed','cancelled','no_continuation')
                      and (lease_expires_at is null or lease_expires_at < now() or owner_id=$2)
-                     and coalesce(payload->'cleanup'->>'phase', '') <> 'in_progress'
+                     and payload->'cleanup' is null
                    returning fencing_token""",
                 run_id, owner_id, lease_seconds,
             )
