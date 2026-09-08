@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from langgraph_runtime.context import RuntimeExecutionContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeCleanupResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
 from runtime_protocol.events import create_runtime_event
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.transport import (
@@ -570,7 +570,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         if operation == "resume" and record is not None and record.status in {"awaiting_human", "paused"}:
             supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
             stored_result = record.result if isinstance(record.result, Mapping) else {}
-            current = stored_result.get("pending_interrupt") or stored_result.get("interruption")
+            current = stored_result.get("interruption")
             if not isinstance(current, Mapping) or not isinstance(supplied, Mapping):
                 raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The checkpoint has no matching pending interrupt", "retryable": False})
             if str(supplied.get("interrupt_id") or "") != str(current.get("interrupt_id") or ""):
@@ -939,9 +939,9 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                     if checkpoint_events:
                         candidate_result = checkpoint_events[-1].get("result")
                         resume_result = candidate_result if isinstance(candidate_result, Mapping) else None
-                pending_interrupt = resume_result.get("pending_interrupt") if isinstance(resume_result, Mapping) else None
-                pending_interrupt = pending_interrupt if isinstance(pending_interrupt, Mapping) else {}
-                interrupt_type = str(pending_interrupt.get("type") or "")
+                interruption = resume_result.get("interruption") if isinstance(resume_result, Mapping) else None
+                interruption = interruption if isinstance(interruption, Mapping) else {}
+                interrupt_type = str(interruption.get("type") or "")
                 if not interrupt_type:
                     raise RuntimeError("runtime_interrupt_invalid", "A resume requires a typed pending interrupt")
                 # Manual pause is a product-requested pause and is protected by
@@ -1426,7 +1426,13 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         try:
             claim_result = await execution_store.begin_cleanup(run_id)
             if str(claim_result.get("status") or "") == "already_cleaned":
-                return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "checkpoint": {"status": "already_cleaned"}, "execution_store": claim_result})
+                cleanup_result = RuntimeCleanupResult(
+                    run_id=run_id,
+                    status="already_cleaned",
+                    checkpoint={"status": "already_cleaned"},
+                    execution_store=claim_result,
+                )
+                return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=cleanup_result.to_dict())
             if str(claim_result.get("status") or "") != "cleanup_claimed":
                 raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup returned an invalid claim outcome")
             claim = str(claim_result.get("claim") or "")
@@ -1436,12 +1442,21 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             if not isinstance(checkpoint_result, Mapping) or str(checkpoint_result.get("status") or "") not in {"cleaned", "already_cleaned", "not_bound"}:
                 raise RuntimeError("runtime_cleanup_invalid_result", "Runtime checkpoint cleanup returned an invalid outcome")
             store_result = await execution_store.cleanup_run(run_id, claim=claim)
+            if not isinstance(store_result, Mapping) or str(store_result.get("status") or "") not in {"cleaned", "already_cleaned"}:
+                raise RuntimeError("runtime_cleanup_invalid_result", "Runtime execution-store cleanup returned an invalid outcome")
+            overall_status = "not_bound" if str(checkpoint_result.get("status") or "") == "not_bound" else "cleaned"
+            cleanup_result = RuntimeCleanupResult(
+                run_id=run_id,
+                status=overall_status,
+                checkpoint=checkpoint_result,
+                execution_store=store_result,
+            )
         except CleanupClaimError as exc:
             raise HTTPException(status_code=409, detail={"code": "runtime_active_execution", "safe_message": str(exc), "retryable": True}) from exc
         except Exception as exc:
             if claim:
                 await execution_store.mark_cleanup_retryable(run_id, claim, str(exc))
             raise
-        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"run_id": run_id, "checkpoint": checkpoint_result, "execution_store": store_result})
+        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=cleanup_result.to_dict())
 
     return app

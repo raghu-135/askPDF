@@ -13,6 +13,7 @@ from app.runtime.operational_limits import (
     validate_bounded_json,
 )
 import app.runtime.cleanup as cleanup
+from runtime_protocol.contracts import RuntimeCleanupResult
 
 
 @pytest.mark.asyncio
@@ -41,7 +42,7 @@ async def test_continuation_cleanup_accepts_explicit_runtime_status(monkeypatch)
     adapter = SimpleNamespace(
         framework="langgraph",
         builder_id="langgraph_graph",
-        cleanup_run=AsyncMock(return_value={"status": "cleaned"}),
+        cleanup_run=AsyncMock(return_value=RuntimeCleanupResult("run-1", "cleaned")),
     )
     run = SimpleNamespace(
         id="run-1",
@@ -99,7 +100,7 @@ async def test_langgraph_cleanup_accepts_only_explicit_success_statuses(monkeypa
     adapter = SimpleNamespace(
         framework="langgraph",
         builder_id="langgraph_graph",
-        cleanup_run=AsyncMock(return_value={"status": status}),
+        cleanup_run=AsyncMock(return_value=RuntimeCleanupResult("run-cleanup", status)),
     )
     registry = SimpleNamespace(get=lambda definition: adapter)
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: registry)

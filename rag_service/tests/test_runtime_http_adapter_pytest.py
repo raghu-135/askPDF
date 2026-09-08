@@ -12,6 +12,7 @@ from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
+    RuntimeCleanupResult,
     RuntimeCourseCorrection,
     RuntimeTaskContext,
 )
@@ -92,6 +93,28 @@ def test_http_context_preserves_task_request_fields_as_json():
         "context_data": {},
         "active_corrections": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_parses_shared_cleanup_result(monkeypatch):
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+
+    async def fake_json(method, path, **kwargs):
+        assert method == "DELETE"
+        assert path == "/v1/runs/run-cleanup"
+        return {
+            "run_id": "run-cleanup",
+            "status": "already_cleaned",
+            "checkpoint": {"status": "already_cleaned"},
+            "execution_store": {"status": "already_cleaned"},
+        }
+
+    monkeypatch.setattr(adapter.transport, "_json", fake_json)
+    result = await adapter.cleanup_run("run-cleanup")
+
+    assert isinstance(result, RuntimeCleanupResult)
+    assert result.status == "already_cleaned"
+    await adapter.aclose()
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from app.runtime.catalog import definition_from_run
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
+from runtime_protocol.contracts import RuntimeCleanupResult, RuntimeCleanupStatus
 
 
 @dataclass(frozen=True)
@@ -40,11 +41,14 @@ async def delete_run_continuation(
         result = await adapter.cleanup_run(run_id)
     except Exception as exc:
         return ContinuationCleanupOutcome(run_id=run_id, status="failed", error=str(exc))
-    if not isinstance(result, dict):
-        return ContinuationCleanupOutcome(run_id=run_id, status="failed", error="runtime cleanup response must be an object")
-    result_status = str(result.get("status") or "")
-    if result_status not in {"cleaned", "already_cleaned", "not_bound"}:
-        return ContinuationCleanupOutcome(run_id=run_id, status="failed", error="runtime cleanup response has an unexpected status", adapter_result=result)
+    if not isinstance(result, RuntimeCleanupResult):
+        return ContinuationCleanupOutcome(
+            run_id=run_id,
+            status="failed",
+            error="runtime cleanup response must be RuntimeCleanupResult",
+            adapter_result=result,
+        )
+    result_status = result.status.value if isinstance(result.status, RuntimeCleanupStatus) else str(result.status)
     return ContinuationCleanupOutcome(run_id=run_id, status=result_status, adapter_result=result)
 
 

@@ -122,6 +122,119 @@ async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwarg
 
 
 @pytest.mark.asyncio
+async def test_start_interrupt_resume_uses_serialized_interruption_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class FakeAdapter(_FakeAdapter):
+        async def start(self, request, *, context, event_sink=None):
+            calls.append("start")
+            return AgentRuntimeResult(
+                status="awaiting_human",
+                interruption={"interrupt_id": "interrupt-start", "type": "approval"},
+                continuation=ContinuationBinding("checkpoint", {"binding_id": "binding-1"}),
+            )
+
+        async def resume(self, request, *, interrupt, context, event_sink=None):
+            calls.append("resume")
+            return AgentRuntimeResult(status="completed", output={"answer": "resumed"})
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    store = ExecutionStore()
+    run_id = "run-start-interrupt-resume"
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        started = await _read_events(client, "POST", "/v1/runs/start", json=_payload(run_id))
+        record = await store.get(run_id)
+        persisted_result = dict(record.result) if record is not None and record.result is not None else None
+        resumed = await _read_events(
+            client,
+            "POST",
+            f"/v1/runs/{run_id}/resume",
+            json={
+                **_payload(run_id),
+                "operation_id": "resume-after-interrupt",
+                "interrupt": {"interrupt_id": "interrupt-start", "type": "approval", "decision": "approve"},
+            },
+        )
+
+    assert started[-1]["result"]["interruption"]["type"] == "approval"
+    assert persisted_result is not None
+    assert persisted_result["interruption"]["interrupt_id"] == "interrupt-start"
+    assert "pending_interrupt" not in persisted_result
+    assert resumed[-1]["result"]["status"] == "completed"
+    assert calls == ["start", "resume"]
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_legacy_pending_interrupt_without_calling_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class FakeAdapter(_FakeAdapter):
+        async def resume(self, request, *, interrupt, context, event_sink=None):
+            calls.append("resume")
+            return AgentRuntimeResult(status="completed")
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    store = ExecutionStore()
+    run_id = "run-legacy-pending-interrupt"
+    await store.create(run_id, "start", _request(run_id), _payload(run_id), operation_id="start")
+    fencing_token = await store.claim(run_id)
+    await store.checkpoint_execution(
+        run_id,
+        AgentRuntimeEvent(
+            event_id=f"{run_id}:paused",
+            run_id=run_id,
+            sequence=0,
+            kind="run.paused",
+            payload={},
+        ).to_dict(),
+        {"status": "awaiting_human", "pending_interrupt": {"interrupt_id": "legacy", "type": "approval"}},
+        status="awaiting_human",
+        continuation={"binding_type": "checkpoint", "payload": {"binding_id": "binding-legacy"}},
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
+    )
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        response = await client.post(
+            f"/v1/runs/{run_id}/resume",
+            json={
+                **_payload(run_id),
+                "operation_id": "resume-legacy",
+                "interrupt": {"interrupt_id": "legacy", "type": "approval", "decision": "approve"},
+            },
+        )
+
+    assert response.status_code == 409
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_endpoint_returns_explicit_overall_status_and_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeAdapter(_FakeAdapter):
+        async def cleanup_run(self, run_id):
+            return {"status": "cleaned", "run_id": run_id}
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    store = ExecutionStore()
+    run_id = "run-cleanup-contract"
+    await store.create(run_id, "start", _request(run_id), _payload(run_id), operation_id="start")
+    await store.set_status(run_id, "completed")
+    app = create_app(execution_store=store, require_auth=False)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
+        first = await client.delete(f"/v1/runs/{run_id}")
+        second = await client.delete(f"/v1/runs/{run_id}")
+
+    assert first.status_code == 200
+    assert first.json()["result"]["status"] == "cleaned"
+    assert second.status_code == 200
+    assert second.json()["result"]["status"] == "already_cleaned"
+
+
+@pytest.mark.asyncio
 async def test_runtime_prepares_neutral_task_context_before_langgraph_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,7 +357,7 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
             kind="run.paused",
             payload={},
         ).to_dict(),
-        {"status": "awaiting_human", "pending_interrupt": {"interrupt_id": "interrupt-1", "type": "approval"}},
+        {"status": "awaiting_human", "interruption": {"interrupt_id": "interrupt-1", "type": "approval"}},
         status="awaiting_human",
         continuation={"binding_type": "langgraph.checkpoint", "payload": {"binding_id": "binding-1"}},
         owner_id=store.owner_id,

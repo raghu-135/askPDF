@@ -27,6 +27,55 @@ class RuntimeBehaviorOwner(str, Enum):
     RUNTIME = "runtime"
 
 
+class RuntimeCleanupStatus(str, Enum):
+    CLEANED = "cleaned"
+    ALREADY_CLEANED = "already_cleaned"
+    NOT_BOUND = "not_bound"
+
+
+@dataclass(frozen=True)
+class RuntimeCleanupResult:
+    """Canonical result for durable runtime/checkpoint cleanup."""
+
+    run_id: str
+    status: RuntimeCleanupStatus | str
+    checkpoint: Mapping[str, Any] = field(default_factory=dict)
+    execution_store: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not str(self.run_id).strip():
+            raise ValueError("cleanup run_id must not be empty")
+        status = self.status.value if isinstance(self.status, RuntimeCleanupStatus) else str(self.status)
+        if status not in {item.value for item in RuntimeCleanupStatus}:
+            raise ValueError(f"invalid cleanup status: {status}")
+        if not isinstance(self.checkpoint, Mapping) or not isinstance(self.execution_store, Mapping):
+            raise TypeError("cleanup component results must be objects")
+
+    def to_dict(self) -> Dict[str, Any]:
+        status = self.status.value if isinstance(self.status, RuntimeCleanupStatus) else str(self.status)
+        return {
+            "run_id": str(self.run_id),
+            "status": status,
+            "checkpoint": dict(self.checkpoint),
+            "execution_store": dict(self.execution_store),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "RuntimeCleanupResult":
+        if not isinstance(value, Mapping):
+            raise TypeError("runtime cleanup result must be an object")
+        required = {"run_id", "status", "checkpoint", "execution_store"}
+        missing = required.difference(value)
+        if missing:
+            raise ValueError(f"runtime cleanup result is missing fields: {sorted(missing)}")
+        return cls(
+            run_id=str(value["run_id"]),
+            status=str(value["status"]),
+            checkpoint=value["checkpoint"],
+            execution_store=value["execution_store"],
+        )
+
+
 @dataclass(frozen=True)
 class RuntimeBehaviorDescriptor:
     """Strict, framework-neutral orchestration behavior negotiated at the wire boundary."""

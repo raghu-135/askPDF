@@ -23,6 +23,7 @@ from runtime_protocol.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
+    RuntimeCleanupResult,
     RuntimeCapabilities,
     RuntimeCourseCorrection,
     RuntimeCourseCorrectionReceipt,
@@ -797,4 +798,8 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json=json_payload({"continuation": continuation.to_dict()}))
 
     async def cleanup_run(self, run_id: str) -> Any:
-        return await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})
+        value = await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})
+        try:
+            return RuntimeCleanupResult.from_mapping(value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid cleanup result") from exc
