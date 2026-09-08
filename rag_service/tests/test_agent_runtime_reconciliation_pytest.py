@@ -37,19 +37,19 @@ async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monke
     newest = AgentRuntimeEvent(
         event_id="event-10", run_id="run-1", sequence=10,
         kind="interrupt.requested",
-        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "new"}),
+        continuation=ContinuationBinding("langgraph.checkpoint", {"binding_id": "new"}),
         checkpoint_boundary_available=True,
     )
     older = AgentRuntimeEvent(
         event_id="event-9", run_id="run-1", sequence=9,
         kind="runtime.event",
-        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "old"}),
+        continuation=ContinuationBinding("langgraph.checkpoint", {"binding_id": "old"}),
         checkpoint_boundary_available=False,
     )
 
     assert await projector.apply_event(run=run, event=newest) is True
     assert await projector.apply_event(run=run, event=older) is False
-    assert state["binding"].payload["checkpoint_thread_id"] == "new"
+    assert state["binding"].payload["binding_id"] == "new"
     assert state["checkpoint"] is True
 
 

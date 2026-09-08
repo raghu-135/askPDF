@@ -156,7 +156,6 @@ def _run(*, status="running", pending=None):
         task_id=None,
         metrics_json={},
         debug_trace_json=None,
-        checkpoint_thread_id="run-1",
         completed_at=None,
     )
 

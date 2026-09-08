@@ -37,6 +37,13 @@ from app.time_utils import iso_utc_z, utc_now
 @pytest.fixture
 def curator_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # Memory-curator responses can emit MCP audit events through the product
+    # workflow repository. Bind every product session owner to this test's
+    # loop; patching only the memory modules leaves audit writes attached to
+    # the process-global engine and produces cross-loop asyncpg failures.
+    from conftest import _patch_app_session_makers
+
+    _patch_app_session_makers(monkeypatch, maker)
     import app.services.effective_memory_service as effective_memory_service
     import app.services.memory_tool_service as memory_tool_service
     import app.services.memory_review_service as memory_review_service

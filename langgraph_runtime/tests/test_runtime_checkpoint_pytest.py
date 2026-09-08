@@ -30,10 +30,6 @@ def _compile_approval_graph(checkpointer):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    os.getenv("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST") != "1",
-    reason="set ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST=1 to run the runtime Postgres checkpoint test",
-)
 async def test_runtime_graph_resumes_after_postgres_checkpointer_reopen():
     thread_id = f"runtime-checkpoint-{uuid.uuid4().hex}"
     config = {"configurable": {"thread_id": thread_id}}

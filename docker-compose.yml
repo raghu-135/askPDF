@@ -40,6 +40,11 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
+      # Checkpoint and execution-store settings belong exclusively to the
+      # langgraph-runtime container. Explicitly blank the shared .env values
+      # so they cannot leak into the control-plane process.
+      - ASKPDF_AGENT_CHECKPOINTER=
+      - ASKPDF_AGENT_CHECKPOINTER_SETUP=
       - AGENT_CHECKPOINT_DATABASE_URL=
       - AGENT_RUNTIME_EXECUTION_DATABASE_URL=
       - LANGGRAPH_RUNTIME_BINDING_SECRET=

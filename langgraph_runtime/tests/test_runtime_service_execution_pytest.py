@@ -11,8 +11,7 @@ from httpx import ASGITransport
 
 from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeResult
 from runtime_protocol.contracts import ContinuationBinding
-from runtime_protocol.contracts import RUNTIME_MINIMUM_COMPATIBLE_VERSION, RUNTIME_PROTOCOL_VERSION
-from runtime_protocol.protocol import versioned_payload
+from runtime_protocol.protocol import json_payload
 from langgraph_runtime.api import create_app
 from langgraph_runtime.dependencies import langgraph_dependency_requirements
 from langgraph_runtime.execution_store import ExecutionStore
@@ -25,8 +24,6 @@ class _FakeAdapter:
 
 def _request(run_id: str) -> dict:
     return {
-        "protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "run_id": run_id,
         "thread_id": "thread-1",
         "definition_id": "router_rag_agent",
@@ -39,8 +36,6 @@ def _request(run_id: str) -> dict:
 
 def _payload(run_id: str) -> dict:
     return {
-        "protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "operation_id": f"{run_id}:start",
         "request": _request(run_id),
         "context": {},
@@ -383,7 +378,7 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
         first = await _read_events(client, "POST", "/v1/runs/start", json=_payload("run-explicit-retry"))
-        retry_payload = versioned_payload({
+        retry_payload = json_payload({
             "attempt_id": "retry-operation-1",
             "source_attempt": 1,
             "operation": "start",
@@ -392,7 +387,7 @@ async def test_explicit_retry_creates_one_new_attempt(monkeypatch: pytest.Monkey
         })
         retried = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
         repeated = await _read_events(client, "POST", "/v1/runs/run-explicit-retry/retry", json=retry_payload)
-        retry_two_payload = versioned_payload({
+        retry_two_payload = json_payload({
             "attempt_id": "retry-operation-2",
             "source_attempt": 2,
             "operation": "start",
@@ -416,7 +411,7 @@ async def test_cancel_unknown_run_returns_404_without_creating_state() -> None:
     app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
-        response = await client.post("/v1/runs/missing/cancel", json=versioned_payload({"request": _request("missing")}))
+        response = await client.post("/v1/runs/missing/cancel", json=json_payload({"request": _request("missing")}))
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "runtime_run_not_found"
@@ -430,10 +425,10 @@ async def test_cancel_active_and_terminal_runs_are_idempotent() -> None:
     app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
-        first = await client.post("/v1/runs/run-cancel/cancel", json=versioned_payload({"request": _request("run-cancel")}))
-        repeated = await client.post("/v1/runs/run-cancel/cancel", json=versioned_payload({"request": _request("run-cancel")}))
+        first = await client.post("/v1/runs/run-cancel/cancel", json=json_payload({"request": _request("run-cancel")}))
+        repeated = await client.post("/v1/runs/run-cancel/cancel", json=json_payload({"request": _request("run-cancel")}))
         await store.set_status("run-cancel", "cancelled")
-        terminal = await client.post("/v1/runs/run-cancel/cancel", json=versioned_payload({"request": _request("run-cancel")}))
+        terminal = await client.post("/v1/runs/run-cancel/cancel", json=json_payload({"request": _request("run-cancel")}))
 
     assert first.status_code == 200
     assert first.json()["result"]["status"] == "cancellation_requested"
@@ -454,7 +449,7 @@ async def test_pause_request_is_persisted_for_external_execution() -> None:
     app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://runtime") as client:
-        response = await client.post("/v1/runs/run-pause/pause", json=versioned_payload({"request": _request("run-pause")}))
+        response = await client.post("/v1/runs/run-pause/pause", json=json_payload({"request": _request("run-pause")}))
 
     assert response.status_code == 200
     assert response.json()["result"]["status"] == "pause_requested"
@@ -468,11 +463,9 @@ async def test_course_correction_endpoint_is_idempotent_and_terminal_aware(monke
     await store.create("run-correction", "start", _request("run-correction"), _payload("run-correction"))
     app = create_app(execution_store=store, require_auth=False)
     transport = ASGITransport(app=app)
-    payload = versioned_payload({
+    payload = json_payload({
         "request": _request("run-correction"),
         "correction": {
-            "protocol_version": RUNTIME_PROTOCOL_VERSION,
-            "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
             "correction_id": "correction-1",
             "operation_id": "operation-1",
             "instruction": "Replan the remaining security work.",
@@ -529,7 +522,7 @@ async def test_cancellation_checker_stops_work_and_persists_one_terminal_event(m
         await asyncio.wait_for(started.wait(), timeout=1)
         response = await client.post(
             "/v1/runs/run-blocking-cancel/cancel",
-            json=versioned_payload({"request": _request("run-blocking-cancel")}),
+            json=json_payload({"request": _request("run-blocking-cancel")}),
         )
         events = await asyncio.wait_for(stream_task, timeout=3)
 

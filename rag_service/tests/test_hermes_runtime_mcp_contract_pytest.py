@@ -81,8 +81,6 @@ def hermes_runtime_configuration(monkeypatch):
 
 def _payload(allowed_tools):
     return {
-        "protocol_version": "1.4",
-        "minimum_compatible_version": "1.4",
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
         "spec": {
             "schema_version": 1,

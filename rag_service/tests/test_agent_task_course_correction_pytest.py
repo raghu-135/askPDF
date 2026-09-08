@@ -53,7 +53,22 @@ async def test_course_correction_uses_command_outbox_and_cancel_rejects_it(
         framework="langgraph",
         builder_id="langgraph_graph",
         resolved_spec_json=_spec(),
-        run_metadata_json={"run_kind": "agent_task", "runtime_started": True},
+        run_metadata_json={
+            "run_kind": "agent_task",
+            "runtime_started": True,
+            "runtime_behavior": {
+                "continuation_semantics": "same_run_safe_boundary",
+                "usage_accounting_owner": "runtime",
+                "preserves_run_id": True,
+                "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True,
+                "required_input_fields": [],
+                "supports_pause_resume": True,
+                "supports_course_correction": True,
+                "budget_boundary_owner": "product",
+                "grounding_owner": "product",
+            },
+        },
     )
     async with test_session_maker() as session:
         async with session.begin():
@@ -132,7 +147,22 @@ async def test_hermes_linked_correction_preserves_failed_source_run(
         framework="hermes",
         builder_id="hermes_agent",
         resolved_spec_json={"schema_version": 1},
-        run_metadata_json={"run_kind": "agent_task", "runtime_started": True},
+        run_metadata_json={
+            "run_kind": "agent_task",
+            "runtime_started": True,
+            "runtime_behavior": {
+                "continuation_semantics": "linked_run",
+                "usage_accounting_owner": "runtime",
+                "preserves_run_id": False,
+                "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True,
+                "required_input_fields": [],
+                "supports_pause_resume": False,
+                "supports_course_correction": True,
+                "budget_boundary_owner": "product",
+                "grounding_owner": "product",
+            },
+        },
     )
     async with test_session_maker() as session:
         async with session.begin():
@@ -187,45 +217,26 @@ async def test_hermes_linked_correction_preserves_failed_source_run(
         stored_command = await session.get(AgentTaskCommand, command.id)
         stored_linked = await session.get(AgentRun, linked.id)
         assert stored_command.result_json["linked_run_id"] == linked.id
-        assert stored_command.result_json["delivery_state"] == "linked"
-        assert stored_command.status == "accepted"
-        assert stored_linked.parent_run_id == source.id
+    assert stored_command.result_json["delivery_state"] == "linked"
+    assert stored_command.status == "accepted"
+    assert stored_linked.parent_run_id == source.id
 
-
-@pytest.mark.asyncio
-async def test_legacy_config_corrections_are_backfilled_idempotently(
-    test_session_maker,
-    sample_thread,
-):
+    # A linked correction is consumed by its one linked run. Terminalizing
+    # that run must not make the finalizer queue another attempt for the same
+    # command.
     async with test_session_maker() as session:
         async with session.begin():
-            session.add(AgentWorkflow(
-                id="legacy-workflow", name="Legacy", description="test",
-                visibility="builtin", is_builtin=True, schema_version=1,
-                spec_json={"schema_version": 1}, metadata_json={"version": 1},
-            ))
-    task, _ = await repository.create_task(
-        thread_id=sample_thread.id,
-        project_id=sample_thread.project_id,
-        user_id=None,
-        workflow_id="legacy-workflow",
-        objective="Legacy correction",
-        idempotency_key="legacy-correction-task",
-        config={"course_corrections": [{
-            "id": "legacy-correction-1",
-            "instruction": "Preserve this correction.",
-            "scope": "remaining_work",
-            "status": "pending",
-        }]},
-    )
-
-    first = await repository.pending_course_corrections(task.id)
-    second = await repository.pending_course_corrections(task.id)
-    refreshed = await repository.get_task(task.id)
-
-    assert [value["correction_id"] for value in first] == ["legacy-correction-1"]
-    assert [value["command_id"] for value in second] == [first[0]["command_id"]]
-    assert "course_corrections" not in refreshed.config_json
+            stored_task = await session.get(type(task), task.id, with_for_update=True)
+            stored_linked = await session.get(AgentRun, linked.id, with_for_update=True)
+            stored_task.status = "running"
+            stored_task.active_run_id = linked.id
+            stored_linked.status = "completed"
+            stored_linked.completed_at = utc_now()
+    assert await repository.pending_course_corrections(
+        task.id, delivery_mode="linked_run", delivery_state="accepted"
+    ) == []
+    not_requeued = await repository.queue_linked_course_correction(task.id, run_id=linked.id)
+    assert not_requeued.status == "running"
 
 
 @pytest.mark.asyncio

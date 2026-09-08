@@ -12,44 +12,18 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
-from langgraph_runtime.checkpointing import open_agent_checkpointer
 from app.agent_workflows.chat_cancellation import ChatRunCancellationRequested
-from langgraph_runtime.router_runtime import handle_router_rag_chat
-from langgraph_runtime.graph import (
-    NodeRegistry,
-    WorkflowCompiler,
-    _final_context_from_state,
-    _llm_result_metadata,
-    _route_function_for_edge,
-    evaluator_route,
-    hitl_gate_route,
-    hitl_gate_route_for,
-    planner_route,
-    router_route,
-)
-from langgraph_runtime.graph import (
-    build_planner_prompt,
-    infer_required_plan_steps,
-    normalize_execution_plan,
-    normalize_evaluator_report,
-)
-from langgraph_runtime.workflows.planning import normalize_replanner_execution_plan
 from app.agent_workflows.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_workflows.trace_details import TRACE_DETAIL_SCALAR_LIMIT, sanitize_trace_detail
 from app.agent_workflows.trace_payloads import merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
-from langgraph_runtime.workflows.node_catalog import collect_node_catalog_errors, get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
-from langgraph_runtime.workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from runtime_protocol.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from langgraph_runtime.workflows.hitl_materializer import materialize_hitl_gates
-from langgraph_runtime.workflows import hitl_runtime
-from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
@@ -1893,52 +1867,6 @@ class TestRouterRagWorkflowValidator:
 
 
 class TestRouterRagGraphToolConsumers:
-    def test_tool_config_enforces_registry_contracts(self):
-        from langgraph_runtime.graph import _tool_config
-
-        state = {
-            "agent_run_id": "run-1",
-            "route": "document",
-            "allowed_tool_ids": builtin_router_rag_spec()["config"]["allowed_tool_ids"],
-        }
-        config = {"configurable": {"thread_id": "thread-1"}}
-
-        allowed = _tool_config(
-            state,
-            config,
-            caller_node="retrieval_worker",
-            tool_name="search_documents",
-        )
-        assert allowed["configurable"]["caller_node"] == "retrieval_worker"
-        assert allowed["configurable"]["tool_name"] == "search_documents"
-        assert allowed["configurable"]["tool_call_id"].startswith("retrieval_worker:search_documents:")
-        assert allowed["metadata"]["tool_call_id"] == allowed["configurable"]["tool_call_id"]
-
-        native = _tool_config(
-            state,
-            {"configurable": {"thread_id": "thread-1", "tool_call_id": "langchain-call-1"}},
-            caller_node="retrieval_worker",
-            tool_name="search_documents",
-        )
-        assert native["configurable"]["tool_call_id"] == "langchain-call-1"
-        assert native["metadata"]["tool_call_id"] == "langchain-call-1"
-
-        with pytest.raises(ValueError, match="search_documents is not allowed from caller node thread_conversation_history_worker"):
-            _tool_config(
-                state,
-                config,
-                caller_node="thread_conversation_history_worker",
-                tool_name="search_documents",
-            )
-
-        with pytest.raises(ValueError, match="is not enabled for this agent run"):
-            _tool_config(
-                dict(state, allowed_tool_ids=["thread_conversation_history"]),
-                config,
-                caller_node="retrieval_worker",
-                tool_name="search_documents",
-            )
-
     def test_v1_custom_graph_validates_and_compiles_with_instance_ids(self):
         spec = {
             "schema_version": 1,
@@ -5677,10 +5605,7 @@ class TestAgentRunService:
         assert result["turns"][0].payload["answer"] == "Answer with approved web evidence."
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        os.getenv("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST") != "1",
-        reason="set ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST=1 to run the Postgres checkpoint persistence test",
-    )
+    @pytest.mark.skip(reason="PostgreSQL checkpoint proof is owned by langgraph_runtime/tests")
     async def test_run_thread_chat_resumes_after_postgres_checkpointer_reopen(
         self,
         engine,

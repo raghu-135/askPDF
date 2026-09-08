@@ -8,11 +8,10 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -36,32 +35,13 @@ def _alembic(test_database_url: str, *arguments: str) -> subprocess.CompletedPro
     return result
 
 
-def _runtime_alembic(test_database_url: str, *arguments: str) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = test_database_url
-    result = subprocess.run(
-        ["alembic", "-c", "langgraph_runtime/alembic.ini", *arguments],
-        cwd=SERVICE_ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode:
-        raise RuntimeError(
-            f"runtime alembic {' '.join(arguments)} failed ({result.returncode}):\n"
-            f"{result.stdout}\n{result.stderr}"
-        )
-    return result
-
-
 def _reset_test_schema(test_database_url: str) -> None:
     database = make_url(test_database_url).database or ""
     if not database.startswith("test_"):
         raise RuntimeError(f"Refusing to reset non-test database: {database}")
 
     async def reset() -> None:
-        engine = create_async_engine(test_database_url)
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
         try:
             async with engine.begin() as connection:
                 await connection.execute(text("drop schema public cascade"))
@@ -82,7 +62,7 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
     _alembic(test_database_url, "upgrade", "a8d3f1c6e4b2")
 
     async def seed_existing_data() -> None:
-        engine = create_async_engine(test_database_url)
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
         try:
             async with engine.begin() as connection:
                 await connection.execute(
@@ -140,7 +120,7 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
     assert "d6f2a8c4e1b9" in current.stdout
 
     async def verify_existing_data() -> tuple[int, int, int, int, dict]:
-        engine = create_async_engine(test_database_url)
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
         try:
             async with engine.connect() as connection:
                 counts = await connection.execute(
@@ -161,40 +141,3 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
             await engine.dispose()
 
     assert asyncio.run(verify_existing_data()) == (1, 1, 1, 1, {"trace": "keep"})
-
-
-def test_runtime_migrations_have_an_independent_single_head():
-    config = Config(str(SERVICE_ROOT / "langgraph_runtime/alembic.ini"))
-    config.set_main_option(
-        "script_location", str(SERVICE_ROOT / "langgraph_runtime/migrations")
-    )
-    scripts = ScriptDirectory.from_config(config)
-    assert set(scripts.get_heads()) == {"r1_runtime_schema"}
-
-
-def test_fresh_runtime_database_reaches_complete_schema(test_database_url: str):
-    _runtime_alembic(test_database_url, "upgrade", "head")
-
-    async def inspect_schema() -> set[str]:
-        engine = create_async_engine(test_database_url)
-        try:
-            async with engine.connect() as connection:
-                result = await connection.execute(
-                    text(
-                        """
-                        select table_name
-                          from information_schema.tables
-                         where table_schema = 'public'
-                           and table_name in ('runtime_executions', 'runtime_events', 'runtime_operations')
-                        """
-                    )
-                )
-                return {row[0] for row in result}
-        finally:
-            await engine.dispose()
-
-    assert asyncio.run(inspect_schema()) == {
-        "runtime_executions",
-        "runtime_events",
-        "runtime_operations",
-    }

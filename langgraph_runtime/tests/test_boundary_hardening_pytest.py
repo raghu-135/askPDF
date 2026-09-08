@@ -141,7 +141,6 @@ def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(llm_module, "ChatOpenAI", FakeChatOpenAI)
-
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
     monkeypatch.setenv("LLM_AUTH_MODE", "none")
     monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")

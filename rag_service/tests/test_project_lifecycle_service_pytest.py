@@ -25,7 +25,9 @@ from app.time_utils import utc_now
 @pytest.fixture
 def lifecycle_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(project_lifecycle_service, "async_session_maker", maker)
+    from conftest import _patch_app_session_makers
+
+    _patch_app_session_makers(monkeypatch, maker)
     monkeypatch.setattr(
         project_lifecycle_service,
         "_default_project_id",
@@ -192,7 +194,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
                 thread_id="source-thread",
                 workflow_id="workflow-1",
                 status="completed",
-                checkpoint_thread_id="checkpoint-source",
+                runtime_binding_json={"binding_type": "langgraph.checkpoint", "payload": {"binding_id": "checkpoint-source"}},
                 pending_interrupt_json={"id": "interrupt"},
                 debug_trace_json=debug,
                 completed_at=now,
@@ -251,7 +253,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
     assert cloned_turn.id != "source-turn"
     assert cloned_run.id != "source-run"
     assert cloned_run.thread_id == cloned_thread.id
-    assert cloned_run.checkpoint_thread_id is None
+    assert cloned_run.runtime_binding_json == {}
     assert cloned_run.pending_interrupt_json is None
     assert cloned_run.run_metadata_json["historical_clone"] is True
     assert cloned_run.debug_trace_json["trace"]["run_id"] == cloned_run.id
@@ -316,10 +318,9 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
                 thread_id="source-thread",
                 workflow_id="workflow-1",
                 status="completed",
-                checkpoint_thread_id="checkpoint-source",
                 runtime_binding_json={
                     "binding_type": "langgraph.checkpoint",
-                    "payload": {"checkpoint_thread_id": "checkpoint-source"},
+                    "payload": {"binding_id": "checkpoint-source"},
                 },
                 runtime_binding_status="active",
                 completed_at=now,

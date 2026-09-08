@@ -55,7 +55,6 @@ services:
       weaviate:
         condition: service_healthy
     volumes:
-      - ./rag_service:/app
       - .:/workspace:ro
       - test_data:/data
       - content_test_data:/static

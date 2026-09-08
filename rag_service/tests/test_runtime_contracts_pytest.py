@@ -42,10 +42,9 @@ from runtime_protocol.contracts import (
     RuntimeUsageSnapshot,
     RuntimeBehaviorDescriptor,
     TaskOrchestrationDelta,
-    ensure_protocol_compatible,
     validated_disabled_operation_ids,
 )
-from runtime_protocol.transport import result_from_dict
+from runtime_protocol.transport import request_from_dict, result_from_dict
 from runtime_protocol.validation import (
     RuntimeProtocolValidationError,
     validate_runtime_result_envelope,
@@ -57,11 +56,6 @@ from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.task_results import normalize_runtime_task_result, runtime_task_result_summary
 from app.runtime.behavior import snapshot_runtime_behavior
 from app.services.agent_task_runtime_projection import runtime_delta_conflict_details
-from langgraph_runtime.workflows.deep_research_execution import (
-    RuntimeBudgetMeter,
-    RuntimeExecutionServices,
-    runtime_execution_services_factory,
-)
 
 
 def _runtime_budget_snapshot(limits):
@@ -115,17 +109,7 @@ def test_runtime_behavior_snapshot_rejects_coercion_and_unknown_values():
         snapshot_runtime_behavior({**behavior, "unexpected": True})
 
 
-from langgraph_runtime.workflows.deep_research_nodes import deep_task_scheduler
-from langgraph_runtime.adapter import _result_from_graph
-from langgraph_runtime.workflows import deep_research_nodes
-from langgraph_runtime.runtime_support.task_results import (
-    RuntimeTaskResultValidationError,
-    normalize_runtime_task_result as normalize_runtime_service_task_result,
-)
-from langgraph_runtime.router_runtime import _install_budget_meter
-
-
-def test_course_correction_contract_is_json_only_and_versioned():
+def test_course_correction_contract_is_json_only_and_revision_aware():
     correction = RuntimeCourseCorrection(
         correction_id="correction-1",
         operation_id="operation-1",
@@ -142,7 +126,7 @@ def test_course_correction_contract_is_json_only_and_versioned():
         run_status="running",
     )
 
-    assert correction.to_dict()["protocol_version"]
+    assert correction.to_dict()["observed_task_version"] == 4
     assert receipt.to_dict()["status"] == "accepted"
     with pytest.raises(ValueError, match="scope"):
         RuntimeCourseCorrection(
@@ -336,9 +320,12 @@ async def test_runtime_execution_retries_empty_subagent_result_once():
     assert scheduled[0].attempt == 2
 
 
-def test_incompatible_runtime_protocol_is_rejected_before_execution():
-    with pytest.raises(ValueError, match="protocol"):
-        ensure_protocol_compatible("2.0", "2.0")
+def test_incomplete_runtime_request_is_rejected_before_execution():
+    with pytest.raises(ValueError, match="run_id"):
+        request_from_dict({
+            "operation_id": "run.start",
+            "request": {"definition_id": "router_rag_agent"},
+        })
 
 
 @pytest.mark.asyncio

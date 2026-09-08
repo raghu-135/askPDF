@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.metadata
+import json
 import os
 import subprocess
 import sys
@@ -28,11 +29,7 @@ UNIT_TEST_FILES = [
     "test_control_plane_import_boundary_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_compose_profile_pytest.py",
-    "test_hermes_execution_store_pytest.py",
     "test_hermes_profile_pytest.py",
-    "test_hermes_runtime_adapter_pytest.py",
-    "test_external_hermes_runtime_smoke_pytest.py",
-    "test_real_hermes_container_smoke_pytest.py",
     "test_agent_retry_behavior.py",
     "test_agent_tool_contract_pytest.py",
     "test_dimension_mismatch_scenarios.py",
@@ -60,7 +57,6 @@ UNIT_TEST_FILES = [
 ]
 
 MCP_TEST_FILES = [
-    "test_hermes_runtime_mcp_contract_pytest.py",
     "test_mcp_context.py",
     "test_mcp_transport.py",
     "test_mcp_contracts.py",
@@ -113,6 +109,60 @@ DIAGNOSTIC_PACKAGES = (
     "asyncpg",
     "httpx",
 )
+
+
+def _approved_test_exclusions() -> dict[str, str]:
+    """Return the explicit inventory for tests outside the control-plane gate.
+
+    The repository still contains historical mixed files while their retained
+    coverage is represented by the framework-owned runtime suites. Keeping
+    this list in the image makes omissions fail closed instead of silently
+    disappearing from the default backend run.
+    """
+    manifest_path = APP_DIR / "tests" / "test_inventory.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Unable to load test inventory manifest: {manifest_path}") from exc
+    excluded = manifest.get("excluded")
+    if not isinstance(excluded, dict) or not all(
+        isinstance(name, str) and isinstance(reason, str) and reason.strip()
+        for name, reason in excluded.items()
+    ):
+        raise SystemExit(f"Invalid test inventory exclusions: {manifest_path}")
+    return excluded
+
+
+def _declared_control_plane_test_names() -> set[str]:
+    return {
+        name
+        for group in (
+            UNIT_TEST_FILES,
+            MCP_TEST_FILES,
+            DB_TEST_FILES,
+            API_TEST_FILES,
+            INTEGRATION_TEST_FILES,
+            SCHEMA_TEST_FILES,
+        )
+        for name in group
+    }
+
+
+def _validate_test_inventory() -> None:
+    test_root = APP_DIR / "tests"
+    repository_tests = {path.name for path in test_root.glob("test_*.py")}
+    assigned = _declared_control_plane_test_names()
+    excluded = _approved_test_exclusions()
+    excluded_names = set(excluded)
+    overlap = sorted(assigned & excluded_names)
+    missing = sorted(repository_tests - assigned - excluded_names)
+    if overlap or missing:
+        details = []
+        if overlap:
+            details.append("assigned and excluded: " + ", ".join(overlap))
+        if missing:
+            details.append("unassigned: " + ", ".join(missing))
+        raise SystemExit("Test inventory is incomplete; " + "; ".join(details))
 
 
 def _print_dependency_versions() -> None:
@@ -286,6 +336,22 @@ def _should_run_standalone(args: argparse.Namespace) -> bool:
     return args.group == "all" or args.all or args.all_tests
 
 
+def _validate_test_targets(targets: list[str]) -> None:
+    # Pytest node selectors append ``::Class::test`` to a real file path.
+    # Validate the file portion so targeted diagnostics retain the same
+    # fail-fast image-boundary check as whole-file runs.
+    missing = [
+        target
+        for target in targets
+        if not Path(target.split("::", 1)[0]).is_file()
+    ]
+    if missing:
+        raise SystemExit(
+            "Requested control-plane test target is not present in the control-plane image: "
+            + ", ".join(missing)
+        )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run askPDF tests inside Docker.")
     parser.add_argument(
@@ -329,7 +395,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     _print_dependency_versions()
+    _validate_test_inventory()
     targets = _pytest_targets(args)
+    _validate_test_targets(targets)
     base_database_url = os.environ.get("DATABASE_URL")
     if not base_database_url:
         raise SystemExit("DATABASE_URL environment variable is required")
@@ -350,10 +418,9 @@ def main(argv: list[str] | None = None) -> int:
     env["TEST_DATABASE_URL"] = test_db_url
     env["DATA_DIR"] = data_dir
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
-    env["ASKPDF_AGENT_CHECKPOINTER"] = "memory"
+    env.pop("ASKPDF_AGENT_CHECKPOINTER", None)
     env.pop("AGENT_CHECKPOINT_DATABASE_URL", None)
     env.pop("ASKPDF_AGENT_CHECKPOINTER_SETUP", None)
-    env.pop("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST", None)
 
     try:
         if targets:

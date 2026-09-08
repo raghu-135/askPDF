@@ -1,8 +1,26 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.mcp.transport import InProcessMCPClient
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def dispose_shared_database_engine():
+    """Own the process-global DB engine used by standalone MCP app tests.
+
+    These tests exercise the MCP ASGI application without starting the full
+    FastAPI lifespan.  A thread-shape call can therefore open the global
+    product engine while no application shutdown hook exists to dispose it.
+    Dispose both exported engines on the owning pytest loop after every test
+    so asyncpg cancellation tasks cannot survive into a later test or loop.
+    """
+    yield
+    from app.db import connection_sqlmodel
+
+    await connection_sqlmodel.engine.dispose()
+    await connection_sqlmodel.test_engine.dispose()
 
 
 @pytest.mark.asyncio

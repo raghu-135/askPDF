@@ -7,14 +7,9 @@ runtime boundaries.
 
 from __future__ import annotations
 
-import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional
-
-
-RUNTIME_PROTOCOL_VERSION = "1.4"
-RUNTIME_MINIMUM_COMPATIBLE_VERSION = "1.4"
 
 
 class RuntimeContinuationSemantics(str, Enum):
@@ -109,68 +104,6 @@ class RuntimeBehaviorDescriptor:
             "budget_boundary_owner": self.budget_boundary_owner.value,
             "grounding_owner": self.grounding_owner.value,
         }
-
-
-def ensure_protocol_compatible(
-    protocol_version: str,
-    minimum_compatible_version: str,
-    *,
-    local_version: str = RUNTIME_PROTOCOL_VERSION,
-) -> None:
-    """Reject peers whose supported version interval excludes this process."""
-
-    def parts(value: str) -> tuple[int, int]:
-        if not isinstance(value, str) or re.fullmatch(r"[0-9]+\.[0-9]+", value) is None:
-            raise ValueError(f"invalid runtime protocol version: {value!r}")
-        major, minor = value.split(".", 1)
-        return int(major), int(minor)
-
-    peer = parts(protocol_version)
-    peer_minimum = parts(minimum_compatible_version)
-    local = parts(local_version)
-    if peer_minimum > peer or local < peer_minimum or local > peer:
-        raise ValueError(
-            "runtime protocol is incompatible: "
-            f"peer={protocol_version}, peer_minimum={minimum_compatible_version}, local={local_version}"
-        )
-
-
-def require_protocol_fields(value: Mapping[str, Any]) -> tuple[str, str]:
-    """Read optional protocol metadata, defaulting current development peers."""
-
-    if not isinstance(value, Mapping):
-        raise ValueError("runtime protocol payload must be an object")
-    missing = [
-        field_name
-        for field_name in ("protocol_version", "minimum_compatible_version")
-        if field_name not in value
-    ]
-    if missing:
-        return (
-            str(value.get("protocol_version") or RUNTIME_PROTOCOL_VERSION),
-            str(value.get("minimum_compatible_version") or RUNTIME_MINIMUM_COMPATIBLE_VERSION),
-        )
-    protocol_version = value["protocol_version"]
-    minimum_compatible_version = value["minimum_compatible_version"]
-    if not isinstance(protocol_version, str) or not protocol_version.strip():
-        raise ValueError("protocol_version must be a non-empty string")
-    if not isinstance(minimum_compatible_version, str) or not minimum_compatible_version.strip():
-        raise ValueError("minimum_compatible_version must be a non-empty string")
-    ensure_protocol_compatible(protocol_version, minimum_compatible_version)
-    return protocol_version, minimum_compatible_version
-
-
-def protocol_error_details(value: Mapping[str, Any], error: Exception | str) -> dict[str, Any]:
-    """Return safe diagnostics for a failed wire-level negotiation."""
-
-    return {
-        "received_protocol_version": value.get("protocol_version") if isinstance(value, Mapping) else None,
-        "received_minimum_compatible_version": value.get("minimum_compatible_version") if isinstance(value, Mapping) else None,
-        "local_protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "local_minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
-        "retryable": False,
-        "error": str(error),
-    }
 
 
 RUNTIME_OPERATION_EVENT_KINDS = frozenset({
@@ -528,9 +461,6 @@ class AgentRuntimeRequest:
     trace_id: Optional[str] = None
     authentication: Mapping[str, Any] = field(default_factory=dict)
     permissions: Mapping[str, Any] = field(default_factory=dict)
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
-
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
         if self.continuation is not None:
@@ -552,9 +482,6 @@ class AgentRuntimeEvent:
     source_metadata: Mapping[str, Any] = field(default_factory=dict)
     continuation: Optional[ContinuationBinding] = None
     checkpoint_boundary_available: Optional[bool] = None
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
-
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
         if self.continuation is not None:
@@ -683,8 +610,6 @@ class RuntimeCapabilities:
     deployment: Mapping[str, Any] = field(default_factory=dict)
     # Neutral orchestration semantics supplied by the selected adapter.
     behavior: RuntimeBehaviorDescriptor | Mapping[str, Any] = field(default_factory=dict)
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
     def __post_init__(self) -> None:
         for operation, descriptor in self.operations.items():
@@ -701,8 +626,6 @@ class RuntimeCapabilities:
     def to_dict(self) -> Dict[str, Any]:
         ordered_operations = sorted(self.operations.items(), key=lambda item: item[0].value)
         value = {
-            "protocol_version": self.protocol_version,
-            "minimum_compatible_version": self.minimum_compatible_version,
             "operations": {
                 operation.value: descriptor.to_dict()
                 for operation, descriptor in ordered_operations
@@ -811,8 +734,6 @@ class RuntimeCourseCorrection:
     observed_plan_revision: int = 0
     scope: str = "remaining_work"
     submitted_at: Optional[str] = None
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
     def __post_init__(self) -> None:
         if not self.correction_id.strip() or not self.operation_id.strip():
@@ -825,7 +746,6 @@ class RuntimeCourseCorrection:
             raise ValueError("unsupported course correction scope")
         if self.observed_task_version < 0 or self.observed_plan_revision < 0:
             raise ValueError("course correction versions must not be negative")
-        ensure_protocol_compatible(self.protocol_version, self.minimum_compatible_version)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -904,8 +824,6 @@ class RuntimeValidationResult:
     normalized_spec: Optional[Mapping[str, Any]] = None
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -927,8 +845,6 @@ class AgentRuntimeResult:
     error: Optional[Mapping[str, Any]] = None
     checkpoint_boundary_available: Optional[bool] = None
     orchestration_delta: Optional["TaskOrchestrationDelta"] = None
-    protocol_version: str = RUNTIME_PROTOCOL_VERSION
-    minimum_compatible_version: str = RUNTIME_MINIMUM_COMPATIBLE_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)

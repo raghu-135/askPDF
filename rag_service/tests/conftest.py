@@ -7,7 +7,9 @@ including connection management, session handling, and test data.
 
 import os
 import asyncio
+import json
 import uuid
+from pathlib import Path
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
@@ -38,6 +40,15 @@ collect_ignore = [
     "test_modular_visualization.py",
     "test_parsing_service.py",
 ]
+
+_test_inventory_path = Path(__file__).with_name("test_inventory.json")
+try:
+    _test_inventory = json.loads(_test_inventory_path.read_text())
+    for _excluded_test in (_test_inventory.get("excluded") or {}):
+        if _excluded_test not in collect_ignore:
+            collect_ignore.append(_excluded_test)
+except (OSError, json.JSONDecodeError) as exc:
+    raise RuntimeError(f"Unable to load test inventory: {_test_inventory_path}") from exc
 
 
 _askpdf_completed_test_calls = 0
@@ -218,6 +229,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
     )
     from app.services import (
         agent_task_repository,
+        agent_task_runtime_projection,
         embedding_materialization_service,
         effective_memory_service,
         memory_manager_engine,
@@ -257,6 +269,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         agent_workflow_repository,
         chat_cancellation,
         agent_task_repository,
+        agent_task_runtime_projection,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 
@@ -271,10 +284,30 @@ def _patch_app_session_makers(monkeypatch, session_maker):
 def api_client(test_database_url, monkeypatch) -> Generator:
     """Create a sync FastAPI test client wired to the isolated test database."""
     from fastapi.testclient import TestClient
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.registry import RuntimeRegistry
+    from app.runtime import registry as registry_module
+    from tests.support.fake_runtime import FakeRuntimeServer
 
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
     _patch_app_session_makers(monkeypatch, session_maker)
+
+    # Product API tests must exercise the external adapter boundary without
+    # depending on a separately deployed runtime.  This is an explicit HTTP
+    # test double, never a production registry fallback.
+    fake_runtime = FakeRuntimeServer()
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://fake-langgraph-runtime")
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
+    fake_adapter = HttpLangGraphRuntimeAdapter(
+        base_url="http://fake-langgraph-runtime",
+        client=fake_runtime.client(),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_registry",
+        RuntimeRegistry(adapters=[fake_adapter]),
+    )
 
     import main as main_module
 
@@ -285,6 +318,11 @@ def api_client(test_database_url, monkeypatch) -> Generator:
     # The isolated fixture owns test schema creation. Production startup must
     # not call SQLModel.metadata.create_all; migrations are the schema authority.
     asyncio.run(_create_test_schema(engine))
+    # The synchronous fixture creates the schema before Starlette starts its
+    # AnyIO portal. Dispose the schema-creation loop's connections before the
+    # same engine is used by the portal loop; otherwise asyncpg can retain a
+    # loop-bound cancellation task until the next unrelated test.
+    asyncio.run(engine.dispose())
     app = main_module.app
 
     try:
@@ -298,10 +336,28 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 @pytest_asyncio.fixture(scope="function")
 async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[AsyncClient, None]:
     """Create an async FastAPI test client wired to the isolated test database."""
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.registry import RuntimeRegistry
+    from app.runtime import registry as registry_module
+    from tests.support.fake_runtime import FakeRuntimeServer
+
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
     await _create_test_schema(engine)
     _patch_app_session_makers(monkeypatch, session_maker)
+
+    fake_runtime = FakeRuntimeServer()
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://fake-langgraph-runtime")
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
+    fake_adapter = HttpLangGraphRuntimeAdapter(
+        base_url="http://fake-langgraph-runtime",
+        client=fake_runtime.client(),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_registry",
+        RuntimeRegistry(adapters=[fake_adapter]),
+    )
 
     import main as main_module
 

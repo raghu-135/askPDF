@@ -46,6 +46,15 @@ def test_control_plane_has_no_langgraph_or_runtime_imports():
         ), path.relative_to(ROOT)
 
 
+def test_control_plane_tests_have_no_framework_execution_imports():
+    forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
+    for path in _source_files("rag_service/tests", ".py"):
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in _imports(path) for prefix in forbidden
+        ), path
+
+
 def test_runtime_has_no_control_plane_imports():
     for path in _source_files("langgraph_runtime", ".py"):
         assert not any(name == "app" or name.startswith("app.") for name in _imports(path)), path
@@ -79,6 +88,19 @@ def test_control_plane_manifest_and_legacy_paths_are_clean():
         assert not (ROOT / "app" / legacy).exists()
 
 
+def test_control_plane_test_inventory_assigns_every_backend_test_file():
+    from scripts.run_tests import (
+        _approved_test_exclusions,
+        _declared_control_plane_test_names,
+    )
+
+    repository_tests = {path.name for path in (ROOT / "tests").glob("test_*.py")}
+    assigned = _declared_control_plane_test_names()
+    excluded = set(_approved_test_exclusions())
+    assert not assigned & excluded
+    assert repository_tests == assigned | excluded
+
+
 def test_control_plane_has_no_framework_execution_symbols():
     forbidden = ("StateGraph", "RunnableConfig", "GraphInterrupt", "RuntimeExecutionContext")
     offenders = {
@@ -97,6 +119,6 @@ def test_frontend_and_product_api_do_not_expose_checkpoint_identity():
     ]
     offenders = [
         path for path in product_sources
-        if "checkpoint_thread_id" in path.read_text() and path.name != "models_sqlmodel.py"
+        if "checkpoint_thread_id" in path.read_text()
     ]
     assert offenders == []

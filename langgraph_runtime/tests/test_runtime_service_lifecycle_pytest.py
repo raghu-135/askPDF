@@ -5,7 +5,6 @@ import httpx
 import time
 import pytest
 from runtime_protocol.contracts import AgentRuntimeResult
-from runtime_protocol.protocol import RUNTIME_MINIMUM_COMPATIBLE_VERSION, RUNTIME_PROTOCOL_VERSION
 from langgraph_runtime.execution_store import ExecutionStore
 
 from langgraph_runtime.api import create_app
@@ -123,12 +122,10 @@ def test_runtime_accepts_missing_outer_protocol_metadata(monkeypatch):
         )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["protocol_version"] == RUNTIME_PROTOCOL_VERSION
-    assert payload["minimum_compatible_version"] == RUNTIME_MINIMUM_COMPATIBLE_VERSION
     assert "capabilities" in payload["result"]
 
 
-def test_runtime_definition_errors_are_versioned_for_control_plane_parsing(monkeypatch):
+def test_runtime_definition_errors_fail_closed_for_control_plane_parsing(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
@@ -137,15 +134,11 @@ def test_runtime_definition_errors_are_versioned_for_control_plane_parsing(monke
         response = client.post(
             "/v1/resolve",
             json={
-                "protocol_version": RUNTIME_PROTOCOL_VERSION,
-                "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
             },
         )
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["protocol_version"] == RUNTIME_PROTOCOL_VERSION
-    assert payload["minimum_compatible_version"] == RUNTIME_MINIMUM_COMPATIBLE_VERSION
     assert payload["error"]["code"] == "runtime_definition_invalid"
     assert "detail" not in payload
 
@@ -161,12 +154,8 @@ def test_dependency_outage_marks_readiness_unavailable_but_blocks_required_run(m
 
     monkeypatch.setattr("langgraph_runtime.dependencies.probe_mcp", unavailable_probe)
     payload = {
-        "protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "operation_id": "dependency-blocked:start",
         "request": {
-            "protocol_version": RUNTIME_PROTOCOL_VERSION,
-            "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
             "run_id": "dependency-blocked",
             "thread_id": "thread-1",
             "definition_id": "router_rag_agent",
@@ -197,8 +186,6 @@ def test_dependency_outage_marks_readiness_unavailable_but_blocks_required_run(m
         cancel_response = client.post(
             "/v1/runs/dependency-blocked/cancel",
             json={
-                "protocol_version": RUNTIME_PROTOCOL_VERSION,
-                "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
                 "request": payload["request"],
             },
         )
@@ -230,8 +217,6 @@ def test_recovery_loop_reclaims_a_lease_after_restart(monkeypatch):
     monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
     store = ExecutionStore(database_url="")
     request = {
-        "protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
         "run_id": "restart-recovery",
         "thread_id": "thread-1",
         "definition_id": "router_rag_agent",

@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from langgraph_runtime.context import RuntimeExecutionContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta, protocol_error_details, require_protocol_fields
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
 from runtime_protocol.events import create_runtime_event
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.transport import (
@@ -28,7 +28,7 @@ from runtime_protocol.transport import (
     sse_encode,
     json_envelope,
 )
-from runtime_protocol.protocol import versioned_payload
+from runtime_protocol.protocol import json_payload
 from langgraph_runtime.capabilities import LangGraphDeploymentProfile, langgraph_capabilities, langgraph_deployment_capabilities
 from langgraph_runtime.budgets import deep_agent_budgets
 from langgraph_runtime.models.llm import configure_runtime_limits
@@ -73,39 +73,11 @@ def _definition_http_error(exc: Exception) -> HTTPException:
 def _request_from_payload(payload: Mapping[str, Any]) -> Any:
     """Parse an incoming request and expose negotiation failures as 4xx errors."""
 
-    _require_payload_protocol(payload)
     request_value = payload.get("request") if isinstance(payload, Mapping) else None
     try:
         return request_from_dict(request_value)
     except (TypeError, ValueError) as exc:
-        if "protocol" in str(exc).lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "runtime_protocol_error",
-                    "safe_message": "Runtime protocol negotiation failed",
-                    "retryable": False,
-                    "details": protocol_error_details(request_value or {}, exc),
-                },
-            ) from exc
         raise
-
-
-def _require_payload_protocol(payload: Mapping[str, Any]) -> None:
-    """Reject an operation before any nested definition/request is parsed."""
-
-    try:
-        require_protocol_fields(payload)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "runtime_protocol_error",
-                "safe_message": "Runtime protocol negotiation failed",
-                "retryable": False,
-                "details": protocol_error_details(payload if isinstance(payload, Mapping) else {}, exc),
-            },
-        ) from exc
 
 
 def _cross_service_error_response(
@@ -674,7 +646,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/capabilities")
     async def capabilities(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -697,7 +668,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/validate")
     async def validate(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             value = await get_adapter().validate(definition, payload.get("spec") or {}, options=payload.get("options") or {})
@@ -707,7 +677,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/prompt-preview")
     async def prompt_preview(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             spec = payload.get("spec") or {}
@@ -726,7 +695,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def resolve(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
         """Resolve and materialize a LangGraph definition inside the runtime boundary."""
 
-        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             spec = payload.get("spec") or {}
@@ -765,7 +733,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
     async def catalog(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
         """Return only framework-owned compiler and graph catalog metadata."""
 
-        _require_payload_protocol(payload)
         try:
             definition = definition_from_dict(payload["definition"])
             from langgraph_runtime.workflows.corrective_contracts import corrective_policy_catalog
@@ -1251,7 +1218,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         record = await execution_store.get(run_id)
         if record is None:
             raise HTTPException(status_code=404, detail="runtime run not found")
-        payload = versioned_payload({"request": record.request, "context": record.payload.get("context") or {}})
+        payload = json_payload({"request": record.request, "context": record.payload.get("context") or {}})
         return StreamingResponse(
             stream_operation(
                 payload,
@@ -1288,7 +1255,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.post("/v1/runs/{run_id}/retry")
     async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
-        _require_payload_protocol(payload)
         request_payload = dict(payload.get("request") or {})
         if str(request_payload.get("run_id") or run_id) != run_id:
             raise HTTPException(status_code=400, detail="run_id does not match request path")
@@ -1447,7 +1413,6 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.delete("/v1/continuations/{binding_id}")
     async def delete_continuation(binding_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        _require_payload_protocol(payload)
         from runtime_protocol.transport import _binding
 
         continuation = _binding(payload.get("continuation"))

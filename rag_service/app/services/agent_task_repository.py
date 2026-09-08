@@ -2493,6 +2493,7 @@ async def pending_course_corrections(
     task_id: str,
     *,
     delivery_mode: Optional[str] = None,
+    delivery_state: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
     async with async_session_maker() as session:
         async with session.begin():
@@ -2516,7 +2517,11 @@ async def pending_course_corrections(
             }
             for command in commands
         ]
-        return [value for value in values if delivery_mode is None or value.get("delivery_mode") == delivery_mode]
+        return [
+            value for value in values
+            if (delivery_mode is None or value.get("delivery_mode") == delivery_mode)
+            and (delivery_state is None or value.get("delivery_state") == delivery_state)
+        ]
 
 
 async def mark_course_corrections_runtime_applied(
@@ -2700,10 +2705,16 @@ async def complete_linked_course_corrections(
             linked: list[str] = []
             for command in commands:
                 result = dict(command.result_json or {})
-                if (
-                    str(result.get("source_run_id") or "") != source_run_id
-                    and str(result.get("delivery_mode") or "") != "linked_run"
-                ):
+                if str(result.get("delivery_mode") or "") != "linked_run":
+                    continue
+                if str(result.get("delivery_state") or "accepted") != "accepted":
+                    continue
+                correction_source_run_id = str(
+                    result.get("source_run_id")
+                    or (result.get("correction") or {}).get("source_run_id")
+                    or ""
+                )
+                if correction_source_run_id != source_run_id:
                     continue
                 correction = dict(result.get("correction") or {})
                 correction_id = str(correction.get("correction_id") or correction.get("id") or "")
@@ -2733,7 +2744,12 @@ async def queue_linked_course_correction(task_id: str, *, run_id: str) -> AgentT
                 AgentTaskCommand.action == "steer",
                 AgentTaskCommand.status == "accepted",
             ).with_for_update())).scalars().all())
-            corrections = [dict((value.result_json or {}).get("correction") or {}) for value in commands]
+            corrections = [
+                dict((value.result_json or {}).get("correction") or {})
+                for value in commands
+                if (value.result_json or {}).get("delivery_mode") == "linked_run"
+                and (value.result_json or {}).get("delivery_state", "accepted") == "accepted"
+            ]
             if not corrections:
                 return task
             if task.deletion_requested_at is not None or task.status in {AgentTaskStatus.CANCELLING.value, AgentTaskStatus.CANCELLED.value}:

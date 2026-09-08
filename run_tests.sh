@@ -7,7 +7,6 @@
 #   ./run_tests.sh --db                     # Run PostgreSQL database tests
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
-#   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
 #   ./run_tests.sh --langgraph-runtime                # Run isolated LangGraph runtime integration checks
 #   ./run_tests.sh --external-runtime                 # Alias for isolated external runtime checks
 #   ./run_tests.sh --langgraph-runtime-real           # Run LangGraph runtime against a configured real provider
@@ -191,6 +190,7 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     fi
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_service_execution_pytest.py runtime-test-runner
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_service_lifecycle_pytest.py runtime-test-runner
+    external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e ASKPDF_AGENT_CHECKPOINTER=postgres -e ASKPDF_AGENT_CHECKPOINTER_SETUP=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_checkpoint_pytest.py runtime-test-runner
     external_runtime_test test-runner --file test_agent_runtime_reconciliation_pytest.py
     external_runtime_test test-runner --file test_control_plane_import_boundary_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
@@ -217,7 +217,6 @@ protected=urllib.request.Request("http://127.0.0.1:8100/v1/dependencies", header
     fi
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
         'import json, os, urllib.error, urllib.request; payload={"operation_id":"external-runtime-dependency-outage:start","request":{"run_id":"external_runtime-dependency-outage","thread_id":"external_runtime-thread","definition_id":"router_rag_agent","framework":"langgraph","builder_id":"langgraph_graph","input":{"question":"test"},"options":{"llm_model":"external_runtime-deterministic","embedding_model":"external_runtime-deterministic-embedding"}},"context":{"embedding_model":"external_runtime-deterministic-embedding","resolved_spec":{"config":{"allowed_tool_ids":["document_evidence"]}}}}; request=urllib.request.Request("http://127.0.0.1:8100/v1/runs/start", data=json.dumps(payload).encode(), headers={"content-type":"application/json", "Authorization": "Bearer " + os.environ["LANGGRAPH_RUNTIME_TOKEN"]}, method="POST");
-payload["protocol_version"] = "1.4"; payload["minimum_compatible_version"] = "1.4"; payload["request"]["protocol_version"] = "1.4"; payload["request"]["minimum_compatible_version"] = "1.4"; request.data = json.dumps(payload).encode()
 try: urllib.request.urlopen(request, timeout=3); raise AssertionError("dependent run was admitted")
 except urllib.error.HTTPError as exc: body=json.load(exc); assert exc.code == 503 and body["error"]["code"] == "runtime_dependency_unavailable" and body["error"]["retryable"] is True'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" start fake-llm rag-service

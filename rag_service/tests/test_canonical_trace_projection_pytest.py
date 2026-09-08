@@ -11,8 +11,6 @@ from app.agent_workflows.canonical_trace import (
 )
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
 from runtime_protocol.contracts import AgentRuntimeEvent
-from langgraph_runtime.adapter import _event_from_graph
-from langgraph_runtime.workflows.runtime_invocation import invoke_llm_for_node
 
 
 def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:
@@ -24,60 +22,6 @@ def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph"
         payload=payload,
         source_metadata={"framework": framework},
     )
-
-
-def test_langgraph_node_translation_preserves_operation_identity_and_topology() -> None:
-    event = _event_from_graph(
-        {
-            "event": "node.completed",
-            "data": {
-                "node_id": "retrieval_1",
-                "node_type": "retrieval_worker",
-                "label": "Document retrieval",
-                "visit_index": 2,
-                "route": "answer",
-                "duration_ms": 12,
-            },
-        },
-        run_id="run-1",
-        sequence=1,
-    )
-
-    assert event.kind == "operation.completed"
-    assert event.payload["operation_id"] == "retrieval_1"
-    assert event.payload["operation_type"] == "retrieval_worker"
-    assert event.payload["operation_label"] == "Document retrieval"
-    assert event.payload["visit_index"] == 2
-    assert event.payload["topology_ref"] == {"kind": "graph_node", "id": "retrieval_1"}
-    assert event.payload["framework_details"]["langgraph"]["route"] == "answer"
-
-
-def test_langgraph_node_failure_preserves_retryability_in_diagnostics() -> None:
-    event = _event_from_graph(
-        {
-            "event": "node.failed",
-            "data": {
-                "node_id": "deep_task_planner",
-                "node_type": "deep_task_planner",
-                "visit_index": 1,
-                "error": {
-                    "code": "deep_research_plan_invalid",
-                    "safe_message": "The research planner returned an invalid plan after repair",
-                    "retryable": True,
-                    "details": {"stage": "repair"},
-                },
-            },
-        },
-        run_id="run-1",
-        sequence=1,
-    )
-
-    projection = build_canonical_trace_projection(events=[event], resolved_spec={}, framework="langgraph")
-
-    failure = projection["diagnostics"]["failures"][0]
-    assert failure["code"] == "deep_research_plan_invalid"
-    assert failure["retryable"] is True
-    assert projection["diagnostics"]["summary"]["retryable"] is True
 
 
 def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
@@ -184,38 +128,6 @@ def test_model_lifecycle_projection_is_correlated_and_summary_only() -> None:
     assert projection["models"][0]["payload"]["operation_id"] == "planner"
     assert "prompt" not in str(projection["models"])
     assert "response" not in str(projection["models"])
-
-
-async def test_shared_model_invocation_emits_bounded_lifecycle_events() -> None:
-    class Sink:
-        def __init__(self) -> None:
-            self.events = []
-
-        async def emit(self, kind, payload):
-            self.events.append((kind, payload))
-
-    sink = Sink()
-    response = SimpleNamespace(content="safe result", usage_metadata={"total_tokens": 9})
-
-    async def invoke(_messages):
-        return response
-
-    await invoke_llm_for_node(
-        invoke,
-        [],
-        state={"llm_model": "test-model", "agent_run_id": "run-1"},
-        config={"configurable": {"execution_event_sink": sink}},
-        node="planner",
-        started=time.perf_counter(),
-        retry_observer=lambda _event: None,
-        retry_attempts=[],
-        model_name="test-model",
-    )
-
-    assert [kind for kind, _payload in sink.events] == ["llm.started", "llm.completed"]
-    assert sink.events[0][1]["operation_id"] == "planner"
-    assert sink.events[1][1]["usage"]["total_tokens"] == 9
-    assert "messages" not in str(sink.events)
 
 
 def test_hermes_projection_keeps_generic_events_and_session_visualization() -> None:

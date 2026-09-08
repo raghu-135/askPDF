@@ -13,20 +13,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from langgraph_runtime.compiler import WorkflowCompiler
-from langgraph_runtime.workflows import deep_research_nodes
-from langgraph_runtime import router_runtime
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import builder_for_definition
-from langgraph_runtime.workflows.deep_research_execution import (
-    RuntimeBudgetMeter,
-    runtime_execution_services_factory,
-)
 from app.agent_workflows.debug_trace import AgentTraceRecorder
-from langgraph_runtime.workflows.enums import WorkflowNodeType
-from langgraph_runtime.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
-from langgraph_runtime.workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api
 from app.api import agent_workflows as agent_workflows_api
 from app.db.models_sqlmodel import AgentRun, AgentTaskTodo, AgentWorkflow
@@ -2497,6 +2487,52 @@ async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
     await agent_task_runtime.run_task_worker(once=True)
 
     execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_cancels_timed_out_remote_run_instead_of_requeueing(monkeypatch):
+    task = SimpleNamespace(
+        id="task-timeout",
+        active_run_id="run-timeout",
+        config_json={"limits": {"wake_limit_seconds": 0.01}},
+        budgets_json={},
+    )
+    run = SimpleNamespace(
+        id="run-timeout",
+        task_id="task-timeout",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        run_metadata_json={"runtime_started": True},
+    )
+    claim = AsyncMock(side_effect=[task, None])
+    async def execute(_task_id, _worker_id):
+        await asyncio.Event().wait()
+
+    execute = AsyncMock(side_effect=execute)
+    set_status = AsyncMock()
+    cancel = AsyncMock(return_value={"runtime_confirmation": "pending"})
+    requeue = AsyncMock()
+
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+    monkeypatch.setattr(agent_task_runtime.tasks, "set_task_runtime_status", set_status)
+    monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", cancel)
+    monkeypatch.setattr(agent_task_runtime.tasks, "requeue_after_wake", requeue)
+    monkeypatch.setattr(agent_task_runtime.tasks, "budget_boundary", AsyncMock(return_value=None))
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    set_status.assert_awaited_once_with(
+        task.id,
+        "cancelling",
+        phase="runtime_wake_timeout_cancelling",
+        reason="active_runtime_wake_limit",
+    )
+    cancel.assert_awaited_once_with(task, run)
+    requeue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

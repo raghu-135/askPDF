@@ -11,7 +11,7 @@ The control plane owns declarative workflow definitions and versions, product to
 
 `langgraph-runtime` owns LangGraph validation and compilation, graph and Deep Agent execution, framework interrupts, checkpoints, execution leases/journals, dependency discovery, and opaque continuation bindings. It has its own database credentials and never imports `app` or accesses product persistence.
 
-`runtime_protocol` is the only shared Python package. Its values are JSON-only and versioned. Checkpoint references are signed inside `langgraph-runtime`; the control plane stores only an opaque `binding_id` and exposes only `checkpoint_boundary_available`.
+`runtime_protocol` is the only shared Python package. Its values are JSON-only and strictly validated; there is no protocol-version negotiation. Checkpoint references are signed inside `langgraph-runtime`; the control plane stores only an opaque `binding_id` and exposes only `checkpoint_boundary_available`.
 
 ## Local operation
 

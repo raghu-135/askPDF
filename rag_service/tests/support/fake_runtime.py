@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from runtime_protocol.protocol import versioned_payload
+from runtime_protocol.protocol import json_payload
 
 
 class FakeRuntimeServer:
@@ -24,29 +24,31 @@ class FakeRuntimeServer:
 
     def _default(self, request: httpx.Request, body: Mapping[str, Any]) -> dict[str, Any]:
         path = request.url.path
+        if path in {"/startupz", "/readyz"}:
+            return {"status": "ok", "checks": {}}
         if path == "/v1/capabilities":
-            return versioned_payload({"capabilities": {"operations": {}, "features": {}, "deployment": {}}})
+            return json_payload({"capabilities": {"operations": {}, "features": {}, "deployment": {}}})
         if path == "/v1/validate":
-            return versioned_payload({"validation": {"valid": True, "issues": [], "diagnostics": {}}})
+            return json_payload({"validation": {"valid": True, "issues": [], "diagnostics": {}}})
         if path == "/v1/resolve":
-            return versioned_payload({"resolved_spec": dict(body.get("spec") or {})})
+            return json_payload({"resolved_spec": dict(body.get("spec") or {})})
         if path == "/v1/catalog":
-            return versioned_payload({"catalog": {"framework": "langgraph", "builder_id": "langgraph_graph"}})
+            return json_payload({"catalog": {"framework": "langgraph", "builder_id": "langgraph_graph"}})
         if path == "/v1/prompt-preview":
-            return versioned_payload({"prompt": "fake runtime prompt"})
+            return json_payload({"prompt": "fake runtime prompt"})
         if path.endswith("/events"):
-            return versioned_payload({"events": self.events.get(str(body.get("run_id") or request.url.path), [])})
+            return json_payload({"events": self.events.get(str(body.get("run_id") or request.url.path), [])})
         if path.endswith("/inspect"):
-            return versioned_payload({"state": {}})
+            return json_payload({"state": {}})
         if path.endswith("/pause"):
-            return versioned_payload({"result": {"status": "pause_requested"}})
+            return json_payload({"result": {"status": "pause_requested"}})
         if path.endswith("/cancel"):
-            return versioned_payload({"result": {"status": "cancelled"}})
+            return json_payload({"result": {"status": "cancelled"}})
         if path.endswith("/continue") or path.endswith("/resume") or path.endswith("/retry"):
-            return versioned_payload({"result": {"status": "completed", "output": {}}})
+            return json_payload({"result": {"status": "completed", "output": {}}})
         if path.endswith("/start"):
-            return versioned_payload({"result": {"status": "completed", "output": {}}})
-        return versioned_payload({"result": {}})
+            return json_payload({"result": {"status": "completed", "output": {}}})
+        return json_payload({"result": {}})
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)

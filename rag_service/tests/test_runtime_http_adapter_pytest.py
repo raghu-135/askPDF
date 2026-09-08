@@ -12,8 +12,6 @@ from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
-    RUNTIME_MINIMUM_COMPATIBLE_VERSION,
-    RUNTIME_PROTOCOL_VERSION,
     RuntimeCourseCorrection,
     RuntimeTaskContext,
 )
@@ -24,11 +22,7 @@ from runtime_protocol.transport import request_from_dict
 
 
 def _wire(value: dict) -> dict:
-    return {
-        "protocol_version": RUNTIME_PROTOCOL_VERSION,
-        "minimum_compatible_version": RUNTIME_MINIMUM_COMPATIBLE_VERSION,
-        **value,
-    }
+    return dict(value)
 
 
 def _event(value: dict) -> dict:
@@ -59,34 +53,6 @@ def test_runtime_error_is_raiseable_and_keeps_wire_shape():
         assert caught.code == "runtime_timeout"
         assert caught.retryable is True
         assert caught.to_dict()["safe_message"] == "Agent runtime timed out"
-
-
-@pytest.mark.parametrize(
-    "field, value",
-    [
-        ("protocol_version", None),
-        ("minimum_compatible_version", None),
-        ("protocol_version", ""),
-        ("minimum_compatible_version", " "),
-        ("protocol_version", "not-semver"),
-        ("minimum_compatible_version", "1"),
-        ("protocol_version", "1.3"),
-        ("minimum_compatible_version", "1.5"),
-    ],
-)
-def test_request_parser_rejects_malformed_protocol_metadata_but_allows_missing_metadata(field, value):
-    payload = _request().to_dict()
-    if value is None:
-        payload.pop(field)
-    else:
-        payload[field] = value
-    if value is None:
-        request = request_from_dict(payload)
-        assert request.protocol_version == RUNTIME_PROTOCOL_VERSION
-        assert request.minimum_compatible_version == RUNTIME_MINIMUM_COMPATIBLE_VERSION
-    else:
-        with pytest.raises(ValueError, match="protocol|minimum_compatible_version"):
-            request_from_dict(payload)
 
 
 def test_typed_projection_keeps_absent_interaction_fields_null():
@@ -267,22 +233,7 @@ async def test_http_adapter_rejects_bare_success_responses_at_the_wire_boundary(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("missing_field", ["protocol_version", "minimum_compatible_version"])
-async def test_http_adapter_accepts_missing_response_negotiation_before_error_handling(missing_field):
-    response = _wire({"error": {"code": "runtime_dependency_unavailable", "safe_message": "unavailable", "retryable": True}})
-    response.pop(missing_field)
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(503, json=response)))
-    adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
-    with pytest.raises(RuntimeError) as caught:
-        await adapter.cancel(_request())
-    assert caught.value.code == "runtime_dependency_unavailable"
-    assert caught.value.retryable is True
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_http_adapter_accepts_unversioned_runtime_errors_in_dev():
+async def test_http_adapter_accepts_structured_runtime_errors():
     response = {
         "detail": {
             "code": "runtime_configuration_invalid",

@@ -2,11 +2,9 @@ import os
 from pathlib import Path
 
 import pytest
-from langchain_core.tools import tool
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import normalize_tool_result
-from langgraph_runtime.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -113,16 +111,3 @@ def test_arxiv_dependency_matches_langchain_wrapper_api():
     arxiv = pytest.importorskip("arxiv")
 
     assert hasattr(arxiv.Search(query="test"), "results")
-
-
-def test_orchestrator_tool_node_configures_recoverable_tool_errors():
-    @tool
-    def failing_tool(query: str) -> str:
-        """Test tool that always fails."""
-        raise RuntimeError("simulated tool outage")
-
-    node = RecoverableToolNode([failing_tool])
-    message = node._handle_tool_errors(RuntimeError("simulated tool outage"))
-
-    assert "Tool execution failed: RuntimeError: simulated tool outage" in message
-    assert "continue with other available evidence" in message

@@ -79,8 +79,17 @@ jobs:
       - name: Run Docker test runner
         run: ./run_tests.sh
 
-      - name: Run Postgres checkpoint/resume test
-        run: ./run_tests.sh --agent-checkpoint
+      - name: Collect control-plane tests
+        run: |
+          docker compose -p askpdf-test -f docker-compose.test.yml \
+            run --rm --entrypoint pytest test-runner --collect-only -q /app/tests
+
+      - name: Collect LangGraph runtime tests
+        run: |
+          docker compose -p askpdf-runtime-collection \
+            -f docker-compose.runtime-integration.yml \
+            run --rm --no-deps --entrypoint pytest runtime-test-runner \
+            --collect-only -q /app/langgraph_runtime/tests
 
       - name: Run mandatory LangGraph runtime proof
         timeout-minutes: 15

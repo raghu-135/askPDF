@@ -540,7 +540,10 @@ async def _clone_thread(
             run_metadata_json=run_metadata,
             resolved_spec_json=copy.deepcopy(run.resolved_spec_json or {}),
             status=run.status,
-            runtime_binding_json=None,
+            # A cloned run is historical product data with no executable
+            # continuation. Persist the neutral empty binding explicitly so
+            # callers never interpret NULL as an omitted/unknown boundary.
+            runtime_binding_json={},
             runtime_binding_status="unbound",
             pending_interrupt_json=None,
             started_at=run.started_at,

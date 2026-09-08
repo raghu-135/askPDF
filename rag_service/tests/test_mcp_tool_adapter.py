@@ -25,6 +25,7 @@ def test_mcp_wrapper_uses_authoritative_description():
         assert tool.description == TOOL_FRIENDLY_CONFIG[name]["description"]
 
 
+@pytest.mark.asyncio
 async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
     monkeypatch.setenv("MCP_ENABLED", "true")
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
@@ -55,6 +56,7 @@ async def test_thread_shape_mcp_wrapper_preserves_thread_context(monkeypatch):
     assert call["_meta"]["com.askpdf/runtime-context"]["run_id"] == "run-456"
 
 
+@pytest.mark.asyncio
 async def test_mcp_request_id_is_unique_per_call(monkeypatch):
     from app.mcp import tool_adapter
 
@@ -112,6 +114,7 @@ async def test_mcp_descriptor_is_cached_per_transport_client(monkeypatch):
     assert calls.count("tools/call") == 2
 
 
+@pytest.mark.asyncio
 async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
     monkeypatch.setenv("MCP_ENABLED", "true")
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
@@ -148,6 +151,7 @@ async def test_mcp_wrapper_preserves_error_and_artifact_envelope(monkeypatch):
     assert payload["artifacts"] == {"source": "wikipedia"}
 
 
+@pytest.mark.asyncio
 async def test_mcp_adapter_never_invokes_legacy_tool(monkeypatch):
     from app.mcp import tool_adapter
 

@@ -159,8 +159,9 @@ The control plane and execution runtimes are separate services. The control
 plane owns product databases, task state, artifacts, MCP authorization, and
 debug projections. `langgraph-runtime` owns graph execution and checkpoint
 storage; `hermes-runtime` owns native Hermes execution. Runtime calls use the
-versioned `runtime_protocol` over HTTP/SSE, and product APIs expose only opaque
-continuations—not framework checkpoint identifiers.
+strictly validated `runtime_protocol` over HTTP/SSE, and product APIs expose only opaque
+continuations—not framework checkpoint identifiers. The HTTP/SSE contract is
+strictly validated but does not negotiate protocol versions.
 
 </details>
 
@@ -460,7 +461,6 @@ run for debugging.
 - `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
 - `--integration` - Run integration tests
-- `--agent-checkpoint` - Run the Postgres checkpoint/resume hardening test
 - `--schema` - Run schema guardrail tests
 - `--standalone` - Run standalone verification scripts
 - `--all` / `--all-tests` - Run the full pytest suite plus standalone checks

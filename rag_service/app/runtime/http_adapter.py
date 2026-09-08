@@ -28,8 +28,6 @@ from runtime_protocol.contracts import (
     RuntimeCourseCorrectionReceipt,
     RuntimeOperationId,
     RuntimeValidationResult,
-    protocol_error_details,
-    require_protocol_fields,
 )
 from runtime_protocol.errors import RuntimeError
 from app.runtime.operational_limits import required_positive_float, required_positive_int
@@ -42,7 +40,7 @@ from runtime_protocol.transport import (
     validation_from_dict,
     iter_sse,
 )
-from runtime_protocol.protocol import versioned_payload
+from runtime_protocol.protocol import json_payload
 from runtime_protocol.validation import validate_runtime_result_for_event
 
 
@@ -214,15 +212,6 @@ class RuntimeTransportConnector:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned invalid JSON") from exc
         if not isinstance(payload, Mapping):
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response")
-        try:
-            require_protocol_fields(payload)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "runtime_protocol_error",
-                "Agent runtime returned an invalid response envelope: protocol negotiation failed",
-                retryable=False,
-                details=protocol_error_details(payload, exc),
-            ) from exc
         _raise_structured_runtime_error(payload)
         try:
             response.raise_for_status()
@@ -293,7 +282,7 @@ class RuntimeTransportConnector:
             operation_id = "runtime-operation:" + hashlib.sha256(
                 json.dumps(operation_seed, sort_keys=True, separators=(",", ":"), default=str).encode()
             ).hexdigest()
-        body = versioned_payload({
+        body = json_payload({
             "definition": definition.to_dict(),
             "request": request.to_dict(),
             "context": context_to_dict(context),
@@ -436,15 +425,6 @@ class RuntimeTransportConnector:
                     envelope = item["data"]
                     if not isinstance(envelope, Mapping):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event envelope")
-                    try:
-                        require_protocol_fields(envelope)
-                    except (TypeError, ValueError) as exc:
-                        raise RuntimeError(
-                            "runtime_protocol_error",
-                            "Agent runtime event envelope failed protocol negotiation",
-                            retryable=False,
-                            details=protocol_error_details(envelope, exc),
-                        ) from exc
                     event_payload = envelope.get("event")
                     if not isinstance(event_payload, Mapping):
                         raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event")
@@ -687,7 +667,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         await self.transport.aclose()
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        value = await self.transport._json("POST", "/v1/capabilities", json=versioned_payload({"definition": definition.to_dict()}))
+        value = await self.transport._json("POST", "/v1/capabilities", json=json_payload({"definition": definition.to_dict()}))
         return capabilities_from_dict(value["capabilities"])
 
     async def deployment_capabilities(self) -> RuntimeCapabilities:
@@ -708,7 +688,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return await self.transport._readiness("/startupz")
 
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
-        value = await self.transport._json("POST", "/v1/validate", json=versioned_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})}))
+        value = await self.transport._json("POST", "/v1/validate", json=json_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})}))
         return validation_from_dict(value["validation"])
 
     async def resolve_definition(
@@ -723,7 +703,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         value = await self.transport._json(
             "POST",
             "/v1/resolve",
-            json=versioned_payload({
+            json=json_payload({
                 "definition": definition.to_dict(),
                 "spec": _safe_json(spec),
                 "thread_settings": _safe_json(thread_settings),
@@ -738,7 +718,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
 
     async def builder_catalog(self, definition: AgentDefinition) -> Mapping[str, Any]:
         value = await self.transport._json(
-            "POST", "/v1/catalog", json=versioned_payload({"definition": definition.to_dict()})
+            "POST", "/v1/catalog", json=json_payload({"definition": definition.to_dict()})
         )
         catalog = value.get("catalog")
         if not isinstance(catalog, Mapping):
@@ -748,7 +728,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
     async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str:
         value = await self.transport._json(
             "POST", "/v1/prompt-preview",
-            json=versioned_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options)}),
+            json=json_payload({"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options)}),
         )
         prompt = value.get("prompt")
         if not isinstance(prompt, str):
@@ -772,11 +752,11 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return None if result.status == "no_continuation" else result
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json=versioned_payload({"request": request.to_dict()}))
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json=json_payload({"request": request.to_dict()}))
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
     async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/pause", request=request, json=versioned_payload({"request": request.to_dict()}))
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/pause", request=request, json=json_payload({"request": request.to_dict()}))
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
     async def submit_course_correction(
@@ -788,14 +768,14 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/course-corrections",
             request=request,
-            json=versioned_payload({"request": request.to_dict(), "correction": correction.to_dict()}),
+            json=json_payload({"request": request.to_dict(), "correction": correction.to_dict()}),
         )
         if not isinstance(value, Mapping):
             raise RuntimeError("runtime_protocol_error", "Runtime returned an invalid correction receipt")
         return course_correction_receipt_from_dict(value)
 
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json=versioned_payload({"request": request.to_dict()}))
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json=json_payload({"request": request.to_dict()}))
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
     async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeInvocationContext | None = None) -> list[AgentRuntimeEvent]:
@@ -814,7 +794,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         binding_id = str(continuation.payload.get("binding_id") or "")
         if not binding_id:
             raise RuntimeError("runtime_binding_invalid", "Runtime continuation is missing its opaque binding ID")
-        return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json=versioned_payload({"continuation": continuation.to_dict()}))
+        return await self.transport._json("DELETE", f"/v1/continuations/{binding_id}", json=json_payload({"continuation": continuation.to_dict()}))
 
     async def cleanup_run(self, run_id: str) -> Any:
         return await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})
