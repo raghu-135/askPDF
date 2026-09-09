@@ -2,9 +2,11 @@ services:
   frontend-test-runner:
     image: node:22-bookworm-slim
     working_dir: /workspace/frontend
-    entrypoint: ["npm", "test"]
+    entrypoint: ["sh", "-c"]
+    command: ["npm ci --ignore-scripts && npm test"]
     volumes:
       - ./frontend:/workspace/frontend:ro
+      - frontend_test_node_modules:/workspace/frontend/node_modules
       - .:/workspace:ro
 
   test-runner:
@@ -93,6 +95,7 @@ services:
       - postgres_test_data:/var/lib/postgresql/data
 
 volumes:
+  frontend_test_node_modules:
   postgres_test_data:
   test_data:
   weaviate_test_data:
