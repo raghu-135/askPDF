@@ -17,6 +17,17 @@ def _compose(name: str) -> dict:
     return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
 
 
+def test_example_environment_enables_hermes_with_replace_me_api_key():
+    values = {}
+    for line in (REPOSITORY_ROOT / ".env.example").read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            values[key] = value
+
+    assert values["COMPOSE_PROFILES"] == "hermes"
+    assert values["API_SERVER_KEY"] == "replace-with-a-long-random-api-server-key"
+
+
 def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():
     paths = [
         "hermes_runtime/config.yaml",

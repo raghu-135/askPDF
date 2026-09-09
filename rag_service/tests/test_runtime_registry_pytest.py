@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from runtime_protocol.contracts import AgentDefinition
+from runtime_protocol.errors import RuntimeError as RuntimeContractError
+import app.runtime.registry as registry_module
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 
 
@@ -11,7 +13,18 @@ class FakeAdapter:
     builder_id = "fake_builder"
 
 
+class FakeLangGraphAdapter:
+    framework = "langgraph"
+    builder_id = "langgraph_graph"
+
+
+class FakeHermesAdapter:
+    framework = "hermes"
+    builder_id = "hermes_agent"
+
+
 def test_default_registry_uses_external_adapter_without_importing_in_process(monkeypatch):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
     monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime.test")
     for name, value in {
         "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
@@ -40,6 +53,48 @@ def test_default_registry_uses_external_adapter_without_importing_in_process(mon
     adapter = registry.get(definition)
     assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter"
     assert adapter.framework == "langgraph"
+
+
+def test_default_registry_does_not_construct_or_advertise_disabled_hermes(monkeypatch):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    monkeypatch.setattr(registry_module, "_default_langgraph_adapter", FakeLangGraphAdapter)
+
+    def fail_if_constructed():
+        raise AssertionError("disabled Hermes must not be constructed")
+
+    monkeypatch.setattr(registry_module, "_default_hermes_adapter", fail_if_constructed)
+
+    registry = RuntimeRegistry()
+    registry.initialize()
+
+    assert [registry.deployment_id(adapter) for adapter in registry.adapters()] == [
+        "langgraph:langgraph_graph",
+    ]
+    assert registry.get_deployment("hermes:hermes_agent") is None
+
+
+def test_default_registry_constructs_hermes_only_when_enabled(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setattr(registry_module, "_default_langgraph_adapter", FakeLangGraphAdapter)
+    monkeypatch.setattr(registry_module, "_default_hermes_adapter", FakeHermesAdapter)
+
+    registry = RuntimeRegistry()
+    registry.initialize()
+
+    assert [registry.deployment_id(adapter) for adapter in registry.adapters()] == [
+        "hermes:hermes_agent",
+        "langgraph:langgraph_graph",
+    ]
+
+
+def test_enabled_hermes_fails_fast_when_endpoint_or_credentials_are_missing(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setattr(registry_module, "_default_langgraph_adapter", FakeLangGraphAdapter)
+    for name in ("HERMES_RUNTIME_URL", "HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN", "API_SERVER_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(RuntimeContractError, match="HERMES_RUNTIME_URL|HERMES_RUNTIME_TOKEN|HERMES_API_TOKEN|API_SERVER_KEY"):
+        RuntimeRegistry().initialize()
 
 
 def test_registry_requires_concrete_framework_and_builder_identity():

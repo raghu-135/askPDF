@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict
 
 from app.runtime.adapter import AgentRuntimeAdapter
+from app.runtime.hermes_config import hermes_runtime_enabled
 from runtime_protocol.contracts import AgentDefinition
 
 
@@ -38,7 +39,8 @@ class RuntimeRegistry:
             return
         self._initialized = True
         self.register(_default_langgraph_adapter())
-        self.register(_default_hermes_adapter())
+        if hermes_runtime_enabled():
+            self.register(_default_hermes_adapter())
 
     def initialize(self) -> None:
         """Resolve and import the configured adapters during application startup."""
