@@ -72,7 +72,7 @@ def test_runtime_protocol_is_dependency_neutral():
 
 
 def test_control_plane_manifest_and_legacy_paths_are_clean():
-    requirements = (ROOT / "requirements-control-plane.txt").read_text().lower()
+    requirements = (ROOT / "requirements.txt").read_text().lower()
     assert "langgraph" not in requirements
     assert "checkpoint-postgres" not in requirements
     assert not (ROOT / "app/runtime/mode.py").exists()

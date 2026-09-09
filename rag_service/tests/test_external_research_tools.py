@@ -20,7 +20,7 @@ def _requirements_lines() -> set[str]:
     repository_root = Path(os.getenv("ASKPDF_REPO_DIR", Path(__file__).resolve().parents[2]))
     lines: set[str] = set()
     for path in (
-        repository_root / "rag_service/requirements-control-plane.txt",
+        repository_root / "rag_service/requirements.txt",
         repository_root / "langgraph_runtime/requirements.txt",
     ):
         with path.open(encoding="utf-8") as req_file:

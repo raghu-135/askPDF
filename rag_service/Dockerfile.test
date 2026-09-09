@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 espeak-ng curl g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY rag_service/requirements-control-plane.txt requirements-control-plane.txt
+COPY rag_service/requirements.txt requirements.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
 RUN python -m spacy download en_core_web_sm
