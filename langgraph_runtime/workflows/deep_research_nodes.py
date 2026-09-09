@@ -1545,6 +1545,10 @@ Evidence manifest: {json.dumps(state.get('task_evidence_manifest') or [], ensure
 Report:\n{answer[:60000]}"""
     synthesis_failed = bool(state.get("task_provisional_synthesis_failed"))
     if synthesis_failed:
+        # A synthesis failure is diagnostic state, never a provisional answer.
+        # Keep the answer empty so neither the runtime nor the product plane can
+        # mistake a limitations notice for usable output.
+        answer = ""
         metadata = {}
         review = {"pass": False, "issues": ["A provisional answer could not be synthesized from the retained artifacts."]}
     else:
@@ -1603,7 +1607,7 @@ Report:\n{answer[:60000]}"""
         issues.extend(
             f"Redirect unresolved: {value['unresolved_reason']}" for value in unresolved
         )
-    if review.get("pass") is False and issues:
+    if review.get("pass") is False and issues and not synthesis_failed:
         answer = f"{answer}\n\nLimitations identified during evidence review:\n" + "\n".join(f"- {issue}" for issue in issues)
     warnings = [
         dict(value)
@@ -1624,15 +1628,20 @@ Report:\n{answer[:60000]}"""
     }
     boundary = state.get("task_budget_boundary") if isinstance(state.get("task_budget_boundary"), Mapping) else None
     if boundary:
+        accept_partial_enabled = bool(answer.strip()) and not synthesis_failed
+        allowed_actions = ["continue", "steer"]
+        if accept_partial_enabled:
+            allowed_actions.insert(1, "accept_partial")
         services = services_from_config(config, state)
         if services.events is not None:
-            await services.events.emit("budget.boundary_requested", {"boundary": dict(boundary), "accept_partial_enabled": bool(answer.strip())})
+            await services.events.emit("budget.boundary_requested", {"boundary": dict(boundary), "accept_partial_enabled": accept_partial_enabled})
         response = interrupt({
             "type": "budget_review",
             "response_operation": "task.budget_review.respond",
             "title": "Research budget reached",
             "prompt": "Review the provisional answer, continue with another tranche, or steer the remaining research.",
-            "allowed_actions": ["continue", "accept_partial", "steer"],
+            "allowed_actions": allowed_actions,
+            "accept_partial_enabled": accept_partial_enabled,
             "boundary_strategy": "safe_atomic_boundary",
             "continuation_semantics": "checkpoint_same_run",
             "preserves_run_id": True,
@@ -1645,6 +1654,12 @@ Report:\n{answer[:60000]}"""
         })
         decision = response if isinstance(response, Mapping) else {}
         action = str(decision.get("action") or decision.get("decision") or "continue")
+        if action == "accept_partial" and not accept_partial_enabled:
+            raise AgentRuntimeError(
+                "budget_partial_answer_unavailable",
+                "No usable provisional answer is available to accept.",
+                retryable=False,
+            )
         update["task_budget_review_route"] = action if action in {"continue", "steer", "accept_partial"} else "continue"
         update["task_budget_boundary"] = {}
     return update

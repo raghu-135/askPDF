@@ -7,13 +7,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices, run_cancellable
+from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices, run_cancellable, runtime_execution_services_factory
 from langgraph_runtime.workflows.state import (
     consume_task_result_packets,
     merge_task_result_packets,
     task_result_packet_identity,
 )
 from langgraph_runtime.workflows import deep_research_nodes
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 class Token:
@@ -338,3 +339,52 @@ async def test_compiled_packet_consumption_survives_checkpoint_continuation():
     assert paused["__interrupt__"]
     resumed = await app.ainvoke(Command(resume=True), config=config)
     assert resumed["task_result_packets"] == []
+
+
+@pytest.mark.asyncio
+async def test_failed_provisional_synthesis_keeps_answer_empty_and_disables_acceptance(monkeypatch):
+    captured = {}
+
+    def fake_interrupt(payload):
+        captured.update(payload)
+        return {"action": "continue"}
+
+    monkeypatch.setattr(deep_research_nodes, "interrupt", fake_interrupt)
+    state = {
+        "agent_task_id": "task-1", "agent_run_id": "run-1", "final_answer": "",
+        "task_provisional_synthesis_failed": {"code": "provisional_synthesis_failed"},
+        "task_budget_boundary": {"status": "requested", "dimensions": ["model_calls"]},
+        "task_incomplete_reasons": ["synthesis_unavailable"], "task_evidence_manifest": [],
+        "task_limits": {"max_model_calls": 10, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 1000},
+        "task_budget_usage": {"tranche_index": 1, "tranche_limits": {"model_calls": 10, "model_tokens": 1000, "tool_calls": 10, "elapsed_active_ms": 1000}, "tranche_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0}, "lifetime_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0}},
+    }
+
+    result = await deep_research_nodes.evidence_critic(state, {"configurable": {
+        "deep_research_services_factory": runtime_execution_services_factory,
+        "cancellation_checker": lambda: False,
+    }})
+
+    assert result["final_answer"] == ""
+    assert captured["allowed_actions"] == ["continue", "steer"]
+    assert captured["provisional_answer"] == ""
+    assert captured["accept_partial_enabled"] is False
+    assert result["task_budget_review_route"] == "continue"
+
+
+@pytest.mark.asyncio
+async def test_failed_provisional_synthesis_rejects_internal_partial_acceptance(monkeypatch):
+    monkeypatch.setattr(deep_research_nodes, "interrupt", lambda _payload: {"action": "accept_partial"})
+    state = {
+        "agent_task_id": "task-1", "agent_run_id": "run-1", "final_answer": "",
+        "task_provisional_synthesis_failed": {"code": "provisional_synthesis_failed"},
+        "task_budget_boundary": {"status": "requested", "dimensions": ["model_calls"]},
+        "task_incomplete_reasons": [], "task_evidence_manifest": [],
+        "task_limits": {"max_model_calls": 10, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 1000},
+        "task_budget_usage": {"tranche_index": 1, "tranche_limits": {"model_calls": 10, "model_tokens": 1000, "tool_calls": 10, "elapsed_active_ms": 1000}, "tranche_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0}, "lifetime_usage": {"model_calls": 0, "model_tokens": 0, "tool_calls": 0, "elapsed_active_ms": 0}},
+    }
+
+    with pytest.raises(AgentRuntimeError, match="No usable provisional answer"):
+        await deep_research_nodes.evidence_critic(state, {"configurable": {
+            "deep_research_services_factory": runtime_execution_services_factory,
+            "cancellation_checker": lambda: False,
+        }})

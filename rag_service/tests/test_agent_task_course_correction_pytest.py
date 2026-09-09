@@ -306,6 +306,7 @@ async def test_budget_review_steer_waits_for_one_durable_runtime_delivery(
     assert steered.current_phase == "budget_correction_delivery_pending"
     assert command is not None
     assert command.result_json["correction"]["instruction"] == "Focus the next tranche on the remaining topic."
+    assert pending["accept_partial_enabled"] is True
     assert (await repository.get_task_run(task.id)).pending_interrupt_json["decision"] == {
         "action": "steer",
         "idempotency_key": "budget-steer-once",
@@ -328,6 +329,29 @@ async def test_budget_review_steer_waits_for_one_durable_runtime_delivery(
     assert released.current_phase == "budget_continuation_queued"
     assert claimed is not None and claimed.id == task.id
     assert len(await repository.pending_course_corrections(task.id)) == 1
+
+    awaiting_empty, pending_empty = await repository.create_budget_review(
+        task.id,
+        run_id=run.id,
+        provisional_answer="   ",
+        warnings=[{"code": "provisional_synthesis_failed"}],
+        gaps=["synthesis unavailable"],
+    )
+    assert pending_empty["allowed_actions"] == ["continue", "steer"]
+    assert pending_empty["accept_partial_enabled"] is False
+    with pytest.raises(repository.AgentTaskConflict, match="No provisional answer"):
+        await repository.respond_to_budget_review(
+            task.id,
+            run_id=run.id,
+            interrupt_id=pending_empty["interrupt_id"],
+            expected_version=awaiting_empty.version,
+            decision="accept_partial",
+            guidance=None,
+            idempotency_key="budget-empty-accept",
+        )
+    still_pending = await repository.get_task_run(task.id)
+    assert still_pending.pending_interrupt_json["status"] == "pending"
+    assert (await repository.get_task(task.id)).status == "awaiting_approval"
 
     awaiting_again, pending_again = await repository.create_budget_review(
         task.id,

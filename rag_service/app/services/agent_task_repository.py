@@ -2234,13 +2234,16 @@ async def create_budget_review(
             budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
             boundary = dict(budget.get("boundary") or {})
             interrupt_id = str(uuid.uuid4())
+            normalized_answer = str(provisional_answer or "").strip()
+            accept_partial_enabled = bool(normalized_answer)
             pending = {
                 "interrupt_id": interrupt_id,
                 "type": "budget_review",
                 "response_operation": "task.budget_review.respond",
                 "status": "pending",
                 "title": "Research budget reached",
-                "allowed_actions": ["continue", "accept_partial", "steer"],
+                "allowed_actions": ["continue", "accept_partial", "steer"] if accept_partial_enabled else ["continue", "steer"],
+                "accept_partial_enabled": accept_partial_enabled,
                 "boundary_strategy": "safe_atomic_boundary",
                 "continuation_semantics": "checkpoint_same_run",
                 "preserves_run_id": True,
@@ -2248,7 +2251,7 @@ async def create_budget_review(
                 "continuation_binding_present": bool(run.runtime_binding_json),
                 "artifact_inheritance": "valid_artifacts",
                 "safe_boundary_latency": "after_active_workers",
-                "provisional_answer": str(provisional_answer or "").strip(),
+                "provisional_answer": normalized_answer,
                 "warnings": list(warnings or []),
                 "gaps": list(gaps or []),
                 "usage": {
@@ -2284,7 +2287,7 @@ async def create_budget_review(
                 session, task, "task.budget_review_requested", agent_run_id=run.id,
                 causal_key=f"run:{run.id}:budget-review:{budget.get('tranche_index')}", payload={
                 "interrupt_id": interrupt_id, "usage": pending["usage"],
-                "accept_partial_enabled": bool(pending["provisional_answer"]), "version": task.version,
+                "accept_partial_enabled": accept_partial_enabled, "version": task.version,
                 },
             )
         await session.refresh(task)
