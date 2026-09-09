@@ -24,6 +24,7 @@ from app.services.agent_task_runtime_projection import (
     apply_runtime_task_delta,
 )
 from runtime_protocol.contracts import RuntimeCourseCorrectionOutcome, RuntimePlanChange, TaskOrchestrationDelta
+from runtime_protocol.events import create_runtime_event
 
 
 async def _task_and_run(test_session_maker, sample_thread):
@@ -48,7 +49,7 @@ async def _task_and_run(test_session_maker, sample_thread):
         idempotency_key=str(uuid.uuid4()),
         config={
             "enabled_profiles": ["document_researcher"],
-            "limits": {"max_model_calls": 10},
+            "limits": {"max_model_calls": 10, "wake_limit_seconds": 600},
         },
     )
     run = AgentRun(
@@ -82,6 +83,42 @@ async def test_projection_recovery_task_is_reserved_for_reconciler(
     )
 
     assert await repository.claim_next_task("ordinary-task-worker") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["cancelled", "failed"])
+async def test_timeout_intent_survives_terminal_projection_and_duplicate_delivery(test_session_maker, sample_thread, status):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    await repository.set_task_runtime_status(task.id, "cancelling", reason="active_runtime_wake_limit", cancellation_request={
+        "effective_limit_seconds": 600, "elapsed_seconds": 600.1, "timeout_source": "task_worker_wake",
+    })
+    pending = await repository.get_task(task.id)
+    assert pending.status == "cancelling"
+    await repository.record_cancellation_confirmation_failure(
+        task.id, run.id, error={"code": "runtime_transport_error", "retryable": True},
+    )
+    assert (await repository.get_task(task.id)).status == "cancelling"
+    assert (await repository.get_task_run(task.id)).run_metadata_json["cancellation_request"]["runtime_confirmation"] == "pending"
+    event = create_runtime_event(event_id="confirmed-terminal", run_id=run.id, sequence=1, kind=f"run.{status}", payload={"status": status})
+    for _ in range(2):
+        await repository.finalize_task_run(
+            task.id, run.id, run_status=status, task_status=status,
+            metrics={"model_calls": 3}, error={"code": "provider_failed"} if status == "failed" else None,
+            debug_trace={}, terminal_reason="provider_failed" if status == "failed" else "run_cancelled",
+            terminal_event=event,
+        )
+    task = await repository.get_task(task.id)
+    stored_run = await repository.get_task_run(task.id)
+    assert task.status == status
+    assert task.terminal_reason == ("active_runtime_wake_limit" if status == "cancelled" else "provider_failed")
+    assert task.config_json["limits"]["wake_limit_seconds"] == 600
+    assert stored_run.metrics_json["model_calls"] == 3
+    assert stored_run.run_metadata_json["cancellation_request"]["runtime_confirmation"] == (
+        "confirmed" if status == "cancelled" else "terminal_before_cancellation"
+    )
+    events = await repository.list_events(task.id, agent_run_id=run.id)
+    assert sum(event.terminal for event in events) == 1
+    assert any(event.event_type == "run.cancel_requested" and event.payload_json["effective_limit_seconds"] == 600 for event in events)
 
 
 def _plan(*todo_ids: str) -> dict:
@@ -309,6 +346,65 @@ async def test_warning_result_enters_review_in_the_delta_transaction(
     assert stored_run.pending_interrupt_json["allowed_actions"] == ["accept", "retry_with_input"]
     assert sum(event.event_type == "runtime.event" and (event.source_metadata_json or {}).get("source_event") == "task.result_review_requested" for event in events) == 1
     assert not any(event.terminal for event in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension,usage_key", [("elapsed_active_ms", "active_runtime_ms"), ("model_tokens", "model_tokens")])
+@pytest.mark.parametrize("decision", ["continue", "accept_partial", "steer"])
+async def test_hermes_time_and_token_exhaustion_share_review_and_linked_continuation(
+    test_session_maker, sample_thread, dimension, usage_key, decision,
+):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    async with test_session_maker() as session:
+        async with session.begin():
+            stored = await session.get(AgentRun, run.id)
+            stored.framework = "hermes"
+            stored.builder_id = "hermes_agent"
+            stored.run_metadata_json = {**stored.run_metadata_json, "runtime_behavior": {
+                "continuation_semantics": "linked_run", "preserves_run_id": False,
+                "usage_accounting_owner": "runtime", "budget_boundary_owner": "product",
+                "artifact_inheritance": "valid_artifacts", "grounding_owner": "product",
+                "supports_orchestration_delta": True, "required_input_fields": [],
+                "supports_pause_resume": False, "supports_course_correction": True,
+            }}
+    limit = task.budgets_json["tranche_limits"][dimension]
+    usage = {"operation_id": "budget-operation", usage_key: limit, "measured_dimensions": [usage_key]}
+    result = {"status": "completed", "text": "Preserved partial evidence.", "warnings": [], "gaps": [], "usage": usage}
+    for _ in range(2):
+        await apply_neutral_task_completion(
+            task_id=task.id, agent_run_id=run.id, operation_id="budget-operation",
+            runtime_status="completed", task_result=result,
+        )
+    task = await repository.get_task(task.id)
+    run = await repository.get_task_run(task.id)
+    pending = run.pending_interrupt_json
+    assert task.status == "awaiting_approval"
+    assert pending["type"] == "budget_review"
+    assert pending["continuation_semantics"] == "linked_run"
+    assert pending["preserves_run_id"] is False
+    assert pending["usage"]["exhausted_dimensions"] == [dimension]
+    assert set(pending["allowed_actions"]) == {"continue", "accept_partial", "steer"}
+    assert pending["provisional_answer"] == result["text"]
+    assert task.budgets_json["lifetime_usage"][dimension] == limit
+    response = dict(
+        run_id=run.id, interrupt_id=pending["interrupt_id"], expected_version=task.version,
+        decision=decision, guidance="Focus on remaining gaps" if decision == "steer" else None,
+        idempotency_key="review-response",
+    )
+    updated, duplicate, linked = await repository.respond_to_budget_review(task.id, **response)
+    assert not duplicate
+    assert linked is (decision != "accept_partial")
+    _, duplicate, _ = await repository.respond_to_budget_review(task.id, **response)
+    assert duplicate
+    if decision == "accept_partial":
+        assert updated.status == "completed"
+        assert updated.terminal_reason == "completed_with_warnings"
+    else:
+        assert updated.status == "queued"
+        assert updated.budgets_json["tranche_index"] == 2
+        assert updated.budgets_json["tranche_usage"][dimension] == 0
+        assert updated.budgets_json["lifetime_usage"][dimension] == limit
+    assert (await repository.get_task_run(task.id)).status == "completed"
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@
 
 import ast
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -56,7 +58,7 @@ def test_control_plane_tests_have_no_framework_execution_imports():
 
 
 def test_runtime_has_no_control_plane_imports():
-    for path in _source_files("langgraph_runtime", ".py"):
+    for path in [*_source_files("langgraph_runtime", ".py"), *_source_files("hermes_runtime", ".py")]:
         assert not any(name == "app" or name.startswith("app.") for name in _imports(path)), path
 
 
@@ -77,6 +79,17 @@ def test_control_plane_manifest_and_legacy_paths_are_clean():
     assert not (ROOT / "app/runtime/langgraph_adapter.py").exists()
     assert not (ROOT / "app/runtime/langgraph").exists()
     assert not (ROOT / "runtime_service").exists()
+    # Empty bind-mounted directories also create importable namespaces.
+    assert not (ROOT / "langgraph_runtime").exists()
+    # The integration test harness can inspect sibling sources via PYTHONPATH;
+    # production/dev services expose only the control-plane source root.
+    subprocess.run([
+        sys.executable, "-I", "-c",
+        f"import sys, importlib.util; sys.path.insert(0, {str(ROOT)!r}); "
+        "assert importlib.util.find_spec('langgraph') is None; "
+        "assert importlib.util.find_spec('langgraph_runtime') is None; "
+        "assert importlib.util.find_spec('runtime_protocol') is not None",
+    ], check=True)
     for legacy in (
         "agent_workflows/evidence.py",
         "agent_workflows/parallel_contracts.py",

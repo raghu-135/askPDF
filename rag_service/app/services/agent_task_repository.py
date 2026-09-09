@@ -32,6 +32,7 @@ from app.agent_workflows.trace_payloads import append_runtime_event_to_debug_pay
 from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
 from runtime_protocol.events import normalize_product_event_kind
 from app.runtime.behavior import continuation_is_linked, supports_course_correction
+from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
 from app.services.agent_task_budgets import (
     exhausted_dimensions,
     initial_budget_state,
@@ -574,6 +575,17 @@ async def _append_event(
         ).with_for_update())).scalar_one_or_none()
         if existing is not None:
             return existing
+    if agent_run_id and normalized_type in TERMINAL_RUNTIME_EVENT_KINDS:
+        run = await session.get(AgentRun, agent_run_id)
+        if run is not None and (run.run_metadata_json or {}).get("cancellation_request"):
+            details = confirmed_cancellation_details(task, run)
+            details["runtime_confirmation"] = (
+                "confirmed" if normalized_type == "run.cancelled" else "terminal_before_cancellation"
+            )
+            replace_jsonb_field(run, "run_metadata_json", {
+                **dict(run.run_metadata_json or {}), "cancellation_request": details,
+            })
+            payload = {**dict(payload or {}), "cancellation": details}
     latest = await session.execute(
         select(func.coalesce(func.max(AgentTaskEvent.sequence), 0))
         .where(AgentTaskEvent.task_id == task.id)
@@ -1636,7 +1648,7 @@ async def finalize_task_run(
 
             task.status = task_status
             task.current_phase = task_status
-            task.terminal_reason = terminal_reason
+            task.terminal_reason = cancellation_reason(task, run) if task_status == "cancelled" else terminal_reason
             task.completed_at = completed_at
             task.expires_at = None
             task.lease_owner = None
@@ -1693,7 +1705,10 @@ async def finalize_task_run(
         return task
 
 
-async def set_task_runtime_status(task_id: str, status: str, *, phase: Optional[str] = None, reason: Optional[str] = None) -> AgentTask:
+async def set_task_runtime_status(
+    task_id: str, status: str, *, phase: Optional[str] = None,
+    reason: Optional[str] = None, cancellation_request: Optional[Dict[str, Any]] = None,
+) -> AgentTask:
     if status not in {value.value for value in AgentTaskStatus}:
         raise ValueError("unknown task status")
     async with async_session_maker() as session:
@@ -1701,6 +1716,36 @@ async def set_task_runtime_status(task_id: str, status: str, *, phase: Optional[
             task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
             if task.status in TERMINAL_TASK_STATUSES:
                 return task
+            if cancellation_request is not None:
+                run = (await session.execute(select(AgentRun).where(
+                    AgentRun.id == task.active_run_id, AgentRun.task_id == task_id,
+                ).with_for_update())).scalar_one()
+                operation_events = (await session.execute(select(AgentRunEvent).where(
+                    AgentRunEvent.agent_run_id == run.id,
+                    AgentRunEvent.kind.in_(("operation.started", "operation.completed", "operation.failed", "operation.skipped")),
+                ).order_by(AgentRunEvent.sequence.desc()))).scalars().all()
+                ended: set[str] = set()
+                active_node = None
+                for event in operation_events:
+                    value = event.payload_json or {}
+                    operation_id = str(value.get("operation_id") or "")
+                    if event.kind != "operation.started":
+                        ended.add(operation_id)
+                    elif operation_id and operation_id not in ended:
+                        active_node = value.get("operation_type") or operation_id
+                        break
+                details = {
+                    **cancellation_request, "task_id": task_id, "run_id": str(run.id),
+                    "active_node": active_node, "task_phase": task.current_phase, "reason": reason,
+                    "runtime_confirmation": "pending",
+                }
+                replace_jsonb_field(run, "run_metadata_json", {
+                    **dict(run.run_metadata_json or {}), "cancellation_request": details,
+                })
+                await _append_event(
+                    session, task, "run.cancel_requested", agent_run_id=run.id,
+                    causal_key=f"run:{run.id}:wake_timeout", payload=details,
+                )
             task.status = status
             task.current_phase = phase or status
             task.terminal_reason = reason
@@ -1716,6 +1761,28 @@ async def set_task_runtime_status(task_id: str, status: str, *, phase: Optional[
                 task.lease_expires_at = None
             await _append_event(session, task, f"task.{status}", agent_run_id=task.active_run_id, payload={"phase": task.current_phase, "reason": reason, "version": task.version})
         await session.refresh(task)
+        return task
+
+
+async def record_cancellation_confirmation_failure(task_id: str, run_id: str, *, error: Dict[str, Any]) -> AgentTask:
+    """Keep unconfirmed execution cancelling and eligible for reconciliation."""
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one()
+            run = (await session.execute(select(AgentRun).where(
+                AgentRun.id == run_id, AgentRun.task_id == task_id,
+            ).with_for_update())).scalar_one()
+            if task.status in TERMINAL_TASK_STATUSES:
+                return task
+            if task.status != AgentTaskStatus.CANCELLING.value:
+                raise AgentTaskConflict("task_cancellation_not_pending", "No cancellation request is pending")
+            metadata = dict(run.run_metadata_json or {})
+            request = {**dict(metadata.get("cancellation_request") or {}),
+                       "runtime_confirmation": "pending", "confirmation_error": dict(error)}
+            projection = {**dict(metadata.get("projection") or {}),
+                          "reconciliation_status": "failed", "projection_error": dict(error)}
+            replace_jsonb_field(run, "run_metadata_json", {**metadata, "cancellation_request": request, "projection": projection})
+            await _append_event(session, task, "run.cancel_requested", agent_run_id=run_id, payload=request)
         return task
 
 
@@ -1833,7 +1900,10 @@ async def finalize_reconciled_runtime_task(
                 replace_jsonb_field(run, "error_json", dict(result.get("agent_error") or result.get("error") or {}))
                 task.status = task_status
                 task.current_phase = task_status
-                task.terminal_reason = str((result.get("agent_error") or {}).get("code") or runtime_status)
+                task.terminal_reason = (
+                    cancellation_reason(task, run) if task_status == "cancelled"
+                    else str((result.get("agent_error") or result.get("error") or {}).get("code") or runtime_status)
+                )
                 task.completed_at = completed_at
                 task.expires_at = None
                 task.lease_owner = None

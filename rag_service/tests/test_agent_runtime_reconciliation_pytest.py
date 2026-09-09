@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -13,6 +14,40 @@ def test_runtime_result_hash_is_stable():
     assert result_hash({"status": "completed", "output": {"answer": "ok"}}) == result_hash(
         {"output": {"answer": "ok"}, "status": "completed"}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+async def test_cancellation_reconciliation_fetches_real_result_and_preserves_outcome(monkeypatch, status):
+    run = SimpleNamespace(
+        id="run-1", thread_id="thread-1", workflow_id="workflow-1", framework="fake", builder_id="fake_builder",
+        definition_category=None, task_id="task-1", status="running", resolved_spec_json={},
+        runtime_binding_json={}, runtime_binding_status="unbound", metrics_json={"model_calls": 2}, debug_trace_json={},
+        run_metadata_json={"cancellation_request": {"reason": "active_runtime_wake_limit", "effective_limit_seconds": 600}},
+    )
+    result = {"status": status, "error": {"code": "provider_failure" if status == "failed" else "run_cancelled"}}
+
+    class Repository:
+        async def get_run(self, run_id):
+            return run
+
+        async def update_runtime_projection(self, run_id, projection):
+            run.run_metadata_json = {**run.run_metadata_json, "projection": dict(projection)}
+
+    adapter = SimpleNamespace(inspect_state=AsyncMock(return_value={"status": status, "result": result, "terminal_event_id": "terminal-1"}))
+    task = SimpleNamespace(id="task-1", status="cancelling", terminal_reason="active_runtime_wake_limit")
+    finalize = AsyncMock()
+    monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.runtime.registry.get_runtime_registry", lambda: SimpleNamespace(get=lambda definition: adapter))
+    monkeypatch.setattr("app.services.agent_task_repository.get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr("app.services.agent_task_repository.finalize_task_run", finalize)
+    monkeypatch.setattr("app.services.agent_task_repository.complete_pending_cancel_commands", AsyncMock())
+    assert await reconciliation.reconcile_run_by_id(run.id) == "projected"
+    adapter.inspect_state.assert_awaited_once()
+    assert finalize.await_args.kwargs["task_status"] == status
+    assert finalize.await_args.kwargs["terminal_reason"] == ("provider_failure" if status == "failed" else "active_runtime_wake_limit")
+    assert run.run_metadata_json["projection"]["runtime_result"] == result
 
 
 @pytest.mark.asyncio

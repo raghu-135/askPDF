@@ -23,7 +23,9 @@ from app.db.models_sqlmodel import (
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.services import agent_task_repository as tasks
+from app.runtime.termination import cancellation_reason
 from app.services.agent_task_budgets import exhausted_dimensions, normalize_budget_state
+from app.runtime.behavior import continuation_is_linked
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
 from runtime_protocol.contracts import TaskOrchestrationDelta
@@ -445,8 +447,9 @@ async def apply_neutral_task_completion(
                     "interrupt_id": f"budget-review:{agent_run_id}:{budget['tranche_index']}",
                     "type": "budget_review", "response_operation": "task.budget_review.respond",
                     "status": "pending", "title": "Research budget reached",
-                    "allowed_actions": ["continue", "accept_partial", "steer"],
-                    "continuation_semantics": "checkpoint_same_run", "preserves_run_id": True,
+                    "allowed_actions": ["continue", "steer"] + (["accept_partial"] if final_artifact_id else []),
+                    "continuation_semantics": "linked_run" if continuation_is_linked(run) else "checkpoint_same_run",
+                    "preserves_run_id": not continuation_is_linked(run),
                     "runtime_operation": "task.budget_review.respond",
                     "continuation_binding_present": bool(run.runtime_binding_json),
                     "provisional_artifact_id": final_artifact_id,
@@ -506,7 +509,7 @@ async def apply_neutral_task_completion(
                 run.completed_at = now
                 task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value if failed else AgentTaskStatus.COMPLETED.value
                 task.current_phase = task.status
-                task.terminal_reason = "incomplete_result_rejected" if disposition == "failed" and runtime_status == "completed" else runtime_status
+                task.terminal_reason = cancellation_reason(task, run) if cancelled else "incomplete_result_rejected" if disposition == "failed" and runtime_status == "completed" else runtime_status
                 task.completed_at = now
                 task.expires_at = None
                 task.lease_owner = None
@@ -1011,7 +1014,7 @@ async def apply_runtime_task_delta(
                     run.completed_at = now
                     task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value
                     task.current_phase = task.status
-                    task.terminal_reason = str((delta.result.get("error") or {}).get("code") or result_status)
+                    task.terminal_reason = cancellation_reason(task, run) if cancelled else str((delta.result.get("error") or {}).get("code") or result_status)
                     task.completed_at = now
                     task.expires_at = None
                     task.lease_owner = None

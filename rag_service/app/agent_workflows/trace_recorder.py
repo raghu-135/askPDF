@@ -842,6 +842,7 @@ class AgentTraceRecorder:
             events=self._runtime_events,
             resolved_spec=self.resolved_spec,
             framework=framework,
+            cancellation_request=(getattr(run, "run_metadata_json", None) or {}).get("cancellation_request"),
         )
         summary = {
             **summary,

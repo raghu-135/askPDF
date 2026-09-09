@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph_runtime.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.workflows.enums import NodeEventStatus
-from langgraph_runtime.workflows.cancellation import raise_if_chat_run_cancelled
+from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested, raise_if_chat_run_cancelled
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from langgraph_runtime.workflows.events import append_node_event, append_tool_event
 from langgraph_runtime.workflows.evidence import state_evidence_refs
@@ -177,8 +177,8 @@ async def invoke_llm_for_node(
     await _emit_progress_event(config, "llm.started", progress)
     try:
         response = await invoke_with_retry(func, messages, retry_observer=retry_observer)
-        cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
-        await raise_if_chat_run_cancelled(cancellation_checker, state)
+        # Keep a response that won the cancellation race. Its usage and output
+        # must be recorded before the next node boundary checks cancellation.
         trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
         if trace_recorder is not None and hasattr(trace_recorder, "record_llm_detail"):
             trace_recorder.record_llm_detail(
@@ -197,6 +197,8 @@ async def invoke_llm_for_node(
             "retry_count": len(retry_attempts),
         })
         return response
+    except ChatRunCancellationRequested:
+        raise
     except Exception as exc:
         await _emit_progress_event(config, "llm.failed", {
             **progress,
@@ -268,6 +270,8 @@ async def invoke_tool_for_node(
             **evidence_event_fields(normalized_result),
         })
         return result
+    except ChatRunCancellationRequested:
+        raise
     except Exception as exc:
         await _emit_progress_event(config, "tool.failed", {
             **progress,

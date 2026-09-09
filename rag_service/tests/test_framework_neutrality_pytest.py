@@ -13,11 +13,20 @@ from app.runtime.operational_limits import (
     validate_bounded_json,
 )
 import app.runtime.cleanup as cleanup
-from runtime_protocol.contracts import RuntimeCleanupResult
+from runtime_protocol.contracts import RuntimeCleanupResult, RuntimeCapabilities, RuntimeOperationId, RuntimeCapabilityDisabledReason, native, unsupported
+
+
+def _adapter(*, framework="langgraph", builder_id="langgraph_graph", response=None):
+    return SimpleNamespace(
+        framework=framework, builder_id=builder_id,
+        implemented_operations=frozenset({RuntimeOperationId.RUN_CLEANUP}),
+        capabilities=AsyncMock(return_value=RuntimeCapabilities(operations={RuntimeOperationId.RUN_CLEANUP: native()})),
+        cleanup_run=AsyncMock(return_value=response),
+    )
 
 
 @pytest.mark.asyncio
-async def test_continuation_cleanup_rejects_non_langgraph_frameworks(monkeypatch) -> None:
+async def test_continuation_cleanup_support_is_independent_of_framework(monkeypatch) -> None:
     run = SimpleNamespace(
         id="run-1",
         workflow_id="definition-1",
@@ -27,23 +36,19 @@ async def test_continuation_cleanup_rejects_non_langgraph_frameworks(monkeypatch
         resolved_spec_json={},
         runtime_binding_json={"binding_type": "fake.binding", "payload": {"id": "binding-1"}},
     )
-    adapter = SimpleNamespace(framework="fake", builder_id="fake-builder")
+    adapter = _adapter(framework="fake", builder_id="fake-builder", response=RuntimeCleanupResult("run-1", "cleaned"))
     from app.runtime.registry import RuntimeRegistry
 
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: RuntimeRegistry([adapter]))
     outcome = await cleanup.cleanup_run(run)
 
-    assert outcome.status == "unsupported"
-    assert outcome.cleaned is False
+    assert outcome.cleaned is True
+    adapter.cleanup_run.assert_awaited_once_with("run-1")
 
 
 @pytest.mark.asyncio
 async def test_continuation_cleanup_accepts_explicit_runtime_status(monkeypatch) -> None:
-    adapter = SimpleNamespace(
-        framework="langgraph",
-        builder_id="langgraph_graph",
-        cleanup_run=AsyncMock(return_value=RuntimeCleanupResult("run-1", "cleaned")),
-    )
+    adapter = _adapter(response=RuntimeCleanupResult("run-1", "cleaned"))
     run = SimpleNamespace(
         id="run-1",
         workflow_id="definition-1",
@@ -72,11 +77,7 @@ async def test_langgraph_cleanup_rejects_non_success_envelopes(monkeypatch, resp
         definition_category=None,
         resolved_spec_json={"framework": "langgraph", "builder_id": "langgraph_graph"},
     )
-    adapter = SimpleNamespace(
-        framework="langgraph",
-        builder_id="langgraph_graph",
-        cleanup_run=AsyncMock(return_value=response),
-    )
+    adapter = _adapter(response=response)
     registry = SimpleNamespace(get=lambda definition: adapter)
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: registry)
 
@@ -97,11 +98,7 @@ async def test_langgraph_cleanup_accepts_only_explicit_success_statuses(monkeypa
         definition_category=None,
         resolved_spec_json={"framework": "langgraph", "builder_id": "langgraph_graph"},
     )
-    adapter = SimpleNamespace(
-        framework="langgraph",
-        builder_id="langgraph_graph",
-        cleanup_run=AsyncMock(return_value=RuntimeCleanupResult("run-cleanup", status)),
-    )
+    adapter = _adapter(response=RuntimeCleanupResult("run-cleanup", status))
     registry = SimpleNamespace(get=lambda definition: adapter)
     monkeypatch.setattr(cleanup, "get_runtime_registry", lambda: registry)
 
@@ -109,6 +106,32 @@ async def test_langgraph_cleanup_accepts_only_explicit_success_statuses(monkeypa
 
     assert outcome.status == status
     assert outcome.cleaned is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["unsupported", "missing", "disabled", "outage", "transport", "identity", "unimplemented"])
+async def test_cleanup_fails_closed_except_explicit_unsupported(mode):
+    adapter = _adapter(framework="hermes", builder_id="hermes_agent", response=RuntimeCleanupResult("run-1", "cleaned"))
+    run = SimpleNamespace(id="run-1", workflow_id="definition-1", framework="hermes", builder_id="hermes_agent", resolved_spec_json={})
+    if mode == "unsupported":
+        adapter.capabilities.return_value = RuntimeCapabilities(operations={RuntimeOperationId.RUN_CLEANUP: unsupported()})
+    elif mode == "missing":
+        adapter.capabilities.return_value = RuntimeCapabilities()
+    elif mode == "disabled":
+        adapter.capabilities.return_value = RuntimeCapabilities(operations={RuntimeOperationId.RUN_CLEANUP: native(enabled=False, disabled_reason=RuntimeCapabilityDisabledReason.DEFINITION_POLICY)})
+    elif mode == "outage":
+        adapter.capabilities.side_effect = OSError("offline")
+    elif mode == "transport":
+        adapter.cleanup_run.side_effect = OSError("offline")
+    elif mode == "identity":
+        adapter.cleanup_run.return_value = RuntimeCleanupResult("different-run", "cleaned")
+    elif mode == "unimplemented":
+        adapter.implemented_operations = frozenset()
+    outcome = await cleanup.cleanup_run(run, registry=SimpleNamespace(get=lambda definition: adapter))
+    assert outcome.owner_deletion_allowed is (mode == "unsupported")
+    assert outcome.status == ("unsupported" if mode == "unsupported" else "failed")
+    if mode not in {"transport", "identity"}:
+        adapter.cleanup_run.assert_not_awaited()
 
 
 def test_runtime_json_validation_rejects_coercion_depth_and_aggregate_size() -> None:

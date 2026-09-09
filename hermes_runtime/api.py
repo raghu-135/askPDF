@@ -98,13 +98,9 @@ def _error(
     return structured_error(code, message, retryable=retryable, details=details)
 
 
-def _upstream_timeout(max_seconds: float | None = None) -> httpx.Timeout:
-    """Use the task budget for streams and the configured limit for short calls."""
-    read_timeout = (
-        float(max_seconds)
-        if max_seconds is not None
-        else required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
-    )
+def _upstream_timeout() -> httpx.Timeout:
+    """Bound stalled transport operations independently of research usage."""
+    read_timeout = required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
     return httpx.Timeout(
         read_timeout,
         connect=required_positive_float("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS"),
@@ -1041,7 +1037,7 @@ def create_app() -> FastAPI:
                         retryable=True,
                         details={"stage": "profile_identity", "reason": "fingerprint_mismatch", "profile_digest": run_profile.config_fingerprint},
                     ))
-            async with httpx.AsyncClient(timeout=_upstream_timeout(max_duration_seconds)) as client:
+            async with httpx.AsyncClient(timeout=_upstream_timeout()) as client:
                 if run_profile is not None:
                     preflight_url = profile_upstream_url(execution_profile) + "/v1/toolsets"
                     try:
@@ -1192,7 +1188,7 @@ def create_app() -> FastAPI:
                     data: list[str] = []
                     output_seen = False
                     async for line in events_response.aiter_lines():
-                        if time.monotonic() >= deadline:
+                        if not neutral_request.get("task_id") and time.monotonic() >= deadline:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
                             if data:
@@ -1623,6 +1619,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         try:
+            record = state["store"].records.get(run_id) or {}
+            if record.get("status") in {"completed", "failed", "cancelled"} and isinstance(record.get("terminal_result"), Mapping):
+                # The normalized durable result retains usage and artifacts,
+                # and remains inspectable after upstream profile retirement.
+                return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={
+                    "run_id": run_id, "status": record["status"],
+                    "result": record["terminal_result"], "terminal_event_id": record.get("terminal_event_id"),
+                })
             payload = payload or {}
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)
@@ -1632,7 +1636,12 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(profile_upstream_url(runtime_profile) + f"/v1/runs/{upstream_run_id}", headers=headers)
                 response.raise_for_status()
-            return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**dict(response.json()), "run_id": run_id, "upstream_run_id": upstream_run_id})
+            inspected = dict(response.json())
+            if inspected.get("status") in {"completed", "failed", "cancelled"}:
+                # Upstream stop confirmation can precede durable stream
+                # finalization. Do not project an incomplete native snapshot.
+                inspected = {"status": "stopping", "upstream_status": inspected["status"], "runtime_confirmation": "pending"}
+            return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={**inspected, "run_id": run_id, "upstream_run_id": upstream_run_id})
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_inspect_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
 

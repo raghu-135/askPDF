@@ -2409,7 +2409,7 @@ async def test_task_worker_runs_maintenance_before_processing_a_busy_queue(monke
     claimed = SimpleNamespace(
         id="task-1",
         active_run_id="run-1",
-        config_json={"limits": {"wake_limit_seconds": 30}},
+        config_json={"limits": {"max_active_runtime_ms": 30000}},
     )
     claim = AsyncMock(side_effect=[claimed, None])
     run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
@@ -2446,7 +2446,7 @@ async def test_task_worker_stops_after_active_claim_without_claiming_more(monkey
     claim = AsyncMock(return_value=SimpleNamespace(
         id="task-1",
         active_run_id="run-1",
-        config_json={"limits": {"wake_limit_seconds": 30}},
+        config_json={"limits": {"max_active_runtime_ms": 30000}},
     ))
     run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
     stop_event = asyncio.Event()
@@ -2465,69 +2465,32 @@ async def test_task_worker_stops_after_active_claim_without_claiming_more(monkey
 
 
 @pytest.mark.asyncio
-async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
+@pytest.mark.parametrize("framework,builder", [("langgraph", "langgraph_graph"), ("hermes", "hermes_agent")])
+async def test_task_worker_leaves_time_exhaustion_to_runtime_budget_review(monkeypatch, framework, builder):
     task = SimpleNamespace(
         id="task-1",
         workflow_id="custom-definition",
         active_run_id="run-1",
-        config_json={"limits": {"wake_limit_seconds": 30}},
+        config_json={"limits": {"max_active_runtime_ms": 1}},
     )
-    run = SimpleNamespace(id="run-1", task_id="task-1", framework="hermes", builder_id="hermes_agent")
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework=framework, builder_id=builder)
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
-    execute = AsyncMock()
+    async def finish_atomic_work_and_request_review(*_args):
+        await asyncio.sleep(0.01)
+        task.status = "awaiting_approval"
+
+    execute = AsyncMock(side_effect=finish_atomic_work_and_request_review)
+    cancel = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", cancel)
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True)
 
     execute.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_task_worker_cancels_timed_out_remote_run_instead_of_requeueing(monkeypatch):
-    task = SimpleNamespace(
-        id="task-timeout",
-        active_run_id="run-timeout",
-        config_json={"limits": {"wake_limit_seconds": 0.01}},
-        budgets_json={},
-    )
-    run = SimpleNamespace(
-        id="run-timeout",
-        task_id="task-timeout",
-        framework="langgraph",
-        builder_id="langgraph_graph",
-        run_metadata_json={"runtime_started": True},
-    )
-    claim = AsyncMock(side_effect=[task, None])
-    async def execute(_task_id, _worker_id):
-        await asyncio.Event().wait()
-
-    execute = AsyncMock(side_effect=execute)
-    set_status = AsyncMock()
-    cancel = AsyncMock(return_value={"runtime_confirmation": "pending"})
-    requeue = AsyncMock()
-
-    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
-    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
-    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
-    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
-    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
-    monkeypatch.setattr(agent_task_runtime.tasks, "set_task_runtime_status", set_status)
-    monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", cancel)
-    monkeypatch.setattr(agent_task_runtime.tasks, "requeue_after_wake", requeue)
-    monkeypatch.setattr(agent_task_runtime.tasks, "budget_boundary", AsyncMock(return_value=None))
-
-    await agent_task_runtime.run_task_worker(once=True)
-
-    set_status.assert_awaited_once_with(
-        task.id,
-        "cancelling",
-        phase="runtime_wake_timeout_cancelling",
-        reason="active_runtime_wake_limit",
-    )
-    cancel.assert_awaited_once_with(task, run)
-    requeue.assert_not_awaited()
+    cancel.assert_not_awaited()
+    assert task.status == "awaiting_approval"
 
 
 @pytest.mark.asyncio
@@ -2547,29 +2510,6 @@ async def test_task_worker_fails_claim_without_persisted_runtime_identity(monkey
     fail_claim.assert_awaited_once()
     assert fail_claim.await_args.args[0] == task.id
     assert fail_claim.await_args.kwargs["code"] == "runtime_task_identity_invalid"
-    execute.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_task_worker_fails_claim_without_persisted_wake_limit(monkeypatch):
-    task = SimpleNamespace(
-        id="task-1",
-        active_run_id="run-1",
-        config_json={"limits": {}},
-    )
-    run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
-    fail_claim = AsyncMock()
-    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
-    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
-    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
-    monkeypatch.setattr(agent_task_runtime.tasks, "fail_invalid_runtime_claim", fail_claim)
-    execute = AsyncMock()
-    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
-
-    await agent_task_runtime.run_task_worker(once=True)
-
-    fail_claim.assert_awaited_once()
-    assert fail_claim.await_args.kwargs["code"] == "runtime_task_configuration_invalid"
     execute.assert_not_awaited()
 
 

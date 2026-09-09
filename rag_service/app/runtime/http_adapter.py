@@ -145,13 +145,9 @@ class RuntimeTransportConnector:
         )
         # The control plane owns transport/reconnect deadlines only. Runtime
         # execution limits are enforced by the remote framework service.
-        self._execution_timeout = required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
         self._reconnect_attempts = required_positive_int("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS")
         self._reconnect_backoff = required_positive_float("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS")
-        self._reconnect_deadline = min(
-            self._execution_timeout,
-            required_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS"),
-        )
+        self._reconnect_deadline = required_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS")
         self._output_delta_flush_seconds = required_positive_float("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS")
         self._output_delta_flush_bytes = required_positive_int("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES")
         if not any(os.getenv(name, "").strip() for name in self.authorization_envs):
@@ -498,7 +494,10 @@ class RuntimeTransportConnector:
         reconnect_count = 0
         try:
             try:
-                await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
+                # HTTP read timeouts bound inactivity, not total subscription
+                # duration. A healthy stream may span many research operations
+                # before reaching a budget-review or terminal boundary.
+                await consume("POST", path)
             except httpx.HTTPStatusError:
                 # Deterministic HTTP admission failures are not ambiguous
                 # stream disconnects and must not trigger replay or a second
@@ -534,13 +533,11 @@ class RuntimeTransportConnector:
                     # committed its durable record. Retry the same idempotent
                     # operation once the replay endpoint reports not-found.
                     if exc.response.status_code == 404 and last_sequence == 0:
-                        await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
+                        await consume("POST", path)
                     else:
                         raise
         except RuntimeError:
             raise
-        except asyncio.TimeoutError as exc:
-            raise RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True) from exc
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed SSE data") from exc
         except httpx.HTTPStatusError as exc:

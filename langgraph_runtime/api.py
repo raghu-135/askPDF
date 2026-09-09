@@ -982,16 +982,21 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             framework = str(getattr(request, "framework", None) or "").strip()
             if not framework:
                 raise RuntimeError("invalid_runtime_identity", "Runtime request is missing framework identity")
-            execution_timeout = float(deep_agent_budgets(framework)["max_duration_seconds"])
-            result = await asyncio.wait_for(
-                getattr(runtime_adapter, operation)(
-                    request,
-                    **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
-                    context=context,
-                    event_sink=durable_sink,
-                ),
-                timeout=execution_timeout,
+            execution = getattr(runtime_adapter, operation)(
+                request,
+                **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
+                context=context,
+                event_sink=durable_sink,
             )
+            # Task time is metered at atomic boundaries and produces the same
+            # durable budget review as token/call exhaustion. Do not cancel the
+            # graph (or its unmetered provisional synthesis) with a second clock.
+            if request.task_id:
+                result = await execution
+            else:
+                result = await asyncio.wait_for(
+                    execution, timeout=float(deep_agent_budgets(framework)["max_duration_seconds"]),
+                )
             if result is None:
                 error = RuntimeError("runtime_continuation_missing", "The runtime did not return a continuation", retryable=False)
                 result = _terminal_result(

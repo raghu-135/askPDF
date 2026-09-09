@@ -1,5 +1,7 @@
 import asyncio
 from typing import Annotated, TypedDict
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -7,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from langgraph_runtime.workflows.deep_research_execution import RuntimeExecutionServices, run_cancellable, runtime_execution_services_factory
+from langgraph_runtime.workflows.deep_research_execution import RuntimeBudgetMeter, RuntimeExecutionServices, run_cancellable, runtime_execution_services_factory
 from langgraph_runtime.workflows.state import (
     consume_task_result_packets,
     merge_task_result_packets,
@@ -15,6 +17,8 @@ from langgraph_runtime.workflows.state import (
 )
 from langgraph_runtime.workflows import deep_research_nodes
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested
+from langgraph_runtime.router_runtime import _invoke_graph_with_partial_state
 
 
 class Token:
@@ -39,9 +43,143 @@ async def test_run_cancellable_stops_blocking_work():
     operation = asyncio.create_task(run_cancellable(work(), token, poll_seconds=0.001))
     await asyncio.sleep(0)
     token.cancelled = True
+    with pytest.raises(ChatRunCancellationRequested):
+        await operation
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_remains_asyncio_cancellation():
+    entered, stopped = asyncio.Event(), asyncio.Event()
+
+    async def work():
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    operation = asyncio.create_task(run_cancellable(work(), Token(), poll_seconds=0.001))
+    await entered.wait()
+    operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
     assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_compiled_graph_critic_cancellation_preserves_domain_signal_and_checkpoint(resume, monkeypatch):
+    class State(TypedDict):
+        evidence: str
+
+    token = Token()
+    entered = asyncio.Event()
+
+    async def model(*args, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(deep_research_nodes, "get_llm", lambda *args, **kwargs: SimpleNamespace(ainvoke=model))
+    monkeypatch.setattr(deep_research_nodes, "execution_model_client", lambda config: None)
+    monkeypatch.setenv("AGENT_CANCELLATION_POLL_INTERVAL_SECONDS", "0.001")
+
+    graph = StateGraph(State)
+    graph.add_node("gather", lambda state: {"evidence": "completed artifact"})
+    graph.add_node("evidence_critic", deep_research_nodes.evidence_critic)
+    graph.add_edge(START, "gather")
+    graph.add_edge("gather", "evidence_critic")
+    graph.add_edge("evidence_critic", END)
+    compiled = graph.compile(checkpointer=InMemorySaver(), interrupt_before=["evidence_critic"] if resume else [])
+    config = {"configurable": {
+        "thread_id": "cancel-critic", "cancellation_checker": token.requested,
+        "deep_research_services_factory": runtime_execution_services_factory,
+        "runtime_budget_meter": RuntimeBudgetMeter({
+            "tranche_limits": {"model_calls": 10, "model_tokens": 10000, "tool_calls": 10, "elapsed_active_ms": 10000},
+            "tranche_usage": {}, "lifetime_usage": {},
+        }, {}),
+    }}
+    if resume:
+        await compiled.ainvoke({}, config)
+    execution = asyncio.create_task(compiled.ainvoke(None if resume else {}, config))
+    entered_task = asyncio.create_task(entered.wait())
+    done, _ = await asyncio.wait({entered_task, execution}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+    if execution in done:
+        entered_task.cancel()
+        await asyncio.gather(entered_task, return_exceptions=True)
+        await execution
+    if entered_task not in done:
+        execution.cancel()
+        entered_task.cancel()
+        await asyncio.gather(execution, entered_task, return_exceptions=True)
+        pytest.fail("model did not start")
+    token.cancelled = True
+    with pytest.raises(ChatRunCancellationRequested):
+        await execution
+    assert (await compiled.aget_state(config)).values["evidence"] == "completed artifact"
+
+
+@pytest.mark.asyncio
+async def test_run_cancellable_does_not_reclassify_model_failure():
+    async def work():
+        raise ValueError("provider failure")
+    with pytest.raises(ValueError, match="provider failure"):
+        await run_cancellable(work(), Token(), poll_seconds=0.001)
+
+
+@pytest.mark.asyncio
+async def test_completed_atomic_result_wins_simultaneous_cancellation():
+    token = Token()
+    token.cancelled = True
+    async def completed():
+        return {"content": "completed output", "usage": 42}
+    assert await run_cancellable(completed(), token, poll_seconds=0.001) == {"content": "completed output", "usage": 42}
+
+
+@pytest.mark.asyncio
+async def test_tool_cancellation_is_not_reported_as_tool_failure():
+    from langgraph_runtime.workflows.runtime_invocation import invoke_tool_for_node
+    sink = SimpleNamespace(emit=AsyncMock())
+    with pytest.raises(ChatRunCancellationRequested):
+        await invoke_tool_for_node("search_documents", {}, state={}, node="researcher", started=0,
+                                   config={"configurable": {"cancellation_checker": AsyncMock(return_value=True), "execution_event_sink": sink}})
+    assert not any(call.args[0] == "tool.failed" for call in sink.emit.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_parallel_graph_retains_completed_pending_writes():
+    from langgraph_runtime.workflows.state import merge_parallel_deltas
+
+    class State(TypedDict):
+        runtime_artifacts: Annotated[list[dict], merge_parallel_deltas]
+
+    token = Token()
+    entered = asyncio.Event()
+
+    async def waiting(state):
+        entered.set()
+        await run_cancellable(asyncio.Event().wait(), token, poll_seconds=0.001)
+        return {}
+
+    graph = StateGraph(State)
+    graph.add_node("completed_worker", lambda state: {"runtime_artifacts": [{"id": "artifact-1", "content": "valid evidence"}]})
+    graph.add_node("waiting_worker", waiting)
+    for node in ("completed_worker", "waiting_worker"):
+        graph.add_edge(START, node)
+        graph.add_edge(node, END)
+    compiled = graph.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "parallel-cancel"}}
+    execution = asyncio.create_task(_invoke_graph_with_partial_state(compiled, {"runtime_artifacts": []}, config))
+    await asyncio.wait_for(entered.wait(), 5)
+    # Wait for the completed worker's durable pending write, not an arbitrary
+    # sleep or the still-blocked parallel barrier.
+    async with asyncio.timeout(5):
+        while not (await compiled.aget_state(config)).values.get("runtime_artifacts"):
+            await asyncio.sleep(0.001)
+    token.cancelled = True
+    with pytest.raises(ChatRunCancellationRequested) as caught:
+        await execution
+    assert caught.value.state["runtime_artifacts"] == [{"id": "artifact-1", "content": "valid evidence"}]
 
 
 @pytest.mark.asyncio
@@ -339,6 +477,62 @@ async def test_compiled_packet_consumption_survives_checkpoint_continuation():
     assert paused["__interrupt__"]
     resumed = await app.ainvoke(Command(resume=True), config=config)
     assert resumed["task_result_packets"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["elapsed_active_ms", "model_tokens"])
+@pytest.mark.parametrize("action", ["continue", "accept_partial", "steer"])
+async def test_compiled_time_and_token_reviews_share_durable_interrupt(monkeypatch, dimension, action):
+    class State(TypedDict, total=False):
+        agent_task_id: str
+        agent_run_id: str
+        final_answer: str
+        task_limits: dict
+        task_budget_usage: dict
+        task_budget_boundary: dict
+        task_budget_review_route: str
+
+    dimensions = {"model_calls": 10, "model_tokens": 1000, "tool_calls": 10, "elapsed_active_ms": 1000}
+    meter = RuntimeBudgetMeter({
+        "tranche_index": 1, "tranche_limits": dimensions,
+        "tranche_usage": {key: 0 for key in dimensions},
+        "lifetime_usage": {key: 0 for key in dimensions},
+    }, {})
+    await meter.consume(**{dimension: dimensions[dimension]})
+    before = await meter.snapshot()
+
+    async def critic_model(*args, **kwargs):
+        assert kwargs["meter_research"] is False
+        assert kwargs["accounting_phase"] == "partial_synthesis"
+        return '{"pass": true, "issues": []}', {}
+
+    monkeypatch.setattr(deep_research_nodes, "_call_model", critic_model)
+    graph = StateGraph(State)
+    graph.add_node("critic", deep_research_nodes.evidence_critic)
+    graph.add_edge(START, "critic")
+    graph.add_edge("critic", END)
+    app = graph.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {
+        "thread_id": f"budget-{dimension}-{action}",
+        "deep_research_services_factory": runtime_execution_services_factory,
+        "cancellation_checker": lambda: False,
+        "runtime_budget_meter": meter,
+    }}
+    state = {
+        "agent_task_id": "task-1", "agent_run_id": "run-1",
+        "final_answer": "Preserved partial evidence.", "task_limits": {},
+        "task_budget_usage": before, "task_budget_boundary": await meter.boundary(),
+    }
+    paused = await app.ainvoke(state, config=config)
+    review = paused["__interrupt__"][0].value
+    assert review["type"] == "budget_review"
+    assert review["usage"]["dimensions"] == [dimension]
+    assert set(review["allowed_actions"]) == {"continue", "accept_partial", "steer"}
+    assert review["provisional_answer"] == state["final_answer"]
+    resumed = await app.ainvoke(Command(resume={"action": action}), config=config)
+    assert resumed["task_budget_review_route"] == action
+    assert resumed["task_budget_boundary"] == {}
+    assert await meter.snapshot() == before
 
 
 @pytest.mark.asyncio

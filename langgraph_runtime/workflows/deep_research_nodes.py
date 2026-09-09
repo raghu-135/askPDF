@@ -23,6 +23,7 @@ from langgraph_runtime.workflows.runtime_invocation import (
     tool_config_for_node,
 )
 from langgraph_runtime.workflows.parallel_runtime import parallel_retryable_error
+from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested
 from langgraph_runtime.workflows.deep_research_execution import (
     TodoRecord,
     run_cancellable,
@@ -1306,8 +1307,8 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
         }
     except asyncio.TimeoutError:
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "timed_out", "summary": "", "artifact_ids": [], "usage": {}, "retryable": True, "error": {"code": "subagent_timeout", "retryable": True}}
-    except asyncio.CancelledError:
-        packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "cancelled", "summary": "", "artifact_ids": [], "usage": {}, "retryable": False, "error": {"code": "task_cancelled", "retryable": False}}
+    except (asyncio.CancelledError, ChatRunCancellationRequested):
+        raise
     except AgentRuntimeError as exc:
         packet = {
             "task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id,
@@ -1510,6 +1511,8 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
             meter_research=not provisional,
             accounting_phase="partial_synthesis" if provisional else "research",
         )
+    except ChatRunCancellationRequested:
+        raise
     except Exception as exc:
         if not provisional:
             raise

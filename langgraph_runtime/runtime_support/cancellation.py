@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from langgraph_runtime.limits import required_positive_float
+from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested
 
 
 T = TypeVar("T")
@@ -40,7 +41,9 @@ async def race_with_cancellation(
         await asyncio.gather(work, return_exceptions=True)
         if cancellation in done:
             await cancellation
-            raise asyncio.CancelledError
+            # A durable cooperative request is a domain signal, not shutdown of
+            # the graph's asyncio task (which LangGraph wraps as NodeCancelledError).
+            raise ChatRunCancellationRequested()
         raise asyncio.TimeoutError
     finally:
         for task in (work, cancellation):

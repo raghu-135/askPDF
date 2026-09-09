@@ -182,7 +182,6 @@ def _deep_agent_budgets(framework: str, values: Mapping[str, str], errors: list[
         "MAX_DURATION_MS": 1,
         "MAX_OUTPUT_CHARS": 1,
         "MAX_EVENT_COUNT": 1,
-        "WAKE_LIMIT_SECONDS": 1,
     }
     if framework == "langgraph":
         common.update({

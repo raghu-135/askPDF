@@ -14,6 +14,7 @@ from app.agent_workflows.repository import AgentWorkflowRepository
 from app.time_utils import utc_now
 from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.events import create_runtime_event
 
 
 def result_hash(result: Mapping[str, Any]) -> str:
@@ -212,36 +213,42 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         and str(task.status) == "cancelling"
         and known_status in {"completed", "failed", "cancelled", "canceled", "no_continuation"}
     ):
-        await reconcile_known_result(run, result, AgentRuntimeProjection())
+        if known_status in {"cancelled", "canceled"}:
+            await confirm_task_cancellation(task, run, result=result, terminal_event_id=projection.get("terminal_event_id"))
+        elif known_status == "failed":
+            error = dict(result.get("error") or result.get("agent_error") or {})
+            terminal = create_runtime_event(
+                event_id=projection.get("terminal_event_id") or f"{run.id}:failed",
+                run_id=str(run.id), sequence=1, kind="run.failed",
+                payload={"status": "failed", "error": error},
+            )
+            await tasks.finalize_task_run(
+                str(task.id), str(run.id), run_status="failed", task_status="failed",
+                metrics=dict(run.metrics_json or {}), error=error,
+                debug_trace=dict(run.debug_trace_json or {}),
+                terminal_reason=str(error.get("code") or "failed"), terminal_event=terminal,
+            )
+        else:
+            await tasks.mark_runtime_projection_recovery_required(
+                str(task.id), str(run.id), projection=projection,
+                error={"code": "runtime_task_result_missing", "message": "Terminal task result has no orchestration delta or neutral completion", "retryable": False},
+            )
+            return "deferred"
         result = None
         status = "projected"
     elif task is not None and str(task.status) == "cancelling" and str(run.status) in {"running", "awaiting_human"}:
         inspection = await adapter.inspect_state(request)
         runtime_status = str(inspection.get("status") or (inspection.get("result") or {}).get("status") or "")
-        if runtime_status in {"cancelled", "canceled"}:
-            cancelled_result = inspection.get("result") if isinstance(inspection.get("result"), Mapping) else {
-                "status": "cancelled",
-                "error": {"code": "run_cancelled", "message": "Runtime cancellation confirmed", "retryable": False},
-            }
-            await confirm_task_cancellation(
-                task,
-                run,
-                result=cancelled_result,
-                terminal_event_id=str(inspection.get("terminal_event_id") or "") or None,
-            )
-            status = "projected"
-        elif runtime_status in {"completed", "failed", "no_continuation"}:
-            terminal_result = (
-                dict(inspection.get("result"))
-                if isinstance(inspection.get("result"), Mapping)
-                else {
-                    "status": runtime_status,
-                    "error": dict(inspection.get("error") or {}),
-                }
-            )
-            terminal_result.setdefault("status", runtime_status)
-            await reconcile_known_result(run, terminal_result, AgentRuntimeProjection())
-            status = "projected"
+        if runtime_status in {"cancelled", "canceled", "completed", "failed"}:
+            terminal_result = inspection.get("result")
+            if not isinstance(terminal_result, Mapping):
+                raise AgentRuntimeError("runtime_terminal_result_missing", "Terminal inspection requires the authoritative result snapshot", retryable=True)
+            if str(terminal_result.get("status") or "") != runtime_status:
+                raise AgentRuntimeError("runtime_terminal_status_conflict", "Inspection and terminal result disagree", retryable=False)
+            await record_terminal_result(run, terminal_result, terminal_event_id=inspection.get("terminal_event_id"))
+            # Re-enter the same durable projection path used by streamed task
+            # results; never discard an orchestration delta or neutral usage.
+            return await reconcile_run_by_id(run_id)
         else:
             await request_task_cancellation(task, run)
             status = "deferred"

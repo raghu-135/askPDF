@@ -529,6 +529,23 @@ def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monke
     assert retired == ["askpdf-run-profile-1"]
 
 
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_terminal_inspection_returns_durable_neutral_result_after_profile_retirement(monkeypatch, tmp_path, status):
+    state_path = tmp_path / "state.json"
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
+    store = HermesExecutionStore(str(state_path))
+    store.create("run-1", _cancel_payload())
+    result = {"status": status, "artifacts": [{"id": "artifact-1"}], "usage": {"total_tokens": 42}}
+    event = {"event_id": "terminal-1", "run_id": "run-1", "sequence": 1, "kind": f"run.{status}", "payload": {}, "terminal": True}
+    store.finalize("run-1", hermes_api._sse(event, result), status=status)
+    with TestClient(hermes_api.create_app()) as client:
+        # No upstream binding or live profile is needed for a durable result.
+        response = client.post("/v1/runs/run-1/inspect", json={})
+    assert response.status_code == 200
+    assert response.json()["result"]["result"] == result
+    assert response.json()["result"]["terminal_event_id"] == "terminal-1"
+
+
 def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp_path):
     retired = []
     async_client = httpx.AsyncClient

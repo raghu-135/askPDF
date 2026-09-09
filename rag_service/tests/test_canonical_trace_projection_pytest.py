@@ -24,6 +24,21 @@ def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph"
     )
 
 
+def test_confirmed_timeout_is_cancellation_not_unexplained_node_failure():
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "run.cancelled", {"error": {"code": "run_cancelled"}})],
+        resolved_spec={}, framework="langgraph",
+        cancellation_request={"reason": "active_runtime_wake_limit", "effective_limit_seconds": 600,
+                              "elapsed_seconds": 600.1, "active_node": "evidence_critic"},
+    )
+    diagnostics = projection["diagnostics"]
+    assert diagnostics["summary"]["failure_count"] == 0
+    assert diagnostics["summary"]["cancellation_count"] == 1
+    assert diagnostics["summary"]["code"] == "active_runtime_wake_limit"
+    assert "600 seconds" in diagnostics["summary"]["message"]
+    assert diagnostics["failures"][0]["details"]["active_node"] == "evidence_critic"
+
+
 def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
     projection = build_canonical_trace_projection(
         events=[_event(1, "operation.completed", {"operation_type": "unknown"}, "future")],

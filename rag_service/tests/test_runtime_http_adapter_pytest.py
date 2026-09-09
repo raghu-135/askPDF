@@ -17,6 +17,7 @@ from runtime_protocol.contracts import (
     RuntimeTaskContext,
 )
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter, context_to_dict
+from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from runtime_protocol.errors import RuntimeError
 from app.runtime.catalog import result_to_product_payload
 from runtime_protocol.transport import request_from_dict
@@ -44,6 +45,133 @@ def _request() -> AgentRuntimeRequest:
         input={"question": "hello"},
         trace_id="trace-1",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [HttpLangGraphRuntimeAdapter, HermesRuntimeAdapter])
+@pytest.mark.parametrize("retry_post", [False, True])
+@pytest.mark.parametrize("status", ["completed", "awaiting_human"])
+async def test_healthy_post_stream_outlives_read_timeout(monkeypatch, adapter_type, retry_post, status):
+    monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "0.03")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
+    calls, post_bodies = [], []
+    kind = "run.completed" if status == "completed" else "interrupt.requested"
+    result = {"status": status, "output": "Preserved research"}
+    if status == "awaiting_human":
+        result["interruption"] = {"type": "budget_review", "interrupt_id": "review-1"}
+    event = {
+        "event_id": "boundary-1", "run_id": "run-1", "sequence": 1,
+        "kind": kind, "payload": {}, "terminal": status == "completed",
+    }
+
+    class HealthyStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            # Every read progresses, but the complete subscription lasts much
+            # longer than one read timeout. Heartbeats need not be domain events.
+            for _ in range(8):
+                await asyncio.sleep(0.01)
+                yield b": heartbeat\n\n"
+            yield f"event: {kind}\ndata: {json.dumps({'event': event, 'result': result})}\n\n".encode()
+
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "POST":
+            post_bodies.append(request.content)
+        if retry_post and len(calls) == 1:
+            raise httpx.ReadError("Admission response lost", request=request)
+        if request.method == "GET":
+            return httpx.Response(404, request=request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=HealthyStream())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = adapter_type("http://runtime", client=client)
+        request = AgentRuntimeRequest(
+            run_id="run-1", thread_id="thread-1", task_id="task-1", definition_id="research",
+            framework=adapter.framework, builder_id=adapter.builder_id,
+        )
+        actual = await adapter.transport._stream(
+            "/v1/runs/start", request, context=RuntimeInvocationContext(), payload=None, event_sink=None,
+        )
+    assert actual.status == status
+    assert actual.output == "Preserved research"
+    assert calls == (["POST", "GET", "POST"] if retry_post else ["POST"])
+    if retry_post:
+        assert post_bodies[0] == post_bodies[1]
+
+
+@pytest.mark.asyncio
+async def test_stalled_reads_remain_transport_timeouts(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        raise httpx.ReadTimeout("No bytes received", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+        with pytest.raises(RuntimeError) as caught:
+            await adapter.start(_request(), context=RuntimeInvocationContext())
+    assert calls == ["POST", "GET"]
+    assert caught.value.code == "runtime_stream_timeout"
+    assert caught.value.retryable
+
+
+@pytest.mark.asyncio
+async def test_empty_replay_attempts_remain_bounded(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.001")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "1")
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b"")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+        with pytest.raises(RuntimeError) as caught:
+            await adapter.start(_request(), context=RuntimeInvocationContext())
+    assert caught.value.code == "runtime_stream_error"
+    assert calls == ["POST", "GET", "GET"]
+
+
+def test_read_inactivity_and_reconnect_deadlines_are_independent(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "0.03")
+    monkeypatch.setenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "2")
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+    assert adapter.transport._timeout.read == 0.03
+    assert adapter.transport._reconnect_deadline == 2
+
+
+@pytest.mark.asyncio
+async def test_caller_can_cancel_a_healthy_subscription():
+    entered, closed = asyncio.Event(), asyncio.Event()
+
+    class OpenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            entered.set()
+            yield b": heartbeat\n\n"
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            closed.set()
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=OpenStream())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = HttpLangGraphRuntimeAdapter("http://runtime", client=client)
+        subscription = asyncio.create_task(adapter.start(_request(), context=RuntimeInvocationContext()))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            subscription.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await subscription
+            assert closed.is_set()
+        finally:
+            subscription.cancel()
+            await asyncio.gather(subscription, return_exceptions=True)
 
 
 def test_runtime_error_is_raiseable_and_keeps_wire_shape():

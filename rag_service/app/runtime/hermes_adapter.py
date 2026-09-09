@@ -244,7 +244,13 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             request=request,
             json=json_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
-        return dict(value or {})
+        result = dict(value or {})
+        if result.get("status") == "already_terminal":
+            status = result.get("upstream_status")
+            if status not in {"completed", "failed", "cancelled"}:
+                raise RuntimeError("runtime_response_invalid", "Hermes returned an invalid terminal cancellation status")
+            result["status"] = status
+        return result
 
     async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Mapping[str, Any]:
         self._ensure_enabled()

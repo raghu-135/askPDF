@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence, TypedDict
@@ -589,7 +590,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         row: AgentTraceFailure = {
             "event_id": event.event_id,
             "kind": event.kind,
-            "classification": "terminal_summary" if event.kind in {"run.failed", "run.cancelled"} else "cancellation" if cancelled else "contributing",
+            "classification": "cancellation" if cancelled else "terminal_summary" if event.kind == "run.failed" else "contributing",
             "code": str(normalized_error.get("code") or payload.get("code") or event.kind.replace(".", "_")),
             "message": str(normalized_error.get("safe_message") or normalized_error.get("message") or normalized_error.get("raw_message") or payload.get("message") or payload.get("reason") or event.kind),
             "retryable": bool(normalized_error.get("retryable") or payload.get("retryable")),
@@ -628,7 +629,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         if group_id:
             parallel_counts[group_id] = parallel_counts.get(group_id, 0) + 1
     for row in rows:
-        if primary is not None and row["event_id"] == primary["event_id"] and row.get("classification") != "terminal_summary":
+        if primary is not None and row["event_id"] == primary["event_id"] and row.get("classification") not in {"terminal_summary", "cancellation"}:
             row["classification"] = "primary"
         elif row.get("classification") not in {"terminal_summary", "cancellation"}:
             parallel_group_id = str((row.get("location") or {}).get("parallel_group_id") or "")
@@ -673,7 +674,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         "primary_failure_event_id": (primary or {}).get("event_id"),
         "primary_basis": primary_basis if primary is not None else None,
         "location": (primary or {}).get("location") or {},
-        "failure_count": len(rows),
+        "failure_count": len([row for row in rows if row.get("classification") != "cancellation"]),
         "cancellation_count": len([row for row in rows if row.get("classification") == "cancellation"]),
     }
     return {
@@ -761,8 +762,20 @@ def build_canonical_trace_projection(
     events: Sequence[AgentRuntimeEvent],
     resolved_spec: Mapping[str, Any],
     framework: str,
+    cancellation_request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
+    if cancellation_request:
+        reason = str(cancellation_request.get("reason") or "run_cancelled")
+        limit = cancellation_request.get("effective_limit_seconds")
+        message = f"Runtime cancellation confirmed: {reason}."
+        if limit is not None:
+            message += f" Effective saved limit: {limit} seconds."
+        ordered = [replace(event, payload={
+            **event.payload,
+            "error": {"code": reason, "message": message, "retryable": False,
+                      "details": {**cancellation_request, "runtime_confirmation": "confirmed"}},
+        }) if event.kind == "run.cancelled" else event for event in ordered]
     operations = _operations(ordered, framework)
     # Trace rendering is diagnostic-only. Isolate malformed historical groups
     # so a projection problem cannot turn an otherwise valid trace into a 500.

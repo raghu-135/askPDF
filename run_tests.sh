@@ -176,7 +176,13 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     fi
     echo "Verifying the immutable production control-plane image..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
-        'import importlib.util; from runtime_protocol.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert importlib.util.find_spec("langgraph") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
+        'import importlib.util; from runtime_protocol.contracts import AgentDefinition; from app.runtime.registry import RuntimeRegistry; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None; registry=RuntimeRegistry(); registry.initialize(); definition=AgentDefinition(definition_id="router_rag_agent", framework="langgraph", builder_id="langgraph_graph"); adapter=registry.get(definition); assert adapter.__class__.__name__ == "HttpLangGraphRuntimeAdapter" and adapter.framework == "langgraph"'
+    echo "Verifying development bind-mounted control-plane isolation..."
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm --no-deps \
+        -v "$PWD/rag_service:/app:ro" rag-service python -c \
+        'import importlib.util; import app, runtime_protocol; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+        'import importlib.util; import langgraph_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
     external_runtime_test runtime-test-runner
     external_runtime_test test-runner --file test_runtime_http_adapter_pytest.py
     if [ "${RUN_LANGGRAPH_RUNTIME_REAL:-0}" = "1" ]; then
@@ -263,6 +269,8 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     echo "Starting deterministic Hermes runtime Hermes runtime proof..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes-runtime python -c \
+        'import importlib.util; import hermes_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_execution_store_pytest.py

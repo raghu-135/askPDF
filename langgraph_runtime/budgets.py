@@ -15,7 +15,6 @@ DEEP_AGENT_BUDGET_KEYS = frozenset({
     "max_duration_seconds",
     "max_output_chars",
     "max_event_count",
-    "wake_limit_seconds",
     "subagent_timeout_ms",
     "dispatch_timeout_ms",
     "worker_timeout_ms",
@@ -35,7 +34,6 @@ DEEP_AGENT_FRAMEWORK_KEYS: dict[str, frozenset[str]] = {
         "max_duration_seconds",
         "max_output_chars",
         "max_event_count",
-        "wake_limit_seconds",
     }),
 }
 
@@ -47,7 +45,6 @@ _ENV_SPECS: dict[str, tuple[str, int]] = {
     "max_duration_seconds": ("MAX_DURATION_MS", 1000),
     "max_output_chars": ("MAX_OUTPUT_CHARS", 1),
     "max_event_count": ("MAX_EVENT_COUNT", 1),
-    "wake_limit_seconds": ("WAKE_LIMIT_SECONDS", 1),
     "subagent_timeout_ms": ("SUBAGENT_TIMEOUT_MS", 1),
     "dispatch_timeout_ms": ("DISPATCH_TIMEOUT_MS", 1),
     "worker_timeout_ms": ("WORKER_TIMEOUT_MS", 1),

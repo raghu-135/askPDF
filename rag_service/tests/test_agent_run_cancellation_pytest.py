@@ -134,3 +134,53 @@ async def test_confirmed_cancellation_atomically_terminalizes_task_and_run(monke
     assert kwargs["terminal_event"].terminal is True
     complete_commands.assert_awaited_once()
     assert complete_commands.await_args.kwargs["result"]["runtime_confirmation"] == "confirmed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed"])
+async def test_terminal_acknowledgement_reconciles_instead_of_forcing_cancel(monkeypatch, status):
+    reconcile = AsyncMock(return_value="projected")
+    finalize = AsyncMock()
+    monkeypatch.setattr("app.services.agent_runtime_reconciliation.reconcile_run_by_id", reconcile)
+    monkeypatch.setattr("app.services.agent_task_repository.finalize_task_run", finalize)
+    assert await cancellation.confirm_task_cancellation(
+        SimpleNamespace(id="task-1"), _run(),
+        result={"status": "cancelling", "runtime_status": status},
+    ) == "projected"
+    reconcile.assert_awaited_once_with("run-1")
+    finalize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_cancellation_cannot_terminalize():
+    with pytest.raises(ValueError, match="confirmed cancelled"):
+        await cancellation.confirm_task_cancellation(SimpleNamespace(id="task-1"), _run(), result={"status": "cancelling"})
+
+
+def test_timeout_reason_survives_recovery_state():
+    from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
+    run = _run()
+    run.run_metadata_json = {"cancellation_request": {
+        "reason": "active_runtime_wake_limit", "effective_limit_seconds": 600,
+        "elapsed_seconds": 600.1, "runtime_confirmation": "pending",
+    }}
+    task = SimpleNamespace(terminal_reason="runtime_projection_failed")
+    assert cancellation_reason(task, run) == "active_runtime_wake_limit"
+    assert confirmed_cancellation_details(task, run)["effective_limit_seconds"] == 600
+    assert confirmed_cancellation_details(task, run)["runtime_confirmation"] == "confirmed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+async def test_hermes_terminal_acknowledgement_is_normalized_in_adapter(monkeypatch, status):
+    from app.runtime.hermes_adapter import HermesRuntimeAdapter
+    from runtime_protocol.contracts import AgentRuntimeRequest, ContinuationBinding
+
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    monkeypatch.setattr(adapter.transport, "_json", AsyncMock(return_value={"status": "already_terminal", "upstream_status": status}))
+    result = await adapter.cancel(AgentRuntimeRequest(
+        run_id="run-1", thread_id="thread-1", definition_id="hermes_rag_agent", framework="hermes", builder_id="hermes_agent",
+        continuation=ContinuationBinding(binding_type="hermes_session", payload={"upstream_run_id": "upstream-1"}),
+    ))
+    assert result["status"] == status

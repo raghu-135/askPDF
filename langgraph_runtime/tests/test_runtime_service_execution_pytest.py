@@ -122,6 +122,32 @@ async def _read_events(client: httpx.AsyncClient, method: str, url: str, **kwarg
 
 
 @pytest.mark.asyncio
+async def test_task_execution_reaches_budget_review_without_total_duration_cancellation(monkeypatch):
+    class FakeAdapter(_FakeAdapter):
+        async def start(self, request, *, context, event_sink=None):
+            await asyncio.sleep(0.02)
+            return AgentRuntimeResult(
+                status="awaiting_human",
+                output={"answer": "Preserved partial research."},
+                interruption={"interrupt_id": "time-review", "type": "budget_review"},
+                continuation=ContinuationBinding("checkpoint", {"binding_id": "time-checkpoint"}),
+            )
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    monkeypatch.setattr("langgraph_runtime.api.deep_agent_budgets", lambda _: {"max_duration_seconds": 0.001})
+    payload = _payload("run-time-review")
+    payload["request"]["task_id"] = "task-time-review"
+    store = ExecutionStore()
+    app = create_app(execution_store=store, require_auth=False)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://runtime") as client:
+        events = await _read_events(client, "POST", "/v1/runs/start", json=payload)
+    assert events[-1]["result"]["status"] == "awaiting_human"
+    assert events[-1]["result"]["interruption"]["type"] == "budget_review"
+    assert events[-1]["result"]["output"]["answer"] == "Preserved partial research."
+    assert not any(event.get("kind") in {"run.failed", "run.cancelled"} for event in events)
+
+
+@pytest.mark.asyncio
 async def test_start_interrupt_resume_uses_serialized_interruption_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

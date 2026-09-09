@@ -28,8 +28,8 @@ export default function TraceDiagnosticsPanel({
   const primary = failures.find((failure) => failure.event_id === summary.primary_failure_event_id);
   return (
     <Stack spacing={0.75} sx={{ mb: 0.75 }}>
-      <Alert severity="error" icon={<ErrorOutlineIcon />} sx={{ '& .MuiAlert-message': { width: '100%' } }}>
-        <Typography variant="overline" sx={{ lineHeight: 1.2 }}>What failed</Typography>
+      <Alert severity={summary.failure_count > 0 ? 'error' : 'warning'} icon={<ErrorOutlineIcon />} sx={{ '& .MuiAlert-message': { width: '100%' } }}>
+        <Typography variant="overline" sx={{ lineHeight: 1.2 }}>{summary.failure_count > 0 ? 'What failed' : 'Why execution stopped'}</Typography>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{readable(summary.code)}</Typography>
         <Typography variant="body2">{summary.message}</Typography>
         <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.6, rowGap: 0.5 }}>

@@ -16,7 +16,7 @@ from langgraph_runtime.workflows.planning import worker_nodes_from_spec
 from langgraph_runtime.workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
-from langgraph_runtime.workflows.state import merge_parallel_deltas, WorkflowBudgetExceeded
+from langgraph_runtime.workflows.state import merge_parallel_deltas, merge_task_result_packets, WorkflowBudgetExceeded
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
@@ -79,8 +79,26 @@ async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: D
             if isinstance(chunk, dict):
                 latest_state = chunk
     except ChatRunCancellationRequested as exc:
+        if getattr(app, "checkpointer", None):
+            # Completed parallel workers can have durable pending writes even
+            # when the graph never emitted the next barrier's values snapshot.
+            snapshot = await app.aget_state(config)
+            latest_state = {**latest_state, **dict(snapshot.values or {})}
+        partial = {**latest_state, **dict(exc.state or {})}
+        for key, reducer in (
+            ("runtime_artifacts", merge_parallel_deltas),
+            ("worker_result_packets", merge_parallel_deltas),
+            ("task_result_packets", merge_task_result_packets),
+        ):
+            if key in latest_state or key in exc.state:
+                partial[key] = reducer(latest_state.get(key) or [], exc.state.get(key) or [])
+        partial["runtime_artifact_contents"] = {
+            **dict(latest_state.get("runtime_artifact_contents") or {}),
+            **dict(exc.state.get("runtime_artifact_contents") or {}),
+        }
+        latest_state = partial
         await _attach_budget_snapshot(latest_state, config)
-        exc.state = {**latest_state, **dict(exc.state or {})}
+        exc.state = latest_state
         raise
     except Exception as exc:
         await _attach_budget_snapshot(latest_state, config)

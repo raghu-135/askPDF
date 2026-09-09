@@ -21,7 +21,6 @@ def hermes_budget_configuration(monkeypatch):
         "MAX_DURATION_MS",
         "MAX_OUTPUT_CHARS",
         "MAX_EVENT_COUNT",
-        "WAKE_LIMIT_SECONDS",
     ):
         monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
 

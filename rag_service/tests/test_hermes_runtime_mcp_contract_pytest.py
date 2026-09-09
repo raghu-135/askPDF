@@ -74,7 +74,7 @@ def hermes_runtime_configuration(monkeypatch):
         monkeypatch.setenv(name, value)
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
-        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT", "WAKE_LIMIT_SECONDS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT",
     ):
         monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
 
@@ -113,11 +113,10 @@ def test_environment_cannot_override_frozen_profile_tool_allowlist(monkeypatch):
     assert validation["runtime_metadata"]["allowed_tool_ids"] == ["search_documents"]
 
 
-def test_stream_timeout_uses_frozen_task_duration_not_shared_read_timeout(monkeypatch):
+def test_stream_idle_timeout_is_independent_of_research_time_budget(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")
 
     assert _upstream_timeout().read == 30
-    assert _upstream_timeout(300).read == 300
 
 
 def test_runtime_errors_preserve_safe_message_and_sanitized_details():

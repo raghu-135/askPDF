@@ -7,7 +7,7 @@ from app.runtime.budgets import apply_deep_agent_env_overrides, deep_agent_budge
 def configured_common_budgets(monkeypatch):
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
-        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT", "WAKE_LIMIT_SECONDS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT",
         "SUBAGENT_TIMEOUT_MS", "DISPATCH_TIMEOUT_MS", "WORKER_TIMEOUT_MS", "WEB_WORKER_TIMEOUT_MS",
     ):
         monkeypatch.setenv(f"DEEP_AGENT_{suffix}", "7200000" if suffix == "MAX_DURATION_MS" else "100")
@@ -46,3 +46,13 @@ def test_missing_budget_env_fails_fast(monkeypatch):
     monkeypatch.delenv("DEEP_AGENT_MAX_EVENT_COUNT", raising=False)
     with pytest.raises(ValueError, match="DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT or DEEP_AGENT_MAX_EVENT_COUNT is required"):
         deep_agent_budgets("langgraph")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "hermes"])
+def test_new_environment_resolution_does_not_mutate_saved_task_limits(monkeypatch, framework):
+    monkeypatch.setenv("DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS", "600")
+    monkeypatch.setenv(f"DEEP_AGENT_{framework.upper()}_MAX_ACTIVE_RUNTIME_MS", "${DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS}")
+    saved = deep_agent_budgets(framework)
+    monkeypatch.setenv("DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS", "3600")
+    assert deep_agent_budgets(framework)["max_active_runtime_ms"] == 3600
+    assert saved["max_active_runtime_ms"] == 600

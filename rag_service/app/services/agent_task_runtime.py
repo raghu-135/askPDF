@@ -17,7 +17,7 @@ from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
-from app.services.agent_run_cancellation import confirm_task_cancellation, request_task_cancellation
+from app.services.agent_run_cancellation import request_task_cancellation
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
@@ -46,7 +46,6 @@ from app.runtime.catalog import (
 )
 from app.runtime.registry import RuntimeRegistry, adapter_for_definition, get_runtime_registry
 from app.runtime.builder_registry import builder_for_definition
-from app.runtime.operational_limits import positive_float_value
 from app.runtime.task_results import normalize_runtime_task_result
 from app.runtime.behavior import (
     continuation_is_linked,
@@ -481,72 +480,6 @@ async def _heartbeat(task_id: str, worker_id: str) -> None:
         await asyncio.sleep(HEARTBEAT_SECONDS)
         if not await tasks.heartbeat_task(task_id, worker_id, lease_seconds=LEASE_SECONDS):
             return
-
-
-async def _contain_wake_timeout(task_id: str, *, reason: str) -> None:
-    """Stop a timed-out remote operation without making a second attempt.
-
-    The task-worker wake limit bounds how long a product worker may wait for
-    an external SSE operation.  It is not safe to requeue the task after that
-    boundary: the runtime may still own the original operation.  Queueing it
-    would let another worker send ``continue`` for an execution that is still
-    active and turn a recoverable timeout into a duplicate-operation failure.
-    """
-
-    task = await tasks.get_task(task_id)
-    run = await tasks.get_task_run(task_id)
-    if task is None or run is None:
-        await tasks.fail_invalid_runtime_claim(
-            task_id,
-            code="runtime_wake_timeout_identity_invalid",
-            details={"run_present": run is not None},
-        )
-        return
-
-    runtime_started = bool((run.run_metadata_json or {}).get("runtime_started") is True)
-    if not runtime_started:
-        await tasks.fail_invalid_runtime_claim(
-            task_id,
-            code="runtime_wake_timeout_before_start",
-            details={"run_id": str(run.id), "reason": reason},
-        )
-        return
-
-    await tasks.set_task_runtime_status(
-        task_id,
-        AgentTaskStatus.CANCELLING.value,
-        phase="runtime_wake_timeout_cancelling",
-        reason=reason,
-    )
-    try:
-        cancellation = await request_task_cancellation(task, run)
-    except AgentRuntimeError as exc:
-        await tasks.mark_runtime_projection_recovery_required(
-            task_id,
-            str(run.id),
-            projection={},
-            error={
-                "code": "runtime_wake_timeout_cancellation_failed",
-                "message": str(exc)[:1000],
-                "retryable": False,
-                "cause": exc.to_dict(),
-            },
-        )
-        logger.exception(
-            "Timed-out task could not be cancelled; preserving recovery-required state | task_id=%s run_id=%s",
-            task_id,
-            run.id,
-        )
-        return
-
-    if cancellation.get("runtime_confirmation") == "terminal":
-        await confirm_task_cancellation(task, run, result=cancellation)
-    else:
-        logger.warning(
-            "Timed-out task cancellation is pending; task will remain cancelling | task_id=%s run_id=%s",
-            task_id,
-            run.id,
-        )
 
 
 async def execute_claimed_task(task_id: str, worker_id: str) -> None:
@@ -1280,36 +1213,10 @@ async def run_task_worker(
                         },
                     )
                     continue
-                limits = ((getattr(task, "config_json", None) or {}).get("limits") or {})
-                wake_limit_value = limits.get("wake_limit_seconds")
-                if wake_limit_value is None:
-                    await tasks.fail_invalid_runtime_claim(
-                        task.id,
-                        code="runtime_task_configuration_invalid",
-                        details={"missing": "limits.wake_limit_seconds"},
-                    )
-                    continue
-                try:
-                    wake_limit = positive_float_value(
-                        wake_limit_value,
-                        name="wake_limit_seconds",
-                    )
-                except (TypeError, ValueError) as exc:
-                    await tasks.fail_invalid_runtime_claim(
-                        task.id,
-                        code="runtime_task_configuration_invalid",
-                        details={
-                            "field": "limits.wake_limit_seconds",
-                            "message": str(exc),
-                        },
-                    )
-                    continue
-                await asyncio.wait_for(execute_claimed_task(task.id, worker_id), timeout=wake_limit)
-            except asyncio.TimeoutError:
-                await _contain_wake_timeout(
-                    task.id,
-                    reason="budget_boundary" if await tasks.budget_boundary(task.id) else "active_runtime_wake_limit",
-                )
+                # Research time is a tranche dimension, just like calls and
+                # tokens. Its runtime-owned safe boundary creates budget review;
+                # a product wall-clock timer must not cancel that continuation.
+                await execute_claimed_task(task.id, worker_id)
             except Exception:
                 logger.exception("Task runner failed before task execution could be contained | task_id=%s", task.id)
                 with suppress(Exception):

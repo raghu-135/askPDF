@@ -10,6 +10,7 @@ from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeOperationId
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.events import create_runtime_event
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
+from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
 
 
 def _request(task: Any, run: Any) -> AgentRuntimeRequest:
@@ -72,7 +73,7 @@ async def request_task_cancellation(
         "run_id": str(run.id),
         "runtime_status": upstream_status or None,
         "runtime_confirmation": (
-            "terminal" if upstream_status in {"completed", "failed", "cancelled", "canceled", "no_continuation"}
+            "terminal" if upstream_status in {"completed", "failed", "cancelled", "canceled"}
             else "pending"
         ),
     }
@@ -88,22 +89,29 @@ async def confirm_task_cancellation(
     """Atomically project one authoritative runtime cancellation."""
 
     from app.services import agent_task_repository as tasks
-    from app.services.agent_runtime_reconciliation import record_terminal_result
+    from app.services.agent_runtime_reconciliation import record_terminal_result, reconcile_run_by_id
+
+    status = str((result or {}).get("runtime_status") or (result or {}).get("status") or "")
+    if status in {"completed", "failed"}:
+        # An acknowledgement of an already terminal execution is not evidence
+        # of cancellation. Fetch/project its real output, including task deltas.
+        return await reconcile_run_by_id(str(run.id))
+    if status not in {"cancelled", "canceled"}:
+        raise ValueError("runtime cancellation requires confirmed cancelled status")
 
     cancelled_result = dict(result or {})
-    cancelled_result["status"] = "cancelled"
-    cancelled_result.setdefault(
-        "error",
-        {"code": "run_cancelled", "message": "Runtime cancellation confirmed", "retryable": False},
-    )
     event_id = terminal_event_id or str(cancelled_result.get("terminal_event_id") or f"{run.id}:cancelled")
     await record_terminal_result(run, cancelled_result, terminal_event_id=event_id)
+    # Keep the runtime snapshot untouched (its hash is used for replay).
+    error = dict(cancelled_result.get("error") or {
+        "code": "run_cancelled", "message": "Runtime cancellation confirmed", "retryable": False,
+    })
     terminal = create_runtime_event(
         event_id=event_id,
         run_id=str(run.id),
         sequence=1,
         kind="run.cancelled",
-        payload={"status": "cancelled", "error": dict(cancelled_result["error"])},
+        payload={"status": "cancelled", "error": error, "cancellation": confirmed_cancellation_details(task, run)},
     )
     finalized = await tasks.finalize_task_run(
         str(task.id),
@@ -111,9 +119,9 @@ async def confirm_task_cancellation(
         run_status="cancelled",
         task_status="cancelled",
         metrics=dict(getattr(run, "metrics_json", None) or {}),
-        error=dict(cancelled_result["error"]),
+        error=error,
         debug_trace=dict(getattr(run, "debug_trace_json", None) or {}),
-        terminal_reason="cancelled_by_user",
+        terminal_reason=cancellation_reason(task, run),
         terminal_event=terminal,
     )
     await tasks.complete_pending_cancel_commands(
