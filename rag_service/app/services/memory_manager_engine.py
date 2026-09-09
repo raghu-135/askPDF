@@ -83,8 +83,12 @@ from app.mcp.result_decoder import DecodedMCPResult, decode_mcp_result
 
 logger = logging.getLogger(__name__)
 
-MAX_MEMORY_MANAGER_TOOL_CALLS = 4
-MAX_MEMORY_MANAGER_WEB_CALLS = 2
+def memory_manager_tool_call_limit() -> int:
+    return int(os.environ["MEMORY_MANAGER_MAX_TOOL_CALLS"])
+
+
+def memory_manager_web_call_limit() -> int:
+    return int(os.environ["MEMORY_MANAGER_MAX_WEB_CALLS"])
 
 class MemoryManagerError(ValueError):
     code = "memory_curator_error"
@@ -434,7 +438,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                 "web_search_decision": req.web_search_decision.model_dump(mode="json") if req.web_search_decision else None,
                 "curator_mode": req.mode,
                 "web_call_count": 0,
-                "web_call_limit": MAX_MEMORY_MANAGER_WEB_CALLS,
+                "web_call_limit": memory_manager_web_call_limit(),
             },
         }
     }
@@ -580,7 +584,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         if supports_tools:
             bound = llm.bind_tools(tools)
             loop_count = 0
-            while loop_count < MAX_MEMORY_MANAGER_TOOL_CALLS + MAX_MEMORY_MANAGER_WEB_CALLS:
+            while loop_count < memory_manager_tool_call_limit() + memory_manager_web_call_limit():
                 loop_count += 1
                 response = await invoke_with_retry(bound.ainvoke, messages)
                 calls = list(getattr(response, "tool_calls", None) or [])
@@ -589,7 +593,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                 messages.append(response)
                 for call in calls:
                     is_web_call = str(call.get("name") or "") == "internet_search"
-                    if not is_web_call and tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
+                    if not is_web_call and tool_call_count >= memory_manager_tool_call_limit():
                         break
                     if not is_web_call:
                         tool_call_count += 1
@@ -618,7 +622,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                         content=str(output),
                         tool_call_id=str(call.get("id") or f"curator-tool-{loop_count}"),
                     ))
-                if tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
+                if tool_call_count >= memory_manager_tool_call_limit():
                     messages.append(SystemMessage(content=tool_limit_prompt))
                     response = await invoke_with_retry(llm.ainvoke, messages)
                     break

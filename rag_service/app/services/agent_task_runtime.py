@@ -24,7 +24,7 @@ from app.services.agent_task_runtime_projection import (
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
-from app.services.agent_task_maintenance import MAINTENANCE_INTERVAL_SECONDS, run_task_maintenance
+from app.services.agent_task_maintenance import task_maintenance_interval_seconds, run_task_maintenance
 from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import (
     AgentRuntimeRequest,
@@ -57,9 +57,20 @@ from app.runtime.behavior import (
 
 logger = logging.getLogger(__name__)
 grounding_evaluator = AgentGroundingEvaluator()
-LEASE_SECONDS = 60
-HEARTBEAT_SECONDS = 15
-CANCELLATION_RETRY_SECONDS = 2.0
+def _configured_seconds(name: str) -> float:
+    return float(os.environ[name])
+
+
+def task_lease_seconds() -> int:
+    return int(_configured_seconds("AGENT_RUNTIME_LEASE_SECONDS"))
+
+
+def task_heartbeat_seconds() -> float:
+    return _configured_seconds("AGENT_TASK_HEARTBEAT_INTERVAL_SECONDS")
+
+
+def cancellation_retry_seconds() -> float:
+    return _configured_seconds("AGENT_TASK_CANCELLATION_RETRY_SECONDS")
 
 
 def _task_runtime_operation_id(task: Any, run: Any) -> str:
@@ -477,8 +488,8 @@ async def ensure_task_run(task_id: str):
 
 async def _heartbeat(task_id: str, worker_id: str) -> None:
     while True:
-        await asyncio.sleep(HEARTBEAT_SECONDS)
-        if not await tasks.heartbeat_task(task_id, worker_id, lease_seconds=LEASE_SECONDS):
+        await asyncio.sleep(task_heartbeat_seconds())
+        if not await tasks.heartbeat_task(task_id, worker_id, lease_seconds=task_lease_seconds()):
             return
 
 
@@ -516,10 +527,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             await tasks.defer_task_lease(
                 task_id,
                 worker_id,
-                retry_seconds=CANCELLATION_RETRY_SECONDS,
+                retry_seconds=cancellation_retry_seconds(),
             )
         else:
-            await tasks.release_task_lease(task_id, worker_id, lease_seconds=LEASE_SECONDS)
+            await tasks.release_task_lease(task_id, worker_id, lease_seconds=task_lease_seconds())
         return
     run = await ensure_task_run(task_id)
     task = await tasks.get_task(task_id)
@@ -549,7 +560,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     thread = await get_thread(task.thread_id) if task else None
     if task is None or thread is None:
         await tasks.complete_task(task_id, status=AgentTaskStatus.FAILED.value, reason="task_thread_missing")
-        await tasks.release_task_lease(task_id, worker_id, lease_seconds=LEASE_SECONDS)
+        await tasks.release_task_lease(task_id, worker_id, lease_seconds=task_lease_seconds())
         return
 
     config = dict(task.config_json or {})
@@ -1154,7 +1165,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         heartbeat.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat
-        await tasks.release_task_lease(task.id, worker_id, lease_seconds=LEASE_SECONDS)
+        await tasks.release_task_lease(task.id, worker_id, lease_seconds=task_lease_seconds())
 
 
 async def run_task_worker(
@@ -1167,11 +1178,11 @@ async def run_task_worker(
     shutdown = stop_event or asyncio.Event()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     await run_task_maintenance()
-    next_maintenance = time.monotonic() + MAINTENANCE_INTERVAL_SECONDS
+    next_maintenance = time.monotonic() + task_maintenance_interval_seconds()
     while True:
         if shutdown.is_set():
             return
-        task = await tasks.claim_next_task(worker_id, lease_seconds=LEASE_SECONDS)
+        task = await tasks.claim_next_task(worker_id, lease_seconds=task_lease_seconds())
         if task is not None:
             try:
                 run = await tasks.get_task_run(task.id)
@@ -1238,4 +1249,4 @@ async def run_task_worker(
         if time.monotonic() >= next_maintenance:
             with suppress(Exception):
                 await run_task_maintenance()
-            next_maintenance = time.monotonic() + MAINTENANCE_INTERVAL_SECONDS
+            next_maintenance = time.monotonic() + task_maintenance_interval_seconds()

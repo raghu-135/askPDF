@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Mapping
 
 
@@ -12,19 +13,27 @@ LIMIT_KEYS = {
     "tool_calls": "max_tool_calls",
     "elapsed_active_ms": "max_active_runtime_ms",
 }
-DEFAULT_LIMITS = {
-    "model_calls": 10_000,
-    "model_tokens": 500_000,
-    "tool_calls": 100,
-    "elapsed_active_ms": 3_600_000,
+ENV_LIMIT_NAMES = {
+    "model_calls": "DEEP_AGENT_MAX_MODEL_CALLS",
+    "model_tokens": "DEEP_AGENT_MAX_MODEL_TOKENS",
+    "tool_calls": "DEEP_AGENT_MAX_TOOL_CALLS",
+    "elapsed_active_ms": "DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS",
 }
 
 
 def tranche_limits(limits: Mapping[str, Any] | None) -> dict[str, int]:
     source = limits if isinstance(limits, Mapping) else {}
+    resolved: dict[str, int] = {}
+    for key in RESEARCH_BUDGET_KEYS:
+        configured = source.get(key) or source.get(LIMIT_KEYS[key])
+        if configured is None:
+            configured = os.environ.get(ENV_LIMIT_NAMES[key])
+        if configured is None or (isinstance(configured, str) and not configured.strip()):
+            raise ValueError(f"{ENV_LIMIT_NAMES[key]} or per-task {LIMIT_KEYS[key]} is required")
+        resolved[key] = max(1, int(configured))
     return {
-        key: max(1, int(source.get(key) or source.get(LIMIT_KEYS[key]) or default))
-        for key, default in DEFAULT_LIMITS.items()
+        key: resolved[key]
+        for key in RESEARCH_BUDGET_KEYS
     }
 
 

@@ -242,6 +242,21 @@ _RUNTIME_INTS = (
     "AGENT_RUNTIME_RECOVERY_BATCH_SIZE",
 )
 
+_CONTROL_PLANE_FLOATS = (
+    "AGENT_TASK_HEARTBEAT_INTERVAL_SECONDS",
+    "AGENT_TASK_CANCELLATION_RETRY_SECONDS",
+    "AGENT_TASK_MAINTENANCE_INTERVAL_SECONDS",
+    "MEMORY_MAINTENANCE_INTERVAL_SECONDS",
+)
+_CONTROL_PLANE_INTS = (
+    "RUNTIME_OPERATION_LEASE_SECONDS",
+    "TASK_CHECKPOINT_RETENTION_DAYS",
+    "AGENT_TASK_MAINTENANCE_BATCH_SIZE",
+    "MEMORY_MAINTENANCE_BATCH_SIZE",
+    "MEMORY_MANAGER_MAX_TOOL_CALLS",
+    "MEMORY_MANAGER_MAX_WEB_CALLS",
+)
+
 
 def validate_runtime_environment(
     *,
@@ -266,6 +281,11 @@ def validate_runtime_environment(
                 _positive_float(name, values, errors)
         for name in _RUNTIME_INTS:
             _positive_int(name, values, errors)
+        if service == "control_plane":
+            for name in _CONTROL_PLANE_FLOATS:
+                _positive_float(name, values, errors)
+            for name in _CONTROL_PLANE_INTS:
+                _positive_int(name, values, errors)
         _positive_int("AGENT_RUNTIME_LEASE_SECONDS", values, errors)
         _positive_int("HERMES_RUNTIME_WORKERS", values, errors) if service == "hermes" else None
         _boolean("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", values, errors) if service == "langgraph" else None

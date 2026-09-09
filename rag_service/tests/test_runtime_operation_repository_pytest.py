@@ -63,9 +63,10 @@ def _patch_claim_dependencies(monkeypatch, results):
     monkeypatch.setattr(repository, "select", lambda _model: _Statement())
 
 
-def test_runtime_operation_lease_defaults_to_five_minutes(monkeypatch):
+def test_runtime_operation_lease_requires_configuration(monkeypatch):
     monkeypatch.delenv("RUNTIME_OPERATION_LEASE_SECONDS", raising=False)
-    assert repository.runtime_operation_lease_seconds() == 300
+    with pytest.raises(RuntimeError, match="RUNTIME_OPERATION_LEASE_SECONDS is required"):
+        repository.runtime_operation_lease_seconds()
 
 
 def test_runtime_operation_lease_rejects_invalid_values(monkeypatch):

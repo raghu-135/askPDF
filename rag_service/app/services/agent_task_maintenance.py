@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import timedelta
 
 from app.services import agent_task_repository as tasks
@@ -12,18 +13,27 @@ from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
 
 
 logger = logging.getLogger(__name__)
-CHECKPOINT_RETENTION_DAYS = 7
-MAINTENANCE_INTERVAL_SECONDS = 60.0
-MAINTENANCE_BATCH_SIZE = 100
 _maintenance_lock = asyncio.Lock()
 
 
-async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> dict[str, int]:
+def task_maintenance_interval_seconds() -> float:
+    return float(os.environ["AGENT_TASK_MAINTENANCE_INTERVAL_SECONDS"])
+
+
+def task_maintenance_batch_size() -> int:
+    return int(os.environ["AGENT_TASK_MAINTENANCE_BATCH_SIZE"])
+
+
+def checkpoint_retention_days() -> int:
+    return int(os.environ["TASK_CHECKPOINT_RETENTION_DAYS"])
+
+
+async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, int]:
     """Run bounded, idempotent maintenance without overlapping in one process."""
     if _maintenance_lock.locked():
         return {"skipped": 1}
     async with _maintenance_lock:
-        bounded = max(1, min(int(batch_size), 500))
+        bounded = max(1, min(int(batch_size if batch_size is not None else task_maintenance_batch_size()), 500))
         expired_tasks = await tasks.expire_stale_tasks()
         recovered_leases = await tasks.release_stale_task_leases(limit=bounded)
         deleted_tasks = 0
@@ -57,7 +67,7 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
 
         deleted_checkpoints = 0
         runtime_runs = await tasks.list_terminal_task_runtime_runs_before(
-            utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
+            utc_now() - timedelta(days=checkpoint_retention_days()),
             limit=bounded,
         )
         from app.runtime.cleanup import cleanup_runs

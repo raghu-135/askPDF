@@ -1832,7 +1832,7 @@ async def test_restarted_runner_resubmits_reclaimed_cancellation_without_termina
     defer_lease.assert_awaited_once_with(
         task.id,
         "replacement-worker",
-        retry_seconds=agent_task_runtime.CANCELLATION_RETRY_SECONDS,
+        retry_seconds=agent_task_runtime.cancellation_retry_seconds(),
     )
 
 

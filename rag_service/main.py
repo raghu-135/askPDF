@@ -119,7 +119,7 @@ async def _probe_runtime_readiness(*, startup: bool = False) -> None:
 
 
 async def _runtime_readiness_loop(stop: asyncio.Event) -> None:
-    interval = max(1.0, float(os.getenv("AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS", "30")))
+    interval = float(os.environ["AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS"])
     while not stop.is_set():
         await _probe_runtime_readiness()
         try:
@@ -156,8 +156,8 @@ def _record_agent_task_worker_completion(app: FastAPI, task: asyncio.Task) -> No
 async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
     """Incrementally retry pending and failed memory indexes."""
 
-    interval = max(30, int(os.environ.get("MEMORY_MAINTENANCE_INTERVAL_SECONDS", "300")))
-    batch_size = max(1, min(500, int(os.environ.get("MEMORY_MAINTENANCE_BATCH_SIZE", "100"))))
+    interval = float(os.environ["MEMORY_MAINTENANCE_INTERVAL_SECONDS"])
+    batch_size = int(os.environ["MEMORY_MAINTENANCE_BATCH_SIZE"])
     while not stop_event.is_set():
         try:
             await retry_pending_memory_indexes(limit=batch_size)
@@ -402,7 +402,7 @@ async def product_readiness():
     try:
         freshness_window = max(
             5.0,
-            3.0 * float(os.getenv("AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS", "30")),
+            3.0 * float(os.environ["AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS"]),
         )
     except (TypeError, ValueError):
         freshness_window = 5.0

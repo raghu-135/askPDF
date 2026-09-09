@@ -21,7 +21,9 @@ class RuntimeOperationConflict(Exception):
 
 
 def runtime_operation_lease_seconds() -> int:
-    raw = os.getenv("RUNTIME_OPERATION_LEASE_SECONDS", "300")
+    raw = os.environ.get("RUNTIME_OPERATION_LEASE_SECONDS")
+    if raw is None or not raw.strip():
+        raise RuntimeError("RUNTIME_OPERATION_LEASE_SECONDS is required")
     try:
         value = int(raw)
     except ValueError as exc:
