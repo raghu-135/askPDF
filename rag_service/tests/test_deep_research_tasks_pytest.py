@@ -651,20 +651,14 @@ async def test_product_result_review_is_runtime_independent_and_idempotent(
     )
 
     assert duplicate is False
-    assert resolved.status == ("completed" if decision == "accept" else "awaiting_approval")
+    assert resolved.status == ("completed" if decision == "accept" else "queued")
     stored_run = await repository.get_task_run(task.id)
     assert stored_run.status == "completed"
     if decision == "retry_with_input":
-        assert stored_run.pending_interrupt_json["type"] == "retry_start_approval"
-        assert stored_run.pending_interrupt_json["status"] == "pending"
-        approved, duplicate, linked = await repository.respond_to_retry_start_approval(
-            task.id, run_id=run.id,
-            interrupt_id=stored_run.pending_interrupt_json["interrupt_id"],
-            expected_version=resolved.version, decision="approve",
-            idempotency_key="retry-start-once",
-        )
-        assert approved.status == "queued" and duplicate is False and linked is True
-        assert (await repository.get_task_run(task.id)).pending_interrupt_json["status"] == "resolved"
+        assert stored_run.pending_interrupt_json["type"] == "incomplete_result_review"
+        assert stored_run.pending_interrupt_json["status"] == "resolved"
+        assert resolved.current_phase == "result_review_retry_queued"
+        assert resolved.config_json["result_review_context"][-1]["followup_input"] == "Address the missing mechanism."
     else:
         assert stored_run.pending_interrupt_json["decision"]["action"] == decision
     run_events = await AgentWorkflowRepository().list_run_events(run.id)
@@ -704,6 +698,7 @@ async def test_budget_review_continue_resets_only_tranche_and_is_repeatable(
     )
     assert duplicate is False and linked is False
     assert continued.status == "queued"
+    assert (await AgentWorkflowRepository().get_run(run.id)).status == "running"
     assert continued.budgets_json["tranche_index"] == 2
     assert continued.budgets_json["tranche_usage"]["model_calls"] == 0
     assert continued.budgets_json["lifetime_usage"]["model_calls"] == 2

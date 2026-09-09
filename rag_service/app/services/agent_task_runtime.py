@@ -333,7 +333,7 @@ async def ensure_task_run(task_id: str):
     if task is None:
         raise ValueError("task_not_found")
     active = await tasks.get_task_run(task_id)
-    if active is not None and active.status in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
+    if active is not None and active.status not in tasks.TERMINAL_TASK_RUN_STATUSES:
         metadata = dict(active.run_metadata_json or {})
         binding = dict(active.runtime_binding_json or {})
         binding_payload = dict(binding.get("payload") or {})
@@ -342,6 +342,9 @@ async def ensure_task_run(task_id: str):
         # still false even though the product run owns an upstream execution.
         # Retire the partial attempt after admitted cancellation and let the
         # normal path allocate a new immutable run identity.
+        if active.status not in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
+            setattr(active, "_fresh_runtime_run", metadata.get("runtime_started") is False)
+            return active
         if metadata.get("runtime_started") is False and binding_payload:
             definition = definition_from_run(active)
             adapter = adapter_for_definition(definition)
@@ -399,6 +402,11 @@ async def ensure_task_run(task_id: str):
         },
     )
     config = dict(resolved.get("config") or {})
+    review_context = [
+        dict(value) for value in (task.config_json or {}).get("result_review_context") or []
+        if isinstance(value, Mapping)
+    ]
+    retry_context = review_context[-1] if review_context else {}
     task_policy = dict(config.get("task_policy") or {})
     task_policy["limits"] = dict((task.config_json or {}).get("limits") or {})
     task_policy["profiles"] = list((task.config_json or {}).get("enabled_profiles") or [])
@@ -442,6 +450,8 @@ async def ensure_task_run(task_id: str):
             "agent_task_id": task.id,
             "runtime_started": False,
             "course_corrections": linked_corrections,
+            "result_review_source_run_id": retry_context.get("source_run_id"),
+            "result_review_idempotency_key": retry_context.get("idempotency_key"),
             "runtime_behavior": runtime_behavior,
             "runtime_capability": capability_resolution.capabilities.to_dict(),
         },
@@ -615,6 +625,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         if isinstance(value, Mapping)
     ]
     followup_input = str((review_context[-1] if review_context else {}).get("followup_input") or "").strip()
+    retry_context = review_context[-1] if review_context else {}
     runtime_question = task.objective
     if followup_input:
         runtime_question = f"{task.objective}\n\nResult review follow-up: {followup_input}"

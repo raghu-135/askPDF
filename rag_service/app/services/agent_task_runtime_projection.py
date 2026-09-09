@@ -446,7 +446,9 @@ async def apply_neutral_task_completion(
                     "type": "budget_review", "response_operation": "task.budget_review.respond",
                     "status": "pending", "title": "Research budget reached",
                     "allowed_actions": ["continue", "accept_partial", "steer"],
-                    "continuation_semantics": "linked_run", "preserves_run_id": False,
+                    "continuation_semantics": "checkpoint_same_run", "preserves_run_id": True,
+                    "runtime_operation": "task.budget_review.respond",
+                    "continuation_binding_present": bool(run.runtime_binding_json),
                     "provisional_artifact_id": final_artifact_id,
                     "provisional_answer": str(task_result.get("text") or ""),
                     "warnings": warnings, "gaps": gaps,
@@ -491,6 +493,9 @@ async def apply_neutral_task_completion(
                     causal_key=f"run:{agent_run_id}:{disposition}:{budget['tranche_index'] if disposition == 'budget_review' else operation_id}",
                     payload={
                         "interrupt_id": pending["interrupt_id"], "warnings": warnings,
+                        "runtime_operation": pending.get("runtime_operation"),
+                        "continuation_semantics": pending.get("continuation_semantics"),
+                        "continuation_binding_present": pending.get("continuation_binding_present"),
                         "gaps": gaps, "exhausted_dimensions": dimensions,
                     },
                 )

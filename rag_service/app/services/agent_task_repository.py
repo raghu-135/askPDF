@@ -1900,8 +1900,6 @@ async def respond_to_result_review(
                 raise AgentTaskConflict("task_run_missing", "Agent task run not found")
             pending = dict(run.pending_interrupt_json or {})
             previous = pending.get("decision") if isinstance(pending.get("decision"), dict) else {}
-            if pending.get("type") == "retry_start_approval" and pending.get("result_review_idempotency_key") == idempotency_key:
-                return task, True
             if pending.get("status") != "pending":
                 if previous.get("idempotency_key") == idempotency_key:
                     return task, True
@@ -2020,6 +2018,7 @@ async def respond_to_result_review(
                     "source_artifact_id": pending.get("provisional_artifact_id"),
                     "followup_input": followup_input,
                     "review_round": pending.get("review_round"),
+                    "idempotency_key": idempotency_key,
                 })
                 config["result_review_context"] = review_context[-5:]
                 replace_jsonb_field(task, "config_json", config)
@@ -2036,28 +2035,13 @@ async def respond_to_result_review(
                     todo.progress = 0
                     todo.version += 1
                     todo.updated_at = now
-                retry_interrupt_id = f"retry-start:{run.id}:{idempotency_key}"
-                replace_jsonb_field(run, "pending_interrupt_json", {
-                    "interrupt_id": retry_interrupt_id,
-                    "type": "retry_start_approval",
-                    "kind": "approval",
-                    "status": "pending",
-                    "response_operation": "task.retry_start.respond",
-                    "title": "Approve redirected retry",
-                    "body": "The redirected research is ready to start as a new attempt.",
-                    "allowed_actions": ["approve", "reject"],
-                    "source_run_id": run.id,
-                    "source_interrupt_id": interrupt_id,
-                    "followup_input": followup_input,
-                    "result_review_idempotency_key": idempotency_key,
-                })
-                task.status = AgentTaskStatus.AWAITING_APPROVAL.value
-                task.current_phase = "awaiting_retry_start_approval"
-                task.terminal_reason = "retry_start_approval_required"
-                task.queued_at = None
+                task.status = AgentTaskStatus.QUEUED.value
+                task.current_phase = "result_review_retry_queued"
+                task.terminal_reason = None
+                task.queued_at = now
                 task.completed_at = None
-                task.expires_at = now + timedelta(days=7)
-                event_kind = "task.retry_start_approval_requested"
+                task.expires_at = now + timedelta(hours=24)
+                event_kind = "task.result_review_retry_queued"
             task.lease_owner = None
             task.lease_expires_at = None
             task.version += 1
@@ -2073,81 +2057,6 @@ async def respond_to_result_review(
             )
         await session.refresh(task)
         return task, False
-
-
-async def respond_to_retry_start_approval(
-    task_id: str,
-    *,
-    run_id: str,
-    interrupt_id: str,
-    expected_version: int,
-    decision: str,
-    idempotency_key: str,
-) -> tuple[AgentTask, bool, bool]:
-    """Authorize or reject creation of a linked retry run."""
-
-    if decision not in {"approve", "reject"}:
-        raise AgentTaskConflict("retry_start_decision_invalid", "Unsupported retry-start decision")
-    async with async_session_maker() as session:
-        async with session.begin():
-            task = (await session.execute(
-                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
-            )).scalar_one_or_none()
-            run = (await session.execute(
-                select(AgentRun).where(AgentRun.id == run_id, AgentRun.task_id == task_id).with_for_update()
-            )).scalar_one_or_none()
-            if task is None or run is None:
-                raise AgentTaskConflict("task_run_missing", "Agent task run not found")
-            pending = dict(run.pending_interrupt_json or {})
-            previous = dict(pending.get("decision") or {}) if isinstance(pending.get("decision"), dict) else {}
-            if pending.get("status") != "pending":
-                if previous.get("idempotency_key") == idempotency_key:
-                    if previous.get("action") != decision:
-                        raise AgentTaskConflict("retry_start_operation_conflict", "Retry-start decision conflicts with the original request", current_version=task.version)
-                    return task, True, previous.get("action") == "approve"
-                raise AgentTaskConflict("retry_start_already_resolved", "Retry-start approval is already resolved", current_version=task.version)
-            if task.version != expected_version:
-                raise AgentTaskConflict("task_version_conflict", "Task version is stale", current_version=task.version)
-            if task.active_run_id != run.id or task.status != AgentTaskStatus.AWAITING_APPROVAL.value:
-                raise AgentTaskConflict("retry_start_not_pending", "Retry-start approval is not pending", current_version=task.version)
-            if pending.get("type") != "retry_start_approval" or pending.get("interrupt_id") != interrupt_id:
-                raise AgentTaskConflict("retry_start_identity_mismatch", "Retry-start approval identity does not match", current_version=task.version)
-
-            now = utc_now()
-            pending["status"] = "resolved"
-            pending["resolved_at"] = now.isoformat()
-            pending["decision"] = {"action": decision, "idempotency_key": idempotency_key}
-            replace_jsonb_field(run, "pending_interrupt_json", pending)
-            if decision == "approve":
-                task.status = AgentTaskStatus.QUEUED.value
-                task.current_phase = "result_review_retry_queued"
-                task.queued_at = now
-                task.terminal_reason = None
-                task.completed_at = None
-                task.expires_at = now + timedelta(hours=24)
-                linked = True
-                event_kind = "task.retry_start_approved"
-            else:
-                task.status = AgentTaskStatus.COMPLETED.value
-                task.current_phase = AgentTaskStatus.COMPLETED.value
-                task.terminal_reason = "retry_start_rejected"
-                task.completed_at = now
-                task.expires_at = None
-                linked = False
-                event_kind = "task.retry_start_rejected"
-            task.lease_owner = None
-            task.lease_expires_at = None
-            task.version += 1
-            await _append_event(
-                session, task, "task.approval_resolved", agent_run_id=run.id,
-                payload={"interrupt_id": interrupt_id, "type": "retry_start_approval", "action": decision},
-            )
-            await _append_event(
-                session, task, event_kind, agent_run_id=run.id,
-                payload={"interrupt_id": interrupt_id, "decision": decision, "version": task.version},
-            )
-        await session.refresh(task)
-        return task, False, linked
 
 
 async def respond_to_budget_review(
@@ -2333,8 +2242,10 @@ async def create_budget_review(
                 "title": "Research budget reached",
                 "allowed_actions": ["continue", "accept_partial", "steer"],
                 "boundary_strategy": "safe_atomic_boundary",
-                "continuation_semantics": "linked_run",
-                "preserves_run_id": False,
+                "continuation_semantics": "checkpoint_same_run",
+                "preserves_run_id": True,
+                "runtime_operation": "task.budget_review.respond",
+                "continuation_binding_present": bool(run.runtime_binding_json),
                 "artifact_inheritance": "valid_artifacts",
                 "safe_boundary_latency": "after_active_workers",
                 "provisional_answer": str(provisional_answer or "").strip(),
@@ -2468,6 +2379,9 @@ async def submit_course_correction(
                 **correction,
                 "delivery_mode": delivery_mode,
                 "delivery_state": "accepted",
+                "runtime_operation": "task.course_correction.submit",
+                "continuation_semantics": "checkpoint_same_run" if delivery_mode == "same_run_safe_boundary" else "linked_run",
+                "continuation_binding_present": bool(run.runtime_binding_json),
                 "version": task.version,
             })
         await session.refresh(task)

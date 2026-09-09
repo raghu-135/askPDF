@@ -1288,7 +1288,7 @@ export interface AgentRunPendingInterrupt {
   node_id?: string | null;
   type?: string | null;
   kind?: 'approval' | 'interrupt' | string | null;
-  response_operation: 'run.resume' | 'run.approval.respond' | 'task.result_review.respond' | 'task.budget_review.respond' | 'task.retry_start.respond';
+  response_operation: 'run.resume' | 'run.approval.respond' | 'task.result_review.respond' | 'task.budget_review.respond';
   response_schema?: Record<string, any>;
   status?: InterruptStatusValue | string;
   requested_at?: string | null;
@@ -2562,20 +2562,6 @@ export async function respondToAgentTaskResultReview(
   },
 ): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean }> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/result-review/responses?${taskQuery(threadId)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) throw new Error(await readApiError(response));
-  return response.json();
-}
-
-export async function respondToAgentTaskRetryStart(
-  taskId: string,
-  threadId: string,
-  payload: { run_id: string; interrupt_id: string; expected_version: number; decision: 'approve' | 'reject' },
-): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean; approved: boolean }> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/retry-start/responses?${taskQuery(threadId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify(payload),

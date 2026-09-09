@@ -146,13 +146,6 @@ class AgentTaskResultReviewRequest(BaseModel):
         return self
 
 
-class AgentTaskRetryStartApprovalRequest(BaseModel):
-    run_id: str = Field(min_length=1, max_length=200)
-    interrupt_id: str = Field(min_length=1, max_length=300)
-    expected_version: int = Field(ge=1)
-    decision: Literal["approve", "reject"]
-
-
 class AgentTaskBudgetReviewRequest(BaseModel):
     run_id: str = Field(min_length=1, max_length=200)
     interrupt_id: str = Field(min_length=1, max_length=300)
