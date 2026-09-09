@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.agent.tool_registry import get_tool_contract_id
-from langgraph_runtime.models.llm import get_llm, runtime_limits
+from langgraph_runtime.models.llm import execution_model_client, get_llm, runtime_limits
 from langgraph_runtime.models.retry import is_retryable_model_error
 from langgraph_runtime.workflows.prompting import (
     build_evaluator_prompt,
@@ -241,12 +241,12 @@ class NodeRegistry:
                     "type": "task_pause",
                     "kind": "pause",
                     "response_operation": "run.resume",
-                    "allowed_actions": ["approve", "resume", "reject"],
+                    "allowed_actions": ["approve", "resume"],
                     "default_action": "approve",
                     "checkpoint_resume": True,
                 })
                 action = str((decision or {}).get("action") if isinstance(decision, dict) else decision or "")
-                if action not in {"approve", "resume", "reject"}:
+                if action not in {"approve", "resume"}:
                     raise AgentRuntimeError("runtime_interrupt_mismatch", "The task pause gate requires an approve or resume decision")
                 return {
                     "task_pause_requested": False,
@@ -619,7 +619,7 @@ class NodeRegistry:
 
     async def planner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_planner_prompt(state)
         if state.get("bypass_clarification"):
             prompt += (
@@ -713,7 +713,7 @@ class NodeRegistry:
 
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_router_prompt(state)
         bypass_clarification = bool(state.get("bypass_clarification"))
         if bypass_clarification:
@@ -1387,7 +1387,7 @@ class NodeRegistry:
 
     async def answer_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         revision_count = max(0, int(state.get("answer_revision_count") or 0))
         prompt = (
             "Review the draft answer against the user's request and the available evidence. "
@@ -1455,7 +1455,7 @@ class NodeRegistry:
 
     async def evidence_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_evaluator_prompt(state)
         response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
             state,
@@ -1554,7 +1554,7 @@ class NodeRegistry:
 
     async def retrieval_quality_grader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_retrieval_quality_prompt(state)
         response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,
@@ -1633,7 +1633,7 @@ class NodeRegistry:
 
     async def grounded_answer_verifier(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_grounded_answer_verifier_prompt(state)
         response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,
@@ -1702,7 +1702,7 @@ class NodeRegistry:
 
     async def replanner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"])
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = build_replanner_prompt(state)
         response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,

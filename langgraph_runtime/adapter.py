@@ -29,6 +29,7 @@ from runtime_protocol.events import create_runtime_event
 from langgraph_runtime.runtime_support.observability import normalize_runtime_event
 from langgraph_runtime.runtime_support.task_results import normalize_runtime_task_result
 from langgraph_runtime.bindings import issue_binding, resolve_binding
+from langgraph_runtime.models.llm import model_client_scope
 
 
 def _public_value(value: Any) -> Any:
@@ -531,8 +532,9 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         bridge = _event_bridge(request.run_id, event_sink)
         mcp_token = self._mcp_token(request)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            try:
-                result = await router_runtime.execute_compiled_rag_chat(
+            async with model_client_scope():
+                try:
+                    result = await router_runtime.execute_compiled_rag_chat(
                     request.thread_id,
                     context.request,
                     context.embedding_model,
@@ -548,10 +550,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     course_correction_reader=context.course_correction_reader,
                     course_correction_acknowledger=context.course_correction_acknowledger,
                     mcp_execution_context_token=mcp_token,
-                )
-            finally:
-                if bridge is not None:
-                    await bridge.drain()
+                    )
+                finally:
+                    if bridge is not None:
+                        await bridge.drain()
         return _result_from_graph(
             result,
             observed_plan_revision=self._observed_plan_revision(context),
@@ -603,14 +605,15 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         if bridge is not None:
             kwargs["execution_event_sink"] = bridge
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            try:
-                result = await router_runtime.resume_compiled_rag_chat(
-                    run, interrupt=dict(interrupt), checkpointer=checkpointer,
-                    mcp_execution_context_token=mcp_token, **kwargs
-                )
-            finally:
-                if bridge is not None:
-                    await bridge.drain()
+            async with model_client_scope():
+                try:
+                    result = await router_runtime.resume_compiled_rag_chat(
+                        run, interrupt=dict(interrupt), checkpointer=checkpointer,
+                        mcp_execution_context_token=mcp_token, **kwargs
+                    )
+                finally:
+                    if bridge is not None:
+                        await bridge.drain()
         return _result_from_graph(
             result,
             observed_plan_revision=self._observed_plan_revision(context),
@@ -652,8 +655,9 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
         bridge = _event_bridge(request.run_id, event_sink)
         mcp_token = self._mcp_token(request)
         async with checkpointing.open_agent_checkpointer() as checkpointer:
-            try:
-                result = await router_runtime.continue_compiled_rag_chat(
+            async with model_client_scope():
+                try:
+                    result = await router_runtime.continue_compiled_rag_chat(
                     run,
                     checkpointer=checkpointer,
                     trace_recorder=context.trace_recorder,
@@ -666,10 +670,10 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
                     course_correction_reader=context.course_correction_reader,
                     course_correction_acknowledger=context.course_correction_acknowledger,
                     mcp_execution_context_token=mcp_token,
-                )
-            finally:
-                if bridge is not None:
-                    await bridge.drain()
+                    )
+                finally:
+                    if bridge is not None:
+                        await bridge.drain()
         return (
             _result_from_graph(
                 result,

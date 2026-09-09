@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from langchain_openai import ChatOpenAI
@@ -17,6 +19,36 @@ class LangGraphLimits:
     replans_limit: int
     max_custom_instructions_chars: int
     max_system_role_chars: int
+
+
+_execution_client: ContextVar[httpx.AsyncClient | None] = ContextVar(
+    "langgraph_execution_client", default=None
+)
+
+
+@asynccontextmanager
+async def model_client_scope() -> AsyncIterator[httpx.AsyncClient]:
+    """Own exactly one provider client for the lifetime of one execution."""
+    client = httpx.AsyncClient()
+    token = _execution_client.set(client)
+    try:
+        yield client
+    finally:
+        _execution_client.reset(token)
+        await client.aclose()
+
+
+def execution_model_client(config: Any = None) -> httpx.AsyncClient:
+    """Return the execution-owned client, failing when called out of scope."""
+    configured = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
+    client = configured.get("model_client") or _execution_client.get()
+    if not isinstance(client, httpx.AsyncClient):
+        raise RuntimeError("LangGraph model client is unavailable outside an execution scope")
+    return client
+
+
+def current_execution_model_client() -> httpx.AsyncClient | None:
+    return _execution_client.get()
 
 
 def load_runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
@@ -62,9 +94,16 @@ def provider_configuration(base_url_override: str | None = None) -> tuple[str, d
     raise RuntimeError("LLM_AUTH_MODE must be 'required' or 'none'")
 
 
-def get_llm(model_name: str, temperature: float = 0.0, *, own_async_transport: bool = True) -> ChatOpenAI:
+def get_llm(
+    model_name: str,
+    temperature: float = 0.0,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> ChatOpenAI:
     base_url, headers, api_key = provider_configuration()
-    client = httpx.AsyncClient() if own_async_transport else None
+    client = http_async_client or _execution_client.get()
+    if client is None:
+        raise RuntimeError("LangGraph model client is unavailable outside an execution scope")
     return ChatOpenAI(
         model=model_name,
         temperature=temperature,
@@ -76,10 +115,3 @@ def get_llm(model_name: str, temperature: float = 0.0, *, own_async_transport: b
         default_headers=headers or None,
         http_async_client=client,
     )
-
-
-async def close_model_client(model: Any) -> None:
-    client = getattr(model, "http_async_client", None)
-    close = getattr(client, "aclose", None) if client is not None else None
-    if close is not None:
-        await close()

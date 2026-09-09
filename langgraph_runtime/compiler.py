@@ -259,6 +259,13 @@ class WorkflowMaterializer:
     def _with_pause_gates(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
         """Put manual pause interrupts in their own checkpointed LangGraph task."""
         nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        for node in nodes:
+            if node.get("type") != "task_pause_gate":
+                continue
+            actions = node.get("allowed_actions") or []
+            routes = node.get("routes") or {}
+            if "reject" in actions or "reject" in routes:
+                raise ValueError("task_pause_gate cannot advertise or route reject")
         node_ids = {str(node.get("id")) for node in nodes if node.get("id")}
         dynamic_targets = {
             str(edge.get("to"))

@@ -577,6 +577,11 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt does not match the checkpoint", "retryable": False})
             if str(supplied.get("type") or "") != str(current.get("type") or ""):
                 raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt type does not match the checkpoint", "retryable": False})
+            if str(current.get("type") or "") == "task_pause":
+                decision = supplied.get("decision") if isinstance(supplied.get("decision"), Mapping) else {}
+                action = str(decision.get("action") or "")
+                if action not in {"approve", "resume"}:
+                    raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "A cooperative pause accepts only approve or resume", "retryable": False})
         if record is None or record.status not in TERMINAL_STATUSES:
             return
         request = _request_from_payload(payload)
@@ -944,6 +949,11 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 interrupt_type = str(interruption.get("type") or "")
                 if not interrupt_type:
                     raise RuntimeError("runtime_interrupt_invalid", "A resume requires a typed pending interrupt")
+                if interrupt_type == "task_pause":
+                    decision = payload.get("interrupt", {}).get("decision", {}) if isinstance(payload.get("interrupt"), Mapping) else {}
+                    action = str(decision.get("action") or "") if isinstance(decision, Mapping) else ""
+                    if action not in {"approve", "resume"}:
+                        raise RuntimeError("runtime_interrupt_mismatch", "A cooperative pause accepts only approve or resume", retryable=False)
                 # Manual pause is a product-requested pause and is protected by
                 # the durable pause token. Framework-owned HITL interrupts
                 # already have their own persisted interrupt identity.

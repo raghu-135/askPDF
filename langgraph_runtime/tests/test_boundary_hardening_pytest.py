@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -131,7 +132,8 @@ async def test_provider_probe_omits_auth_for_keyless_mode(monkeypatch):
     assert "authorization" not in requests[0].headers
 
 
-def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
+@pytest.mark.asyncio
+async def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
     import langgraph_runtime.models.llm as llm_module
 
     captured = {}
@@ -144,8 +146,52 @@ def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
     monkeypatch.setenv("LLM_AUTH_MODE", "none")
     monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
-    llm_module.get_llm("local-model", own_async_transport=False)
-    assert captured["api_key"] == "not-needed"
+    client = httpx.AsyncClient()
+    try:
+        llm_module.get_llm("local-model", http_async_client=client)
+        assert captured["api_key"] == "not-needed"
+    finally:
+        await client.aclose()
+
+
+def test_model_creation_requires_execution_client(monkeypatch):
+    import langgraph_runtime.models.llm as llm_module
+
+    monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "none")
+    monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
+    with pytest.raises(RuntimeError, match="outside an execution scope"):
+        llm_module.get_llm("local-model")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, RuntimeError("provider failed"), asyncio.CancelledError()])
+async def test_model_client_scope_closes_on_every_exit_path(monkeypatch, failure):
+    import langgraph_runtime.models.llm as llm_module
+
+    clients = []
+
+    class FakeClient:
+        async def aclose(self):
+            self.closed = True
+
+        def __init__(self):
+            self.closed = False
+
+    monkeypatch.setattr(llm_module.httpx, "AsyncClient", FakeClient)
+    async def run():
+        async with llm_module.model_client_scope() as client:
+            clients.append(client)
+            assert llm_module.execution_model_client({"configurable": {"model_client": client}}) is client
+            if failure is not None:
+                raise failure
+
+    if failure is None:
+        await run()
+    else:
+        with pytest.raises(type(failure)):
+            await run()
+    assert clients[-1].closed is True
 
 
 def test_outer_failure_result_contains_terminal_delta(monkeypatch):

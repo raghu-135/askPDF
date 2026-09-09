@@ -29,7 +29,7 @@ from langgraph_runtime.workflows.deep_research_execution import (
     services_from_config,
 )
 from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchSubagentResult
-from langgraph_runtime.models.llm import close_model_client, get_llm
+from langgraph_runtime.models.llm import execution_model_client, get_llm
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.runtime_support.evidence import inherited_evidence_packets, tool_result_evidence
 from langgraph_runtime.runtime_support.task_results import (
@@ -322,7 +322,7 @@ async def _call_model(
     if meter_research:
         await services.consume_budget(task_id, model_calls=1)
     attempts, observer = llm_retry_observer()
-    model = get_llm(model_name, own_async_transport=True)
+    model = get_llm(model_name, http_async_client=execution_model_client(config))
     try:
         invoke = model.ainvoke
         resolved_config = state.get("resolved_spec") if isinstance(state.get("resolved_spec"), Mapping) else {}
@@ -396,7 +396,8 @@ async def _call_model(
                 services.cancellation,
             )
     finally:
-        await close_model_client(model)
+        # The execution-scoped provider client is owned by the adapter.
+        pass
     raw_response = response.get("raw") if isinstance(response, Mapping) and "raw" in response else response
     metadata = llm_result_metadata(raw_response, model_name=model_name, retry_attempts=attempts)
     metadata["accounting_phase"] = accounting_phase

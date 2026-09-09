@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from langgraph_runtime.graph import NodeRegistry
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 class _PauseState(TypedDict, total=False):
@@ -78,3 +79,53 @@ async def test_pause_resume_cannot_answer_following_hitl_interrupt() -> None:
     assert third["answer"] == "approve"
     assert calls == ["business", "business"]
     assert consumed == ["pause-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["reject", "unknown"])
+async def test_task_pause_gate_rejects_invalid_decisions_without_consuming_pause(monkeypatch, action: str) -> None:
+    pause = {"requested": True, "token": "pause-invalid"}
+
+    async def pause_checker() -> bool:
+        return pause["requested"]
+
+    async def pause_token_reader() -> str:
+        return pause["token"]
+
+    gate = NodeRegistry().get_for_spec({
+        "id": "__task_pause_gate__business",
+        "type": "task_pause_gate",
+        "target_node_id": "business",
+    })
+    monkeypatch.setattr(
+        "langgraph_runtime.graph.interrupt",
+        lambda _payload: {"action": action},
+    )
+
+    with pytest.raises(AgentRuntimeError, match="approve or resume"):
+        await gate(
+            {},
+            {"configurable": {
+                "pause_checker": pause_checker,
+                "pause_token_reader": pause_token_reader,
+            }},
+        )
+    assert pause["requested"] is True
+
+
+def test_compiler_rejects_rejection_route_on_cooperative_pause_gate() -> None:
+    from langgraph_runtime.compiler import WorkflowCompiler
+
+    spec = {
+        "config": {"graph": {
+            "nodes": [{
+                "id": "pause",
+                "type": "task_pause_gate",
+                "allowed_actions": ["approve", "reject"],
+                "routes": {"reject": "END"},
+            }],
+            "edges": [],
+        }},
+    }
+    with pytest.raises(ValueError, match="cannot advertise or route reject"):
+        WorkflowCompiler()._with_pause_gates(spec["config"]["graph"])

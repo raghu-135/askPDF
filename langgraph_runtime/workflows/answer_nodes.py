@@ -30,13 +30,13 @@ from langgraph_runtime.workflows.runtime_invocation import (
 )
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview, prompt_summary
-from langgraph_runtime.models.llm import get_llm as _default_get_llm
+from langgraph_runtime.models.llm import execution_model_client, get_llm as _default_get_llm
 
 
-def _get_llm(model_name: str) -> Any:
+def _get_llm(model_name: str, config: RunnableConfig) -> Any:
     graph_module = sys.modules.get("langgraph_runtime.graph")
     get_llm_fn = getattr(graph_module, "get_llm", _default_get_llm)
-    return get_llm_fn(model_name)
+    return get_llm_fn(model_name, http_async_client=execution_model_client(config))
 
 
 async def direct_answer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -49,7 +49,7 @@ async def synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dic
 
 async def answer_from_context_node(state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
     started = time.perf_counter()
-    llm = _get_llm(state["llm_model"])
+    llm = _get_llm(state["llm_model"], config)
     context, context_source = final_context_from_state(state)
     if state.get("evaluator_report"):
         context = combine_evidence(

@@ -18,7 +18,7 @@ from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
 from langgraph_runtime.workflows.state import merge_parallel_deltas, WorkflowBudgetExceeded
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
-from langgraph_runtime.models.llm import runtime_limits
+from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
 
 
@@ -147,6 +147,9 @@ def _runtime_config(
         "trace_recorder": trace_recorder,
         "deep_research_services_factory": deep_research_services_factory,
     }
+    model_client = current_execution_model_client()
+    if model_client is not None:
+        configurable["model_client"] = model_client
     if execution_event_sink is not None:
         configurable["execution_event_sink"] = execution_event_sink
     if cancellation_checker is not None:
