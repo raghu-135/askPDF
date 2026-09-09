@@ -254,7 +254,7 @@ def _validate_requested_result(value: Mapping[str, Any], schema: Mapping[str, An
 
 
 def _todo_payload(todo: Any) -> Dict[str, Any]:
-    return {
+    payload = {
         "id": todo.id,
         "title": todo.title,
         "description": todo.description,
@@ -271,6 +271,9 @@ def _todo_payload(todo: Any) -> Dict[str, Any]:
         "artifact_ids": list(todo.artifact_ids_json or []),
         "version": todo.version,
     }
+    if getattr(todo, "execution_key", None):
+        payload["execution_key"] = todo.execution_key
+    return payload
 
 
 def _response_text(response: Any) -> str:
@@ -920,6 +923,11 @@ async def deep_task_scheduler(state: Dict[str, Any], config: RunnableConfig) -> 
         "execution_key": executions[ordinal],
         "trace_visit_index": max(1, (int(todo.attempt) - 1) * max_todos + todo_positions[todo.id]),
     } for ordinal, todo in enumerate(ready)]
+    execution_keys = {str(item["todo"]["id"]): item["execution_key"] for item in work_items}
+    for todo in todos:
+        execution_key = execution_keys.get(todo.id)
+        if execution_key:
+            todo.execution_key = execution_key
     sink = services.events
     if sink is not None and work_items:
         dispatch_payload = {
@@ -1121,6 +1129,7 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
     if duplicate and subagent.status == "completed":
         return {"task_result_packets": [{
             "task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id,
+            "attempt": int(todo.get("attempt") or 1), "execution_key": item.get("execution_key"),
             "status": "completed", "summary": "Recovered completed subagent execution.",
             "artifact_ids": list(subagent.output_artifact_ids_json or []), "usage": dict(subagent.usage_json or {}),
             "retryable": False, "error": None,
@@ -1304,6 +1313,8 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
         }
     except Exception as exc:
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "failed", "summary": "", "artifact_ids": [], "usage": {}, "retryable": parallel_retryable_error(exc), "error": {"code": "subagent_failed", "type": type(exc).__name__, "message": str(exc)[:700]}}
+    packet["attempt"] = int(todo.get("attempt") or 1)
+    packet["execution_key"] = item.get("execution_key")
     terminal_kind = {
         "completed": "subagent.completed",
         "cancelled": "subagent.cancelled",

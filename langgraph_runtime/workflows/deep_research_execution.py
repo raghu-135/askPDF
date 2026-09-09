@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, Protocol, TypeVar
 
 from langgraph_runtime.runtime_support.cancellation import race_with_cancellation
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
@@ -41,6 +41,7 @@ class TodoRecord:
     version: int = 1
     dependency_ids_json: list[str] = field(default_factory=list)
     artifact_ids_json: list[str] = field(default_factory=list)
+    execution_key: str | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], **overrides: Any) -> "TodoRecord":
@@ -61,6 +62,7 @@ class TodoRecord:
             version=int(data.get("version") or 1),
             dependency_ids_json=list(data.get("dependency_ids") or data.get("dependency_ids_json") or []),
             artifact_ids_json=list(data.get("artifact_ids") or data.get("artifact_ids_json") or []),
+            execution_key=str(data["execution_key"]) if data.get("execution_key") else None,
         )
 
 
@@ -318,6 +320,88 @@ class RuntimeBudgetMeter:
 
 
 class RuntimeExecutionServices(DeepResearchExecutionServices):
+    _SUCCESS_STATUSES = {"completed", "skipped"}
+    _FAILED_STATUSES = {"failed", "blocked", "cancelled", "timed_out"}
+
+    def _task_todos_state(self) -> list[dict[str, Any]]:
+        if not isinstance(self.state, MutableMapping):
+            raise AgentRuntimeError(
+                "runtime_task_state_not_mutable",
+                "The runtime scheduler requires mutable checkpoint state.",
+            )
+        values = self.state.get("task_todos") or []
+        if not isinstance(values, list):
+            raise AgentRuntimeError(
+                "runtime_task_state_invalid",
+                "Checkpoint task_todos must be a list.",
+            )
+        todos = [dict(value) for value in values if isinstance(value, Mapping)]
+        if len(todos) != len(values):
+            raise AgentRuntimeError(
+                "runtime_task_state_invalid",
+                "Every checkpoint task todo must be an object.",
+            )
+        ids = [str(todo.get("id") or "") for todo in todos]
+        if any(not todo_id for todo_id in ids) or len(ids) != len(set(ids)):
+            raise AgentRuntimeError(
+                "runtime_task_state_invalid",
+                "Checkpoint task todos must have unique non-empty IDs.",
+            )
+        return todos
+
+    def _write_task_todos(self, todos: list[dict[str, Any]]) -> None:
+        if not isinstance(self.state, MutableMapping):
+            raise AgentRuntimeError(
+                "runtime_task_state_not_mutable",
+                "The runtime scheduler requires mutable checkpoint state.",
+            )
+        self.state["task_todos"] = todos
+
+    @classmethod
+    def _validate_dependencies(cls, todos: list[dict[str, Any]]) -> dict[str, list[str]]:
+        by_id = {str(todo["id"]): todo for todo in todos}
+        dependencies: dict[str, list[str]] = {}
+        for todo in todos:
+            todo_id = str(todo["id"])
+            raw = todo.get("dependency_ids") or todo.get("dependency_ids_json") or []
+            if not isinstance(raw, list):
+                raise AgentRuntimeError(
+                    "runtime_dependency_state_invalid",
+                    "Todo dependency_ids must be a list.",
+                    details={"todo_id": todo_id},
+                )
+            dependency_ids = [str(value) for value in raw]
+            unknown = sorted(set(dependency_ids) - set(by_id))
+            if unknown:
+                raise AgentRuntimeError(
+                    "runtime_dependency_missing",
+                    "A todo references an unknown dependency.",
+                    details={"todo_id": todo_id, "dependency_ids": unknown},
+                )
+            dependencies[todo_id] = dependency_ids
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(todo_id: str) -> None:
+            if todo_id in visiting:
+                raise AgentRuntimeError(
+                    "runtime_dependency_cycle",
+                    "Todo dependencies must form an acyclic graph.",
+                    details={"todo_id": todo_id},
+                )
+            if todo_id in visited:
+                return
+            visiting.add(todo_id)
+            for dependency_id in dependencies[todo_id]:
+                visit(dependency_id)
+            visiting.remove(todo_id)
+            visited.add(todo_id)
+
+        for todo_id in dependencies:
+            visit(todo_id)
+        return dependencies
+
     @asynccontextmanager
     async def execution_span(self, *, enabled: bool = True):
         if not enabled:
@@ -376,29 +460,70 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         return revision, todos
 
     async def schedule_ready(self, task_id: str, *, limit: int) -> list[TodoRecord]:
+        todos = self._task_todos_state()
+        dependencies = self._validate_dependencies(todos)
+        by_id = {str(todo["id"]): todo for todo in todos}
+
+        # Resolve blocked dependents to a fixed point before selecting work.
+        # This makes failed prerequisite propagation deterministic even when a
+        # chain contains more than one not-yet-evaluated dependent.
+        changed = True
+        while changed:
+            changed = False
+            for todo in todos:
+                todo_id = str(todo["id"])
+                if todo.get("status") not in {"pending", "ready"}:
+                    continue
+                failed = [
+                    dependency_id for dependency_id in dependencies[todo_id]
+                    if by_id[dependency_id].get("status") in self._FAILED_STATUSES
+                ]
+                if failed:
+                    todo.update({
+                        "status": "blocked",
+                        "result_summary": f"dependency_failed:{','.join(sorted(failed))}",
+                    })
+                    changed = True
+
+        eligible = [
+            todo for todo in todos
+            if todo.get("status") in {"pending", "ready"}
+            and all(by_id[dependency_id].get("status") in self._SUCCESS_STATUSES
+                    for dependency_id in dependencies[str(todo["id"])] )
+        ]
+        eligible.sort(key=lambda todo: (-int(todo.get("priority") or 0), str(todo["id"])))
+
         ready: list[TodoRecord] = []
-        for todo in self.state.get("task_todos") or []:
-            if not isinstance(todo, Mapping) or todo.get("status") not in {"pending", "ready"}:
-                continue
-            value = dict(todo)
-            if value.get("status") == "ready":
-                value["attempt"] = int(value.get("attempt") or 0) + 1
+        for value in eligible[:max(0, int(limit))]:
+            previous_status = str(value.get("status") or "pending")
+            attempt = int(value.get("attempt") or 0)
+            max_attempts = max(1, int(value.get("max_attempts") or 2))
+            if previous_status == "ready":
+                if attempt >= max_attempts:
+                    value.update({
+                        "status": "failed",
+                        "result_summary": "max_attempts_exhausted",
+                    })
+                    continue
+                attempt += 1
             else:
-                value["attempt"] = max(1, int(value.get("attempt") or 0))
-            value["status"] = "running"
+                attempt = max(1, attempt)
+            value.update({"status": "running", "attempt": attempt})
             ready.append(TodoRecord.from_mapping(value))
-            if len(ready) >= limit:
-                break
+
+        self._write_task_todos(todos)
         return ready
 
     async def list_todos(self, task_id: str) -> list[TodoRecord]:
-        return [TodoRecord.from_mapping(todo) for todo in self.state.get("task_todos") or [] if isinstance(todo, Mapping)]
+        return [TodoRecord.from_mapping(todo) for todo in self._task_todos_state()]
 
     async def block_todos(self, task_id: str, todo_ids: list[str], *, reason: str) -> None:
         blocked = set(todo_ids)
-        for todo in self.state.get("task_todos") or []:
-            if isinstance(todo, dict) and str(todo.get("id")) in blocked:
+        todos = self._task_todos_state()
+        for todo in todos:
+            if str(todo.get("id")) in blocked:
                 todo.update({"status": "blocked", "result_summary": reason})
+        self._write_task_todos(todos)
 
     async def start_subagent(self, **kwargs: Any) -> tuple[SubagentRecord, bool]:
         await self.consume_budget(str(kwargs.get("task_id") or ""), subagent_attempts=1)
@@ -422,21 +547,52 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         return artifact
 
     async def record_result_packets(self, packets: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        todos = [dict(todo) for todo in self.state.get("task_todos") or [] if isinstance(todo, Mapping)]
+        todos = self._task_todos_state()
         by_id = {str(todo.get("id")): todo for todo in todos}
         for packet in packets:
-            todo = by_id.get(str(packet.get("todo_id") or ""))
+            todo_id = str(packet.get("todo_id") or "")
+            todo = by_id.get(todo_id)
             if todo is None:
-                continue
+                raise AgentRuntimeError(
+                    "runtime_result_unknown_todo",
+                    "A result packet references an unknown todo.",
+                    details={"todo_id": todo_id},
+                )
+            if todo.get("status") != "running":
+                raise AgentRuntimeError(
+                    "runtime_result_stale",
+                    "A result packet does not target a running todo.",
+                    details={"todo_id": todo_id, "status": todo.get("status")},
+                )
+            expected_attempt = int(todo.get("attempt") or 0)
+            packet_attempt = int(packet.get("attempt") or 0)
+            if packet_attempt != expected_attempt:
+                raise AgentRuntimeError(
+                    "runtime_result_attempt_mismatch",
+                    "A result packet targets a stale or invalid attempt.",
+                    details={"todo_id": todo_id, "expected_attempt": expected_attempt, "packet_attempt": packet_attempt},
+                )
+            expected_execution_key = todo.get("execution_key")
+            if expected_execution_key and str(packet.get("execution_key") or "") != str(expected_execution_key):
+                raise AgentRuntimeError(
+                    "runtime_result_execution_mismatch",
+                    "A result packet has an invalid execution identity.",
+                    details={"todo_id": todo_id},
+                )
             if packet.get("status") == "completed":
                 todo["status"] = "completed"
-            elif bool(packet.get("retryable")) and int(todo.get("attempt") or 0) < int(todo.get("max_attempts") or 2):
+            elif bool(packet.get("retryable")) and expected_attempt < int(todo.get("max_attempts") or 2):
                 todo["status"] = "ready"
             else:
                 todo["status"] = packet.get("status") or "failed"
-            todo["result_summary"] = str(packet.get("summary") or "")[:4000]
+                if bool(packet.get("retryable")):
+                    todo["status"] = "failed"
+                    todo["result_summary"] = "max_attempts_exhausted"
+            if todo.get("result_summary") != "max_attempts_exhausted":
+                todo["result_summary"] = str(packet.get("summary") or "")[:4000]
             todo["artifact_ids"] = list(dict.fromkeys([*(todo.get("artifact_ids") or []), *(packet.get("artifact_ids") or [])]))
             todo["progress"] = 100 if todo["status"] == "completed" else todo.get("progress", 0)
+        self._write_task_todos(todos)
         return todos
 
     async def persist_web_access(self, status: str, *, run_id: str, interrupt_id: str) -> None:

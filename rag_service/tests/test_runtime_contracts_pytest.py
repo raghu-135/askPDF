@@ -307,6 +307,7 @@ async def test_runtime_execution_retries_empty_subagent_result_once():
 
     todos = await services.record_result_packets([{
         "todo_id": "T1",
+        "attempt": 1,
         "status": "failed",
         "summary": "",
         "retryable": True,
