@@ -8,6 +8,7 @@ def configured_common_budgets(monkeypatch):
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
         "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT",
+        "MAX_PLAN_ATTEMPTS", "MAX_PLAN_VALIDATION_ERRORS",
         "SUBAGENT_TIMEOUT_MS", "DISPATCH_TIMEOUT_MS", "WORKER_TIMEOUT_MS", "WEB_WORKER_TIMEOUT_MS",
     ):
         monkeypatch.setenv(f"DEEP_AGENT_{suffix}", "7200000" if suffix == "MAX_DURATION_MS" else "100")
@@ -16,6 +17,14 @@ def configured_common_budgets(monkeypatch):
 def test_common_configured_budgets_are_shared():
     assert deep_agent_budgets("langgraph")["max_duration_seconds"] == 7200
     assert deep_agent_budgets("hermes")["max_duration_seconds"] == 7200
+
+
+def test_langgraph_planner_limits_are_environment_configured(monkeypatch):
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS", "7")
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS", "13")
+    budgets = deep_agent_budgets("langgraph")
+    assert budgets["max_plan_attempts"] == 7
+    assert budgets["max_plan_validation_errors"] == 13
 
 
 def test_framework_alias_resolves_shared_budget(monkeypatch):

@@ -189,6 +189,8 @@ def _deep_agent_budgets(framework: str, values: Mapping[str, str], errors: list[
             "DISPATCH_TIMEOUT_MS": 1,
             "WORKER_TIMEOUT_MS": 1,
             "WEB_WORKER_TIMEOUT_MS": 1,
+            "MAX_PLAN_ATTEMPTS": 1,
+            "MAX_PLAN_VALIDATION_ERRORS": 1,
         })
     for suffix in common:
         framework_name = f"DEEP_AGENT_{framework.upper()}_{suffix}"

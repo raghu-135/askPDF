@@ -40,6 +40,7 @@ from langgraph_runtime.runtime_support.task_results import (
 )
 from langgraph_runtime.workflows.state import consume_task_result_packets, task_result_packet_identity
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
+from langgraph_runtime.budgets import planner_limits
 
 
 def canonical_hash(value: Any) -> str:
@@ -180,8 +181,6 @@ DEEP_NODE_COORDINATOR = "deep_coordinator"
 DEEP_NODE_SYNTHESIZER = "deep_task_synthesizer"
 DEEP_NODE_CRITIC = "evidence_critic"
 DEEP_RESEARCH_POLICY = get_deep_research_policy()
-MAX_PLAN_VALIDATION_ERRORS = 20
-MAX_PLAN_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -432,7 +431,7 @@ def _plan_validation_details(
 ) -> dict[str, Any]:
     safe_errors = [
         {"field": error.path, "code": error.code, "type": error.code, "message": error.message[:500]}
-        for error in tuple(errors)[:MAX_PLAN_VALIDATION_ERRORS]
+        for error in tuple(errors)[:planner_limits()["max_plan_validation_errors"]]
     ]
     return {
         "stage": stage,
@@ -556,7 +555,7 @@ def _raw_plan_errors(
                     f"todos[{todo_id}].{field}", "completed_todo_changed",
                     f"Completed todo '{todo_id}' cannot change field '{field}'.",
                 ))
-    return errors[:MAX_PLAN_VALIDATION_ERRORS]
+    return errors[:planner_limits()["max_plan_validation_errors"]]
 
 
 def _decode_research_plan(
@@ -593,7 +592,7 @@ def _decode_research_plan(
         proposal = DeepResearchPlanProposal.model_validate(raw)
     except Exception as exc:
         pydantic_errors = exc.errors() if hasattr(exc, "errors") else []
-        for value in pydantic_errors[:MAX_PLAN_VALIDATION_ERRORS]:
+        for value in pydantic_errors[:planner_limits()["max_plan_validation_errors"]]:
             location = value.get("loc") if isinstance(value, Mapping) else None
             message = str(value.get("msg") or "validation failed") if isinstance(value, Mapping) else "validation failed"
             errors.append(_plan_error(
@@ -602,7 +601,7 @@ def _decode_research_plan(
                 message,
             ))
     if errors:
-        errors = list(dict.fromkeys(errors))[:MAX_PLAN_VALIDATION_ERRORS]
+        errors = list(dict.fromkeys(errors))[:planner_limits()["max_plan_validation_errors"]]
         details = _plan_validation_details(stage=stage, text=text, errors=errors)
         return PlanValidationResult(False, tuple(errors), diagnostics=details)
     details = _plan_validation_details(stage=stage, text=text, errors=(), category="valid")
@@ -697,7 +696,7 @@ Do not create parallel or scheduling structure; runtime-owned scheduling will ha
     attempts: list[dict[str, Any]] = []
     candidate = text
     proposal: DeepResearchPlanProposal | None = None
-    for planner_call in range(1, MAX_PLAN_ATTEMPTS + 1):
+    for planner_call in range(1, planner_limits()["max_plan_attempts"] + 1):
         stage = "initial" if planner_call == 1 else f"repair_{planner_call - 1}"
         if planner_call > 1:
             previous = attempts[-1]
@@ -734,7 +733,7 @@ Previous candidate (untrusted, bounded): {candidate[:12000]}
                 "stage": stage,
                 "planner_call": planner_call,
                 "schema_sha256": canonical_hash(schema),
-                "previous_errors": previous_errors[:MAX_PLAN_VALIDATION_ERRORS],
+                "previous_errors": previous_errors[:planner_limits()["max_plan_validation_errors"]],
                 **_plan_output_identity(candidate),
             })
             candidate, _repair_metadata = await _call_model(

@@ -19,6 +19,8 @@ DEEP_AGENT_BUDGET_KEYS = frozenset({
     "dispatch_timeout_ms",
     "worker_timeout_ms",
     "web_worker_timeout_ms",
+    "max_plan_attempts",
+    "max_plan_validation_errors",
 })
 
 # These are the limits each framework can consume. An absent key is
@@ -49,6 +51,8 @@ _ENV_SPECS: dict[str, tuple[str, int]] = {
     "dispatch_timeout_ms": ("DISPATCH_TIMEOUT_MS", 1),
     "worker_timeout_ms": ("WORKER_TIMEOUT_MS", 1),
     "web_worker_timeout_ms": ("WEB_WORKER_TIMEOUT_MS", 1),
+    "max_plan_attempts": ("MAX_PLAN_ATTEMPTS", 1),
+    "max_plan_validation_errors": ("MAX_PLAN_VALIDATION_ERRORS", 1),
 }
 
 
@@ -128,3 +132,13 @@ def configured_budget_value(config: Mapping[str, Any], name: str, framework: str
 
     budgets = deep_agent_budgets(framework)
     return budgets[name]
+
+
+def planner_limits() -> dict[str, int]:
+    """Return planner limits from the validated LangGraph environment."""
+
+    budgets = deep_agent_budgets("langgraph")
+    return {
+        "max_plan_attempts": budgets["max_plan_attempts"],
+        "max_plan_validation_errors": budgets["max_plan_validation_errors"],
+    }
