@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.agent_workflows.canonical_trace import build_parallel_groups
-from app.agent_workflows.parallel_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
+from app.agent_workflows.canonical_trace import build_parallel_groups_safely
+from app.agent_workflows.parallel_projection_contracts import PARALLEL_EVENT_JOURNAL_LIMIT, PARALLEL_EVENT_PREFIXES
 from app.agent_workflows.parallel_observability import enrich_parallel_event
 from app.agent_workflows.trace_sanitization import _bounded_value
-from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
-from app.runtime.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
+from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
+from runtime_protocol.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
 from app.runtime.observability import normalize_runtime_event
 
 
@@ -50,6 +50,7 @@ class AgentExecutionEventSink:
         self._runtime_binding_persister: Any = None
         self._runtime_fact_persister: Any = None
         self._runtime_event_persister: Any = None
+        self._runtime_event_projector: Any = None
         self._run_id: str | None = None
         self._sequence = 0
         self._canonical_events: list[AgentRuntimeEvent] = []
@@ -75,6 +76,9 @@ class AgentExecutionEventSink:
         self._run_id = run_id
         self._runtime_event_persister = persister
         self._sequence = max(0, int(initial_sequence))
+
+    def bind_runtime_event_projector(self, projector: Any) -> None:
+        self._runtime_event_projector = projector
 
     def canonical_events(self) -> list[AgentRuntimeEvent]:
         return list(self._canonical_events)
@@ -262,9 +266,13 @@ class AgentExecutionEventSink:
             source_metadata.setdefault("source_sequence", source_sequence)
         if normalized_kind != event:
             source_metadata.setdefault("source_event", event)
+        hash_payload = {
+            key: value for key, value in normalized_payload.items()
+            if key not in {"occurred_at", "timestamp"}
+        }
         candidate_hash = hashlib.sha256(
             json.dumps(
-                {"kind": normalized_kind, "payload": normalized_payload, "source_metadata": source_metadata},
+                {"kind": normalized_kind, "payload": hash_payload, "source_metadata": source_metadata},
                 sort_keys=True,
                 default=str,
             ).encode()
@@ -312,6 +320,8 @@ class AgentExecutionEventSink:
         else:
             if self._runtime_event_persister is not None and canonical.run_id:
                 await self._runtime_event_persister(canonical.run_id, canonical)
+            if self._runtime_event_projector is not None:
+                await self._runtime_event_projector(canonical)
             self._canonical_events.append(canonical)
             if event_id:
                 self._runtime_event_ids[event_id] = candidate_hash
@@ -336,7 +346,7 @@ class AgentExecutionEventSink:
         if self._delivery_attached:
             delivery_payload = dict(canonical.payload)
             delivery_payload.setdefault("event_id", canonical.event_id)
-            parallel_groups = build_parallel_groups(self._canonical_events)
+            parallel_groups = build_parallel_groups_safely(self._canonical_events)
             if parallel_groups:
                 delivery_payload["parallel_groups"] = parallel_groups
             await self.queue.put({"event": canonical.kind, "data": delivery_payload})

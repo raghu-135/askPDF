@@ -79,8 +79,8 @@ def _bounded_value(value: Any, *, key: Any = None) -> Any:
             for item_key, item in value.items()
             if item not in (None, "", [], {})
         }
-    # Framework-owned objects (for example LangGraph GraphInterrupt values)
-    # must never cross the persisted JSON boundary as live Python instances.
+    # Runtime-owned objects must never cross the canonical event boundary or
+    # the persisted JSON boundary as live Python instances.
     return _jsonable(value)
 
 

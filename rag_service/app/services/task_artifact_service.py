@@ -39,7 +39,7 @@ async def delete_task_resources_for_threads(thread_ids: list[str]) -> None:
 async def cleanup_deleted_task(task_id: str) -> None:
     """Idempotently remove content/checkpoints for one hidden terminal task."""
     from app.services import agent_task_repository as tasks
-    from app.runtime.cleanup import delete_run_continuation
+    from app.runtime.cleanup import cleanup_run
 
     store = get_content_store()
     for artifact in await tasks.list_artifacts(task_id):
@@ -47,7 +47,7 @@ async def cleanup_deleted_task(task_id: str) -> None:
         await tasks.mark_artifact_deleted(task_id, artifact.id)
     runs = await tasks.list_task_runs(task_id)
     for run in runs:
-        outcome = await delete_run_continuation(run)
+        outcome = await cleanup_run(run)
         if not outcome.owner_deletion_allowed:
             raise RuntimeError(
                 f"Runtime continuation cleanup did not complete for run {run.id}: {outcome.status}"

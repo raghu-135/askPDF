@@ -9,12 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.runtime.langgraph.validator import WorkflowValidationError
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentWorkflow, WorkflowVisibility
 from app.time_utils import utc_now
+
+
+class WorkflowValidationError(ValueError):
+    """Product-level rejection of an invalid remotely validated definition."""
 
 
 @dataclass
@@ -70,26 +73,12 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
             builder_id = str(workflow_def.get("builder_id") or "").strip()
             if not framework or not builder_id:
                 raise ValueError(f"Builtin workflow {builtin_key} is missing runtime identity")
-            definition = AgentDefinition(
-                definition_id=builtin_key,
-                framework=framework,
-                builder_id=builder_id,
-                category=workflow_def.get("category"),
-                display_name=workflow_def.get("name"),
-            )
-            try:
-                provider = builder_for_definition(definition)
-                validation = await provider.validate(definition, spec_json)
-            except BuilderSelectionError as exc:
-                raise WorkflowValidationError(str(exc)) from exc
             validation_result = {
-                "valid": validation.valid,
-                "errors": [issue.message for issue in validation.issues],
+                "valid": True,
+                "errors": [],
+                "scope": "product_envelope",
+                "framework_validation": "runtime_admission",
             }
-            if not validation.valid:
-                raise WorkflowValidationError(
-                    "; ".join(validation_result["errors"]) or f"Invalid workflow: {builtin_key}"
-                )
             metadata = {
                 "source": WorkflowVisibility.BUILTIN.value,
                 "builtin_key": builtin_key,

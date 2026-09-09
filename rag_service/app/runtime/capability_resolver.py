@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
@@ -17,7 +17,7 @@ from app.runtime.contracts import (
     validated_disabled_operation_ids,
 )
 from app.runtime.adapter import AgentRuntimeAdapter
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.product_capabilities import product_operation_descriptors, project_public_capabilities
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 from app.db.enums import AgentRunStatus
@@ -54,13 +54,14 @@ RESUMABLE_TASK_STATES = frozenset({
 RETRYABLE_TASK_STATES = frozenset({
     AgentTaskStatus.FAILED.value,
     AgentTaskStatus.EXPIRED.value,
+    AgentTaskStatus.RECOVERY_REQUIRED.value,
 })
 ACTIVE_RUN_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_CANCEL,
     RuntimeOperationId.RUN_SEND_FOLLOWUP,
     RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
     RuntimeOperationId.RUN_STEER_LIVE,
-    RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+    RuntimeOperationId.RUN_CLEANUP,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,
 })
 
@@ -97,7 +98,7 @@ CHECKPOINT_OPERATIONS = frozenset({
     RuntimeOperationId.RUN_INSPECT_STATE,
     RuntimeOperationId.RUN_REPLAY,
     RuntimeOperationId.RUN_FORK,
-    RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+    RuntimeOperationId.RUN_CLEANUP,
 })
 
 def deployment_id(adapter: Any) -> str:
@@ -161,6 +162,26 @@ def _reconcile_implementation(
 def _with_product_operations(capabilities: RuntimeCapabilities) -> RuntimeCapabilities:
     operations = dict(capabilities.operations)
     operations.update(product_operation_descriptors())
+    return replace(capabilities, operations=operations)
+
+
+def _reconcile_adapter_task_operations(
+    capabilities: RuntimeCapabilities,
+    adapter: Any,
+) -> RuntimeCapabilities:
+    """Reapply adapter-owned task restrictions after product operations merge."""
+    if bool(getattr(adapter, "supports_task_pause", False)) and capabilities.deployment.get("checkpoint_available", True) is not False:
+        return capabilities
+    operations = dict(capabilities.operations)
+    for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
+        descriptor = operations.get(operation_id)
+        if descriptor is not None:
+            operations[operation_id] = replace(
+                descriptor,
+                support=RuntimeSupportLevel.UNSUPPORTED,
+                enabled=False,
+                disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+            )
     return replace(capabilities, operations=operations)
 
 
@@ -264,13 +285,12 @@ async def _reconciled_capabilities(
     )
     capabilities = _reconcile_implementation(capabilities, adapter)
     capabilities = _with_product_operations(capabilities)
+    capabilities = _reconcile_adapter_task_operations(capabilities, adapter)
     task_runtime_requested = definition is not None and bool(
         definition.capabilities.get("supports_long_running_tasks")
     )
     checkpoint_unavailable = capabilities.deployment.get("checkpoint_available") is False
-    if task_runtime_requested and (
-        not bool(getattr(adapter, "supports_task_pause", False)) or checkpoint_unavailable
-    ):
+    if task_runtime_requested and checkpoint_unavailable:
         operations = dict(capabilities.operations)
         for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
             descriptor = operations.get(operation_id)
@@ -472,21 +492,46 @@ async def resolve_run_capability_resolution(
                 )
 
     task_status = str(getattr(task, "status", "") or status)
+    if task_status == AgentTaskStatus.RECOVERY_REQUIRED.value:
+        for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS | {
+            RuntimeOperationId.TASK_PAUSE,
+            RuntimeOperationId.TASK_RESUME,
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
+        }:
+            if operation in operations:
+                operations[operation] = _disabled(
+                    operations[operation], RuntimeCapabilityDisabledReason.RECOVERY_REQUIRED,
+                )
     budget_review = operations.get(RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND)
+    behavior = (
+        capabilities.behavior.to_dict()
+        if hasattr(capabilities.behavior, "to_dict")
+        else dict(capabilities.behavior)
+    )
     if budget_review is not None:
         operations[RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND] = replace(
             budget_review,
-            preserves_run_id=definition.framework == "langgraph",
+            preserves_run_id=bool(behavior.get("preserves_run_id")),
             preserves_session_id=True,
         )
     course_correction = operations.get(RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT)
-    if course_correction is not None and task_status not in {
-        AgentTaskStatus.RUNNING.value, AgentTaskStatus.QUEUED.value,
-    }:
-        operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT] = _disabled(
-            course_correction, RuntimeCapabilityDisabledReason.TASK_TERMINAL
-            if task_status in TERMINAL_TASK_STATES else RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE,
+    if course_correction is not None:
+        course_correction = replace(
+            course_correction,
+            preserves_run_id=bool(behavior.get("preserves_run_id")) and status not in TERMINAL_RUN_STATES,
+            preserves_session_id=True,
         )
+        if task_status not in {
+            AgentTaskStatus.RUNNING.value,
+            AgentTaskStatus.QUEUED.value,
+            AgentTaskStatus.PAUSED.value,
+            AgentTaskStatus.AWAITING_APPROVAL.value,
+        }:
+            course_correction = _disabled(
+                course_correction, RuntimeCapabilityDisabledReason.TASK_TERMINAL
+                if task_status in TERMINAL_TASK_STATES else RuntimeCapabilityDisabledReason.TASK_NOT_PAUSEABLE,
+            )
+        operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT] = course_correction
     run_metadata = getattr(run, "run_metadata_json", None)
     cancellation_pending = (
         status not in TERMINAL_RUN_STATES
@@ -514,7 +559,7 @@ async def resolve_run_capability_resolution(
     elif RuntimeOperationId.TASK_RESUME in operations and task_status in {
         AgentTaskStatus.AWAITING_APPROVAL.value,
         AgentTaskStatus.PAUSED.value,
-    } and pending_type != "task_pause":
+    } and (pending_type != "task_pause" or not binding_available or not checkpoint_boundary_available(run)):
         operations[RuntimeOperationId.TASK_RESUME] = _disabled(operations[RuntimeOperationId.TASK_RESUME], RuntimeCapabilityDisabledReason.TASK_NOT_RESUMABLE)
     if RuntimeOperationId.TASK_RETRY in operations and task_status not in RETRYABLE_TASK_STATES:
         operations[RuntimeOperationId.TASK_RETRY] = _disabled(operations[RuntimeOperationId.TASK_RETRY], RuntimeCapabilityDisabledReason.TASK_NOT_RETRYABLE)

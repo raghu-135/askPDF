@@ -7,7 +7,6 @@ import pytest
 from app.services import agent_runtime_reconciliation as reconciliation
 from app.services.agent_runtime_reconciliation import reconcile_known_result, result_hash
 from app.services.agent_runtime_projection import AgentRuntimeProjection
-from app.services.runtime_checkpoint_reset import mark_runs_deferred
 
 
 def test_runtime_result_hash_is_stable():
@@ -18,7 +17,7 @@ def test_runtime_result_hash_is_stable():
 
 @pytest.mark.asyncio
 async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monkeypatch):
-    from app.runtime.contracts import AgentRuntimeEvent, ContinuationBinding
+    from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
 
     state = {"last_sequence": 0, "binding": None, "checkpoint": None}
 
@@ -38,19 +37,19 @@ async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monke
     newest = AgentRuntimeEvent(
         event_id="event-10", run_id="run-1", sequence=10,
         kind="interrupt.requested",
-        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "new"}),
+        continuation=ContinuationBinding("langgraph.checkpoint", {"binding_id": "new"}),
         checkpoint_boundary_available=True,
     )
     older = AgentRuntimeEvent(
         event_id="event-9", run_id="run-1", sequence=9,
         kind="runtime.event",
-        continuation=ContinuationBinding("langgraph.checkpoint", {"checkpoint_thread_id": "old"}),
+        continuation=ContinuationBinding("langgraph.checkpoint", {"binding_id": "old"}),
         checkpoint_boundary_available=False,
     )
 
     assert await projector.apply_event(run=run, event=newest) is True
     assert await projector.apply_event(run=run, event=older) is False
-    assert state["binding"].payload["checkpoint_thread_id"] == "new"
+    assert state["binding"].payload["binding_id"] == "new"
     assert state["checkpoint"] is True
 
 
@@ -236,8 +235,16 @@ async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
         assert dry_run is False
         return statuses[run_id]
 
+    async def no_pending_corrections(*, limit):
+        assert limit == 3
+        return []
+
     monkeypatch.setattr(reconciliation.AgentWorkflowRepository, "list_runtime_reconciliation_candidates", Repository().list_runtime_reconciliation_candidates)
     monkeypatch.setattr(reconciliation, "reconcile_run_by_id", reconcile)
+    monkeypatch.setattr(
+        "app.services.agent_task_repository.list_pending_course_correction_commands",
+        no_pending_corrections,
+    )
 
     assert await reconciliation.run_runtime_reconciliation(batch_size=3) == {
         "inspected": 3,
@@ -245,37 +252,5 @@ async def test_bounded_reconciliation_reports_candidate_outcomes(monkeypatch):
         "preserved": 1,
         "failed": 0,
         "deferred": 1,
+        "corrections": 0,
     }
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_reset_preflight_marks_active_runs_deferred(monkeypatch):
-    run = SimpleNamespace(
-        id="run-1",
-        runtime_binding_json={
-            "binding_type": "langgraph.checkpoint",
-            "payload": {"checkpoint_thread_id": "checkpoint-1"},
-        },
-        runtime_binding_status="active",
-    )
-    updates = []
-
-    class Repository:
-        async def list_nonterminal_runtime_runs(self, *, limit):
-            assert limit == 10
-            return [run]
-
-        async def update_runtime_projection(self, run_id, projection):
-            updates.append((run_id, projection))
-
-    monkeypatch.setattr("app.services.runtime_checkpoint_reset.AgentWorkflowRepository", Repository)
-    result = await mark_runs_deferred(limit=10)
-
-    assert result == {"inspected": 1, "marked_deferred": 0, "dry_run": 1}
-    assert updates == []
-
-    result = await mark_runs_deferred(limit=10, dry_run=False)
-    assert result["marked_deferred"] == 1
-    assert updates[0][0] == "run-1"
-    assert updates[0][1]["reconciliation_status"] == "deferred"
-    assert "binding_status" not in updates[0][1]

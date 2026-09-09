@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
-from app.agent_workflows.runtime_invocation import safe_json_object
+from app.json_utils import safe_json_object
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field
@@ -77,7 +77,7 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.time_utils import iso_utc_z, utc_now
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.tool_adapter import create_mcp_tool
 from app.mcp.result_decoder import DecodedMCPResult, decode_mcp_result
 
 
@@ -439,10 +439,10 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         }
     }
     tools = [
-        create_mcp_langchain_tool("memory_search"),
-        create_mcp_langchain_tool("memory_get"),
-        create_mcp_langchain_tool("memory_prepare_change"),
-        create_mcp_langchain_tool("internet_search"),
+        create_mcp_tool("memory_search"),
+        create_mcp_tool("memory_get"),
+        create_mcp_tool("memory_prepare_change"),
+        create_mcp_tool("internet_search"),
     ]
     tools_by_name = {tool.name: tool for tool in tools}
     tool_call_count = 0

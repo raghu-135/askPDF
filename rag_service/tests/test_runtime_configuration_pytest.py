@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from runtime_protocol.configuration import RuntimeConfigurationError, validate_runtime_environment
+from runtime_protocol.configuration import RuntimeConfigurationError, parse_bounded_ratio, validate_runtime_environment
 
 
 def _environment() -> dict[str, str]:
     values = {
-        "AGENT_RUNTIME_MODE": "external",
         "AGENT_RUNTIME_LEASE_SECONDS": "120",
         "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
         "AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS": "300",
@@ -34,18 +34,28 @@ def _environment() -> dict[str, str]:
         "AGENT_RUNTIME_RECOVERY_LOOP_ENABLED": "true",
         "MCP_OTEL_ENABLED": "false",
         "MCP_REQUEST_TIMEOUT_SECONDS": "600",
-        "MCP_TRANSPORT": "in_process",
+        "MCP_TRANSPORT": "loopback_http",
+        "MCP_LOOPBACK_URL": "http://rag-service:8000/internal/mcp/",
         "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "2000",
         "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "2000",
         "ASKPDF_AGENT_CHECKPOINTER": "postgres",
+        "ASKPDF_AGENT_CHECKPOINTER_SETUP": "false",
         "AGENT_CHECKPOINT_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "AGENT_RUNTIME_EXECUTION_DATABASE_URL": "postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints",
         "LANGGRAPH_RUNTIME_URL": "http://langgraph-runtime:8100",
+        "LANGGRAPH_RUNTIME_TOKEN": "r" * 32,
+        "LANGGRAPH_RUNTIME_BINDING_SECRET": "b" * 32,
+        "LLM_AUTH_MODE": "none",
+        "LLM_KEYLESS_PROVIDER": "local",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
         "API_SERVER_KEY": "server-key",
         "HERMES_RUNTIME_URL": "http://hermes-runtime:8200",
+        "DEFAULT_TOKEN_BUDGET": "8192",
+        "REPLANS_LIMIT": "10",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "2000",
+        "MAX_SYSTEM_ROLE_CHARS": "500",
     }
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
@@ -67,13 +77,68 @@ def _environment() -> dict[str, str]:
     return values
 
 
-def test_framework_budget_aliases_resolve_and_explicit_override_wins():
+def test_control_plane_ignores_framework_runtime_budget_variables():
     values = _environment()
-    values["DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS"] = "250"
+    values.pop("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS")
+    values.pop("DEEP_AGENT_HERMES_MAX_MODEL_CALLS")
 
     validated = validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
-    assert validated.get("DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS") == "250"
+    assert "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS" not in validated.values
+
+
+def test_control_plane_requires_langgraph_runtime_token():
+    values = _environment()
+    values.pop("LANGGRAPH_RUNTIME_TOKEN")
+    with pytest.raises(RuntimeConfigurationError, match="LANGGRAPH_RUNTIME_TOKEN"):
+        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+
+
+def test_langgraph_limits_accept_non_default_values():
+    values = _environment()
+    values.update({
+        "DEFAULT_TOKEN_BUDGET": "16384",
+        "REPLANS_LIMIT": "20",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "4000",
+        "MAX_SYSTEM_ROLE_CHARS": "1000",
+    })
+
+    validated = validate_runtime_environment(service="langgraph", environ=values)
+
+    assert {name: validated.get(name) for name in (
+        "DEFAULT_TOKEN_BUDGET", "REPLANS_LIMIT",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS", "MAX_SYSTEM_ROLE_CHARS",
+    )} == {
+        "DEFAULT_TOKEN_BUDGET": "16384",
+        "REPLANS_LIMIT": "20",
+        "MAX_CUSTOM_INSTRUCTIONS_CHARS": "4000",
+        "MAX_SYSTEM_ROLE_CHARS": "1000",
+    }
+
+
+@pytest.mark.parametrize("name,value", [
+    ("DEFAULT_TOKEN_BUDGET", ""),
+    ("REPLANS_LIMIT", "0"),
+    ("MAX_CUSTOM_INSTRUCTIONS_CHARS", "false"),
+    ("MAX_SYSTEM_ROLE_CHARS", "not-an-integer"),
+])
+def test_langgraph_limits_reject_missing_or_invalid_values(name: str, value: str):
+    values = _environment()
+    values[name] = value
+
+    with pytest.raises(RuntimeConfigurationError, match=name):
+        validate_runtime_environment(service="langgraph", environ=values)
+
+
+@pytest.mark.parametrize("value", ["0", "0.5"])
+def test_jitter_ratio_accepts_inclusive_bounds(value):
+    assert parse_bounded_ratio(value, name="jitter") == float(value)
+
+
+@pytest.mark.parametrize("value", ["-0.01", "0.51", "nan", "inf", ""])
+def test_jitter_ratio_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="finite ratio"):
+        parse_bounded_ratio(value, name="jitter")
 
 
 @pytest.mark.parametrize(
@@ -90,7 +155,7 @@ def test_invalid_runtime_configuration_is_rejected(name: str, value: str):
     values[name] = value
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+        validate_runtime_environment(service="langgraph", environ=values)
 
     assert name in str(caught.value)
 
@@ -99,16 +164,13 @@ def test_missing_values_are_aggregated_without_secret_values():
     values = _environment()
     values.pop("DEEP_AGENT_MAX_MODEL_CALLS")
     values.pop("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
-    values["HERMES_MCP_CONTEXT_SECRET"] = "secret-value"
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": "hermes"})
+        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
     message = str(caught.value)
-    assert "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS" in message
     assert "AGENT_RUNTIME_READ_TIMEOUT_SECONDS" in message
-    assert "HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters" in message
-    assert "secret-value" not in message
+    assert "DEEP_AGENT_MAX_MODEL_CALLS" not in message
 
 
 @pytest.mark.parametrize(
@@ -124,7 +186,7 @@ def test_invalid_deep_agent_references_fail_startup(mutations):
     values.update(mutations)
 
     with pytest.raises(RuntimeConfigurationError) as caught:
-        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
+        validate_runtime_environment(service="langgraph", environ=values)
 
     assert "DEEP_AGENT_MAX_TOOL_CALLS" in str(caught.value)
 
@@ -133,7 +195,6 @@ def test_langgraph_database_requirements_are_conditional():
     values = _environment()
     values.pop("AGENT_CHECKPOINT_DATABASE_URL")
     values.pop("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
-    values.pop("LANGGRAPH_RUNTIME_URL")
 
     validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
@@ -142,8 +203,69 @@ def test_langgraph_database_requirements_are_conditional():
     assert "AGENT_RUNTIME_EXECUTION_DATABASE_URL" in str(caught.value)
 
 
+def test_langgraph_checkpoint_database_never_falls_back_to_product_database():
+    values = _environment()
+    values.pop("AGENT_CHECKPOINT_DATABASE_URL")
+    values["DATABASE_URL"] = "postgresql://product/database"
+
+    with pytest.raises(RuntimeConfigurationError) as caught:
+        validate_runtime_environment(service="langgraph", environ=values)
+    assert "AGENT_CHECKPOINT_DATABASE_URL" in str(caught.value)
+
+
+@pytest.mark.parametrize("service", ["langgraph", "hermes"])
+def test_external_runtime_requires_loopback_mcp_transport(service):
+    values = _environment()
+    values["MCP_TRANSPORT"] = "in_process"
+    with pytest.raises(RuntimeConfigurationError, match="MCP_TRANSPORT must be 'loopback_http'"):
+        validate_runtime_environment(service=service, environ=values)
+
+
+def test_control_plane_may_use_in_process_mcp_transport():
+    values = _environment()
+    values["MCP_TRANSPORT"] = "in_process"
+    validate_runtime_environment(service="control_plane", environ=values)
+
+
+@pytest.mark.parametrize(
+    "mode,keyless_provider,api_key,expected",
+    [
+        ("required", "", "secret", True),
+        ("required", "", "", False),
+        ("none", "local", "", True),
+        ("none", "", "", False),
+        ("none", "remote", "", False),
+    ],
+)
+def test_langgraph_model_authentication_is_explicit(mode, keyless_provider, api_key, expected):
+    values = _environment()
+    values.update({"LLM_AUTH_MODE": mode, "LLM_KEYLESS_PROVIDER": keyless_provider, "OPENAI_API_KEY": api_key})
+    if expected:
+        validate_runtime_environment(service="langgraph", environ=values)
+    else:
+        with pytest.raises(RuntimeConfigurationError):
+            validate_runtime_environment(service="langgraph", environ=values)
+
+
+def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
+    validated = validate_runtime_environment(
+        service="hermes_profile",
+        environ={
+            "HERMES_MODEL_CONTEXT_LENGTH": "32768",
+            "HERMES_MODEL_PROVIDER": "lmstudio",
+            "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
+            "API_SERVER_KEY": "server-key",
+            "HERMES_PROFILE_ROOT": "/opt/data/profiles",
+            "HERMES_PROFILE_UID": "10000",
+            "HERMES_PROFILE_GID": "10000",
+        },
+    )
+
+    assert validated.get("HERMES_MODEL_PROVIDER") == "lmstudio"
+
+
 def test_unused_environment_names_are_not_documented():
-    example = Path(__file__).parents[2] / ".env.example"
+    example = Path(os.environ.get("ASKPDF_REPO_DIR", Path(__file__).parents[2])) / ".env.example"
     text = example.read_text()
     for name in (
         "AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS",

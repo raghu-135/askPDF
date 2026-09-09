@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from dataclasses import replace
 from typing import Any, Mapping
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -20,7 +22,8 @@ from app.runtime.contracts import (
     RuntimeSupportLevel,
     RuntimeValidationResult,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.protocol import json_payload
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.http_runtime_adapter import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
@@ -53,7 +56,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         task_context = getattr(context, "task_context", None)
         if task_context is None:
             return request
-        data = dict(getattr(task_context, "context_data", {}) or {})
+        context_data = dict(getattr(task_context, "context_data", {}) or {})
+        data = {**context_data, **task_context.to_dict()}
         limits = dict(getattr(task_context, "limits", {}) or {})
         spec = dict(getattr(context, "resolved_spec", {}) or {})
         config = dict(spec.get("config") or {})
@@ -75,7 +79,14 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 context_window=context_window,
                 use_web_search=bool(config.get("use_web_search")),
                 use_reranker=True,
-                extensions={"task_id": task_context.task_id, "llm_model": config.get("llm_model")},
+                extensions={
+                    "task_id": task_context.task_id,
+                    "llm_model": config.get("llm_model"),
+                    "correction_context_sha256": hashlib.sha256(json.dumps(
+                        data.get("active_corrections") or [], sort_keys=True,
+                        separators=(",", ":"), ensure_ascii=True,
+                    ).encode()).hexdigest(),
+                },
             ),
             task_id=task_context.task_id,
             allowed_tools=allowed_tools,
@@ -94,11 +105,14 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self.transport = RuntimeTransportConnector(
             base_url=configured_base_url,
             framework=self.framework,
-            authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN"),
+            authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN", "API_SERVER_KEY"),
             visualization_id=self.visualization_id,
             replay_by_event_id=True,
             **kwargs,
         )
+
+    async def aclose(self) -> None:
+        await self.transport.aclose()
 
     def _ensure_enabled(self) -> None:
         if not hermes_runtime_enabled():
@@ -176,7 +190,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
     async def deployment_capabilities(self) -> RuntimeCapabilities:
         self._ensure_enabled()
         value = await self.transport._json("GET", "/v1/capabilities")
-        from app.runtime.transport import capabilities_from_dict
+        from runtime_protocol.transport import capabilities_from_dict
         try:
             capabilities = value["capabilities"]
             if not isinstance(capabilities, Mapping):
@@ -184,6 +198,12 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             return capabilities_from_dict(capabilities)
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed capabilities") from exc
+
+    async def readiness(self) -> Mapping[str, Any]:
+        if not hermes_runtime_enabled():
+            return {"status": "not_ready", "reason": "runtime_disabled"}
+        self._ensure_enabled()
+        return await self.transport._readiness()
 
     async def validate(
         self,
@@ -195,13 +215,13 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         value = await self.transport._json(
             "POST",
             "/v1/validate",
-            json={
+            json=json_payload({
                 "definition": definition.to_dict(),
                 "spec": dict(spec),
                 "options": dict(options or {}),
-            },
+            }),
         )
-        from app.runtime.transport import validation_from_dict
+        from runtime_protocol.transport import validation_from_dict
         return validation_from_dict(value["validation"])
 
     async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
@@ -222,7 +242,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/cancel",
             request=request,
-            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+            json=json_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
         return dict(value or {})
 
@@ -239,11 +259,11 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/approval",
             request=request,
-            json={
+            json=json_payload({
                 "request": request.to_dict(),
                 "continuation": request.continuation.to_dict(),
                 "response": {"choice": choice, "resolve_all": choice in {"session", "always"}},
-            },
+            }),
         )
         return dict(value or {})
 
@@ -255,6 +275,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/inspect",
             request=request,
-            json={"request": request.to_dict(), "continuation": request.continuation.to_dict()},
+            json=json_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
         return dict(value or {})

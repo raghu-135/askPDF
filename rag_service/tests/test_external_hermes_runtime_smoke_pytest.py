@@ -13,8 +13,8 @@ import httpx
 import pytest
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest
+from app.runtime.adapter import RuntimeInvocationContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.hermes_builder import HermesBuilderProvider
 from app.mcp.execution_context_token import issue_execution_context_token
@@ -26,7 +26,7 @@ _required = (
     "HERMES_RUNTIME_URL",
     "HERMES_RUNTIME_PRODUCT_DATABASE_URL",
 )
-_TEST_MODEL = "hermes-runtime-deterministic"
+_TEST_MODEL = os.getenv("HERMES_MODEL", "hermes-runtime-deterministic-hermes")
 if _enabled:
     missing = [name for name in _required if not os.getenv(name)]
     if "hermes" not in {value.strip().lower() for value in os.getenv("COMPOSE_PROFILES", "").split(",")}:
@@ -68,6 +68,7 @@ async def test_external_hermes_runtime_contract_and_execution():
     request = AgentRuntimeRequest(
         run_id=run_id,
         thread_id=thread_id,
+        task_id=run_id,
         definition_id=definition.definition_id,
         framework=definition.framework,
         builder_id=definition.builder_id,
@@ -94,14 +95,19 @@ async def test_external_hermes_runtime_contract_and_execution():
         )
         result = await adapter.start(
             request,
-            context=RuntimeExecutionContext(
-                request=SimpleNamespace(question=request.input["question"], runtime_execution_mode=True),
+            context=RuntimeInvocationContext(
+                request_payload={"question": request.input["question"], "runtime_execution_mode": True},
                 resolved_spec=resolved_spec,
                 agent_run_context={"agent_run_id": request.run_id, "agent_workflow_id": definition.definition_id},
             ),
         )
         assert result.status == "completed", result
         assert result.output
+        assert result.task_result is not None
+        assert result.task_result.usage["active_runtime_ms"] > 0
+        assert {"tool_calls", "active_runtime_ms"}.issubset(
+            result.task_result.usage["measured_dimensions"]
+        )
         assert result.continuation is not None
         assert result.continuation.binding_type == "hermes_session"
         assert result.continuation.payload["session_id"]
@@ -131,17 +137,17 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             f"/api/threads/{thread_id}/agent-tasks",
             headers={"Idempotency-Key": f"hermes-runtime-hermes-{unique}"},
             json={
+                "definition_id": "hermes_rag_agent",
                 "objective": "Use document evidence and provide the deterministic answer.",
                 "llm_model": _TEST_MODEL,
                 "context_window": int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"]),
                 "web_search_mode": "off",
-                "engine": "hermes",
             },
         )
-        created.raise_for_status()
+        assert created.status_code == 201, created.text
         task = created.json()["task"]
         started = await client.post(
-            f"/api/agent-tasks/{task['id']}/start",
+            f"/api/agent-tasks/{task['id']}/commands/start",
             params={"thread_id": thread_id},
             headers={"Idempotency-Key": f"hermes-runtime-hermes-start-{unique}"},
             json={"expected_version": task["version"]},
@@ -152,17 +158,23 @@ async def test_product_api_executes_and_persists_hermes_deep_research_task():
             current = await client.get(f"/api/agent-tasks/{task['id']}", params={"thread_id": thread_id})
             current.raise_for_status()
             task = current.json()["task"]
-            if task["status"] in {"completed", "failed", "cancelled"}:
+            if task["status"] in {"completed", "failed", "cancelled", "awaiting_approval"}:
                 break
             await asyncio.sleep(0.5)
-        assert task["status"] == "completed", json.dumps(task, indent=2, default=str)
+        # The empty smoke project has no document evidence. Preserve the
+        # product's incomplete-result review semantics instead of silently
+        # accepting the provider's ungrounded prose as a completed task.
+        assert task["status"] == "awaiting_approval", json.dumps(task, indent=2, default=str)
+        assert task["current_phase"] == "awaiting_result_review"
+        assert task["budgets"]["lifetime_usage"]["elapsed_active_ms"] > 0
+        assert task["active_run"]["pending_interrupt"]["type"] == "incomplete_result_review"
         run_id = task["active_run_id"]
         run_response = await client.get(f"/api/agent-runs/{run_id}", params={"thread_id": thread_id})
         run_response.raise_for_status()
         persisted = run_response.json()["agent_run"]
         assert persisted["framework"] == "hermes"
         assert persisted["builder_id"] == "hermes_agent"
-        assert persisted["status"] == "completed"
+        assert persisted["status"] == "awaiting_human"
         assert persisted["workflow_id"] == "hermes_rag_agent"
 
     connection = await asyncpg.connect(os.environ["HERMES_RUNTIME_PRODUCT_DATABASE_URL"])

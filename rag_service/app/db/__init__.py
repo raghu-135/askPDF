@@ -30,6 +30,7 @@ from app.db.models_sqlmodel import (
     AgentTaskSubagentRun,
     AgentTaskArtifact,
     AgentTaskEvent,
+    AgentTaskRuntimeDelta,
     AgentTaskCommand,
     AgentRuntimeOperation,
     Memory,

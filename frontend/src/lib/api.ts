@@ -702,6 +702,7 @@ export interface AgentWorkflowRouteFunctionMetadata {
   name?: string;
   display_name?: string;
   description?: string;
+  route_kind?: 'conditional' | 'hitl' | 'parallel_dispatch' | 'serial_dispatch' | 'default';
   allowed_source_node_types?: string[];
   route_labels?: string[];
   routes?: string[];
@@ -1938,12 +1939,14 @@ export async function deleteInternalAgentWorkflow(
 }
 
 export async function validateAgentWorkflowSpec(
-  spec: AgentWorkflowBuilderSpec | Record<string, any>
+  spec: AgentWorkflowBuilderSpec | Record<string, any>,
+  framework: string,
+  builderId: string,
 ): Promise<AgentWorkflowValidationReport> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ spec }),
+    body: JSON.stringify({ spec, framework, builder_id: builderId }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
@@ -2344,7 +2347,7 @@ export async function streamResumeAgentRun(
 
 // ============ Durable Deep Research Tasks ============
 
-export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'expired';
+export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'recovery_required' | 'cancelled' | 'completed' | 'failed' | 'expired';
 
 export interface AgentTaskSummary {
   id: string;
@@ -2365,8 +2368,19 @@ export interface AgentTaskSummary {
   configuration: Record<string, any>;
   created_at: string;
   updated_at: string;
-  active_run?: { id: string; status: string; checkpoint_thread_id?: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
+  active_run?: { id: string; status: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
   plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
+  course_corrections?: Array<{
+    command_id: string;
+    correction_id: string;
+    instruction: string;
+    status: string;
+    delivery_mode?: string | null;
+    delivery_state: string;
+    linked_run_id?: string | null;
+    runtime_outcome?: { explanation?: string | null; unresolved_reason?: string | null };
+    submitted_at?: string | null;
+  }>;
 }
 
 export interface AgentTaskTodo {
@@ -2406,7 +2420,6 @@ export interface AgentTaskRun {
   attempt: number;
   parent_run_id?: string | null;
   status: string;
-  checkpoint_thread_id?: string | null;
   runtime_binding_status?: string;
   pending_interrupt?: AgentRunPendingInterrupt | null;
   metrics: Record<string, any>;
@@ -2528,7 +2541,7 @@ export async function getAgentTask(taskId: string, threadId: string): Promise<Ag
 }
 
 export async function commandAgentTask(taskId: string, threadId: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry', version: number): Promise<AgentTaskSummary> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/${action}?${taskQuery(threadId)}`, {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/commands/${action}?${taskQuery(threadId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({ expected_version: version }),
@@ -2567,7 +2580,12 @@ export async function respondToAgentTaskBudgetReview(
     decision: 'continue' | 'accept_partial' | 'steer';
     guidance?: string;
   },
-): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean }> {
+): Promise<{
+  task: AgentTaskSummary;
+  linked_run?: AgentTaskRun | null;
+  correction_delivery?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/budget-review/responses?${taskQuery(threadId)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload),
   });
@@ -2579,7 +2597,16 @@ export async function submitAgentTaskCourseCorrection(
   taskId: string,
   threadId: string,
   payload: { run_id: string; expected_version: number; instruction: string; scope?: 'remaining_work' },
-): Promise<{ task: AgentTaskSummary; correction: Record<string, unknown>; duplicate: boolean }> {
+): Promise<{
+  task: AgentTaskSummary;
+  command_id: string;
+  correction_id: string;
+  correction: Record<string, unknown>;
+  delivery_mode: 'same_run_safe_boundary' | 'linked_run';
+  delivery_state: 'accepted' | 'delivered' | 'linked' | 'incorporated' | 'satisfied' | 'unresolved' | 'accepted_unresolved' | 'rejected';
+  runtime_receipt?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/course-corrections?${taskQuery(threadId)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ scope: 'remaining_work', ...payload }),
   });

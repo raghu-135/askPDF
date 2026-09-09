@@ -27,6 +27,12 @@ _REFERENCE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
 _HERMES_PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
+LANGGRAPH_LIMIT_NAMES = (
+    "DEFAULT_TOKEN_BUDGET",
+    "REPLANS_LIMIT",
+    "MAX_CUSTOM_INSTRUCTIONS_CHARS",
+    "MAX_SYSTEM_ROLE_CHARS",
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,22 @@ def _positive_int(name: str, values: Mapping[str, str], errors: list[str]) -> in
     return parsed
 
 
+def parse_required_positive_int(name: str, value: str | None) -> int:
+    """Parse one required positive integer without applying a fallback."""
+    if value is None or not value.strip():
+        raise ValueError(f"{name} is required")
+    normalized = value.strip().lower()
+    if normalized in _TRUE or normalized in _FALSE:
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        parsed = int(normalized, 10)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
+
+
 def _positive_float(name: str, values: Mapping[str, str], errors: list[str]) -> float | None:
     value = _required(name, values, errors)
     if value is None:
@@ -94,17 +116,25 @@ def _positive_float(name: str, values: Mapping[str, str], errors: list[str]) -> 
     return parsed
 
 
+def parse_bounded_ratio(value: str | float, *, name: str, minimum: float = 0.0, maximum: float = 0.5) -> float:
+    """Parse a finite inclusive ratio without silently clamping it."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite ratio between {minimum:g} and {maximum:g}") from exc
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
+        raise ValueError(f"{name} must be a finite ratio between {minimum:g} and {maximum:g}")
+    return parsed
+
+
 def _jitter_ratio(name: str, values: Mapping[str, str], errors: list[str]) -> float | None:
     value = _required(name, values, errors)
     if value is None:
         return None
     try:
-        parsed = float(value)
-    except ValueError:
-        errors.append(f"{name} must be a finite ratio between 0 and 0.5")
-        return None
-    if not math.isfinite(parsed) or not 0 <= parsed <= 0.5:
-        errors.append(f"{name} must be a finite ratio between 0 and 0.5")
+        parsed = parse_bounded_ratio(value, name=name)
+    except ValueError as exc:
+        errors.append(str(exc))
         return None
     return parsed
 
@@ -224,27 +254,39 @@ def validate_runtime_environment(
     values = dict(os.environ if environ is None else environ)
     errors: list[str] = []
 
-    mode = _required("AGENT_RUNTIME_MODE", values, errors)
-    if mode is not None and mode not in {"external", "in_process"}:
-        errors.append("AGENT_RUNTIME_MODE must be 'external' or 'in_process'")
+    # The profile renderer is a one-shot bootstrap job, not an HTTP runtime.
+    # Validate only the inputs it consumes so it does not inherit connector,
+    # polling, lease, or frontend configuration requirements.
+    if service != "hermes_profile":
+        for name in _RUNTIME_FLOATS:
+            if name == "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO":
+                _jitter_ratio(name, values, errors)
+            else:
+                _positive_float(name, values, errors)
+        for name in _RUNTIME_INTS:
+            _positive_int(name, values, errors)
+        _positive_int("AGENT_RUNTIME_LEASE_SECONDS", values, errors)
+        _positive_int("HERMES_RUNTIME_WORKERS", values, errors) if service == "hermes" else None
+        _boolean("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", values, errors) if service == "langgraph" else None
+        _boolean("MCP_OTEL_ENABLED", values, errors)
 
-    for name in _RUNTIME_FLOATS:
-        if name == "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO":
-            _jitter_ratio(name, values, errors)
+        if service == "control_plane":
+            transport = _required("MCP_TRANSPORT", values, errors)
+            allowed_transports = {"in_process", "loopback_http"}
+            if transport is not None and transport not in allowed_transports:
+                errors.append(f"MCP_TRANSPORT must be 'in_process' or 'loopback_http' for {service}")
+            if transport == "loopback_http":
+                _url("MCP_LOOPBACK_URL", values, errors)
         else:
-            _positive_float(name, values, errors)
-    for name in _RUNTIME_INTS:
-        _positive_int(name, values, errors)
-    _positive_int("AGENT_RUNTIME_LEASE_SECONDS", values, errors)
-    _positive_int("HERMES_RUNTIME_WORKERS", values, errors) if service == "hermes" else None
-    _boolean("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", values, errors) if service == "langgraph" else None
-    _boolean("MCP_OTEL_ENABLED", values, errors)
-
-    transport = _required("MCP_TRANSPORT", values, errors)
-    if transport is not None and transport not in {"in_process", "loopback_http"}:
-        errors.append("MCP_TRANSPORT must be 'in_process' or 'loopback_http'")
-    if transport == "loopback_http":
-        _url("MCP_LOOPBACK_URL", values, errors)
+            # External runtimes always use the product MCP endpoint.  Reachability
+            # is a readiness concern, but missing or malformed configuration is
+            # a startup error.
+            transport = _required("MCP_TRANSPORT", values, errors)
+            loopback_url = _required("MCP_LOOPBACK_URL", values, errors)
+            if transport is not None and transport != "loopback_http":
+                errors.append(f"MCP_TRANSPORT must be 'loopback_http' for {service}")
+            if loopback_url:
+                _url("MCP_LOOPBACK_URL", values, errors)
 
     if service == "hermes_profile":
         provider = _required("HERMES_MODEL_PROVIDER", values, errors)
@@ -267,29 +309,47 @@ def validate_runtime_environment(
         if provider_name != "lmstudio" and not values.get("OPENAI_API_KEY", "").strip():
             errors.append("OPENAI_API_KEY is required for the selected Hermes provider")
 
-    if service in {"control_plane", "langgraph"}:
+    if service == "langgraph":
+        for name in LANGGRAPH_LIMIT_NAMES:
+            _positive_int(name, values, errors)
         _deep_agent_budgets("langgraph", values, errors)
     hermes_enabled = service == "hermes" or (
         service == "control_plane"
         and "hermes" in {item.strip().lower() for item in values.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
     )
-    if hermes_enabled:
+    if service == "hermes":
         _deep_agent_budgets("hermes", values, errors)
 
     if service == "langgraph":
+        auth_mode = _required("LLM_AUTH_MODE", values, errors)
+        if auth_mode is not None and auth_mode not in {"required", "none"}:
+            errors.append("LLM_AUTH_MODE must be 'required' or 'none'")
+        keyless_provider = values.get("LLM_KEYLESS_PROVIDER", "").strip().lower()
+        if auth_mode == "none":
+            if not keyless_provider:
+                errors.append("LLM_KEYLESS_PROVIDER is required when LLM_AUTH_MODE=none")
+            elif keyless_provider not in {"lmstudio", "ollama", "local"}:
+                errors.append("LLM_KEYLESS_PROVIDER must be lmstudio, ollama, or local")
+        elif auth_mode == "required" and not values.get("OPENAI_API_KEY", "").strip():
+            errors.append("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
+        binding_secret = _required("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
+        if binding_secret is not None and len(binding_secret) < 32:
+            errors.append("LANGGRAPH_RUNTIME_BINDING_SECRET must contain at least 32 characters")
+        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        if runtime_token is not None and len(runtime_token) < 32:
+            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
         checkpoint = _required("ASKPDF_AGENT_CHECKPOINTER", values, errors)
-        if checkpoint is not None and checkpoint not in {"memory", "postgres"}:
-            errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'memory' or 'postgres'")
+        if checkpoint is not None and checkpoint != "postgres":
+            errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'postgres' for the external runtime")
         _boolean("ASKPDF_AGENT_CHECKPOINTER_SETUP", values, errors)
-        _boolean("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", values, errors)
         if checkpoint == "postgres":
-            checkpoint_values = dict(values)
-            if not checkpoint_values.get("AGENT_CHECKPOINT_DATABASE_URL") and checkpoint_values.get("DATABASE_URL"):
-                checkpoint_values["AGENT_CHECKPOINT_DATABASE_URL"] = checkpoint_values["DATABASE_URL"]
-            _database_url("AGENT_CHECKPOINT_DATABASE_URL", checkpoint_values, errors)
+            _database_url("AGENT_CHECKPOINT_DATABASE_URL", values, errors)
         _database_url("AGENT_RUNTIME_EXECUTION_DATABASE_URL", values, errors)
-        if mode == "external":
-            _url("LANGGRAPH_RUNTIME_URL", values, errors)
+    if service == "control_plane":
+        _url("LANGGRAPH_RUNTIME_URL", values, errors)
+        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        if runtime_token is not None and len(runtime_token) < 32:
+            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
 
     if hermes_enabled:
         if service == "hermes":
@@ -338,9 +398,10 @@ def validate_runtime_environment(
     if errors:
         raise RuntimeConfigurationError(sorted(set(errors)))
     resolved_values = dict(values)
-    for name in values:
-        if name.startswith("DEEP_AGENT_"):
-            resolved = _raw(name, values)
-            if resolved is not None:
-                resolved_values[name] = resolved.strip()
+    if service in {"langgraph", "hermes"}:
+        for name in values:
+            if name.startswith("DEEP_AGENT_"):
+                resolved = _raw(name, values)
+                if resolved is not None:
+                    resolved_values[name] = resolved.strip()
     return RuntimeEnvironment(resolved_values)

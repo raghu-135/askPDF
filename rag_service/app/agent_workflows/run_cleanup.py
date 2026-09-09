@@ -73,7 +73,6 @@ async def prune_runtime_continuations_for_runs_before(
             select(AgentRun)
             .where(AgentRun.started_at < cutoff)
             .where(AgentRun.status.in_(requested_statuses))
-            .where(AgentRun.runtime_binding_json.isnot(None))
         )
         if thread_id is not None:
             query = query.where(AgentRun.thread_id == thread_id)
@@ -81,8 +80,8 @@ async def prune_runtime_continuations_for_runs_before(
             query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
         )
         runs = list(result.scalars().all())
-    from app.runtime.cleanup import delete_run_continuations
-    return await delete_run_continuations(runs)
+    from app.runtime.cleanup import cleanup_runs
+    return await cleanup_runs(runs)
 
 
 async def fail_stale_running_runs(

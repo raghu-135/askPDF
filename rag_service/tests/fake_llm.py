@@ -16,6 +16,7 @@ async def models():
         "data": [
             {"id": "external_runtime-deterministic", "object": "model"},
             {"id": "external_runtime-deterministic-embedding", "object": "model"},
+            {"id": "hermes-runtime-deterministic-hermes", "object": "model"},
         ],
     }
 
@@ -59,6 +60,18 @@ async def completions(payload: dict):
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+    if payload.get("tool_choice") == "required" and payload.get("tools"):
+        function = payload["tools"][0].get("function") or {}
+        response["choices"][0]["message"] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "external-runtime-tool-probe",
+                "type": "function",
+                "function": {"name": function.get("name"), "arguments": "{}"},
+            }],
+        }
+        response["choices"][0]["finish_reason"] = "tool_calls"
     if not payload.get("stream"):
         return response
 

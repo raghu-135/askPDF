@@ -6,8 +6,8 @@ from typing import Any, Mapping
 
 from app.runtime.capability_resolver import require_capability
 from app.runtime.catalog import continuation_from_run, definition_from_run
-from app.runtime.contracts import AgentRuntimeRequest, RuntimeOperationId
-from app.runtime.errors import RuntimeError
+from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeOperationId
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
 
 
@@ -36,10 +36,6 @@ async def request_task_pause(
     definition = definition_from_run(run)
     await require_capability(definition, RuntimeOperationId.TASK_PAUSE, registry=selected, run=run)
     adapter = selected.get(definition)
-    # In-process LangGraph observes the control-plane task row directly. The
-    # HTTP deployment needs the explicit runtime control request below.
-    if not bool(getattr(adapter, "supports_external_task_pause", False)):
-        return {"status": "pause_requested", "task_id": str(task.id), "run_id": str(run.id), "runtime_confirmation": "local"}
     try:
         result = await adapter.pause(_request(task, run))
     except RuntimeError:

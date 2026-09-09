@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from app.runtime.adapter import AgentRuntimeEventSink
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -136,6 +136,8 @@ class AgentBuilderProvider(Protocol):
     ) -> Mapping[str, Any]: ...
 
     async def source(self, definition_id: str) -> Mapping[str, Any]: ...
+
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str: ...
 
     async def transient_test(
         self,

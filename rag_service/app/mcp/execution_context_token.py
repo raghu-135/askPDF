@@ -46,7 +46,11 @@ def issue_execution_context_token(
     task_id: str,
     allowed_tools: list[str],
     ttl_seconds: int = 3600,
+    runtime: str = "hermes",
 ) -> str:
+    runtime = str(runtime or "").strip().lower()
+    if runtime not in {"hermes", "langgraph"}:
+        raise ValueError("runtime must be hermes or langgraph")
     context_data = context.as_dict()
     extensions = dict(context_data.get("extensions") or {})
     extensions["task_id"] = task_id
@@ -55,6 +59,7 @@ def issue_execution_context_token(
         "v": 1,
         "exp": int(time.time()) + max(60, ttl_seconds),
         "task_id": task_id,
+        "runtime": runtime,
         "allowed_tools": sorted(set(allowed_tools)),
         "model_settings": {
             "llm_model": extensions.get("llm_model"),
@@ -115,12 +120,16 @@ def decode_execution_context_token(token: str, *, tool_name: str | None = None) 
             model_settings.get("llm_model") != extensions.get("llm_model"),
         )):
             raise ExecutionContextTokenError("model_context_mismatch")
-        try:
-            configured_context = hermes_model_context_length(required=True)
-        except HermesConfigurationError as exc:
-            raise ExecutionContextTokenError("model_context_mismatch") from exc
-        if decoded.context_window != configured_context:
-            raise ExecutionContextTokenError("model_context_mismatch")
+        runtime = str(payload.get("runtime") or "hermes").strip().lower()
+        if runtime not in {"hermes", "langgraph"}:
+            raise ExecutionContextTokenError("malformed")
+        if runtime == "hermes":
+            try:
+                configured_context = hermes_model_context_length(required=True)
+            except HermesConfigurationError as exc:
+                raise ExecutionContextTokenError("model_context_mismatch") from exc
+            if decoded.context_window != configured_context:
+                raise ExecutionContextTokenError("model_context_mismatch")
         return decoded
     except ExecutionContextTokenError:
         raise

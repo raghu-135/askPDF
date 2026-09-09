@@ -12,7 +12,7 @@ import app.services.agent_task_repository as task_repository
 import app.services.task_artifact_service as task_artifact_service
 from app.agent_workflows.interrupts import InterruptResolutionResult
 from app.agent_workflows.service import AgentRunService
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeResult,
     RuntimeCapabilities,
@@ -24,7 +24,7 @@ from app.runtime.contracts import (
     native,
     unsupported,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeRegistry
 from app.services.runtime_operation_repository import RuntimeOperationConflict
 
@@ -39,7 +39,7 @@ class RecordingAdapter:
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
         RuntimeOperationId.RUN_SEND_FOLLOWUP,
         RuntimeOperationId.RUN_STEER_LIVE,
-        RuntimeOperationId.RUN_CONTINUATION_CLEANUP,
+        RuntimeOperationId.RUN_CLEANUP,
     })
 
     def __init__(self, *, unsupported=()):
@@ -56,7 +56,7 @@ class RecordingAdapter:
             RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
             RuntimeOperationId.RUN_SEND_FOLLOWUP: native(),
             RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
-            RuntimeOperationId.RUN_CONTINUATION_CLEANUP: unsupported(),
+        RuntimeOperationId.RUN_CLEANUP: unsupported(),
         }
         for operation in self.unsupported:
             operations[RuntimeOperationId(operation)] = unsupported()
@@ -64,6 +64,9 @@ class RecordingAdapter:
 
     async def deployment_capabilities(self):
         return await self.capabilities(AgentDefinition("deployment", self.framework, self.builder_id))
+
+    async def prepare_request(self, request, *, context):
+        return request
 
     async def cancel(self, request):
         self.calls["cancel"] += 1
@@ -153,7 +156,6 @@ def _run(*, status="running", pending=None):
         task_id=None,
         metrics_json={},
         debug_trace_json=None,
-        checkpoint_thread_id="run-1",
         completed_at=None,
     )
 
@@ -356,6 +358,127 @@ async def test_resume_uses_injected_repository_factory_for_independent_transacti
 
     assert result.run.status == "completed"
     assert factory.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_resume_propagates_capability_resolution_failure_without_fallback(monkeypatch):
+    pending = {
+        "interrupt_id": "capability-failure",
+        "status": "pending",
+        "response_operation": RuntimeOperationId.RUN_RESUME.value,
+        "checkpoint_resume": True,
+    }
+    run = _run(status="awaiting_human", pending=pending)
+    resolution = InterruptResolutionResult(
+        run=run,
+        outcome="resumed",
+        interrupt={**pending, "status": "resumed"},
+    )
+    adapter = RecordingAdapter()
+    service = _patch_runtime(monkeypatch, adapter, FakeRepository(run, resolution))
+    capability_error = {
+        "code": "runtime_capability_discovery_failed",
+        "safe_message": "Runtime capability discovery failed",
+        "retryable": True,
+        "details": {"framework": "fake", "builder_id": "fake_builder"},
+    }
+    monkeypatch.setattr(
+        service_module,
+        "resolve_run_capability_resolution",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                capabilities=RuntimeCapabilities(),
+                error=capability_error,
+                runtime_available=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(service_module, "require_capability", AsyncMock())
+
+    with pytest.raises(RuntimeError) as caught:
+        await service.resume_agent_run(
+            run.id,
+            interrupt_id="capability-failure",
+            action="approve",
+            expected_thread_id=run.thread_id,
+            execution_event_sink=Sink(),
+        )
+
+    assert caught.value.code == "runtime_capability_discovery_failed"
+    assert caught.value.retryable is True
+    assert caught.value.details == capability_error["details"]
+    assert adapter.calls["resume"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requires_embedding", [False, True])
+async def test_non_task_resume_resolves_embedding_requirement_from_effective_capabilities(
+    monkeypatch,
+    requires_embedding,
+):
+    pending = {
+        "interrupt_id": f"embedding-{requires_embedding}",
+        "status": "pending",
+        "response_operation": RuntimeOperationId.RUN_RESUME.value,
+        "checkpoint_resume": True,
+    }
+    current = _run(status="awaiting_human", pending=pending)
+    resolved_run = _run(
+        status="running",
+        pending={**pending, "status": "resumed"},
+    )
+    resolution = InterruptResolutionResult(
+        run=resolved_run,
+        outcome="resumed",
+        interrupt=resolved_run.pending_interrupt_json,
+    )
+    adapter = RecordingAdapter()
+    service = _patch_runtime(monkeypatch, adapter, FakeRepository(current, resolution))
+    adapter.resume = AsyncMock(
+        return_value=AgentRuntimeResult(status="completed", output="done")
+    )
+    service.projection.project_chat_result = AsyncMock(
+        return_value={"status": "completed", "answer": "done"}
+    )
+    capabilities = RuntimeCapabilities(
+        operations={
+            RuntimeOperationId.RUN_RESUME: conditional(enabled=True),
+            RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
+        },
+        behavior={
+            "required_input_fields": ["embedding_model"] if requires_embedding else [],
+        },
+    )
+    monkeypatch.setattr(
+        service_module,
+        "resolve_run_capability_resolution",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                capabilities=capabilities,
+                error=None,
+                runtime_available=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(service_module, "require_capability", AsyncMock())
+    embedding_ready = AsyncMock(
+        return_value=SimpleNamespace(embedding_model="embedding-model")
+    )
+    monkeypatch.setattr(service_module, "require_thread_embedding_ready", embedding_ready)
+
+    result = await service.resume_agent_run(
+        current.id,
+        interrupt_id=pending["interrupt_id"],
+        action="approve",
+        expected_thread_id=current.thread_id,
+        execution_event_sink=Sink(),
+    )
+
+    assert result.run.status == "completed"
+    if requires_embedding:
+        embedding_ready.assert_awaited_once_with(current.thread_id)
+    else:
+        embedding_ready.assert_not_awaited()
 
 
 def _hermes_bound_run():

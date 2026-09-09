@@ -1,4 +1,4 @@
-"""Neutral runtime adapter base class and invocation context."""
+"""Neutral runtime adapter base class and JSON-only invocation context."""
 
 from __future__ import annotations
 
@@ -6,33 +6,31 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, NoReturn, Optional, Protocol
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
-    ContinuationBinding,
     RuntimeApprovalResponse,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
     RuntimeCapabilities,
     RuntimeSteeringInput,
     RuntimeValidationResult,
     RuntimeTaskContext,
     RuntimeOperationId,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 
 
 @dataclass(frozen=True)
-class RuntimeExecutionContext:
-    """In-process execution inputs kept outside the wire contract."""
+class RuntimeInvocationContext:
+    """Product-owned values that may be serialized onto the runtime wire."""
 
-    request: Any = None
+    request_payload: Mapping[str, Any] = field(default_factory=dict)
     embedding_model: Optional[str] = None
     resolved_spec: Mapping[str, Any] = field(default_factory=dict)
     agent_run_context: Mapping[str, Any] = field(default_factory=dict)
-    trace_recorder: Any = None
-    cancellation_checker: Any = None
-    pause_checker: Any = None
     task_id: Optional[str] = None
     task_worker_id: Optional[str] = None
     task_context: Optional[RuntimeTaskContext] = None
@@ -48,24 +46,16 @@ class AgentRuntimeAdapter(ABC):
     framework: str
     builder_id: str
     supports_task_pause: bool = False
-    supports_external_task_pause: bool = False
     implemented_operations: frozenset[RuntimeOperationId] = frozenset()
 
     async def prepare_request(
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
     ) -> AgentRuntimeRequest:
         """Let a concrete adapter encode neutral context for its transport."""
         return request
-
-    async def prepare_execution_context(
-        self,
-        context: RuntimeExecutionContext,
-    ) -> RuntimeExecutionContext:
-        """Materialize runtime-native in-process inputs from neutral context."""
-        return context
 
     def _unsupported(self, operation_id: str, explanation: str) -> NoReturn:
         raise RuntimeError.capability_unsupported(
@@ -88,6 +78,13 @@ class AgentRuntimeAdapter(ABC):
             )
         )
 
+    async def cleanup_run(self, run_id: str) -> Any:
+        self._unsupported("run.cleanup", "This runtime does not expose run cleanup")
+
+    async def readiness(self) -> Mapping[str, Any]:
+        """Return operational readiness independently of capability metadata."""
+        return {"status": "not_ready", "reason": "readiness_not_implemented"}
+
     @abstractmethod
     async def validate(
         self,
@@ -102,7 +99,7 @@ class AgentRuntimeAdapter(ABC):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult: ...
 
@@ -140,7 +137,7 @@ class AgentRuntimeAdapter(ABC):
         request: AgentRuntimeRequest,
         *,
         interrupt: Mapping[str, Any],
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> AgentRuntimeResult:
         self._unsupported("run.resume", "This runtime does not expose run resumption")
@@ -149,7 +146,7 @@ class AgentRuntimeAdapter(ABC):
         self,
         request: AgentRuntimeRequest,
         *,
-        context: RuntimeExecutionContext,
+        context: RuntimeInvocationContext,
         event_sink: AgentRuntimeEventSink | None = None,
     ) -> Optional[AgentRuntimeResult]:
         raise RuntimeError(
@@ -187,14 +184,24 @@ class AgentRuntimeAdapter(ABC):
     async def steer_live(self, request: AgentRuntimeRequest, steering: RuntimeSteeringInput) -> Mapping[str, Any]:
         self._unsupported("run.steer_live", "This runtime does not provide live steering")
 
+    async def submit_course_correction(
+        self,
+        request: AgentRuntimeRequest,
+        correction: RuntimeCourseCorrection,
+    ) -> RuntimeCourseCorrectionReceipt:
+        self._unsupported(
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT.value,
+            "This runtime does not accept corrections inside an active run",
+        )
+
     async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
         self._unsupported("run.inspect_state", "This runtime does not expose durable state inspection")
 
-    async def replay(self, request: AgentRuntimeRequest, checkpoint_id: str) -> AgentRuntimeResult:
-        self._unsupported("run.replay", "This runtime does not expose checkpoint replay")
+    async def replay(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
+        self._unsupported("run.replay", "This runtime does not expose continuation replay")
 
-    async def fork(self, request: AgentRuntimeRequest, checkpoint_id: str) -> AgentRuntimeResult:
-        self._unsupported("run.fork", "This runtime does not expose checkpoint forks")
+    async def fork(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
+        self._unsupported("run.fork", "This runtime does not expose continuation forks")
 
     async def list_subagents(self, request: AgentRuntimeRequest) -> list[Mapping[str, Any]]:
         self._unsupported("subagent.list", "This runtime does not expose subagent listing")
@@ -213,14 +220,11 @@ class AgentRuntimeAdapter(ABC):
     async def list_artifacts(self, request: AgentRuntimeRequest) -> list[Mapping[str, Any]]:
         self._unsupported("artifact.list", "This runtime does not expose runtime artifacts")
 
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        self._unsupported("run.continuation.cleanup", "This runtime does not expose continuation cleanup")
-
     async def project_trace(
         self,
         events: list[Mapping[str, Any]],
         *,
         run_id: str,
-        context: RuntimeExecutionContext | None = None,
+        context: RuntimeInvocationContext | None = None,
     ) -> list[Any]:
         self._unsupported("trace.project", "This runtime does not project runtime events into product traces")

@@ -540,8 +540,10 @@ async def _clone_thread(
             run_metadata_json=run_metadata,
             resolved_spec_json=copy.deepcopy(run.resolved_spec_json or {}),
             status=run.status,
-            checkpoint_thread_id=None,
-            runtime_binding_json=None,
+            # A cloned run is historical product data with no executable
+            # continuation. Persist the neutral empty binding explicitly so
+            # callers never interpret NULL as an omitted/unknown boundary.
+            runtime_binding_json={},
             runtime_binding_status="unbound",
             pending_interrupt_json=None,
             started_at=run.started_at,
@@ -633,7 +635,7 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             runtime_runs = list((await session.execute(
                 select(AgentRun).where(
                     AgentRun.thread_id.in_(thread_ids),
-                    AgentRun.runtime_binding_json.is_not(None),
+                    AgentRun.framework == "langgraph",
                 )
             )).scalars().all())
         affected_files = set((await session.execute(
@@ -671,8 +673,8 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             raise ProjectCleanupError(f"Failed to delete memory vectors for {scope_type}:{scope_id}")
     if runtime_runs:
         try:
-            from app.runtime.cleanup import delete_run_continuations
-            outcomes = await delete_run_continuations(runtime_runs)
+            from app.runtime.cleanup import cleanup_runs
+            outcomes = await cleanup_runs(runtime_runs)
             if any(not outcome.owner_deletion_allowed for outcome in outcomes):
                 raise ProjectCleanupError("Runtime continuation cleanup was not confirmed")
         except Exception as exc:

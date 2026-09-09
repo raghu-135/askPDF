@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Any, Mapping
 
 from app.agent_workflows.trace_sanitization import _bounded_value
 
@@ -31,6 +31,9 @@ def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tup
         topology_ref = data.get("topology_ref")
         if not isinstance(topology_ref, Mapping):
             topology_ref = {"kind": "graph_node", "id": operation_id}
+        # Node events from any runtime are projected into the neutral operation
+        # vocabulary. Framework metadata, checkpoint state, and raw graph
+        # details are deliberately not reconstructed in the control plane.
         data = {
             **data,
             "operation_id": operation_id,
@@ -38,19 +41,16 @@ def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tup
             "operation_label": data.get("operation_label") or data.get("label"),
             "visit_index": max(1, int(data.get("visit_index") or 1)),
             "topology_ref": dict(topology_ref),
-            "framework_details": {
-                **(dict(data.get("framework_details") or {}) if isinstance(data.get("framework_details"), Mapping) else {}),
-                "langgraph": {
-                    **(dict(data.get("framework_metadata") or {}) if isinstance(data.get("framework_metadata"), Mapping) else {}),
-                    "node_id": operation_id,
-                    "node_type": operation_type,
-                    "route": data.get("route"),
-                    "route_reason": data.get("route_reason"),
-                    "checkpoint": data.get("checkpoint"),
-                    "superstep": data.get("superstep"),
-                },
-            },
         }
+        for private_key in (
+            "checkpoint",
+            "checkpoint_before",
+            "checkpoint_after",
+            "framework_metadata",
+            "graph",
+            "state",
+        ):
+            data.pop(private_key, None)
         kind = normalized_kind
     elif kind in OPERATION_KINDS:
         operation_id = str(data.get("operation_id") or "operation")

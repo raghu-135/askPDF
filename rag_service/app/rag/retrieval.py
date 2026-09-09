@@ -7,14 +7,36 @@ from app.db import FileSourceType, get_thread_shape
 from app.models.llm_server_client import get_reranker_model, LOCAL_RERANKER_MODEL
 from app.db.vector import get_vector_db
 from app.rag.enums import TimelineEventType
+from runtime_protocol.tool_contract import MAX_TOOL_RESULT_STRING_LENGTH
 
 logger = logging.getLogger(__name__)
+RETRIEVAL_CONTENT_BUDGET = MAX_TOOL_RESULT_STRING_LENGTH - 2048
 _DOCUMENT_VECTOR_TEMPORAL_FIELDS = {
     "document_available_in_thread_at",
     "document_indexed_at",
     "timeline_event_at",
     "timeline_event_type",
 }
+
+
+def bounded_retrieval_text(parts: List[str], *, budget: int = RETRIEVAL_CONTENT_BUDGET) -> Tuple[str, bool]:
+    """Join complete evidence units without exceeding the shared content budget."""
+
+    selected: List[str] = []
+    used = 0
+    truncated = False
+    for part in parts:
+        value = str(part or "")
+        if not value:
+            continue
+        separator = 2 if selected else 0
+        if used + separator + len(value) <= budget:
+            selected.append(value)
+            used += separator + len(value)
+            continue
+        truncated = True
+        break
+    return "\n\n".join(selected), truncated
 
 
 async def get_document_name_lookup(thread_id: str) -> Dict[str, str]:

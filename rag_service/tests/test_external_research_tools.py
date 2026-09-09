@@ -1,9 +1,10 @@
+import os
+from pathlib import Path
+
 import pytest
-from langchain_core.tools import tool
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import normalize_tool_result
-from app.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -16,10 +17,13 @@ TOOL_PACKAGE_PINS = {
 
 
 def _requirements_lines() -> set[str]:
-    requirements_path = external_research_tools.__file__.split("/app/agent/")[0]
+    repository_root = Path(os.getenv("ASKPDF_REPO_DIR", Path(__file__).resolve().parents[2]))
     lines: set[str] = set()
-    for filename in ("requirements-control-plane.txt", "requirements-langgraph-runtime.txt"):
-        with open(f"{requirements_path}/{filename}", encoding="utf-8") as req_file:
+    for path in (
+        repository_root / "rag_service/requirements-control-plane.txt",
+        repository_root / "langgraph_runtime/requirements.txt",
+    ):
+        with path.open(encoding="utf-8") as req_file:
             lines.update(
                 line.strip()
                 for line in req_file
@@ -107,16 +111,3 @@ def test_arxiv_dependency_matches_langchain_wrapper_api():
     arxiv = pytest.importorskip("arxiv")
 
     assert hasattr(arxiv.Search(query="test"), "results")
-
-
-def test_orchestrator_tool_node_configures_recoverable_tool_errors():
-    @tool
-    def failing_tool(query: str) -> str:
-        """Test tool that always fails."""
-        raise RuntimeError("simulated tool outage")
-
-    node = RecoverableToolNode([failing_tool])
-    message = node._handle_tool_errors(RuntimeError("simulated tool outage"))
-
-    assert "Tool execution failed: RuntimeError: simulated tool outage" in message
-    assert "continue with other available evidence" in message

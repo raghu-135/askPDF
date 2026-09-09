@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
 )
-from app.runtime.events import create_runtime_event
+from runtime_protocol.events import create_runtime_event
 
 
 def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -131,6 +131,7 @@ def result_to_product_payload(result: AgentRuntimeResult) -> dict[str, Any]:
         "runtime_metadata": dict(result.runtime_metadata or {}),
         "runtime_binding": result.continuation.to_dict() if result.continuation else None,
         "runtime_task_result": result.task_result.to_dict() if result.task_result else payload.get("runtime_task_result"),
+        "orchestration_delta": result.orchestration_delta.to_dict() if result.orchestration_delta else None,
     })
     return payload
 

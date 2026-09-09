@@ -149,7 +149,6 @@ const validateParallelGroups = (
     && (!requireEventReferences || references.every((eventId) => eventIds.has(eventId)))
   );
   const groupIds = new Set<string>();
-  const memberOwners = new Map<string, string>();
   for (const group of value) {
     if (!group || typeof group !== 'object' || Array.isArray(group)) return 'A parallel group is not an object.';
     const row = group as Record<string, any>;
@@ -166,9 +165,6 @@ const validateParallelGroups = (
       if (!member || typeof member !== 'object' || Array.isArray(member)) return `Parallel group ${row.group_id} contains an invalid member.`;
       const memberRow = member as Record<string, any>;
       if (typeof memberRow.member_id !== 'string' || !memberRow.member_id) return `Parallel group ${row.group_id} contains a member without member_id.`;
-      const owner = memberOwners.get(memberRow.member_id);
-      if (owner && owner !== row.group_id) return `Parallel member ${memberRow.member_id} belongs to conflicting groups.`;
-      memberOwners.set(memberRow.member_id, row.group_id);
       if (typeof memberRow.status !== 'string' || !Number.isInteger(memberRow.first_sequence) || !Number.isInteger(memberRow.last_sequence)) return `Parallel member ${memberRow.member_id} has invalid status or sequence data.`;
       if (!validReferences(memberRow.event_ids) || !Array.isArray(memberRow.attempts)) return `Parallel member ${memberRow.member_id} has invalid event or attempt data.`;
       for (const attempt of memberRow.attempts) {

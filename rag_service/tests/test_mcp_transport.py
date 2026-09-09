@@ -1,8 +1,26 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.mcp.transport import InProcessMCPClient
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def dispose_shared_database_engine():
+    """Own the process-global DB engine used by standalone MCP app tests.
+
+    These tests exercise the MCP ASGI application without starting the full
+    FastAPI lifespan.  A thread-shape call can therefore open the global
+    product engine while no application shutdown hook exists to dispose it.
+    Dispose both exported engines on the owning pytest loop after every test
+    so asyncpg cancellation tasks cannot survive into a later test or loop.
+    """
+    yield
+    from app.db import connection_sqlmodel
+
+    await connection_sqlmodel.engine.dispose()
+    await connection_sqlmodel.test_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -59,7 +77,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
             assert all("_askpdf_context_token" not in tool["inputSchema"].get("properties", {}) for tool in listed["tools"])
             accepted = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
             assert accepted["isError"] is False
-            assert accepted["structuredContent"]["result_count"] == 1
+            assert len(accepted["structuredContent"]["sources"]) == 1
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
             rejected = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})

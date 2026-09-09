@@ -50,7 +50,7 @@ class TestHealthEndpoint:
         assert data["agent_task_worker"] == "running"
         assert "version" in data
 
-    def test_health_check_reports_failed_integrated_worker(self, client):
+    def test_health_check_remains_live_when_integrated_worker_fails(self, client):
         from main import app
 
         app.state.agent_task_worker_status = "failed"
@@ -59,9 +59,37 @@ class TestHealthEndpoint:
         finally:
             app.state.agent_task_worker_status = "running"
 
-        assert response.status_code == 503
-        assert response.json()["status"] == "degraded"
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
         assert response.json()["agent_task_worker"] == "failed"
+
+    def test_product_readiness_requires_worker_and_fresh_runtime_probe(self, client):
+        from main import app
+
+        previous_worker = getattr(app.state, "agent_task_worker_status", None)
+        previous_readiness = getattr(app.state, "runtime_readiness", None)
+        app.state.runtime_readiness = {
+            "checked_at": __import__("time").time(),
+            "runtimes": {"langgraph:langgraph_graph": {"status": "ready"}},
+            "ready": True,
+        }
+        try:
+            app.state.agent_task_worker_status = "failed"
+            response = client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["agent_task_worker"] == "failed"
+
+            app.state.agent_task_worker_status = "running"
+            response = client.get("/ready")
+            assert response.status_code == 200
+
+            app.state.runtime_readiness["checked_at"] = 0
+            response = client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["runtime_readiness"]["fresh"] is False
+        finally:
+            app.state.agent_task_worker_status = previous_worker
+            app.state.runtime_readiness = previous_readiness
 
     @pytest.mark.asyncio
     async def test_integrated_worker_completion_marks_unexpected_failure(self):
@@ -776,8 +804,15 @@ class TestThreadEndpoints:
         assert {"system_role", "tool_instructions", "custom_instructions"} <= set(data["defaults"])
         assert "reasoning_mode" not in data["defaults"]
 
-    def test_prompt_preview(self, client):
+    def test_prompt_preview(self, client, monkeypatch):
         """Test getting prompt preview."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Router Node Prompt\n# Final Answer Prompt"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -794,8 +829,15 @@ class TestThreadEndpoints:
         assert "# Router Node Prompt" in data["prompt"]
         assert "# Final Answer Prompt" in data["prompt"]
 
-    def test_prompt_preview_supports_plan_execute_pattern(self, client):
+    def test_prompt_preview_supports_plan_execute_pattern(self, client, monkeypatch):
         """Prompt preview should use selected agent workflow runtime prompts."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Planner Node Prompt\nexecution_plan"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -812,8 +854,8 @@ class TestThreadEndpoints:
         assert "# Planner Node Prompt" in prompt
         assert "execution_plan" in prompt
 
-    def test_prompt_preview_unknown_pattern_falls_back_to_router(self, client):
-        """Unknown preview pattern IDs should preserve Router default behavior."""
+    def test_prompt_preview_unknown_workflow_is_not_found(self, client):
+        """Unknown workflow IDs must not silently select a different workflow."""
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -822,10 +864,8 @@ class TestThreadEndpoints:
             },
         )
 
-        assert response.status_code == 200
-        prompt = response.json()["prompt"]
-        assert "# Router Node Prompt" in prompt
-        assert "# Planner Node Prompt" not in prompt
+        assert response.status_code == 404
+        assert response.json()["detail"] == {"code": "agent_workflow_not_found"}
 
     def test_reasoning_mode_removed_from_request_models(self):
         """Reasoning-mode compatibility should not be exposed by API schemas."""

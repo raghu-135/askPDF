@@ -105,7 +105,7 @@ def test_grounding_policy_is_not_part_of_the_runtime_adapter_spi():
 def test_agent_task_run_payload_preserves_required_trace_details():
     run = SimpleNamespace(
         id="run-1", task_id="task-1", task_attempt=1, parent_run_id=None,
-        status="failed", checkpoint_thread_id=None, pending_interrupt_json=None,
+        status="failed", pending_interrupt_json=None,
         runtime_binding_status=None,
         metrics_json={}, error_json={"code": "runtime_limit_exceeded"},
         started_at=None, completed_at=None,

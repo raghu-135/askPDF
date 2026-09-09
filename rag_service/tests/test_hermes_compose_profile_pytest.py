@@ -10,7 +10,11 @@ REPOSITORY_ROOT = Path(
 
 
 def _compose(name: str) -> dict:
-    return yaml.safe_load((REPOSITORY_ROOT / name).read_text())
+    class ComposeLoader(yaml.SafeLoader):
+        pass
+
+    ComposeLoader.add_constructor("!reset", lambda loader, node: loader.construct_sequence(node))
+    return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
 
 
 def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():
@@ -41,6 +45,30 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert adapter["depends_on"]["hermes"]["condition"] == "service_healthy"
     assert "COMPOSE_PROFILES" not in services["rag-service"].get("environment", {})
     assert services["rag-service"]["env_file"][0]["path"] == ".env"
+
+
+def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
+    services = _compose("docker-compose.dev.yml")["services"]
+    assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"
+    assert services["hermes-runtime"]["environment"]["MCP_LOOPBACK_URL"] == "http://rag-service:8000/internal/mcp/"
+
+
+def test_hermes_bootstrap_has_explicit_complete_environment():
+    services = _compose("docker-compose.yml")["services"]
+    bootstrap = services["hermes-config-init"]
+    assert bootstrap.get("env_file") == []
+    assert {
+        "HERMES_DATA_ROOT", "HERMES_CONFIG_TEMPLATE_ROOT", "HERMES_MODEL_PROVIDER",
+        "HERMES_MODEL_CONTEXT_LENGTH", "HERMES_PROFILE_ROOT", "HERMES_PROFILE_UID",
+        "HERMES_PROFILE_GID", "API_SERVER_KEY", "HERMES_MCP_CONTEXT_SECRET",
+        "OPENAI_API_KEY",
+    } <= {entry.split("=", 1)[0] for entry in bootstrap["environment"]}
+
+
+def test_runtime_integration_bootstrap_allowlists_provider_credential():
+    bootstrap = _compose("docker-compose.runtime-integration.yml")["services"]["hermes-config-init"]
+    assert "OPENAI_API_KEY" in bootstrap["environment"]
+    assert bootstrap["environment"]["HERMES_MODEL_PROVIDER"] == "lmstudio"
 
 
 def test_pinned_contract_copies_match_authoritative_module():

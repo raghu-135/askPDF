@@ -9,7 +9,7 @@ from app.agent_workflows.execution_stream import (
     drain_retained_executions,
     retain_background_task,
 )
-from app.runtime.events import RuntimeEventContractViolation, create_runtime_event
+from runtime_protocol.events import RuntimeEventContractViolation, create_runtime_event
 
 
 @pytest.mark.asyncio

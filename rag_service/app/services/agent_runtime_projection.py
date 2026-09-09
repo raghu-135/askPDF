@@ -41,7 +41,7 @@ class AgentRuntimeProjection:
 
         from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
         from app.agent_workflows.repository import AgentWorkflowRepository
-        from app.runtime.contracts import AgentRuntimeEvent
+        from runtime_protocol.contracts import AgentRuntimeEvent
 
         repository = AgentWorkflowRepository()
         events = await repository.list_run_events(run.id)

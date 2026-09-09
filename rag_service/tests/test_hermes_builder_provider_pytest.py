@@ -3,9 +3,27 @@ import pytest
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.builder_registry import get_builder_registry
 from app.runtime.builder import UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition
 from app.runtime.hermes_builder import HermesBuilderProvider
-from app.runtime.langgraph_builder import LangGraphBuilderProvider
+
+
+@pytest.fixture(autouse=True)
+def hermes_budget_configuration(monkeypatch):
+    """Keep direct builder tests explicit about required Hermes deployment limits."""
+
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    for suffix in (
+        "MAX_MODEL_CALLS",
+        "MAX_MODEL_TOKENS",
+        "MAX_TOOL_CALLS",
+        "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS",
+        "MAX_OUTPUT_CHARS",
+        "MAX_EVENT_COUNT",
+        "WAKE_LIMIT_SECONDS",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
 
 
 def _definition() -> AgentDefinition:
@@ -29,14 +47,11 @@ def test_hermes_builtin_is_concrete_and_not_a_graph():
 
 def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
     prompt = _spec()["config"]["system_prompt"]
-    assert "tool_search searches only the deferred tool catalog" in prompt
-    assert "semantic search uploaded document file_hash" in prompt
-    assert "Every tool_search call must include a nonempty capability-oriented query" in prompt
-    assert "tool_describe" in prompt and "tool_call" in prompt
-    assert "exact namespaced name" in prompt
-    assert "or invent a namespaced name" in prompt
-    assert "no matches means only that the catalog query did not match" in prompt
-    assert "call search_document_by_id" not in prompt
+    assert "exact namespaced AskPDF retrieval tool directly" in prompt
+    assert "bridge APIs are only for genuinely deferred tools" in prompt
+    assert "search_documents or search_document_by_id" in prompt
+    assert "do not route an already-listed AskPDF tool through tool_search" in prompt
+    assert "Do not use read_file for AskPDF-managed documents" in prompt
 
 
 def test_hermes_provider_is_registered_without_changing_langgraph_provider():
@@ -82,16 +97,6 @@ async def test_hermes_provider_catalog_is_framework_specific():
     assert catalog.framework == "hermes"
     assert catalog.builder_id == "hermes_agent"
     assert catalog.payload["definition_ids"] == ["hermes_rag_agent"]
-
-
-def test_langgraph_provider_retains_owned_request_overrides():
-    definition = AgentDefinition("router_rag_agent", "langgraph", "langgraph_graph")
-    filtered = LangGraphBuilderProvider().filter_request_overrides(
-        definition,
-        {"use_web_search": True, "replans": 2, "unknown": "drop", "use_reranker": None},
-        reject_unsupported=False,
-    )
-    assert filtered == {"use_web_search": True, "replans": 2}
 
 
 @pytest.mark.asyncio

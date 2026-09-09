@@ -140,7 +140,7 @@ export function DeepResearchTaskPicker({
           secondary={`${task.status.replaceAll('_', ' ')} · attempt ${task.run_attempt || 0}`}
           slotProps={{ primary: { noWrap: true }, secondary: { noWrap: true } }}
         />
-        {['completed', 'failed', 'expired', 'cancelled'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
+        {['completed', 'failed', 'expired', 'cancelled', 'recovery_required'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
           <DeleteIcon fontSize="small" />
         </IconButton>}
       </MenuItem>)}
@@ -272,6 +272,7 @@ export default function DeepResearchTaskPanel({
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [reviewGuidance, setReviewGuidance] = useState('');
   const [courseCorrection, setCourseCorrection] = useState('');
+  const [courseCorrectionStatus, setCourseCorrectionStatus] = useState('');
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
@@ -294,7 +295,7 @@ export default function DeepResearchTaskPanel({
   const activeCapabilitiesState = useAgentRunCapabilities(
     task?.active_run_id,
     threadId,
-    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.checkpoint_thread_id}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
+    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
   );
   const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
   const activeTaskCapabilities = activeCapabilitiesState.capabilities;
@@ -417,7 +418,7 @@ export default function DeepResearchTaskPanel({
 
   useEffect(() => {
     if (!selectedTaskId || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) return;
-    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired'];
+    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'];
     if (!terminalStatuses.includes(String(task?.status)) && !terminalStatuses.includes(String(selectedRun.status))) return;
     void refreshTimeline(selectedTaskId, selectedRun.id).catch((value) => setError(String(value)));
   }, [refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status]);
@@ -573,7 +574,7 @@ export default function DeepResearchTaskPanel({
     setTraceLiveRequested(true);
     const details = await getAgentRun(selectedRun.id, threadId);
     liveTraceRunDetailsRef.current = details;
-    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired'].includes(selectedRun.status) });
+    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(selectedRun.status) });
   };
 
   const decide = async (
@@ -732,9 +733,12 @@ export default function DeepResearchTaskPanel({
       {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
       {requestedWebUnavailable && <Alert severity="warning" sx={{ mb: 1 }}>The selected definition does not allow web search.</Alert>}
       {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
+      {task?.status === 'recovery_required' && <Alert severity="warning" sx={{ mb: 1 }}>
+        Runtime execution finished, but its product-state update could not be applied safely. Retry the task or ask an administrator to reconcile this run.
+      </Alert>}
       {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
-          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'primary'} />
+          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />
           <Typography variant="caption">Attempt {selectedRun?.attempt || 0} of {runs.length}</Typography>
           <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
           <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
@@ -815,14 +819,46 @@ export default function DeepResearchTaskPanel({
     composer={!task ? <Box sx={{ pb: 1 }}>
       <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
     </Box> : interactionDescriptors.length > 0 || courseCorrectionAvailability.visible ? <Box sx={{ pb: 1 }}>
-      {courseCorrectionAvailability.visible && task.status === 'running' ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
+      {courseCorrectionAvailability.visible && ['queued', 'running', 'paused', 'awaiting_approval'].includes(task.status) ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
         <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
         <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
           if (!selectedRun || !task) return;
           void submitAgentTaskCourseCorrection(task.id, threadId, { run_id: selectedRun.id, expected_version: task.version, instruction: courseCorrection.trim() })
-            .then(() => { setCourseCorrection(''); return refresh(); })
+            .then((response) => {
+              setCourseCorrection('');
+              setCourseCorrectionStatus(
+                response.delivery_state === 'linked'
+                  ? 'Correction linked to a follow-up run.'
+                  : response.delivery_state === 'incorporated'
+                    ? 'Correction is incorporated into this attempt and remains active until the result verifies coverage.'
+                  : response.delivery_state === 'satisfied'
+                    ? 'Correction was verified in the final result.'
+                  : response.delivery_state === 'unresolved'
+                    ? 'Execution finished without fully resolving this correction. Review the partial result or retry.'
+                  : response.delivery_state === 'delivered'
+                    ? 'Correction delivered and waiting for the next safe planning boundary.'
+                    : 'Correction accepted and queued for delivery.',
+              );
+              return refresh();
+            })
             .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
         }}>Redirect research</Button>
+      </Stack> : null}
+      {courseCorrectionStatus ? <Alert severity="info" sx={{ mb: 1 }}>{courseCorrectionStatus}</Alert> : null}
+      {task.course_corrections?.length ? <Stack spacing={0.75} sx={{ mb: 1 }}>
+        {task.course_corrections.map((correction) => <Alert
+          key={correction.correction_id}
+          severity={correction.delivery_state === 'unresolved' ? 'warning' : correction.delivery_state === 'satisfied' ? 'success' : 'info'}
+          icon={false}
+        >
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Chip size="small" label={correction.delivery_state.replaceAll('_', ' ')} />
+            <Typography variant="body2">{correction.instruction}</Typography>
+          </Stack>
+          {correction.delivery_state === 'unresolved' ? <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+            {correction.runtime_outcome?.unresolved_reason || 'Execution finished without fully addressing this redirect. Retry or accept the partial result.'}
+          </Typography> : null}
+        </Alert>)}
       </Stack> : null}
       <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
         {interactionDescriptors.map((operation) => <Button
@@ -851,7 +887,7 @@ export default function DeepResearchTaskPanel({
           }}
         />}
     </Box> : <Box sx={{ px: 2, py: 1 }}><Typography variant="body2" color="text.secondary">
-      {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
+      {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'recovery_required' ? 'Runtime execution stopped at a product-state recovery boundary. Retry or cancel the task above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
     </Typography></Box>}
   />;
 }

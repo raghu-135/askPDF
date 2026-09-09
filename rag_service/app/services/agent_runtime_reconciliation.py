@@ -6,11 +6,14 @@ import hashlib
 import json
 import argparse
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.runtime.contracts import AgentRuntimeRequest
+from app.time_utils import utc_now
+from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 def result_hash(result: Mapping[str, Any]) -> str:
@@ -90,7 +93,7 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     from app.agent_workflows.repository import AgentWorkflowRepository
     from app.runtime.catalog import continuation_from_run, definition_from_run
     from app.runtime.registry import get_runtime_registry
-    from app.runtime.adapter import RuntimeExecutionContext
+    from app.runtime.adapter import RuntimeInvocationContext
     from app.services.agent_runtime_projection import AgentRuntimeProjection
     from app.services import agent_task_repository as tasks
     from app.services.agent_run_cancellation import confirm_task_cancellation, request_task_cancellation
@@ -115,15 +118,95 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
         task_id=getattr(run, "task_id", None),
         continuation=continuation_from_run(run),
     )
-    context = RuntimeExecutionContext(
-        request=SimpleNamespace(question=request.input.get("question", ""), runtime_execution_mode=True),
+    context = RuntimeInvocationContext(
+        request_payload={"question": request.input.get("question", ""), "runtime_execution_mode": True},
         resolved_spec=dict(run.resolved_spec_json or {}),
-        agent_run_context={"run": run, "agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
+        agent_run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
         task_id=getattr(run, "task_id", None),
     )
     status = "preserved"
     task = await tasks.get_task(str(run.task_id)) if getattr(run, "task_id", None) else None
     known_status = str((result or {}).get("status") or "") if isinstance(result, Mapping) else ""
+    if task is not None and isinstance(result, Mapping) and result.get("orchestration_delta"):
+        from app.services.agent_task_runtime_projection import apply_runtime_task_delta
+        from runtime_protocol.transport import result_from_dict
+
+        wire_result = dict(result)
+        if not isinstance(wire_result.get("task_result"), Mapping) and isinstance(
+            wire_result.get("runtime_task_result"), Mapping
+        ):
+            wire_result["task_result"] = dict(wire_result["runtime_task_result"])
+        runtime_result = result_from_dict(wire_result)
+        delta = runtime_result.orchestration_delta
+        if delta is None:
+            return "deferred"
+        artifact_ids = await apply_runtime_task_delta(
+            task_id=str(task.id), agent_run_id=str(run.id), delta=delta,
+        )
+        delta_sha256 = hashlib.sha256(
+            json.dumps(delta.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        final_runtime_artifact = str((delta.result or {}).get("final_artifact_id") or "")
+        await tasks.finalize_reconciled_runtime_task(
+            str(task.id), str(run.id), delta_event_id=delta.event_id,
+            payload_sha256=delta_sha256, runtime_status=runtime_result.status,
+            result=dict(result),
+            final_artifact_id=artifact_ids.get(final_runtime_artifact, final_runtime_artifact or None),
+        )
+        return "projected"
+    if (
+        task is not None
+        and isinstance(result, Mapping)
+        and (result.get("runtime_metadata") or {}).get("runtime_behavior", {}).get("continuation_semantics") == "linked_run"
+    ):
+        from app.services.agent_task_runtime_projection import apply_neutral_task_completion
+        from runtime_protocol.transport import result_from_dict
+
+        wire_result = dict(result)
+        if not isinstance(wire_result.get("task_result"), Mapping) and isinstance(
+            wire_result.get("runtime_task_result"), Mapping
+        ):
+            wire_result["task_result"] = dict(wire_result["runtime_task_result"])
+        runtime_result = result_from_dict(wire_result)
+        if runtime_result.task_result is None:
+            projection.update({
+                "reconciliation_status": "manual_required",
+                "projection_error": {
+                    "code": "runtime_task_result_missing",
+                    "message": "A task-backed Hermes result has no neutral task result",
+                    "retryable": False,
+                },
+            })
+            await repository.update_runtime_projection(run.id, projection)
+            return "deferred"
+        task_result = runtime_result.task_result.to_dict()
+        usage = dict(task_result.get("usage") or {})
+        operation_id = str(
+            usage.get("operation_id")
+            or projection.get("operation_id")
+            or f"task:{task.id}:run:{run.id}:reconcile"
+        )
+        await apply_neutral_task_completion(
+            task_id=str(task.id), agent_run_id=str(run.id),
+            operation_id=operation_id, runtime_status=runtime_result.status,
+            task_result=task_result,
+        )
+        return "projected"
+    if (
+        task is not None and str(task.status) != "cancelling"
+        and isinstance(result, Mapping)
+        and bool((result.get("runtime_metadata") or {}).get("runtime_behavior", {}).get("supports_orchestration_delta"))
+    ):
+        projection.update({
+            "reconciliation_status": "manual_required",
+            "projection_error": {
+                "code": "runtime_task_delta_missing",
+                "message": "A task-backed LangGraph result cannot be projected by the chat projector",
+                "retryable": False,
+            },
+        })
+        await repository.update_runtime_projection(run.id, projection)
+        return "deferred"
     if (
         task is not None
         and str(task.status) == "cancelling"
@@ -192,14 +275,103 @@ async def reconcile_task_attempt(task_id: str, run_id: str, *, dry_run: bool = F
 
 async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = False) -> dict[str, int]:
     from app.agent_workflows.repository import AgentWorkflowRepository
+    from app.runtime.catalog import definition_from_run
+    from app.runtime.registry import adapter_for_definition
+    from app.services import agent_task_repository as tasks
+    from app.services.agent_task_runtime import ensure_task_run
 
     candidates = await AgentWorkflowRepository().list_runtime_reconciliation_candidates(limit=batch_size)
-    counts = {"inspected": 0, "projected": 0, "preserved": 0, "failed": 0, "deferred": 0}
+    counts = {"inspected": 0, "projected": 0, "preserved": 0, "failed": 0, "deferred": 0, "corrections": 0}
     for run in candidates:
         counts["inspected"] += 1
         try:
             status = await reconcile_run_by_id(run.id, dry_run=dry_run)
             counts[status] = counts.get(status, 0) + 1
+        except Exception as exc:
+            failed_run = await AgentWorkflowRepository().get_run(run.id)
+            projection = dict(((failed_run.run_metadata_json if failed_run is not None else {}) or {}).get("projection") or {})
+            failure_count = int(projection.get("reconciliation_failure_count") or 0) + 1
+            projection.update({
+                "reconciliation_status": "manual_required" if failure_count >= 3 else "failed",
+                "reconciliation_failure_count": failure_count,
+                "last_reconciliation_error": {
+                    "type": type(exc).__name__, "message": str(exc)[:1000],
+                },
+                "next_retry_at": None if failure_count >= 3 else (
+                    utc_now() + timedelta(seconds=min(300, 2 ** failure_count * 5))
+                ).isoformat(),
+            })
+            await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
+            counts["failed"] += 1
+    for command in await tasks.list_pending_course_correction_commands(limit=batch_size):
+        if dry_run:
+            counts["corrections"] += 1
+            continue
+        try:
+            result = dict(command.result_json or {})
+            correction = dict(result.get("correction") or {})
+            task = await tasks.get_task(command.task_id)
+            if task is None:
+                continue
+            if task.status in {"cancelling", "cancelled"} or task.deletion_requested_at is not None:
+                await tasks.reject_course_correction(
+                    command.id,
+                    error={"code": "course_correction_cancelled", "retryable": False},
+                )
+                counts["corrections"] += 1
+                continue
+            run = await AgentWorkflowRepository().get_run(
+                str(result.get("source_run_id") or correction.get("source_run_id") or "")
+            )
+            if run is None:
+                await tasks.reject_course_correction(
+                    command.id,
+                    error={"code": "course_correction_source_run_missing", "retryable": False},
+                )
+                counts["corrections"] += 1
+                continue
+            if str(result.get("delivery_mode") or "") == "linked_run" or str(run.status) in {"completed", "failed", "cancelled", "expired", "rejected"}:
+                await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run")
+                if str(run.status) in tasks.TERMINAL_TASK_RUN_STATUSES:
+                    await tasks.queue_linked_course_correction(task.id, run_id=run.id)
+                    await ensure_task_run(task.id)
+                    counts["corrections"] += 1
+                continue
+            definition = definition_from_run(run)
+            receipt = await adapter_for_definition(definition).submit_course_correction(
+                AgentRuntimeRequest(
+                    run_id=run.id,
+                    thread_id=run.thread_id,
+                    definition_id=definition.definition_id,
+                    framework=definition.framework,
+                    builder_id=definition.builder_id,
+                    task_id=task.id,
+                ),
+                RuntimeCourseCorrection(
+                    correction_id=str(correction.get("correction_id") or correction.get("id")),
+                    operation_id=command.id,
+                    instruction=str(correction.get("instruction") or ""),
+                    scope=str(correction.get("scope") or "remaining_work"),
+                    observed_task_version=int(correction.get("observed_task_version") or command.expected_version),
+                    observed_plan_revision=int(correction.get("observed_plan_revision") or 0),
+                    submitted_at=correction.get("submitted_at"),
+                ),
+            )
+            if receipt.status == "terminal":
+                await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run", receipt=receipt.to_dict())
+            elif receipt.status == "applied":
+                await tasks.mark_course_corrections_runtime_applied(
+                    task.id,
+                    [receipt.correction_id],
+                    plan_revision=int(receipt.plan_revision or 0),
+                )
+            else:
+                await tasks.mark_course_correction_delivered(command.id, receipt=receipt.to_dict())
+            counts["corrections"] += 1
+        except AgentRuntimeError as exc:
+            if not exc.retryable:
+                await tasks.reject_course_correction(command.id, error=exc.to_dict())
+            counts["failed"] += 1
         except Exception:
             counts["failed"] += 1
     return counts

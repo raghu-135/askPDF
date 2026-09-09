@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence, TypedDict
 
 from app.agent_workflows.trace_sanitization import _bounded_value
-from app.runtime.contracts import AgentRuntimeEvent
+from runtime_protocol.contracts import AgentRuntimeEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 class TraceVisualizationId(str, Enum):
@@ -22,15 +26,6 @@ class GenericTimelineVisualization(TypedDict):
 class GenericParallelVisualization(TypedDict):
     id: str
     group_ids: list[str]
-
-
-class LangGraphVisualization(TypedDict):
-    id: str
-    nodes: list[Any]
-    edges: list[Any]
-    execution_plan: list[Any]
-    selected_route: Any
-    visits: list[Any]
 
 
 class HermesSessionVisualization(TypedDict):
@@ -254,7 +249,6 @@ def _parallel_status(kind: str, payload: Mapping[str, Any]) -> str:
 
 def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTraceParallelGroup]:
     groups: dict[str, dict[str, Any]] = {}
-    member_owners: dict[str, str] = {}
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
     for event in ordered:
         payload = dict(event.payload)
@@ -339,10 +333,6 @@ def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTrac
         if member_value is None or not str(member_value).strip():
             raise TraceProjectionError(f"parallel member event {event.event_id} is missing a member identity")
         member_id = str(member_value).strip()
-        prior_owner = member_owners.get(member_id)
-        if prior_owner and prior_owner != group_id:
-            raise TraceProjectionError(f"parallel member {member_id} belongs to conflicting groups")
-        member_owners[member_id] = group_id
         members: dict[str, dict[str, Any]] = group["members"]
         member = members.setdefault(member_id, {
             "member_id": member_id,
@@ -434,6 +424,39 @@ def build_parallel_groups(events: Sequence[AgentRuntimeEvent]) -> list[AgentTrac
                 attempt.setdefault("related_event_ids", [])
         result.append(sanitized)
     return sorted(result, key=lambda row: (int(row["first_sequence"]), row["group_id"]))
+
+
+def build_parallel_groups_safely(
+    events: Sequence[AgentRuntimeEvent],
+) -> list[AgentTraceParallelGroup]:
+    """Project groups for delivery, isolating malformed groups from the stream."""
+    grouped: dict[str, list[AgentRuntimeEvent]] = {}
+    for event in events:
+        payload = dict(event.payload)
+        mode = str(payload.get("dispatch_mode") or payload.get("mode") or "parallel").strip().lower()
+        if mode == "serial":
+            continue
+        group_id = _parallel_group_id(payload)
+        is_lifecycle = event.kind.startswith(_PARALLEL_EVENT_PREFIXES)
+        is_correlated_operation = event.kind.startswith("operation.") and group_id is not None
+        if not is_lifecycle and not is_correlated_operation:
+            continue
+        if group_id is None:
+            logger.warning("Parallel trace event omitted from delivery: missing group identity")
+            continue
+        grouped.setdefault(group_id, []).append(event)
+
+    projected: list[AgentTraceParallelGroup] = []
+    for group_id, group_events in grouped.items():
+        try:
+            projected.extend(build_parallel_groups(group_events))
+        except TraceProjectionError as exc:
+            logger.warning(
+                "Parallel trace group omitted from delivery: group_id=%s error=%s",
+                group_id,
+                str(exc)[:300],
+            )
+    return sorted(projected, key=lambda row: (int(row["first_sequence"]), row["group_id"]))
 
 
 def _operation_key(payload: Mapping[str, Any]) -> tuple[str, int] | None:
@@ -650,7 +673,7 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
         "primary_failure_event_id": (primary or {}).get("event_id"),
         "primary_basis": primary_basis if primary is not None else None,
         "location": (primary or {}).get("location") or {},
-        "failure_count": max(len(groups), 1 if terminal and terminal.get("kind") == "run.failed" else 0),
+        "failure_count": len(rows),
         "cancellation_count": len([row for row in rows if row.get("classification") == "cancellation"]),
     }
     return {
@@ -662,13 +685,24 @@ def build_trace_diagnostics(events: Sequence[AgentRuntimeEvent]) -> AgentTraceDi
     }
 
 
-def _graph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[Mapping[str, Any]]) -> LangGraphVisualization | None:
-    config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), Mapping) else {}
-    graph = config.get("graph") if isinstance(config.get("graph"), Mapping) else {}
-    nodes = list(graph.get("nodes") or [])
-    edges = list(graph.get("edges") or [])
-    if not nodes and not edges:
-        return None
+def _runtime_visualization(
+    events: Sequence[AgentRuntimeEvent],
+    operations: Sequence[Mapping[str, Any]],
+    visualization_id: str,
+) -> dict[str, Any] | None:
+    """Project a bounded visualization descriptor emitted by a runtime.
+
+    The control plane deliberately does not inspect resolved framework specs.
+    Runtimes may emit a neutral ``visualization`` object in an event payload;
+    operation topology remains useful when no static descriptor is available.
+    """
+
+    descriptors = [
+        event.payload.get("visualization")
+        for event in events
+        if event.source_metadata.get("visualization_id") == visualization_id
+        and isinstance(event.payload.get("visualization"), Mapping)
+    ]
     visits = [
         {
             "operation_id": row.get("operation_id"),
@@ -680,22 +714,19 @@ def _graph_visualization(resolved_spec: Mapping[str, Any], operations: Sequence[
         for row in operations
         if isinstance(row.get("topology_ref"), Mapping)
     ]
-    execution_plan = next((row.get("execution_plan") for row in reversed(operations) if row.get("execution_plan")), graph.get("execution_plan") or graph.get("executionPlan") or [])
-    selected_route = next((row.get("route") for row in reversed(operations) if row.get("route")), graph.get("selected_route") or graph.get("selectedRoute"))
-    return {
-        "id": TRACE_VISUALIZATION_LANGGRAPH,
-        "nodes": _bounded_value(nodes),
-        "edges": _bounded_value(edges),
-        "execution_plan": _bounded_value(execution_plan),
-        "selected_route": selected_route,
-        "visits": _bounded_value(visits),
-    }
+    if not descriptors and not visits:
+        return None
+    descriptor = dict(descriptors[-1]) if descriptors else {}
+    descriptor["id"] = visualization_id
+    descriptor["visits"] = visits
+    return _bounded_value(descriptor)
 
 
 def _hermes_visualization(events: Sequence[AgentRuntimeEvent], failures: Sequence[Mapping[str, Any]]) -> HermesSessionVisualization | None:
     hermes_events = [
         event for event in events
         if event.source_metadata.get("visualization_id") == TRACE_VISUALIZATION_HERMES
+        or event.source_metadata.get("framework") == "hermes"
     ]
     if not hermes_events:
         return None
@@ -733,7 +764,9 @@ def build_canonical_trace_projection(
 ) -> dict[str, Any]:
     ordered = sorted(events, key=lambda event: (event.sequence, event.event_id))
     operations = _operations(ordered, framework)
-    parallel_groups = build_parallel_groups(ordered)
+    # Trace rendering is diagnostic-only. Isolate malformed historical groups
+    # so a projection problem cannot turn an otherwise valid trace into a 500.
+    parallel_groups = build_parallel_groups_safely(ordered)
     diagnostics = build_trace_diagnostics(ordered)
     failures = diagnostics["failures"]
     visualizations: dict[str, Any] = {
@@ -744,9 +777,9 @@ def build_canonical_trace_projection(
             "id": TRACE_VISUALIZATION_PARALLEL,
             "group_ids": [group["group_id"] for group in parallel_groups],
         }
-    langgraph = _graph_visualization(resolved_spec, operations)
-    if langgraph is not None:
-        visualizations[TRACE_VISUALIZATION_LANGGRAPH] = langgraph
+    runtime_graph = _runtime_visualization(ordered, operations, TRACE_VISUALIZATION_LANGGRAPH)
+    if runtime_graph is not None:
+        visualizations[TRACE_VISUALIZATION_LANGGRAPH] = runtime_graph
     hermes = _hermes_visualization(ordered, failures)
     if hermes is not None:
         visualizations[TRACE_VISUALIZATION_HERMES] = hermes

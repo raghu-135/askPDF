@@ -36,6 +36,7 @@ from app.mcp.telemetry import extracted_trace_context, tool_span
 from app.mcp.tool_audit import persist_tool_audit
 from app.runtime.cancellation import race_with_cancellation
 from app.services.agent_task_repository import run_cancel_requested
+from runtime_protocol.tool_contract import ToolError, ToolResult, ToolTrace, ToolMetrics
 
 logger = logging.getLogger(__name__)
 _transport_execution_token: ContextVar[str | None] = ContextVar(
@@ -210,26 +211,52 @@ class MCPServer:
                             },
                         )
                         raise
+            # MCP structuredContent is the shared runtime_protocol tool
+            # envelope.  Registry and transport metadata belongs in the
+            # descriptor/context, not in the canonical result object; adding
+            # arbitrary top-level keys here makes remote runtimes reject an
+            # otherwise valid result as a different wire contract.
+            try:
+                if not isinstance(result, ToolResult):
+                    raise ValueError("MCP handler returned a non-canonical result")
+                structured = result.to_payload()
+            except Exception as exc:
+                cause = str(exc)[:700]
+                failure = ToolResult(
+                    ok=False,
+                    content=f"{name} failed: {cause}",
+                    sources=[],
+                    artifacts={},
+                    warnings=["tool_result_boundary_failure"],
+                    error=ToolError(
+                        code="tool_result_size_exceeded" if "size" in cause or "length" in cause or "maximum" in cause else "mcp_protocol_error",
+                        message=cause,
+                        type=type(exc).__name__,
+                        retryable=False,
+                    ),
+                    metrics=ToolMetrics(result_chars=min(len(cause), 700), warning_count=1),
+                    trace=ToolTrace(tool_name=name, thread_id=context.thread_id, agent_run_id=context.run_id, tool_call_id=context.tool_call_id, mcp_request_id=context.mcp_request_id),
+                )
+                structured = failure.to_payload()
+                await persist_tool_audit(
+                    run_id=str(context.run_id or ""), request_id=audit_request_id,
+                    phase="failed", tool_name=name, result=failure,
+                    payload={"failure_stage": "serialization", "error": {"code": failure.error.code, "type": type(exc).__name__, "message": cause}},
+                )
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=failure.content)],
+                    structuredContent=structured,
+                    isError=True,
+                )
             await persist_tool_audit(
                 run_id=str(context.run_id or ""), request_id=audit_request_id,
                 phase="completed" if result.ok and result.error is None else "failed",
                 tool_name=name, result=result,
                 payload={"failure_stage": "handler"} if not result.ok or result.error is not None else None,
             )
-            structured = result.structured(
-                contract_id=config["id"],
-                contract_version=config.get("contract_version", "1"),
-            )
             trace = structured.setdefault("trace", {})
             trace.setdefault("mcp_request_id", context.mcp_request_id)
             trace.setdefault("tool_call_id", context.tool_call_id)
-            structured["result_count"] = len(result.sources)
-            structured.update({
-                "mcp_server": config.get("mcp_server"),
-                "mcp_contract_version": config.get("contract_version", "1"),
-                "transport": mcp_transport(),
-                "mcp_mode": mcp_mode(),
-            })
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=result.content)],
                 structuredContent=structured,

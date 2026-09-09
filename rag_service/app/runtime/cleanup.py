@@ -5,14 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.runtime.capability_resolver import resolve_run_capability_resolution
-from app.runtime.catalog import continuation_from_run, definition_from_run
-from app.runtime.contracts import RuntimeOperationId, RuntimeSupportLevel
+from app.runtime.catalog import definition_from_run
 from app.runtime.registry import RuntimeRegistry, get_runtime_registry
+from runtime_protocol.contracts import RuntimeCleanupResult, RuntimeCleanupStatus
 
 
 @dataclass(frozen=True)
-class ContinuationCleanupOutcome:
+class RunCleanupOutcome:
     run_id: str
     status: str
     adapter_result: Any = None
@@ -20,64 +19,55 @@ class ContinuationCleanupOutcome:
 
     @property
     def cleaned(self) -> bool:
-        return self.status == "cleaned"
+        return self.status in {"cleaned", "already_cleaned", "not_bound"}
 
     @property
     def owner_deletion_allowed(self) -> bool:
-        return self.status in {"cleaned", "not_bound", "unsupported"}
+        # Hermes owns native execution/session cleanup and deliberately does
+        # not participate in the LangGraph run-cleanup contract.  This is a
+        # framework boundary, not a LangGraph cleanup fallback.
+        return self.status in {"cleaned", "already_cleaned", "not_bound", "unsupported"}
 
 
-async def delete_run_continuation(
+async def cleanup_run(
     run: Any,
     *,
     registry: RuntimeRegistry | None = None,
-) -> ContinuationCleanupOutcome:
+) -> RunCleanupOutcome:
     run_id = str(getattr(run, "id", ""))
     definition = definition_from_run(run)
-    if not getattr(run, "runtime_binding_json", None):
-        return ContinuationCleanupOutcome(run_id=run_id, status="not_bound")
-    binding = continuation_from_run(run)
-    if binding is None:
-        return ContinuationCleanupOutcome(
-            run_id=run_id,
-            status="invalid_binding",
-            error="The persisted runtime binding is invalid.",
-        )
+    if str(getattr(definition, "framework", "")) != "langgraph":
+        return RunCleanupOutcome(run_id=run_id, status="unsupported")
     registry = registry or get_runtime_registry()
     adapter = registry.get(definition)
-    resolution = await resolve_run_capability_resolution(
-        definition,
-        registry=registry,
-        run=run,
-        adapter=adapter,
-    )
-    if not resolution.runtime_available:
-        return ContinuationCleanupOutcome(
-            run_id=run_id,
-            status="unavailable",
-            error=resolution.error,
-        )
-    capabilities = resolution.capabilities
-    descriptor = capabilities.operations.get(RuntimeOperationId.RUN_CONTINUATION_CLEANUP)
-    if descriptor is None or not descriptor.enabled or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
-        return ContinuationCleanupOutcome(run_id=run_id, status="unsupported")
     try:
-        result = await adapter.delete_continuation(binding)
+        result = await adapter.cleanup_run(run_id)
     except Exception as exc:
-        return ContinuationCleanupOutcome(run_id=run_id, status="failed", error=str(exc))
-    return ContinuationCleanupOutcome(
-        run_id=run_id,
-        status="cleaned",
-        adapter_result=result,
-    )
+        return RunCleanupOutcome(run_id=run_id, status="failed", error=str(exc))
+    if not isinstance(result, RuntimeCleanupResult):
+        return RunCleanupOutcome(
+            run_id=run_id,
+            status="failed",
+            error="runtime cleanup response must be RuntimeCleanupResult",
+            adapter_result=result,
+        )
+    if result.run_id != run_id:
+        return RunCleanupOutcome(
+            run_id=run_id,
+            status="failed",
+            error="runtime cleanup response returned a different run_id",
+            adapter_result=result,
+        )
+    result_status = result.status.value if isinstance(result.status, RuntimeCleanupStatus) else str(result.status)
+    return RunCleanupOutcome(run_id=run_id, status=result_status, adapter_result=result)
 
 
-async def delete_run_continuations(
+async def cleanup_runs(
     runs: Iterable[Any],
     *,
     registry: RuntimeRegistry | None = None,
-) -> list[ContinuationCleanupOutcome]:
-    results: list[ContinuationCleanupOutcome] = []
+) -> list[RunCleanupOutcome]:
+    results: list[RunCleanupOutcome] = []
     for run in runs:
-        results.append(await delete_run_continuation(run, registry=registry))
+        results.append(await cleanup_run(run, registry=registry))
     return results

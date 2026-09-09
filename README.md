@@ -129,9 +129,9 @@ docker compose up --build
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      Docker Compose                                         │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────┬─────────────────────┤
-│    Frontend     │   RAG Service   │  Browser Capture│   PostgreSQL    │      Weaviate       │
-│   (Next.js)     │    (FastAPI)    │   (Selenium)    │   (Primary DB)  │   (Vector DB)       │
-│   Port: 3000    │   Port: 8000    │   Port: 8090    │   Port: 5432    │   Port: 8080        │
+│    Frontend     │   RAG Service   │ LangGraph runtime│ Hermes runtime │ Browser Capture      │
+│   (Next.js)     │ control plane   │  (FastAPI/SSE)   │  (HTTP gateway)│   (Selenium)         │
+│   Port: 3000    │   Port: 8000    │   Port: 8100      │   Port: 8200   │   Port: 8090          │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴─────────────────────┘
                                                    │
                                                    ▼
@@ -147,17 +147,21 @@ docker compose up --build
 | Service | Port | Description |
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
-| **RAG Service** | 8000 | FastAPI server for PDF processing, indexing, chat, and the integrated durable agent-task worker |
+| **RAG Service** | 8000 | Product/control-plane APIs for PDF processing, indexing, chat, task orchestration, artifacts, MCP, and trace projection |
+| **LangGraph runtime** | 8100 | External LangGraph validation, graph compilation, Deep Agent execution, checkpoints, dependency discovery, and framework HITL |
+| **Hermes runtime** | 8200 | Separate Hermes execution gateway for Hermes-backed task runs |
 | **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
-The current deployment runs `rag-service` as one Uvicorn process. Its integrated
-agent-task worker shares the service's PostgreSQL pool and uses database leases
-and checkpoints for restart recovery. Do not enable multiple Uvicorn/Gunicorn
-worker processes until agent execution is extracted into its planned dedicated
-service; each server process would otherwise start another task worker.
+The control plane and execution runtimes are separate services. The control
+plane owns product databases, task state, artifacts, MCP authorization, and
+debug projections. `langgraph-runtime` owns graph execution and checkpoint
+storage; `hermes-runtime` owns native Hermes execution. Runtime calls use the
+strictly validated `runtime_protocol` over HTTP/SSE, and product APIs expose only opaque
+continuations—not framework checkpoint identifiers. The HTTP/SSE contract is
+strictly validated but does not negotiate protocol versions.
 
 </details>
 
@@ -165,7 +169,7 @@ service; each server process would otherwise start another task worker.
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Agent Workflow Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with persisted run metadata
+- **Agent Workflow Runtime**: External LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with product-projected run metadata
 - **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
 - **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
 - **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
@@ -186,17 +190,23 @@ service; each server process would otherwise start another task worker.
 <details>
 <summary>🛠️ Technology Stack</summary>
 
-### RAG Service
+### RAG Service / Control Plane
 | Technology | Purpose |
 |------------|---------|
 | **FastAPI** | Web framework |
-| **LangChain** | LLM/Embedding integration |
-| **LangGraph** | Stateful multi-agent workflow |
+| **LangChain** | Product-side LLM/embedding integration where required |
 | **Weaviate Client** | Vector database operations |
 | **SQLModel** | ORM built on SQLAlchemy |
 | **SQLAlchemy** | Async database operations |
 | **Alembic** | Database migration management |
 | **asyncpg** | Async PostgreSQL driver |
+
+### LangGraph Runtime
+| Technology | Purpose |
+|------------|---------|
+| **FastAPI + HTTP/SSE** | External runtime protocol and event streaming |
+| **LangGraph / LangChain** | Graph compilation and stateful Deep Agent execution |
+| **Checkpoint store** | Runtime-owned pause, resume, and restart recovery |
 
 ### Browser Capture Service
 | Technology | Purpose |
@@ -332,22 +342,17 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
-| `ASKPDF_AGENT_CHECKPOINTER` | `memory` (`postgres` in Docker/CI) | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
-| `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
-| `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
-| `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
-| `AGENT_RUNTIME_MODE` | `external` | LangGraph execution transport: `external` for the runtime service or explicit `in_process` for development images that install LangGraph |
-| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Internal URL used when `AGENT_RUNTIME_MODE=external` |
+| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Required internal URL for the external LangGraph runtime |
 | `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
 
 **Agent Runtime Operations**
-- Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
-- Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
+- Local development runs the control plane and `langgraph-runtime` together through Compose, or points `LANGGRAPH_RUNTIME_URL` at a separately launched runtime. The control plane has no in-process LangGraph mode.
+- Checkpoint configuration and credentials belong only to `langgraph-runtime`; the runtime fails closed when durable checkpoint storage is unavailable.
 - Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
 - The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
-- Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
+- Runtime checkpoint administration is performed from the `langgraph-runtime` image and never from the control plane.
 - The Hermes adapter implements the production API contract pinned to NousResearch/hermes-agent commit `bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894`. Definitions resolve deterministically into managed profiles; credentials remain environment-owned. The bundled gateway journal is still single-worker/single-replica and requires a shared transactional store before horizontal scaling.
 
 The default Compose stack builds the pinned Hermes API and its askPDF adapter.
@@ -456,7 +461,6 @@ run for debugging.
 - `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
 - `--integration` - Run integration tests
-- `--agent-checkpoint` - Run the Postgres checkpoint/resume hardening test
 - `--schema` - Run schema guardrail tests
 - `--standalone` - Run standalone verification scripts
 - `--all` / `--all-tests` - Run the full pytest suite plus standalone checks

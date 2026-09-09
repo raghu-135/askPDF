@@ -95,7 +95,6 @@ async def create_run(
             run_metadata_json=run_metadata,
             resolved_spec_json=resolved_spec_json,
             status=running_status,
-            checkpoint_thread_id=None,
             runtime_binding_json=dict(runtime_binding_json) if runtime_binding_json else None,
             runtime_binding_status="active" if runtime_binding_json else "unbound",
             started_at=utc_now(),
@@ -153,6 +152,26 @@ async def set_run_debug_trace(
         run = await session.get(AgentRun, run_id)
         if not run:
             return None
+        replace_jsonb_field(run, "debug_trace_json", debug_trace_json)
+        await session.flush()
+        await session.refresh(run)
+        return run
+
+
+async def update_run_observability(
+    session: AsyncSession,
+    run_id: str,
+    *,
+    metrics_json: Dict[str, Any],
+    debug_trace_json: Dict[str, Any],
+) -> Optional[AgentRun]:
+    """Persist product observability without repeating orchestration mutations."""
+
+    async with session.begin():
+        run = await session.get(AgentRun, run_id)
+        if not run:
+            return None
+        replace_jsonb_field(run, "metrics_json", metrics_json)
         replace_jsonb_field(run, "debug_trace_json", debug_trace_json)
         await session.flush()
         await session.refresh(run)

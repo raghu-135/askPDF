@@ -60,9 +60,9 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
             utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
             limit=bounded,
         )
-        from app.runtime.cleanup import delete_run_continuations
+        from app.runtime.cleanup import cleanup_runs
 
-        cleanup_results = await delete_run_continuations(runtime_runs)
+        cleanup_results = await cleanup_runs(runtime_runs)
         await tasks.clear_task_runtime_bindings(
             result.run_id for result in cleanup_results if result.cleaned
         )

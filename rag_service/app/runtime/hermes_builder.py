@@ -9,7 +9,7 @@ from app.runtime.builder import (
     BuilderCatalog,
     UnsupportedRequestOverrideError,
 )
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -17,10 +17,9 @@ from app.runtime.contracts import (
     RuntimeValidationResult,
     validated_disabled_operation_ids,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_context_length, hermes_model_provider
 from app.runtime.hermes_profile import resolve_hermes_profile
-from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
@@ -50,7 +49,9 @@ class HermesBuilderProvider:
         )
 
     def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:
-        return apply_deep_agent_env_overrides(limits, self.framework)
+        # Hermes execution safety limits are owned by hermes-runtime. The
+        # control plane forwards only the neutral product limits in the task.
+        return dict(limits)
     _allowed_config_keys = {
         "research_policy_id", "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",

@@ -62,8 +62,8 @@ services:
   real-hermes-smoke-test:
     profiles: ["real-hermes"]
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile.test
+      context: .
+      dockerfile: rag_service/Dockerfile.test
     working_dir: /app
     environment:
       PYTHONPATH: /app

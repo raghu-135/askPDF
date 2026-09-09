@@ -10,23 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator, Mapping
 
-
-CANONICAL_RUNTIME_EVENT_KINDS = frozenset({
-    "run.queued", "run.started", "run.paused", "run.resumed", "run.completed",
-    "run.failed", "run.cancel_requested", "run.cancelled", "output.delta",
-    "output.completed", "llm.started", "llm.completed", "llm.failed",
-    "reasoning.available", "interrupt.requested", "interrupt.responded",
-    "approval.requested", "approval.responded", "tool.started", "tool.progress",
-    "tool.completed", "tool.failed", "subagent.started", "subagent.progress",
-    "subagent.completed", "subagent.failed", "subagent.cancelled", "artifact.created",
-    "artifact.updated", "artifact.completed", "runtime.event", "operation.started",
-    "operation.completed", "operation.failed", "operation.skipped", "dispatch.planned",
-    "dispatch.started", "dispatch.barrier_reached", "dispatch.cancelled", "worker.queued",
-    "worker.started", "worker.progress", "worker.retrying", "worker.completed",
-    "worker.skipped", "worker.failed", "worker.timed_out", "worker.cancelled",
-    "aggregation.completed", "aggregation.partial",
-})
-TERMINAL_RUNTIME_EVENT_KINDS = frozenset({"run.completed", "run.failed", "run.cancelled"})
+from runtime_protocol.contracts import (
+    CANONICAL_RUNTIME_EVENT_KINDS,
+    TERMINAL_RUNTIME_EVENT_KINDS,
+)
 
 
 def json_envelope(
@@ -46,6 +33,14 @@ def json_envelope(
     }
 
 
+def json_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a JSON operation payload without adding negotiation metadata."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime protocol payload must be an object")
+    return dict(value)
+
+
 def structured_error(
     code: str,
     message: str,
@@ -62,7 +57,9 @@ def structured_error(
 
 
 def validate_event_mapping(value: Mapping[str, Any]) -> None:
-    required = {"event_id", "run_id", "sequence", "kind"}
+    required = {
+        "event_id", "run_id", "sequence", "kind",
+    }
     if not isinstance(value, Mapping) or not required.issubset(value):
         raise ValueError("runtime event has an incomplete canonical shape")
     if not isinstance(value["event_id"], str) or not value["event_id"].strip():
@@ -90,7 +87,10 @@ def validate_event_mapping(value: Mapping[str, Any]) -> None:
 def sse_encode(event: Mapping[str, Any] | Any, *, result: Mapping[str, Any] | Any | None = None) -> str:
     event_value = event.to_dict() if hasattr(event, "to_dict") else dict(event)
     result_value = result.to_dict() if hasattr(result, "to_dict") else result
-    payload: dict[str, Any] = {"event": event_value}
+    validate_event_mapping(event_value)
+    payload: dict[str, Any] = {
+        "event": event_value,
+    }
     if result_value is not None:
         payload["result"] = dict(result_value)
     return f"id: {event_value['event_id']}\nevent: {event_value['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
@@ -103,7 +103,8 @@ async def iter_sse(response: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     async for line in response.aiter_lines():
         if line == "":
             if data:
-                yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}
+                value = json.loads("\n".join(data))
+                yield event_name, {"event_id": event_id, "data": value}
             event_id, event_name, data = "", "message", []
             continue
         if line.startswith("id:"):
@@ -113,4 +114,5 @@ async def iter_sse(response: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         elif line.startswith("data:"):
             data.append(line[5:].lstrip())
     if data:
-        yield event_name, {"event_id": event_id, "data": json.loads("\n".join(data))}
+        value = json.loads("\n".join(data))
+        yield event_name, {"event_id": event_id, "data": value}

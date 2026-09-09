@@ -7,17 +7,25 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
+from app.runtime.adapter import RuntimeInvocationContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.protocol import json_payload
 from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
 from hermes_runtime.pinned_contract import HERMES_REVISION
 from hermes_runtime.execution_store import HermesExecutionStore
+
+
+@pytest.fixture(autouse=True)
+def external_hermes_transport_environment(monkeypatch):
+    """Hermes runtime tests exercise the external service contract."""
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
 
 
 @pytest.mark.asyncio
@@ -63,11 +71,18 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._json = AsyncMock(return_value={
-        "capabilities": {
+        "capabilities": json_payload({
             "operations": {
                 "run.start": {"support": "native", "owner": "runtime", "enabled": True},
-            }
-        }
+            },
+            "behavior": {
+                "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
+                "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True, "required_input_fields": [],
+                "supports_pause_resume": False, "supports_course_correction": True,
+                "budget_boundary_owner": "product", "grounding_owner": "product",
+            },
+        }),
     })
 
     deployment = await adapter.deployment_capabilities()
@@ -161,7 +176,7 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     state_path = tmp_path / "state.json"
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
-    payload = {
+    payload = json_payload({
         "request": {
             "run_id": "run-conflict",
             "definition_id": "hermes_rag_agent",
@@ -171,7 +186,7 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
             "options": {},
         },
         "context": {"resolved_spec": {"config": {}}},
-    }
+    })
     store = HermesExecutionStore(str(state_path))
     store.create("run-conflict", payload)
     continuation = {
@@ -200,7 +215,10 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
         "http://hermes.test",
         "profile-1",
         "upstream-1",
-        {"X-Hermes-Session-Id": "session-1"},
+        {
+            "authorization": "Bearer test-hermes-api-token-32-characters",
+            "X-Hermes-Session-Id": "session-1",
+        },
     )
     result = HermesExecutionStore(str(state_path)).records["run-conflict"]
     assert result["status"] == "cancelled"
@@ -334,6 +352,20 @@ def test_hermes_tool_completion_preserves_bounded_evidence_metadata():
     assert payload["explicit_gap"] is False
 
 
+def test_hermes_task_input_makes_multiple_redirects_authoritative():
+    rendered = hermes_api._task_input_with_context("Original objective", {
+        "active_corrections": [
+            {"correction_id": "c-1", "operation_id": "o-1", "instruction": "Compare security."},
+            {"correction_id": "c-2", "operation_id": "o-2", "instruction": "Compare pricing."},
+        ],
+    })
+
+    assert "AUTHORITATIVE USER REDIRECTS" in rendered
+    assert "c-1" in rendered and "Compare security" in rendered
+    assert "c-2" in rendered and "Compare pricing" in rendered
+    assert "correction_outcomes" in rendered
+
+
 @pytest.mark.asyncio
 async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
     requested = []
@@ -369,8 +401,10 @@ async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
 async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypatch):
     statuses = iter(("stopping", "running", "cancelled"))
     async_client = httpx.AsyncClient
+    observed_headers = []
 
     def handler(request):
+        observed_headers.append(dict(request.headers))
         return httpx.Response(
             200,
             json={"run_id": "upstream-run-7", "status": next(statuses)},
@@ -387,7 +421,10 @@ async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypat
         "http://hermes.test",
         "askpdf-run-profile-1",
         "upstream-run-7",
-        {},
+        {
+            "authorization": "Bearer test-hermes-token",
+            "X-Hermes-Session-Id": "session-3",
+        },
         timeout_seconds=1,
         poll_interval_seconds=0.01,
     )
@@ -397,6 +434,8 @@ async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypat
         "status": "cancelled",
         "last_event": None,
     }
+    assert all(headers["authorization"] == "Bearer test-hermes-token" for headers in observed_headers)
+    assert all("x-hermes-session-id" not in headers for headers in observed_headers)
 
 
 @pytest.mark.asyncio
@@ -450,7 +489,7 @@ async def test_upstream_stop_rejects_a_malformed_acknowledgement(monkeypatch):
 
 
 def _cancel_payload():
-    return {
+    return json_payload({
         "continuation": {
             "binding_type": "hermes_session",
             "payload": {
@@ -459,7 +498,7 @@ def _cancel_payload():
                 "runtime_profile": "askpdf-run-profile-1",
             },
         },
-    }
+    })
 
 
 def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monkeypatch, tmp_path):
@@ -595,18 +634,18 @@ async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
     def handler(http_request: httpx.Request) -> httpx.Response:
         calls.append(http_request.method)
         if http_request.method == "POST":
-            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps({'event': progress})}\n\n"
+            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps(json_payload({'event': json_payload(progress)}))}\n\n"
         else:
             assert http_request.url.params["after_event_id"] == "run-1:346"
             assert "after_sequence" not in http_request.url.params
-            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps({'event': terminal, 'result': {'status': 'completed', 'output': 'recovered'}})}\n\n"
+            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps(json_payload({'event': json_payload(terminal), 'result': json_payload({'status': 'completed', 'output': 'recovered'})}))}\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
     result = await adapter.start(
         request,
-        context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
+        context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
     )
 
     assert result.output == "recovered"
@@ -628,7 +667,7 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
     with pytest.raises(RuntimeError) as error:
         await adapter.start(
             request,
-            context=RuntimeExecutionContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
+            context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
         )
 
     assert error.value.code == "runtime_model_tool_calling_unsupported"
@@ -664,7 +703,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
     monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "postgres")
     monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "1")
-    with pytest.raises(builtins.RuntimeError, match="PostgreSQL execution storage is not enabled"):
+    with pytest.raises(builtins.RuntimeError, match="HERMES_RUNTIME_STORAGE_BACKEND must be 'file'"):
         hermes_api.create_app()
 
 
@@ -755,31 +794,8 @@ def test_hermes_readiness_rejects_rendered_context_mismatch(monkeypatch, tmp_pat
 def test_hermes_readiness_does_not_invent_health_route_from_mcp_transport(monkeypatch, tmp_path):
     monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
     monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
-    response, requested_urls = _readiness_response(
-        monkeypatch, tmp_path, hermes_status=200, mcp_status=200
-    )
-
-    # The helper configures the explicit health URL; remove it and exercise the
-    # app again to ensure the streamable transport URL is never treated as a
-    # conventional GET health endpoint.
-    monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
-    async_client = httpx.AsyncClient
-
-    def handler(request):
-        requested_urls.append(str(request.url))
-        return httpx.Response(200, request=request)
-
-    monkeypatch.setattr(
-        hermes_api.httpx,
-        "AsyncClient",
-        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
-    )
-    with TestClient(hermes_api.create_app()) as client:
-        response = client.get("/readyz")
-
-    assert response.status_code == 503
-    assert response.json()["checks"]["mcp"]["status"] == "not_checked"
-    assert not any("/internal/mcp/healthz" in url for url in requested_urls)
+    with pytest.raises(builtins.RuntimeError, match="ASKPDF_MCP_HEALTH_URL is required"):
+        hermes_api.create_app()
 
 
 def test_hermes_readiness_rejects_unhealthy_required_mcp(monkeypatch, tmp_path):

@@ -80,6 +80,21 @@ def test_signed_context_rejects_deployment_context_mismatch(monkeypatch):
     assert rejected.value.reason == "model_context_mismatch"
 
 
+def test_langgraph_context_window_is_not_checked_against_hermes_limit(monkeypatch):
+    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", context_window=8192),
+        task_id="task-1",
+        allowed_tools=["search_documents"],
+        runtime="langgraph",
+    )
+
+    decoded = decode_execution_context_token(token, tool_name="search_documents")
+
+    assert decoded.context_window == 8192
+
+
 def test_execution_context_identity_rejects_cross_run_reuse(monkeypatch):
     monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")

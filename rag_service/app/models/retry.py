@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 import re
 from typing import Any, Callable, Dict, Optional
+
+from app.services.retry import run_with_bounded_retries
 
 
 logger = logging.getLogger(__name__)
@@ -46,30 +47,30 @@ async def invoke_with_retry(
     retry_observer: Optional[Callable[[Dict[str, Any]], Any]] = None,
     **kwargs,
 ):
-    max_retries = 10
-    base_delay = 2
-    for i in range(max_retries):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            err_str = str(e)
-            is_retryable, reason = is_retryable_model_error(err_str)
-            if is_retryable:
-                delay = base_delay * (2 ** min(i, 4))
-                if retry_observer is not None:
-                    event = {
-                        "attempt": i + 1,
-                        "delay_ms": delay * 1000,
-                        "reason": reason,
-                        "http_status_code": _extract_http_status_code(err_str),
-                        "exception_type": type(e).__name__,
-                        "exception_message": _compact_error_message(e),
-                    }
-                    observed = retry_observer(event)
-                    if inspect.isawaitable(observed):
-                        await observed
-                logger.warning("%s. Retrying in %ss... (Attempt %s/%s)", reason, delay, i + 1, max_retries)
-                await asyncio.sleep(delay)
-                continue
-            raise
-    raise Exception("Max retries reached while waiting for model to become available.")
+    def retry_model_error(exc: BaseException) -> bool:
+        retryable, _ = is_retryable_model_error(str(exc))
+        return retryable
+
+    async def observe_model_retry(event: Dict[str, Any]) -> None:
+        if retry_observer is None:
+            return
+        message = str(event.get("exception_message") or "")
+        _, reason = is_retryable_model_error(message)
+        enriched = {
+            **event,
+            "reason": reason,
+            "http_status_code": _extract_http_status_code(message),
+        }
+        observed = retry_observer(enriched)
+        if inspect.isawaitable(observed):
+            await observed
+
+    return await run_with_bounded_retries(
+        lambda: func(*args, **kwargs),
+        max_attempts=10,
+        base_delay_seconds=2,
+        max_delay_seconds=32,
+        retry_if=retry_model_error,
+        operation_name="model call",
+        retry_observer=observe_model_retry if retry_observer is not None else None,
+    )

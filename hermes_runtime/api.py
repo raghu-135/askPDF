@@ -34,11 +34,42 @@ from hermes_runtime.profile_manager import (
     configured_provider,
     validate_provider_context,
 )
-from runtime_protocol import json_envelope, sse_encode, structured_error, validate_event_mapping
+from runtime_protocol import (
+    json_envelope,
+    sse_encode,
+    structured_error,
+    validate_event_mapping,
+    json_payload,
+)
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.contracts import RuntimeUsageSnapshot
 
 
 logger = logging.getLogger(__name__)
+
+
+def _runtime_usage_snapshot(
+    native_usage: Mapping[str, Any] | None,
+    *,
+    operation_id: str,
+    started_tool_calls: set[str],
+    active_runtime_ms: int,
+) -> dict[str, Any]:
+    """Normalize only usage dimensions Hermes measured for this operation."""
+
+    usage = dict(native_usage or {})
+    usage["tool_calls"] = len(started_tool_calls)
+    usage["active_runtime_ms"] = max(0, int(active_runtime_ms))
+    measured = ["tool_calls", "active_runtime_ms"]
+    if any(
+        usage.get(key) is not None
+        for key in ("model_tokens", "total_tokens", "input_tokens", "output_tokens")
+    ):
+        measured.append("model_tokens")
+    if usage.get("model_calls") is not None:
+        measured.append("model_calls")
+    usage["measured_dimensions"] = measured
+    return RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
 
 _DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
 - AskPDF document tools are already exposed directly in the model-facing MCP tool list.
@@ -86,6 +117,18 @@ def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> 
     documents = task_context.get("documents")
     if isinstance(documents, list) and documents:
         sections.append(_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE)
+    corrections = [
+        value for value in task_context.get("active_corrections") or []
+        if isinstance(value, Mapping)
+    ]
+    if corrections:
+        sections.append(
+            "AUTHORITATIVE USER REDIRECTS (each must be addressed and reported separately):\n"
+            + json.dumps(corrections, sort_keys=True, ensure_ascii=False)
+            + "\nThe terminal result object MUST include correction_outcomes with one entry per "
+            "correction_id. Each entry must contain correction_id, operation_id, state "
+            "(satisfied or unresolved), explanation, unresolved_reason, todo_ids, and artifact_ids."
+        )
     sections.append("askPDF task context:\n" + json.dumps(task_context, sort_keys=True, ensure_ascii=False))
     return "\n\n".join(section for section in sections if section)
 
@@ -177,7 +220,7 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
         **(dict(existing_details) if isinstance(existing_details, Mapping) else {}),
         "hermes": hermes_details,
     }
-    event = {
+    event = json_payload({
         "event_id": event_id or f"{run_id}:{sequence}",
         "run_id": run_id,
         "sequence": sequence,
@@ -185,7 +228,7 @@ def _neutral_event(run_id: str, sequence: int, kind: str, payload: Mapping[str, 
         "payload": normalized_payload,
         "terminal": terminal,
         "source_metadata": {"framework": "hermes", "source_event": source_event_id} if source_event_id else {"framework": "hermes"},
-    }
+    })
     if continuation is not None:
         event["continuation"] = dict(continuation)
     if source_event_id is not None:
@@ -388,9 +431,17 @@ async def _confirm_upstream_terminal(
     )
     deadline = time.monotonic() + timeout
     last_status = "stopping"
+    # The session header is needed to target the live stop request, but the
+    # pinned run-status endpoint authenticates the profile-scoped run itself
+    # and rejects session routing metadata. Preserve bearer authentication.
+    polling_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() != "x-hermes-session-id"
+    }
     async with httpx.AsyncClient(timeout=_upstream_timeout()) as client:
         while True:
-            response = await client.get(status_url, headers=dict(headers))
+            response = await client.get(status_url, headers=polling_headers)
             response.raise_for_status()
             try:
                 payload = response.json()
@@ -453,6 +504,7 @@ def create_app() -> FastAPI:
         "worker_count": worker_count,
         "storage_healthy": True,
         "profile_manager": profile_manager,
+        "profile_retirement_holds": set(),
     }
     start_lock = asyncio.Lock()
 
@@ -572,8 +624,12 @@ def create_app() -> FastAPI:
         return _envelope(
             status="ok",
             request_id=request.headers.get("x-request-id"),
-            result={"capabilities": {
+            result={"capabilities": json_payload({
                 "operations": {
+                    "run.events": {
+                        "support": "native", "owner": "runtime", "enabled": True,
+                        "replay": "event_id",
+                    },
                     "run.approval.respond": {
                         "support": "native", "owner": "runtime", "enabled": True,
                         "requires_runtime_binding": True,
@@ -585,7 +641,7 @@ def create_app() -> FastAPI:
                         "confirmation": "bounded",
                         "terminal_states": ["cancelled"],
                     },
-                    "run.continuation.cleanup": {
+                    "run.cleanup": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
@@ -613,7 +669,19 @@ def create_app() -> FastAPI:
                         "disabled_reason": "runtime_capability_unsupported",
                     },
                 },
-            }},
+                "behavior": {
+                    "continuation_semantics": "linked_run",
+                    "usage_accounting_owner": "runtime",
+                    "preserves_run_id": False,
+                    "artifact_inheritance": "valid_artifacts",
+                    "supports_orchestration_delta": True,
+                    "required_input_fields": ["task_context", "resolved_spec"],
+                    "supports_pause_resume": False,
+                    "supports_course_correction": True,
+                    "budget_boundary_owner": "product",
+                    "grounding_owner": "product",
+                },
+            })},
         )
 
     @app.post("/v1/validate")
@@ -632,7 +700,7 @@ def create_app() -> FastAPI:
             if config.get("mcp_server") != "askpdf":
                 issues.append({"code": "unsupported_mcp_server", "message": "Hermes runtime requires mcp_server=askpdf"})
         allowed_tool_ids = list(config.get("allowed_tool_ids") or []) if isinstance(config, Mapping) else []
-        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": {"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "hermes_revision": HERMES_REVISION, "mcp_server": "askpdf", "allowed_tool_ids": sorted(allowed_tool_ids)}}})
+        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": json_payload({"valid": not issues, "issues": issues, "normalized_spec": spec if not issues else None, "runtime_metadata": {"framework": "hermes", "builder_id": "hermes_agent", "hermes_revision": HERMES_REVISION, "mcp_server": "askpdf", "allowed_tool_ids": sorted(allowed_tool_ids)}})})
 
     def _binding(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
         continuation = payload.get("continuation") or (payload.get("request") or {}).get("continuation")
@@ -674,12 +742,18 @@ def create_app() -> FastAPI:
         if effective_limits.get("max_duration_seconds") is None:
             raise ValueError("max_duration_seconds is required in the resolved runtime limits")
         max_duration_seconds = max(1, int(effective_limits["max_duration_seconds"]))
-        deadline = time.monotonic() + max_duration_seconds
+        operation_started_at = time.monotonic()
+        deadline = operation_started_at + max_duration_seconds
+        operation_id = str(options.get("idempotency_key") or f"hermes:{run_id}:execute")
         system_prompt = str(managed_profile.get("instructions") or "").strip()
         task_context = input_data.get("task_context")
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
             question = _task_input_with_context(question, task_context)
+        active_corrections = [
+            dict(value) for value in (task_context or {}).get("active_corrections") or []
+            if isinstance(value, Mapping)
+        ] if isinstance(task_context, Mapping) else []
         upstream_payload = {
             "input": question,
             "instructions": system_prompt or None,
@@ -691,6 +765,7 @@ def create_app() -> FastAPI:
                 "askpdf_thread_id": neutral_request.get("thread_id"),
                 "askpdf_definition_id": neutral_request.get("definition_id"),
                 "askpdf_profile_id": (dict(context.get("resolved_spec") or {}).get("managed_profile") or {}).get("profile_id"),
+                "askpdf_correction_ids": [value.get("correction_id") for value in active_corrections],
             },
         }
         upstream_payload = {key: value for key, value in upstream_payload.items() if value not in (None, "")}
@@ -716,6 +791,7 @@ def create_app() -> FastAPI:
             "last_tool_name": None,
             "last_tool_call_id": None,
         }
+        started_tool_calls: set[str] = set()
 
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id
@@ -742,7 +818,13 @@ def create_app() -> FastAPI:
             elif kind in {"tool.started", "tool.completed", "tool.failed"}:
                 kind, event_payload = _normalized_tool_payload(kind, event_payload)
                 if kind == "tool.started":
-                    tool_activity["started"] += 1
+                    tool_identity = str(
+                        event_payload.get("tool_call_id")
+                        or source_event_id
+                        or f"tool-started:{sequence}"
+                    )
+                    started_tool_calls.add(tool_identity)
+                    tool_activity["started"] = len(started_tool_calls)
                 elif kind == "tool.completed":
                     tool_activity["completed"] += 1
                     tool_activity["evidence_result_count"] += max(0, int(event_payload.get("result_count") or 0))
@@ -786,21 +868,91 @@ def create_app() -> FastAPI:
                     text_output = str(text_output)[:max_output_chars]
                 warnings = [dict(value) for value in (output_mapping.get("warnings") or event_payload.get("warnings") or []) if isinstance(value, Mapping)]
                 gaps = [str(value) for value in (output_mapping.get("gaps") or event_payload.get("gaps") or []) if str(value).strip()]
+                structured_output = output_mapping.get("structured_output") if isinstance(output_mapping.get("structured_output"), Mapping) else None
+                raw_outcomes = output_mapping.get("correction_outcomes")
+                if raw_outcomes is None and structured_output is not None:
+                    raw_outcomes = structured_output.get("correction_outcomes")
+                outcomes_by_id = {
+                    str(value.get("correction_id")): dict(value)
+                    for value in raw_outcomes or []
+                    if isinstance(value, Mapping) and value.get("correction_id")
+                }
+                correction_outcomes = []
+                for correction in active_corrections:
+                    correction_id = str(correction.get("correction_id") or "")
+                    candidate = outcomes_by_id.get(correction_id)
+                    valid = candidate is not None and candidate.get("state") in {"satisfied", "unresolved"}
+                    outcome_state = str(candidate.get("state")) if valid else "unresolved"
+                    unresolved_reason = (
+                        str(candidate.get("unresolved_reason") or "Runtime reported this redirect as unresolved")
+                        if outcome_state == "unresolved" and candidate is not None
+                        else "Hermes did not return a valid structured coverage outcome for this redirect"
+                        if not valid else None
+                    )
+                    correction_outcomes.append({
+                        "correction_id": correction_id,
+                        "operation_id": str(correction.get("operation_id") or correction_id),
+                        "state": outcome_state,
+                        "linked_run_id": run_id,
+                        "todo_ids": [str(value) for value in (candidate or {}).get("todo_ids") or []][:100],
+                        "artifact_ids": [str(value) for value in (candidate or {}).get("artifact_ids") or []][:200],
+                        "explanation": str((candidate or {}).get("explanation") or "")[:4000] or None,
+                        "unresolved_reason": unresolved_reason,
+                    })
+                    if outcome_state == "unresolved":
+                        warnings.append({"code": "course_correction_unresolved", "details": {"correction_id": correction_id}})
+                        gaps.append(f"course_correction:{correction_id}")
                 result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
+                usage = _runtime_usage_snapshot(
+                    output_mapping.get("usage") or event_payload.get("usage"),
+                    operation_id=operation_id,
+                    started_tool_calls=started_tool_calls,
+                    active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
+                )
                 neutral_task_result = {
                     "status": result_outcome,
                     "text": text_output,
-                    "structured_output": output_mapping.get("structured_output") if isinstance(output_mapping.get("structured_output"), Mapping) else None,
+                    "structured_output": structured_output,
                     "artifacts": list(output_mapping.get("artifacts") or []),
                     "warnings": warnings,
                     "gaps": gaps,
-                    "usage": dict(output_mapping.get("usage") or event_payload.get("usage") or {}),
+                    "usage": usage,
                     "error": event_payload.get("error"),
                     "framework_details": {"framework": "hermes", "native_output": output_mapping},
+                    "correction_outcomes": correction_outcomes,
+                }
+                task_metadata = task_context.get("metadata") if isinstance(task_context, Mapping) else {}
+                task_metadata = task_metadata if isinstance(task_metadata, Mapping) else {}
+                attempt_id = str(task_metadata.get("attempt_id") or f"{run_id}:attempt:1")
+                boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
+                orchestration_delta = {
+                    "event_id": boundary_event_id,
+                    "attempt_id": attempt_id,
+                    "operation_id": operation_id,
+                    "idempotency_key": f"task-delta:{boundary_event_id}",
+                    "observed_task_version": int(task_metadata.get("task_version") or 0),
+                    "observed_plan_revision": int(task_metadata.get("plan_revision") or 0),
+                    "plan_changes": [],
+                    "todo_changes": [],
+                    "subagent_changes": [],
+                    "budget_usage": usage,
+                    "web_access": None,
+                    "artifacts": list(neutral_task_result["artifacts"]),
+                    "pending_interrupt": {"operation": "clear"},
+                    "result": {
+                        "status": status,
+                        "incomplete_reasons": gaps[:50],
+                        "warnings": warnings[:50],
+                        "result_outcome": result_outcome,
+                        "task_result": neutral_task_result,
+                    },
+                    "correction_outcomes": correction_outcomes,
                 }
                 result = {
                     "status": status,
                     "task_result": neutral_task_result,
+                    "orchestration_delta": orchestration_delta,
+                    "usage": usage,
                     "output": {
                         "answer": text_output,
                         "final_answer": text_output,
@@ -814,6 +966,18 @@ def create_app() -> FastAPI:
                         "mcp_server": managed_mcp.get("server"),
                         "allowed_tool_ids": list(managed_mcp.get("allowed_tool_ids") or []),
                         "policy_fingerprint": managed_profile.get("profile_id"),
+                        "runtime_behavior": {
+                            "continuation_semantics": "linked_run",
+                            "usage_accounting_owner": "runtime",
+                            "preserves_run_id": False,
+                            "artifact_inheritance": "valid_artifacts",
+                            "supports_orchestration_delta": True,
+                            "required_input_fields": ["task_context", "resolved_spec"],
+                            "supports_pause_resume": False,
+                            "supports_course_correction": True,
+                            "budget_boundary_owner": "product",
+                            "grounding_owner": "product",
+                        },
                     },
                     "continuation": continuation,
                     "error": event_payload.get("error"),
@@ -1007,6 +1171,13 @@ def create_app() -> FastAPI:
                 store.update(run_id, continuation=continuation)
                 yield _sse(_neutral_event(run_id, sequence, "run.started", {"framework": "hermes"}, continuation=continuation))
                 sequence += 1
+                if active_corrections:
+                    yield _sse(_neutral_event(run_id, sequence, "course_correction.incorporated", {
+                        "correction_ids": [value.get("correction_id") for value in active_corrections],
+                        "operation_ids": [value.get("operation_id") for value in active_corrections],
+                        "linked_run_id": run_id,
+                    }, continuation=continuation))
+                    sequence += 1
                 yield _sse(_neutral_event(run_id, sequence, "operation.started", {
                     "operation_id": "hermes_session",
                     "operation_type": "agent_session",
@@ -1156,6 +1327,8 @@ def create_app() -> FastAPI:
         finally:
             # Approval is a resumable boundary. Keep the credential-bearing
             # profile active until a terminal result, cancellation, or expiry.
+            if run_id in state["profile_retirement_holds"]:
+                retain_profile = True
             if terminal_seen and not retain_profile:
                 try:
                     upstream_terminal = await _confirm_upstream_terminal(
@@ -1350,7 +1523,7 @@ def create_app() -> FastAPI:
         return StreamingResponse(_subscribe(run_id, after_event_id), media_type="text/event-stream")
 
     @app.post("/v1/runs/{run_id}/resume")
-    async def resume(run_id: str) -> JSONResponse:
+    async def resume(run_id: str, payload: Mapping[str, Any]) -> JSONResponse:
         return JSONResponse(_envelope(status="failed", error=_error("runtime_capability_unsupported", "Hermes resume is not enabled")), status_code=409)
 
     @app.post("/v1/runs/{run_id}/continue")
@@ -1384,6 +1557,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        retirement_held = False
         try:
             record = state["store"].records.get(run_id)
             persisted_status = str((record or {}).get("status") or "").lower()
@@ -1403,6 +1577,10 @@ def create_app() -> FastAPI:
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
             runtime_profile = ((binding or {}).get("payload") or {}).get("runtime_profile")
             headers = upstream_headers(session_id)
+            # Keep the profile credential available while the concurrent event
+            # stream observes cancellation and enters its terminal cleanup.
+            state["profile_retirement_holds"].add(run_id)
+            retirement_held = True
             stop_result = await _stop_and_confirm_upstream_run(
                 hermes_api_url,
                 str(runtime_profile or ""),
@@ -1438,6 +1616,9 @@ def create_app() -> FastAPI:
             )
         except httpx.HTTPError as exc:
             return _envelope(status="failed", error=_error("hermes_cancel_failed", str(exc), retryable=True), request_id=request.headers.get("x-request-id"))
+        finally:
+            if retirement_held:
+                state["profile_retirement_holds"].discard(run_id)
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -1479,7 +1660,7 @@ def create_app() -> FastAPI:
         return await _forward_control(run_id, request, payload, "approval", {"choice": choice, "resolve_all": bool(response.get("resolve_all"))})
 
     @app.delete("/v1/continuations/{binding_id}")
-    async def delete_continuation(binding_id: str, request: Request) -> dict[str, Any]:
+    async def delete_continuation(binding_id: str, request: Request, payload: Mapping[str, Any]) -> dict[str, Any]:
         return JSONResponse(_envelope(status="failed", request_id=request.headers.get("x-request-id"), error=_error("runtime_capability_unsupported", "Hermes does not expose safe durable session deletion")), status_code=409)
 
     return app

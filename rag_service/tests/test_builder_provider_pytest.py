@@ -4,13 +4,42 @@ import pytest
 
 from app.runtime.builder import BuilderCapabilities, BuilderCatalog
 from app.runtime.builder_registry import BuilderRegistry, BuilderSelectionError
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition, RuntimeCapabilities, RuntimeValidationIssue, RuntimeValidationResult
 from app.runtime.langgraph_builder import LangGraphBuilderProvider
 
 
 class FakeBuilder:
     framework = "fake"
     builder_id = "fake_builder"
+
+
+class FakeLangGraphRuntime:
+    def __init__(self):
+        self.resolve_calls = []
+
+    async def capabilities(self, definition):
+        return RuntimeCapabilities()
+
+    async def validate(self, definition, spec, *, options=None):
+        return RuntimeValidationResult(
+            valid=False,
+            issues=(RuntimeValidationIssue("invalid", "invalid schema", "schema_version"),),
+        )
+
+    async def resolve_definition(
+        self,
+        definition,
+        spec,
+        *,
+        thread_settings,
+        request_overrides,
+        options=None,
+    ):
+        self.resolve_calls.append({
+            "thread_settings": dict(thread_settings),
+            "request_overrides": dict(request_overrides),
+        })
+        return {**dict(spec), "config": {**dict(spec.get("config") or {}), **dict(thread_settings), **dict(request_overrides)}}
 
 
 def test_builder_registry_is_keyed_by_framework_and_builder_not_category():
@@ -64,7 +93,7 @@ def test_neutral_builder_modules_have_no_framework_imports():
 
 
 def test_langgraph_provider_owns_task_web_tool_mapping():
-    provider = LangGraphBuilderProvider()
+    provider = LangGraphBuilderProvider(adapter=FakeLangGraphRuntime())
     with_web = AgentDefinition(
         definition_id="deep_research_agent",
         framework="langgraph",
@@ -84,7 +113,7 @@ def test_langgraph_provider_owns_task_web_tool_mapping():
 
 @pytest.mark.asyncio
 async def test_langgraph_provider_preserves_concrete_identity():
-    provider = LangGraphBuilderProvider()
+    provider = LangGraphBuilderProvider(adapter=FakeLangGraphRuntime())
     definition = AgentDefinition(
         definition_id="router_rag_agent",
         framework="langgraph",
@@ -101,8 +130,33 @@ async def test_langgraph_provider_preserves_concrete_identity():
 
 
 @pytest.mark.asyncio
+async def test_langgraph_provider_does_not_send_product_thread_settings_to_runtime():
+    runtime = FakeLangGraphRuntime()
+    provider = LangGraphBuilderProvider(adapter=runtime)
+    definition = AgentDefinition("deep_research_agent", "langgraph", "langgraph_graph")
+
+    await provider.resolve(
+        definition,
+        {"schema_version": 1, "config": {}},
+        thread_settings={
+            "agent_workflow": {"workflow_id": "deep_research_agent"},
+            "memory": {"memory_enabled": True},
+            "replans_limit": 20,
+            "replans": 3,
+            "system_role": "product role",
+        },
+        request_overrides={"context_window": 8192},
+    )
+
+    assert runtime.resolve_calls == [{
+        "thread_settings": {"replans": 3, "system_role": "product role"},
+        "request_overrides": {"context_window": 8192},
+    }]
+
+
+@pytest.mark.asyncio
 async def test_langgraph_provider_rejects_invalid_spec_without_compiling():
-    provider = LangGraphBuilderProvider()
+    provider = LangGraphBuilderProvider(adapter=FakeLangGraphRuntime())
     definition = AgentDefinition(
         definition_id="router_rag_agent",
         framework="langgraph",

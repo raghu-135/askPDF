@@ -2,6 +2,8 @@ import type { AgentRunDetails, AgentTaskRun, AgentTaskSummary } from './api';
 
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'expired', 'cancelled']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const QUIESCENT_TASK_STATUSES = new Set([...TERMINAL_TASK_STATUSES, 'recovery_required']);
+const QUIESCENT_RUN_STATUSES = new Set([...TERMINAL_RUN_STATUSES, 'recovery_required']);
 const TERMINAL_EVENT_TYPES = new Set(['run.completed', 'run.failed', 'run.cancelled']);
 
 export function mergeActiveAgentTaskRun(task: AgentTaskSummary, runs: AgentTaskRun[]): AgentTaskRun[] {
@@ -16,7 +18,7 @@ export function mergeActiveAgentTaskRun(task: AgentTaskSummary, runs: AgentTaskR
 }
 
 export function shouldPollAgentTask(task: AgentTaskSummary | null): boolean {
-  return Boolean(task && !TERMINAL_TASK_STATUSES.has(task.status));
+  return Boolean(task && !QUIESCENT_TASK_STATUSES.has(task.status));
 }
 
 export function shouldSubscribeToAgentTaskEvents(
@@ -26,8 +28,8 @@ export function shouldSubscribeToAgentTaskEvents(
   return Boolean(
     task
     && run
-    && !TERMINAL_TASK_STATUSES.has(task.status)
-    && !TERMINAL_RUN_STATUSES.has(run.status),
+    && !QUIESCENT_TASK_STATUSES.has(task.status)
+    && !QUIESCENT_RUN_STATUSES.has(run.status),
   );
 }
 

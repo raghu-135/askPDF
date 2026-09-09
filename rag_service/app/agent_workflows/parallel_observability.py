@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Mapping, Sequence
 
-from app.agent_workflows.parallel_contracts import (
+from app.agent_workflows.parallel_projection_contracts import (
     PARALLEL_EVENT_NAMES,
     PARALLEL_PROJECTED_WORKER_STATUSES,
     PARALLEL_TERMINAL_WORKER_STATUSES,

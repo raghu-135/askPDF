@@ -12,7 +12,7 @@ from app.runtime.capability_resolver import (
     require_capability,
     resolve_capabilities,
 )
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     RuntimeCapabilityDisabledReason,
     RuntimeCapabilities,
@@ -24,7 +24,7 @@ from app.runtime.contracts import (
     native,
     unsupported,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.product_capabilities import project_public_capabilities
 from app.runtime.registry import RuntimeRegistry
 
@@ -747,6 +747,33 @@ async def test_task_lifecycle_operations_require_task_definition_and_eligible_st
     capabilities = await resolve_capabilities(non_task_definition, registry=registry, run=running)
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "definition_not_task_runtime"
     assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].disabled_reason == "definition_not_task_runtime"
+
+
+@pytest.mark.asyncio
+async def test_recovery_required_allows_retry_and_cancel_but_disables_live_runtime_controls():
+    registry = RuntimeRegistry(adapters=[CapabilityAdapter()])
+    definition = _definition(supports_long_running_tasks=True)
+    run = SimpleNamespace(
+        status="recovery_required", pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"}, runtime_binding_status="active",
+        run_metadata_json={},
+    )
+    task = SimpleNamespace(status="recovery_required")
+
+    capabilities = await resolve_capabilities(definition, registry=registry, run=run, task=task)
+
+    assert capabilities.operations[RuntimeOperationId.TASK_RETRY.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_CANCEL.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "recovery_required"
+
+
+def test_recovery_required_task_is_deletable_without_being_normal_terminal():
+    from app.services.agent_task_repository import DELETABLE_TASK_STATUSES, TERMINAL_TASK_STATUSES
+
+    assert "recovery_required" in DELETABLE_TASK_STATUSES
+    assert "recovery_required" not in TERMINAL_TASK_STATUSES
 
 
 @pytest.mark.asyncio

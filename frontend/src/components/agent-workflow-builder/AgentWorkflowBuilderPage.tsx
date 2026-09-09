@@ -200,6 +200,7 @@ export default function AgentWorkflowBuilderPage() {
   const [builderState, setBuilderState] = useState<AgentWorkflowBuilderState | null>(null);
   const [selection, setSelection] = useState<BuilderSelection>(null);
   const [validation, setValidation] = useState<AgentWorkflowValidationReport | null>(null);
+  const [validationServiceError, setValidationServiceError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
     workflowId: '',
@@ -328,13 +329,20 @@ export default function AgentWorkflowBuilderPage() {
 
   useEffect(() => {
     if (!builderState) return;
+    const framework = selectedStarterWorkflow?.framework?.trim();
+    const builderId = selectedStarterWorkflow?.builder_id?.trim();
+    if (!framework || !builderId) {
+      setValidationServiceError('The selected workflow does not declare a runtime builder identity.');
+      return;
+    }
     const timer = window.setTimeout(() => {
-      void validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState))
-        .then(setValidation)
-        .catch(() => undefined);
+      setValidationServiceError(null);
+      void validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState), framework, builderId)
+        .then((report) => { setValidation(report); setValidationServiceError(null); })
+        .catch((error) => setValidationServiceError(error instanceof Error ? error.message : String(error)));
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [builderState]);
+  }, [builderState, selectedStarterWorkflow]);
 
   useEffect(() => {
     if (!isDirty) return;
@@ -655,14 +663,14 @@ export default function AgentWorkflowBuilderPage() {
     if (!builderState) return;
     try {
       setValidating(true);
-      const report = await validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState));
+      const framework = selectedStarterWorkflow?.framework?.trim();
+      const builderId = selectedStarterWorkflow?.builder_id?.trim();
+      if (!framework || !builderId) throw new Error('The selected workflow does not declare a runtime builder identity.');
+      const report = await validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState), framework, builderId);
       setValidation(report);
+      setValidationServiceError(null);
     } catch (err) {
-      setValidation({
-        valid: false,
-        errors: [err instanceof Error ? err.message : String(err)],
-        warnings: [],
-      });
+      setValidationServiceError(err instanceof Error ? err.message : String(err));
     } finally {
       setValidating(false);
     }
@@ -772,16 +780,14 @@ export default function AgentWorkflowBuilderPage() {
       setPersistenceStatus(null);
       const workflowId = persistedWorkflow?.workflow.id;
       const saveSpec = { ...spec };
-      const report = await validateAgentWorkflowSpec(saveSpec);
+      const framework = persistedWorkflow?.workflow.framework || selectedStarterWorkflow?.framework;
+      const builderId = persistedWorkflow?.workflow.builder_id || selectedStarterWorkflow?.builder_id;
+      if (!framework || !builderId) throw new Error('The selected definition does not declare a runtime builder identity.');
+      const report = await validateAgentWorkflowSpec(saveSpec, framework, builderId);
       setValidation(report);
       if (!report.valid) {
         setPersistenceError('Validation failed. Fix the reported issues before saving.');
         return;
-      }
-      const framework = persistedWorkflow?.workflow.framework || selectedStarterWorkflow?.framework;
-      const builderId = persistedWorkflow?.workflow.builder_id || selectedStarterWorkflow?.builder_id;
-      if (!framework || !builderId) {
-        throw new Error('The selected definition does not declare a runtime builder identity.');
       }
       const response = await saveInternalAgentWorkflow({
         ...(workflowId ? { workflow_id: workflowId } : {}),
@@ -944,6 +950,7 @@ export default function AgentWorkflowBuilderPage() {
                     validation={validation}
                     issues={validationIssues}
                     workflowIsValid={workflowIsValid}
+                    serviceError={validationServiceError}
                     onSelectIssue={(nextSelection) => { setSelection(nextSelection); setBuildTab('canvas-tab'); }}
                   />
                 )}

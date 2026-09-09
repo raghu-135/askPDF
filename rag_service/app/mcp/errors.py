@@ -47,6 +47,18 @@ class MCPUnavailableError(RuntimeError):
         }
 
 
+class MCPProtocolError(MCPUnavailableError):
+    """A malformed MCP result; never classify it as a connectivity outage."""
+
+    def __init__(self, tool_name: str, *, cause: BaseException, **kwargs: Any) -> None:
+        super().__init__(tool_name, category="protocol", cause=cause, retryable=False, **kwargs)
+
+    def as_dict(self) -> dict[str, Any]:
+        value = super().as_dict()
+        value["code"] = "mcp_protocol_error"
+        return value
+
+
 def classify_mcp_failure(exc: BaseException) -> tuple[str, bool]:
     if isinstance(exc, BaseExceptionGroup):
         categories = [classify_mcp_failure(child) for child in exc.exceptions]

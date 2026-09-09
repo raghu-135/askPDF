@@ -158,7 +158,7 @@ def run_interrupt_resume_guard(run: AgentRun) -> Dict[str, Any]:
         "workflow_id": run.workflow_id,
         "workflow_version_id": run.workflow_version_id,
         "workflow_version": run.workflow_version,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
+        "runtime_binding_hash": canonical_json_hash(dict(run.runtime_binding_json or {})),
         "resolved_spec_hash": canonical_json_hash(spec),
     }
 
@@ -182,7 +182,7 @@ def validate_interrupt_resume_guard(interrupt: Dict[str, Any], run: AgentRun) ->
         "schema_version",
         "spec_schema_version",
         "workflow_id",
-        "checkpoint_thread_id",
+        "runtime_binding_hash",
         "resolved_spec_hash",
     )
     mismatched = [field for field in fields if resume_guard.get(field) != expected.get(field)]

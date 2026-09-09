@@ -13,20 +13,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.runtime.langgraph.compiler import WorkflowCompiler
-from app.agent_workflows import deep_research_nodes
-from app.runtime.langgraph import router_runtime
 from app.runtime.catalog import definition_from_workflow
 from app.runtime.builder_registry import builder_for_definition
-from app.agent_workflows.deep_research_execution import (
-    product_execution_services_factory,
-    runtime_execution_services_factory,
-)
 from app.agent_workflows.debug_trace import AgentTraceRecorder
-from app.agent_workflows.enums import WorkflowNodeType
-from app.runtime.langgraph.graph import NodeRegistry
 from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.validator import WorkflowResolver, WorkflowValidator
 from app.api import agent_tasks as agent_tasks_api
 from app.api import agent_workflows as agent_workflows_api
 from app.db.models_sqlmodel import AgentRun, AgentTaskTodo, AgentWorkflow
@@ -40,11 +30,11 @@ from app.runtime.budgets import apply_deep_agent_env_overrides
 from app.services.content_store import SharedVolumeContentStore, set_content_store
 from app.services.task_artifact_service import artifact_ownership_key, persist_task_artifact
 from app.time_utils import utc_now
-from app.runtime.errors import RuntimeError as AgentRuntimeError
-from app.runtime.events import create_runtime_event
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.events import create_runtime_event
 from app.runtime.evidence import evidence_event_fields, inherited_evidence_packets, tool_result_evidence
-from app.runtime.adapter import RuntimeExecutionContext
-from app.runtime.contracts import (
+from app.runtime.adapter import RuntimeInvocationContext
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -83,40 +73,21 @@ def _valid_plan_text(profile: str = "document_researcher") -> str:
 
 
 def _deep_config(*, runtime: bool = False, **configurable) -> dict:
+    configurable.setdefault("runtime_budget_meter", RuntimeBudgetMeter({
+        "tranche_limits": {
+            "model_calls": 10000,
+            "model_tokens": 500000,
+            "tool_calls": 100,
+            "elapsed_active_ms": 7200000,
+        },
+        "tranche_usage": {},
+        "lifetime_usage": {},
+    }, {}))
     return {"configurable": {
-        "deep_research_services_factory": (
-            runtime_execution_services_factory if runtime else product_execution_services_factory
-        ),
+        "deep_research_services_factory": runtime_execution_services_factory,
         "cancellation_checker": lambda: False,
         **configurable,
     }}
-
-
-@pytest.mark.asyncio
-async def test_langgraph_injects_pause_gate_at_control_node_boundary():
-    registry = NodeRegistry()
-    node_called = False
-
-    async def coordinator(_state, _config):
-        nonlocal node_called
-        node_called = True
-        return {}
-
-    async def pause_checker():
-        return True
-
-    registry._nodes[WorkflowNodeType.DEEP_COORDINATOR.value] = coordinator
-    registry.hitl_gate = AsyncMock(return_value={})
-    bound = registry.get_for_spec({
-        "id": WorkflowNodeType.DEEP_COORDINATOR.value,
-        "type": WorkflowNodeType.DEEP_COORDINATOR.value,
-    })
-
-    await bound({"node_events": []}, {"configurable": {"pause_checker": pause_checker}})
-
-    registry.hitl_gate.assert_awaited_once()
-    assert registry.hitl_gate.await_args.kwargs["node_id"] == "task_pause_gate"
-    assert node_called is True
 
 
 class TaskInvocationAdapter:
@@ -189,7 +160,7 @@ async def test_task_worker_start_gate_rejects_before_adapter_invocation(monkeypa
             definition=definition,
             run=run,
             runtime_request=request,
-            runtime_context=RuntimeExecutionContext(),
+            runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=repository,
         registry=RuntimeRegistry(adapters=[]),
@@ -229,7 +200,7 @@ async def test_task_worker_replays_persisted_terminal_result_without_hermes_cont
         runtime_request=AgentRuntimeRequest(
             "run-1", "thread-1", definition.definition_id, definition.framework, definition.builder_id,
         ),
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=repository,
         registry=RuntimeRegistry(adapters=[]),
@@ -270,7 +241,7 @@ async def test_hermes_resolved_approval_continues_without_runtime_resume():
         definition=definition,
         run=run,
         runtime_request=request,
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=SimpleNamespace(),
         registry=registry,
@@ -306,7 +277,7 @@ async def test_task_runtime_resume_is_rejected_by_real_registry_before_adapter_c
             definition=definition,
             run=run,
             runtime_request=request,
-            runtime_context=RuntimeExecutionContext(),
+            runtime_context=RuntimeInvocationContext(),
             runtime_event_sink=None,
             repository=SimpleNamespace(),
             registry=registry,
@@ -386,7 +357,7 @@ async def test_interrupted_hermes_prestart_gets_new_product_run(monkeypatch):
             result.id, task.thread_id, definition.definition_id,
             definition.framework, definition.builder_id,
         ),
-        runtime_context=RuntimeExecutionContext(),
+        runtime_context=RuntimeInvocationContext(),
         runtime_event_sink=None,
         repository=start_repository,
         registry=RuntimeRegistry(adapters=[adapter]),
@@ -465,11 +436,112 @@ async def test_deep_planner_repairs_invalid_output_once(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypatch):
+async def test_deep_planner_fails_closed_with_bounded_validation_diagnostics(monkeypatch):
     secret_marker = "must-not-be-persisted"
     call_model = AsyncMock(side_effect=[
         (f"not json {secret_marker}", {}),
         ("{}", {}),
+        ("[]", {}),
+    ])
+    monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
+    sink = SimpleNamespace(emit=AsyncMock())
+    state = {
+        "runtime_execution_mode": True,
+        "question": "Research Lamport clocks",
+        "task_enabled_profiles": ["document_researcher"],
+        "task_limits": {"max_todos": 5},
+        "task_todos": [],
+        "llm_model": "small-test-model",
+    }
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await deep_research_nodes.deep_task_planner(
+            state, _deep_config(runtime=True, execution_event_sink=sink),
+        )
+
+    assert caught.value.code == "deep_research_plan_invalid"
+    assert caught.value.retryable is True
+    attempts = caught.value.details["attempts"]
+    assert [attempt["stage"] for attempt in attempts] == ["initial", "repair_1", "repair_2"]
+    assert attempts[0]["category"] == "json_parse_error"
+    assert attempts[0]["reason"]
+    assert attempts[1]["category"] == "schema_validation"
+    assert attempts[1]["errors"][0]["field"] == "objective"
+    assert attempts[2]["errors"][0]["code"] == "json_object_required"
+    assert call_model.await_count == 3
+    assert [call.args[0] for call in sink.emit.await_args_list] == [
+        "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
+        "planner.repair_started", "planner.validation_failed", "planner.failed",
+    ]
+    diagnostics = json.dumps([call.args[1] for call in sink.emit.await_args_list])
+    assert secret_marker not in diagnostics
+
+
+def test_plan_validator_reports_strict_structural_errors_without_model_output():
+    candidate = json.dumps({
+        "objective": "Research",
+        "success_criteria": ["Answer"],
+        "todos": [
+            {
+                "id": "todo-1",
+                "title": "One",
+                "description": "Collect evidence",
+                "completion_criteria": "Evidence collected",
+                "profile_id": "not-enabled",
+                "dependency_ids": ["missing"],
+            },
+            {
+                "id": "todo-1",
+                "title": "Two",
+                "description": "Synthesize evidence",
+                "completion_criteria": "Answer written",
+                "profile_id": "document_researcher",
+                "dependency_ids": ["todo-1"],
+            },
+        ],
+    })
+    result = deep_research_nodes._decode_research_plan(
+        candidate,
+        stage="initial",
+        enabled_profiles=["document_researcher"],
+        max_todos=5,
+        required_correction_ids=["corr-1"],
+    )
+
+    assert result.valid is False
+    codes = {error.code for error in result.errors}
+    assert {"unknown_profile", "duplicate_todo_id", "unknown_dependency", "missing_course_correction"} <= codes
+    assert candidate not in json.dumps(result.diagnostics)
+
+
+def test_plan_validator_does_not_require_unpersisted_runtime_fields_on_completed_todos():
+    result = deep_research_nodes._decode_research_plan(
+        _valid_plan_text(),
+        stage="repair_1",
+        enabled_profiles=["document_researcher"],
+        max_todos=5,
+        prior_todos=[{
+            "id": "retrieve-evidence",
+            "title": "Retrieve evidence",
+            "description": "Search the available evidence",
+            "completion_criteria": "Relevant sources are collected",
+            "dependency_ids": [],
+            "priority": 50,
+            "required": True,
+            "profile_id": "document_researcher",
+            "status": "completed",
+        }],
+    )
+
+    assert result.valid is True
+
+
+@pytest.mark.asyncio
+async def test_deep_planner_uses_third_call_for_targeted_repair(monkeypatch):
+    call_model = AsyncMock(side_effect=[
+        ("not json", {}),
+        ("{}", {}),
+        (_valid_plan_text(), {}),
     ])
     monkeypatch.setattr(deep_research_nodes, "_call_model", call_model)
     sink = SimpleNamespace(emit=AsyncMock())
@@ -486,14 +558,13 @@ async def test_deep_planner_uses_bounded_fallback_after_invalid_repair(monkeypat
         state, _deep_config(runtime=True, execution_event_sink=sink),
     )
 
-    assert result["task_plan"]["todos"][0]["profile_id"] == "document_researcher"
-    assert len(result["task_plan"]["todos"]) == 1
-    assert call_model.await_count == 2
-    assert [call.args[0] for call in sink.emit.await_args_list] == [
+    assert result["task_plan"]["todos"]
+    assert call_model.await_count == 3
+    events = [call.args[0] for call in sink.emit.await_args_list]
+    assert events == [
         "planner.validation_failed", "planner.repair_started", "planner.validation_failed",
-        "planner.fallback_created",
+        "planner.repair_started",
     ]
-    assert secret_marker not in json.dumps(sink.emit.await_args_list[-1].args[1])
 
 
 async def _attach_test_run(test_session_maker, task, *, parent_run_id: str | None = None) -> AgentRun:
@@ -583,7 +654,13 @@ async def test_product_result_review_is_runtime_independent_and_idempotent(
     assert resolved.status == ("completed" if decision == "accept" else "queued")
     stored_run = await repository.get_task_run(task.id)
     assert stored_run.status == "completed"
-    assert stored_run.pending_interrupt_json["decision"]["action"] == decision
+    if decision == "retry_with_input":
+        assert stored_run.pending_interrupt_json["type"] == "incomplete_result_review"
+        assert stored_run.pending_interrupt_json["status"] == "resolved"
+        assert resolved.current_phase == "result_review_retry_queued"
+        assert resolved.config_json["result_review_context"][-1]["followup_input"] == "Address the missing mechanism."
+    else:
+        assert stored_run.pending_interrupt_json["decision"]["action"] == decision
     run_events = await AgentWorkflowRepository().list_run_events(run.id)
     assert [(event.kind, event.terminal) for event in run_events if event.terminal] == [("run.completed", True)]
     repeated, duplicate = await repository.respond_to_result_review(
@@ -621,6 +698,7 @@ async def test_budget_review_continue_resets_only_tranche_and_is_repeatable(
     )
     assert duplicate is False and linked is False
     assert continued.status == "queued"
+    assert (await AgentWorkflowRepository().get_run(run.id)).status == "running"
     assert continued.budgets_json["tranche_index"] == 2
     assert continued.budgets_json["tranche_usage"]["model_calls"] == 0
     assert continued.budgets_json["lifetime_usage"]["model_calls"] == 2
@@ -687,6 +765,8 @@ async def _seed_deep_workflow(test_session_maker) -> None:
             ))
 
 
+
+
 def test_deep_research_builtin_is_valid_and_compilable():
     spec = _spec()
     assert WorkflowValidator().validate(spec) == {"valid": True, "errors": []}
@@ -706,11 +786,13 @@ def test_deep_research_builtin_is_valid_and_compilable():
 
 def test_environment_budget_is_snapshotted_and_continuation_preserves_lifetime(monkeypatch):
     monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "3")
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS", "3")
     state = initial_budget_state(apply_deep_agent_env_overrides({"max_model_calls": 99}, "langgraph"))
     assert state["tranche_limits"]["model_calls"] == 3
     state["tranche_usage"]["model_calls"] = 3
     state["lifetime_usage"]["model_calls"] = 3
     monkeypatch.setenv("DEEP_AGENT_MAX_MODEL_CALLS", "7")
+    monkeypatch.setenv("DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS", "7")
     normalized = normalize_budget_state(state, {"max_model_calls": 99})
     assert normalized["tranche_limits"]["model_calls"] == 3
     continued = reset_tranche(normalized)
@@ -868,6 +950,26 @@ def test_tool_gap_is_explicit_but_not_available_evidence():
 
     assert packet.explicit_gap is True
     assert packet.available is False
+
+
+def test_failed_web_search_is_a_typed_explicit_evidence_gap():
+    packet = tool_result_evidence({
+        "ok": False,
+        "content": "Web search failed; this task has an explicit web-evidence gap.",
+        "sources": [],
+        "warnings": ["search_web_failed"],
+        "error": {
+            "code": "search_web_failed",
+            "message": "provider timed out",
+            "retryable": True,
+            "evidence_gap": True,
+        },
+        "trace": {"tool_name": "search_web", "tool_call_id": "call-2"},
+    })
+
+    assert packet.explicit_gap is True
+    assert packet.available is False
+    assert "search_web_failed" in packet.warnings
 
 
 @pytest.mark.asyncio
@@ -1439,7 +1541,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     monkeypatch.setattr(agent_task_runtime, "record_terminal_result", AsyncMock())
     monkeypatch.setattr(agent_task_runtime, "AgentWorkflowRepository", lambda: workflow_repository)
     monkeypatch.setattr(
-        "app.runtime.langgraph.router_runtime.continue_compiled_rag_chat",
+        "langgraph_runtime.router_runtime.continue_compiled_rag_chat",
         AsyncMock(return_value={"status": "completed", "answer": "Grounded report", "node_events": [], "tool_events": []}),
     )
     monkeypatch.setattr(
@@ -1452,7 +1554,7 @@ async def test_completed_task_run_persists_debug_trace(monkeypatch):
     async def checkpointer():
         yield object()
 
-    monkeypatch.setattr("app.runtime.langgraph.checkpointing.open_agent_checkpointer", checkpointer)
+    monkeypatch.setattr("langgraph_runtime.checkpointing.open_agent_checkpointer", checkpointer)
 
     await agent_task_runtime.execute_claimed_task(task.id, "worker-trace")
 
@@ -2069,7 +2171,7 @@ def test_task_api_enforces_idempotency_ownership_and_builtin_contract(api_client
     )
     assert missing.status_code == 404
     started = api_client.post(
-        f"/api/agent-tasks/{task['id']}/start",
+        f"/api/agent-tasks/{task['id']}/commands/start",
         params={"thread_id": sample_thread.id},
         json={"expected_version": task["version"]},
         headers={"Idempotency-Key": "builtin-start"},
@@ -2286,10 +2388,10 @@ async def test_task_maintenance_runs_all_bounded_cleanup_classes(monkeypatch):
     runtime_run = SimpleNamespace(id="run-1")
     monkeypatch.setattr(agent_task_maintenance.tasks, "list_terminal_task_runtime_runs_before", AsyncMock(return_value=[runtime_run]))
     monkeypatch.setattr(agent_task_maintenance.tasks, "clear_task_runtime_bindings", AsyncMock(return_value=1))
-    from app.runtime.cleanup import ContinuationCleanupOutcome
+    from app.runtime.cleanup import RunCleanupOutcome
     monkeypatch.setattr(
-        "app.runtime.cleanup.delete_run_continuations",
-        AsyncMock(return_value=[ContinuationCleanupOutcome(run_id="run-1", status="cleaned")]),
+        "app.runtime.cleanup.cleanup_runs",
+        AsyncMock(return_value=[RunCleanupOutcome(run_id="run-1", status="cleaned")]),
     )
 
     result = await agent_task_maintenance.run_task_maintenance(batch_size=10)
@@ -2383,20 +2485,110 @@ async def test_task_worker_uses_persisted_neutral_wake_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_task_worker_cancels_timed_out_remote_run_instead_of_requeueing(monkeypatch):
+    task = SimpleNamespace(
+        id="task-timeout",
+        active_run_id="run-timeout",
+        config_json={"limits": {"wake_limit_seconds": 0.01}},
+        budgets_json={},
+    )
+    run = SimpleNamespace(
+        id="run-timeout",
+        task_id="task-timeout",
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        run_metadata_json={"runtime_started": True},
+    )
+    claim = AsyncMock(side_effect=[task, None])
+    async def execute(_task_id, _worker_id):
+        await asyncio.Event().wait()
+
+    execute = AsyncMock(side_effect=execute)
+    set_status = AsyncMock()
+    cancel = AsyncMock(return_value={"runtime_confirmation": "pending"})
+    requeue = AsyncMock()
+
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", claim)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+    monkeypatch.setattr(agent_task_runtime.tasks, "set_task_runtime_status", set_status)
+    monkeypatch.setattr(agent_task_runtime, "request_task_cancellation", cancel)
+    monkeypatch.setattr(agent_task_runtime.tasks, "requeue_after_wake", requeue)
+    monkeypatch.setattr(agent_task_runtime.tasks, "budget_boundary", AsyncMock(return_value=None))
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    set_status.assert_awaited_once_with(
+        task.id,
+        "cancelling",
+        phase="runtime_wake_timeout_cancelling",
+        reason="active_runtime_wake_limit",
+    )
+    cancel.assert_awaited_once_with(task, run)
+    requeue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_task_worker_fails_claim_without_persisted_runtime_identity(monkeypatch):
     task = SimpleNamespace(id="task-1", active_run_id="run-1")
-    complete = AsyncMock()
-    release = AsyncMock()
+    fail_claim = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
     monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=None))
-    monkeypatch.setattr(agent_task_runtime.tasks, "complete_task", complete)
-    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", release)
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=task))
+    monkeypatch.setattr(agent_task_runtime.tasks, "fail_invalid_runtime_claim", fail_claim)
     execute = AsyncMock()
     monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
 
     await agent_task_runtime.run_task_worker(once=True)
 
-    complete.assert_awaited_once_with(task.id, status="failed", reason="task_runtime_identity_invalid")
-    release.assert_awaited_once()
+    fail_claim.assert_awaited_once()
+    assert fail_claim.await_args.args[0] == task.id
+    assert fail_claim.await_args.kwargs["code"] == "runtime_task_identity_invalid"
     execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_fails_claim_without_persisted_wake_limit(monkeypatch):
+    task = SimpleNamespace(
+        id="task-1",
+        active_run_id="run-1",
+        config_json={"limits": {}},
+    )
+    run = SimpleNamespace(id="run-1", task_id="task-1", framework="langgraph", builder_id="langgraph_graph")
+    fail_claim = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[task, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(agent_task_runtime.tasks, "fail_invalid_runtime_claim", fail_claim)
+    execute = AsyncMock()
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", execute)
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    fail_claim.assert_awaited_once()
+    assert fail_claim.await_args.kwargs["code"] == "runtime_task_configuration_invalid"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_worker_reloads_run_after_concurrent_retry_attachment(monkeypatch):
+    claimed = SimpleNamespace(id="task-1", active_run_id="old-run")
+    refreshed = SimpleNamespace(id="task-1", active_run_id="new-run")
+    run = SimpleNamespace(
+        id="new-run", task_id="task-1", framework="langgraph", builder_id="langgraph_graph",
+    )
+    monkeypatch.setattr(agent_task_runtime, "run_task_maintenance", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_task_runtime.tasks, "claim_next_task", AsyncMock(side_effect=[claimed, None]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task_run", AsyncMock(side_effect=[None, run]))
+    monkeypatch.setattr(agent_task_runtime.tasks, "get_task", AsyncMock(return_value=refreshed))
+    monkeypatch.setattr(agent_task_runtime.tasks, "defer_task_lease", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime.tasks, "release_task_lease", AsyncMock())
+    monkeypatch.setattr(agent_task_runtime, "execute_claimed_task", AsyncMock())
+
+    await agent_task_runtime.run_task_worker(once=True)
+
+    agent_task_runtime.execute_claimed_task.assert_awaited_once()
+    assert agent_task_runtime.execute_claimed_task.await_args.args[0] == "task-1"

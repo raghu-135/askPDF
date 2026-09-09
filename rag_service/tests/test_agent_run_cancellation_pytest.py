@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services import agent_run_cancellation as cancellation
-from app.runtime.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
 class Adapter:

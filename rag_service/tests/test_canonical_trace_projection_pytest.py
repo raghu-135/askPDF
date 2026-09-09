@@ -3,11 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent_workflows.canonical_trace import TraceProjectionError, build_canonical_trace_projection, build_parallel_groups
+from app.agent_workflows.canonical_trace import (
+    TraceProjectionError,
+    build_canonical_trace_projection,
+    build_parallel_groups,
+    build_parallel_groups_safely,
+)
 from app.agent_workflows.trace_recorder import AgentTraceRecorder
-from app.runtime.contracts import AgentRuntimeEvent
-from app.runtime.langgraph_adapter import _event_from_graph
-from app.agent_workflows.runtime_invocation import invoke_llm_for_node
+from runtime_protocol.contracts import AgentRuntimeEvent
 
 
 def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:
@@ -21,32 +24,6 @@ def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph"
     )
 
 
-def test_langgraph_node_translation_preserves_operation_identity_and_topology() -> None:
-    event = _event_from_graph(
-        {
-            "event": "node.completed",
-            "data": {
-                "node_id": "retrieval_1",
-                "node_type": "retrieval_worker",
-                "label": "Document retrieval",
-                "visit_index": 2,
-                "route": "answer",
-                "duration_ms": 12,
-            },
-        },
-        run_id="run-1",
-        sequence=1,
-    )
-
-    assert event.kind == "operation.completed"
-    assert event.payload["operation_id"] == "retrieval_1"
-    assert event.payload["operation_type"] == "retrieval_worker"
-    assert event.payload["operation_label"] == "Document retrieval"
-    assert event.payload["visit_index"] == 2
-    assert event.payload["topology_ref"] == {"kind": "graph_node", "id": "retrieval_1"}
-    assert event.payload["framework_details"]["langgraph"]["route"] == "answer"
-
-
 def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
     projection = build_canonical_trace_projection(
         events=[_event(1, "operation.completed", {"operation_type": "unknown"}, "future")],
@@ -57,6 +34,37 @@ def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
     assert projection["operations"] == []
     assert set(projection["visualizations"]) == {"generic.timeline"}
     assert projection["events"][0]["kind"] == "operation.completed"
+
+
+def test_parallel_projection_scopes_reused_work_id_to_each_dispatch_group() -> None:
+    events = [
+        _event(1, "dispatch.started", {"dispatch_id": "dispatch-1", "planned": 1}),
+        _event(2, "worker.started", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(3, "worker.failed", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(4, "dispatch.started", {"dispatch_id": "dispatch-2", "planned": 1}),
+        _event(5, "worker.started", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+        _event(6, "worker.completed", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+    ]
+    groups = build_parallel_groups(events)
+
+    assert [group["group_id"] for group in groups] == ["dispatch-1", "dispatch-2"]
+    assert [group["members"][0]["member_id"] for group in groups] == ["work-a", "work-a"]
+    assert groups[0]["members"][0]["attempts"][0]["status"] == "failed"
+    assert groups[1]["members"][0]["attempts"][0]["status"] == "completed"
+
+    rendered = build_canonical_trace_projection(events=events, resolved_spec={}, framework="langgraph")
+    assert [group["group_id"] for group in rendered["parallel_groups"]] == ["dispatch-1", "dispatch-2"]
+
+
+def test_safe_parallel_projection_omits_only_malformed_group_projection() -> None:
+    events = [
+        _event(1, "worker.started", {"work_id": "work-a"}),
+        _event(2, "dispatch.started", {"dispatch_id": "dispatch-b", "planned": 1}),
+        _event(3, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-b", "attempt": 1}),
+    ]
+
+    groups = build_parallel_groups_safely(events)
+    assert [group["group_id"] for group in groups] == ["dispatch-b"]
 
 
 def test_unknown_framework_metadata_remains_visible_without_specialized_visualization() -> None:
@@ -120,38 +128,6 @@ def test_model_lifecycle_projection_is_correlated_and_summary_only() -> None:
     assert projection["models"][0]["payload"]["operation_id"] == "planner"
     assert "prompt" not in str(projection["models"])
     assert "response" not in str(projection["models"])
-
-
-async def test_shared_model_invocation_emits_bounded_lifecycle_events() -> None:
-    class Sink:
-        def __init__(self) -> None:
-            self.events = []
-
-        async def emit(self, kind, payload):
-            self.events.append((kind, payload))
-
-    sink = Sink()
-    response = SimpleNamespace(content="safe result", usage_metadata={"total_tokens": 9})
-
-    async def invoke(_messages):
-        return response
-
-    await invoke_llm_for_node(
-        invoke,
-        [],
-        state={"llm_model": "test-model", "agent_run_id": "run-1"},
-        config={"configurable": {"execution_event_sink": sink}},
-        node="planner",
-        started=time.perf_counter(),
-        retry_observer=lambda _event: None,
-        retry_attempts=[],
-        model_name="test-model",
-    )
-
-    assert [kind for kind, _payload in sink.events] == ["llm.started", "llm.completed"]
-    assert sink.events[0][1]["operation_id"] == "planner"
-    assert sink.events[1][1]["usage"]["total_tokens"] == 9
-    assert "messages" not in str(sink.events)
 
 
 def test_hermes_projection_keeps_generic_events_and_session_visualization() -> None:
@@ -364,10 +340,6 @@ def test_serial_dispatch_events_never_create_parallel_groups() -> None:
         ([_event(1, "worker.started", {"work_id": "work-a"})], "missing a group identity"),
         ([_event(1, "worker.started", {"dispatch_id": "dispatch-a"})], "missing a member identity"),
         ([_event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a", "attempt": 0})], "invalid attempt"),
-        ([
-            _event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a"}),
-            _event(2, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-a"}),
-        ], "conflicting groups"),
     ],
 )
 def test_parallel_projection_rejects_malformed_correlation(events, message) -> None:

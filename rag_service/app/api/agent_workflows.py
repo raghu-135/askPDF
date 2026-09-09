@@ -12,24 +12,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
     BUILDER_TEST_RUN_KIND,
 )
-from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.parallel_contracts import parallel_policy_catalog
-from app.agent_workflows.corrective_contracts import corrective_policy_catalog
-from app.agent_workflows.workflow_requirements import (
-    workflow_node_tool_requirements,
-    workflow_required_tool_ids,
-)
 from app.agent_workflows.workflow_runtime import (
-    ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
     workflow_is_chat_eligible,
     workflow_supports_replans,
@@ -41,8 +32,8 @@ from app.agent_workflows.chat_cancellation import (
 )
 from app.agent_workflows.trace_details import detail_manifest
 from app.agent_workflows.trace_payloads import is_current_debug_payload
-from app.agent_workflows.canonical_trace import build_parallel_groups
-from app.runtime.contracts import AgentRuntimeEvent, AgentRuntimeRequest
+from app.agent_workflows.canonical_trace import build_parallel_groups_safely
+from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +68,7 @@ def _normalized_visit_index(value: Any) -> Optional[int]:
 from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
 from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
+from runtime_protocol.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
 from app.runtime.capability_resolver import (
     capability_envelope,
     capability_discovery_error,
@@ -86,7 +77,7 @@ from app.runtime.capability_resolver import (
     resolve_definition_capability_resolution,
     resolve_run_capability_resolution,
 )
-from app.runtime.errors import RuntimeError
+from runtime_protocol.errors import RuntimeError
 from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
 from app.runtime.operational_limits import required_positive_float
 from app.runtime.operational_limits import validate_bounded_json
@@ -296,7 +287,7 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
             run.id,
             debug.get("version"),
         )
-        return dict(debug)
+        return None
     trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else None
     summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
     if trace is None or summary is None:
@@ -324,6 +315,17 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
             "operation_refs": topology_available,
         },
     }
+
+
+def _debug_trace_failure_for_response(run) -> Dict[str, Any] | None:
+    debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
+    if not debug:
+        return None
+    if not is_current_debug_payload(debug):
+        return {"code": "debug_trace_contract_invalid", "retryable": False, "run_id": str(run.id)}
+    if not isinstance(debug.get("trace"), dict) or not isinstance(debug.get("summary"), dict):
+        return {"code": "debug_trace_shape_invalid", "retryable": False, "run_id": str(run.id)}
+    return None
 
 
 def _turn_summary_payload(turn) -> Dict[str, Any]:
@@ -357,7 +359,6 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "turns": [_turn_summary_payload(turn) for turn in turns],
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
         "runtime_binding_status": getattr(run, "runtime_binding_status", "active"),
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
@@ -369,6 +370,7 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "retrieval_quality_report": (run.metrics_json or {}).get("retrieval_quality_report") if isinstance(run.metrics_json, dict) else None,
         "grounding_report": (run.metrics_json or {}).get("grounding_report") if isinstance(run.metrics_json, dict) else None,
         "debug": _debug_payload_for_response(run),
+        "debug_trace_failure": _debug_trace_failure_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
@@ -468,8 +470,8 @@ def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
     features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
     config = spec_json.get("config") if isinstance(spec_json.get("config"), dict) else {}
     return {
-        "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
-        "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
+        "required_tool_ids": sorted({str(value) for value in config.get("allowed_tool_ids") or [] if value}),
+        "node_tool_requirements": {},
         "supports_parallel_dispatch": bool(features.get("supports_parallel_dispatch")),
         "supports_corrective_retrieval": bool(features.get("supports_corrective_retrieval")),
         "parallel_policy": config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else None,
@@ -717,7 +719,7 @@ async def stream_agent_run_events(
                         "occurred_at": maybe_iso_utc_z(getattr(row, "occurred_at", None)),
                         "created_at": maybe_iso_utc_z(getattr(row, "created_at", None)),
                         "terminal": terminal,
-                        "parallel_groups": build_parallel_groups(canonical_events),
+                        "parallel_groups": build_parallel_groups_safely(canonical_events),
                     }
                     yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
                     if terminal:
@@ -1247,10 +1249,8 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
         for source in (thread_settings or {}, req.overrides or {}):
-            for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
-                value = source.get(key) if isinstance(source, dict) else None
-                if value is not None:
-                    candidate_config[key] = value
+            if isinstance(source, dict):
+                candidate_config.update({key: value for key, value in source.items() if value is not None})
         candidate["config"] = candidate_config
         validation = await provider.validate(definition, candidate)
         report = _validation_payload(validation)

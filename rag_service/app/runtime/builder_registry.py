@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict
 
 from app.runtime.builder import AgentBuilderProvider
-from app.runtime.contracts import AgentDefinition
+from runtime_protocol.contracts import AgentDefinition
 
 
 class BuilderSelectionError(ValueError):
