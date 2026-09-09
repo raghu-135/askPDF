@@ -1131,6 +1131,7 @@ async def deep_research_subagent(state: Dict[str, Any], config: RunnableConfig) 
     if duplicate and subagent.status == "completed":
         return {"task_result_packets": [{
             "task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id,
+            "dispatch_id": item.get("dispatch_id"),
             "attempt": int(todo.get("attempt") or 1), "execution_key": item.get("execution_key"),
             "status": "completed", "summary": "Recovered completed subagent execution.",
             "artifact_ids": list(subagent.output_artifact_ids_json or []), "usage": dict(subagent.usage_json or {}),
@@ -1316,6 +1317,7 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
     except Exception as exc:
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "failed", "summary": "", "artifact_ids": [], "usage": {}, "retryable": parallel_retryable_error(exc), "error": {"code": "subagent_failed", "type": type(exc).__name__, "message": str(exc)[:700]}}
     packet["attempt"] = int(todo.get("attempt") or 1)
+    packet["dispatch_id"] = item.get("dispatch_id")
     packet["execution_key"] = item.get("execution_key")
     terminal_kind = {
         "completed": "subagent.completed",
