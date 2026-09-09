@@ -13,6 +13,7 @@ from langgraph_runtime.workflows.node_catalog import (
 
 
 NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
+TASK_RESULT_PACKET_CONSUME_KEY = "__consume_task_result_packets__"
 
 
 class WorkflowBudgetExceeded(RuntimeError):
@@ -82,6 +83,51 @@ def merge_parallel_deltas(left: List[Any], right: List[Any]) -> List[Any]:
             result.append(item)
             seen.add(identity)
     return result
+
+
+def task_result_packet_identity(value: Any) -> str:
+    """Return the stable identity used to acknowledge one result packet."""
+
+    if not isinstance(value, dict):
+        raise ValueError("task result packet must be an object")
+    dispatch_id = str(value.get("dispatch_id") or "")
+    work_id = str(value.get("execution_key") or value.get("work_id") or "")
+    if not dispatch_id or not work_id:
+        raise ValueError("task result packet is missing dispatch/work identity")
+    try:
+        attempt = int(value["attempt"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("task result packet is missing a valid attempt") from exc
+    if attempt < 1:
+        raise ValueError("task result packet attempt must be positive")
+    return f"result|{dispatch_id}|{work_id}|{attempt}"
+
+
+def consume_task_result_packets(identities: List[str]) -> Dict[str, List[str]]:
+    """Create a checkpoint-safe reducer command for acknowledged packets."""
+
+    if any(not isinstance(identity, str) or not identity for identity in identities):
+        raise ValueError("task result packet consume identities must be non-empty strings")
+    return {TASK_RESULT_PACKET_CONSUME_KEY: list(dict.fromkeys(identities))}
+
+
+def merge_task_result_packets(left: List[Any], right: Any) -> List[Any]:
+    """Append new packets and explicitly remove packets acknowledged by a coordinator."""
+
+    if isinstance(right, dict) and TASK_RESULT_PACKET_CONSUME_KEY in right:
+        identities = right[TASK_RESULT_PACKET_CONSUME_KEY]
+        if not isinstance(identities, list) or any(not isinstance(value, str) or not value for value in identities):
+            raise ValueError("invalid task result packet consume command")
+        consumed = set(identities)
+        return [
+            item for item in left or []
+            if not isinstance(item, dict) or task_result_packet_identity(item) not in consumed
+        ]
+    if right is None:
+        return list(left or [])
+    if not isinstance(right, list):
+        raise ValueError("task result packet reducer expects a list or consume command")
+    return merge_parallel_deltas(left, right)
 
 
 def merge_corrective_wave_records(left: List[Any], right: List[Any]) -> List[Any]:
@@ -260,7 +306,7 @@ class RouterRagState(TypedDict, total=False):
     task_todos: List[Dict[str, Any]]
     task_work_item: Dict[str, Any]
     task_work_items: List[Dict[str, Any]]
-    task_result_packets: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    task_result_packets: Annotated[List[Dict[str, Any]], merge_task_result_packets]
     task_artifact_manifest: List[Dict[str, Any]]
     task_evidence_manifest: List[Dict[str, Any]]
     task_evidence_gaps: List[str]

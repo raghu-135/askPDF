@@ -37,6 +37,7 @@ from langgraph_runtime.runtime_support.task_results import (
     normalize_runtime_task_result,
     runtime_task_result_summary,
 )
+from langgraph_runtime.workflows.state import consume_task_result_packets, task_result_packet_identity
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
 
 
@@ -1385,6 +1386,7 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
     sink = services.events
     work_items = [item for item in state.get("task_work_items") or [] if isinstance(item, dict)]
     packets = [item for item in state.get("task_result_packets") or [] if isinstance(item, dict)]
+    packet_identities = [task_result_packet_identity(packet) for packet in packets]
     result_warnings = [
         dict(value) for value in state.get("task_result_warnings") or [] if isinstance(value, Mapping)
     ]
@@ -1455,7 +1457,7 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
         **context_update,
         "task_todos": todos,
         "task_work_items": [],
-        "task_result_packets": [],
+        "task_result_packets": consume_task_result_packets(packet_identities),
         "task_result_warnings": result_warnings,
         "task_result_gaps": list(dict.fromkeys(result_gaps)),
         "task_controller_route": route,
