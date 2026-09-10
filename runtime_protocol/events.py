@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 from typing import Any, Mapping
 
 from runtime_protocol.sanitization import bounded_value
@@ -28,34 +29,19 @@ def _now() -> str:
 
 
 def _event_kind(kind: str, *, source_metadata: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
-    value = str(kind or "").strip()
-    source = dict(source_metadata or {})
-    node_mapping = {
-        "node.started": "operation.started",
-        "node.completed": "operation.completed",
-        "node.skipped": "operation.skipped",
-        "node.failed": "operation.failed",
-        "interrupt.created": "interrupt.requested",
-        "run.interrupted": "interrupt.requested",
-    }
-    if value == "run.clarification":
-        return value, source
-    if value in {"model.started", "model.completed", "model.failed", "llm.start", "llm.complete"}:
-        source.setdefault("source_event", value)
-        value = {
-            "model.started": "llm.started",
-            "model.completed": "llm.completed",
-            "model.failed": "llm.failed",
-            "llm.start": "llm.started",
-            "llm.complete": "llm.completed",
-        }[value]
-    if value in node_mapping:
-        source.setdefault("source_event", value)
-        value = node_mapping[value]
-    if value not in CANONICAL_RUNTIME_EVENT_KINDS:
-        source.setdefault("source_event", value or None)
-        return "runtime.event", source
-    return value, source
+    if not isinstance(kind, str) or kind not in CANONICAL_RUNTIME_EVENT_KINDS:
+        raise ValueError(f"unsupported runtime event kind: {kind}")
+    if source_metadata is not None and not isinstance(source_metadata, Mapping):
+        raise ValueError("runtime event source_metadata must be an object")
+    return kind, dict(source_metadata or {})
+
+
+def canonical_event_payload(kind: str, payload: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    """Accept only canonical kinds at the product boundary; adapters translate upstream events."""
+    _event_kind(kind)
+    if payload is not None and not isinstance(payload, Mapping):
+        raise ValueError("runtime event payload must be an object")
+    return kind, dict(bounded_value(dict(payload) if payload is not None else {}))
 
 
 def normalize_product_event_kind(kind: str, *, source_metadata: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
@@ -65,6 +51,24 @@ def normalize_product_event_kind(kind: str, *, source_metadata: Mapping[str, Any
     source = dict(source_metadata or {})
     mapping = {
         "task.created": "run.queued",
+        "task.queued": "run.queued",
+        "task.pausing": "runtime.event",
+        "task.awaiting_approval": "run.paused",
+        "task.cancelling": "run.cancel_requested",
+        "task.recovery_required": "runtime.event",
+        "task.start_requested": "run.queued",
+        "task.retry_requested": "run.queued",
+        "task.approval_requested": "interrupt.requested",
+        "task.result_review_requested": "interrupt.requested",
+        "todo.started": "operation.started",
+        "todo.running": "operation.started",
+        "todo.completed": "operation.completed",
+        "todo.failed": "operation.failed",
+        "todo.skipped": "operation.skipped",
+        "todo.cancelled": "operation.skipped",
+        "todo.pending": "runtime.event",
+        "todo.ready": "runtime.event",
+        "todo.blocked": "runtime.event",
         "task.claimed": "run.started",
         "task.run_attached": "run.started",
         "task.continuation_queued": "run.queued",
@@ -79,28 +83,52 @@ def normalize_product_event_kind(kind: str, *, source_metadata: Mapping[str, Any
         "task.cancelled": "run.cancelled",
         "artifact.deleted": "artifact.updated",
         "artifact.invalidated": "artifact.updated",
+        "web_access.allowed_for_task": "approval.responded",
+        "web_access.denied_for_task": "approval.responded",
+        "task.course_correction_submitted": "course_correction.accepted",
+        "task.course_correction_incorporated": "course_correction.incorporated",
+        "task.course_correction_accepted_unresolved": "course_correction.unresolved",
+        "task.course_correction_rejected": "course_correction.unresolved",
+        "task.course_correction_satisfied": "course_correction.satisfied",
+        "task.course_correction_unresolved": "course_correction.unresolved",
+        "task.course_correction_linked": "linked_run.created",
+        "task.budget_review_requested": "budget.boundary_requested",
+        "task.budget_review_continued": "intervention.responded",
+        "task.budget_review_partial_accepted": "intervention.responded",
+        "task.budget_review_steered": "intervention.responded",
+        "task.budget_updated": "runtime.event",
+        "task.deletion_completed": "runtime.event",
+        "task.lease_recovered": "runtime.event",
+        "task.result_review_accepted": "intervention.responded",
+        "task.result_review_retry_queued": "run.queued",
+        "task.runtime_projection_failed": "runtime.event",
+        "task.runtime_projection_reconciled": "runtime.event",
+        "task.wake_budget_reached": "budget.boundary_requested",
     }
     if value.startswith("task.") and value.endswith("_requested"):
         action = value.removeprefix("task.").removesuffix("_requested")
-        mapping[value] = {
+        requested_kind = {
             "cancel": "run.cancel_requested",
             "pause": "run.paused",
             "resume": "run.resumed",
-        }.get(action, "runtime.event")
+        }.get(action)
+        if requested_kind is not None:
+            mapping[value] = requested_kind
     if value.startswith("subagent."):
         status = value.removeprefix("subagent.")
-        mapping[value] = {
+        subagent_kind = {
             "start": "subagent.started",
             "started": "subagent.started",
+            "running": "subagent.started",
             "progress": "subagent.progress",
             "complete": "subagent.completed",
             "completed": "subagent.completed",
             "failed": "subagent.failed",
             "timed_out": "subagent.failed",
             "cancelled": "subagent.cancelled",
-        }.get(status, "runtime.event")
-    if value.startswith("web_access."):
-        mapping[value] = "approval.requested" if value.endswith("requested") else "approval.responded"
+        }.get(status)
+        if subagent_kind is not None:
+            mapping[value] = subagent_kind
     normalized = mapping.get(value)
     if normalized is None:
         normalized, source = _event_kind(value, source_metadata=source)
@@ -124,25 +152,27 @@ def create_runtime_event(
     continuation: Any = None,
     checkpoint_boundary_available: bool | None = None,
 ) -> AgentRuntimeEvent:
-    if not str(event_id or "").strip():
+    if not isinstance(event_id, str) or not event_id.strip():
         raise ValueError("runtime event_id is required")
-    if not str(run_id or "").strip():
+    if not isinstance(run_id, str) or not run_id.strip():
         raise ValueError("runtime run_id is required")
-    if int(sequence) < 1:
+    if type(sequence) is not int or sequence < 1:
         raise ValueError("runtime event sequence must be positive")
-    if int(attempt) < 1:
+    if type(attempt) is not int or attempt < 1:
         raise ValueError("runtime event attempt must be positive")
+    if payload is not None and not isinstance(payload, Mapping):
+        raise ValueError("runtime event payload must be an object")
     normalized_kind, normalized_source = _event_kind(kind, source_metadata=source_metadata)
     expected_terminal = normalized_kind in TERMINAL_RUNTIME_EVENT_KINDS
-    if terminal is not None and bool(terminal) != expected_terminal:
+    if terminal is not None and (type(terminal) is not bool or terminal != expected_terminal):
         raise ValueError(f"terminal flag does not match event kind {normalized_kind}")
-    return AgentRuntimeEvent(
+    event = AgentRuntimeEvent(
         event_id=str(event_id),
         run_id=str(run_id),
         sequence=int(sequence),
         kind=normalized_kind,
         attempt=int(attempt),
-        payload=bounded_value(dict(payload or {})),
+        payload=dict(payload) if payload is not None else {},
         occurred_at=occurred_at or _now(),
         terminal=expected_terminal,
         trace_id=trace_id,
@@ -150,20 +180,47 @@ def create_runtime_event(
         continuation=continuation,
         checkpoint_boundary_available=checkpoint_boundary_available,
     )
+    validate_runtime_event(event)
+    # Validate the original types before redaction can turn values into strings.
+    event = replace(event, payload=bounded_value(dict(event.payload)))
+    return event
 
 
 def validate_runtime_event(event: AgentRuntimeEvent, *, previous: AgentRuntimeEvent | None = None) -> None:
-    if not event.event_id.strip():
+    if not isinstance(event.event_id, str) or not event.event_id.strip():
         raise ValueError("runtime event_id is required")
-    if not event.run_id.strip():
+    if not isinstance(event.run_id, str) or not event.run_id.strip():
         raise ValueError("runtime run_id is required")
-    if event.sequence < 1:
+    if type(event.sequence) is not int or event.sequence < 1:
         raise ValueError("runtime event sequence must be positive")
     if event.kind not in CANONICAL_RUNTIME_EVENT_KINDS:
         raise ValueError(f"unsupported runtime event kind: {event.kind}")
-    if event.terminal != (event.kind in TERMINAL_RUNTIME_EVENT_KINDS):
+    if type(event.terminal) is not bool or event.terminal != (event.kind in TERMINAL_RUNTIME_EVENT_KINDS):
         raise ValueError(f"terminal flag does not match event kind {event.kind}")
-    payload = dict(event.payload or {})
+    if type(event.attempt) is not int or event.attempt < 1:
+        raise ValueError("runtime event attempt must be positive")
+    if not isinstance(event.payload, Mapping):
+        raise ValueError("runtime event payload must be an object")
+    if not isinstance(event.source_metadata, Mapping):
+        raise ValueError("runtime event source_metadata must be an object")
+    payload = dict(event.payload)
+    required = ()
+    if event.kind.startswith("tool."):
+        required = ("tool_call_id", "tool_name")
+    elif event.kind.startswith("subagent."):
+        required = ("subagent_id",)
+    elif event.kind.startswith("artifact."):
+        required = ("artifact_id",)
+    elif event.kind.startswith("approval."):
+        required = ("approval_id",)
+    for name in required:
+        if not isinstance(payload.get(name), str) or not payload[name].strip():
+            raise ValueError(f"{event.kind} requires {name}")
+    if event.kind == "output.delta" and not isinstance(payload.get("delta"), str):
+        raise ValueError("output.delta requires a string delta")
+    if event.kind == "approval.requested" and payload.get("response_operation") != "run.approval.respond":
+        raise ValueError("approval.requested requires run.approval.respond")
+
     if payload.get("parent_operation_id") and payload.get("parent_operation_id") == payload.get("operation_id"):
         raise ValueError("runtime event operation cannot parent itself")
     caused_by = payload.get("caused_by_event_id")
@@ -192,6 +249,8 @@ def validate_runtime_event(event: AgentRuntimeEvent, *, previous: AgentRuntimeEv
             except (TypeError, ValueError) as exc:
                 raise ValueError("worker runtime event attempt must be positive") from exc
     if previous is not None:
+        if event.run_id != previous.run_id:
+            raise ValueError("runtime events must belong to the same run")
         if event.sequence <= previous.sequence:
             raise ValueError("runtime event sequence must be monotonic")
         if previous.terminal:

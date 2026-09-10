@@ -14,6 +14,7 @@ from runtime_protocol.contracts import (
     CANONICAL_RUNTIME_EVENT_KINDS,
     TERMINAL_RUNTIME_EVENT_KINDS,
 )
+from runtime_protocol.validation import validate_runtime_result_for_event
 
 
 def json_envelope(
@@ -57,31 +58,47 @@ def structured_error(
 
 
 def validate_event_mapping(value: Mapping[str, Any]) -> None:
-    required = {
-        "event_id", "run_id", "sequence", "kind",
-    }
-    if not isinstance(value, Mapping) or not required.issubset(value):
+    from runtime_protocol.contracts import AgentRuntimeEvent
+    from runtime_protocol.events import validate_runtime_event
+
+    if not isinstance(value, Mapping):
+        raise ValueError("runtime event must be an object")
+    required = {"event_id", "run_id", "sequence", "kind"}
+    if not required.issubset(value):
         raise ValueError("runtime event has an incomplete canonical shape")
-    if not isinstance(value["event_id"], str) or not value["event_id"].strip():
-        raise ValueError("runtime event event_id must be a non-empty string")
-    if not isinstance(value["run_id"], str) or not value["run_id"].strip():
-        raise ValueError("runtime event run_id must be a non-empty string")
-    if not isinstance(value["kind"], str) or value["kind"] not in CANONICAL_RUNTIME_EVENT_KINDS:
-        raise ValueError("runtime event kind is not canonical")
-    try:
-        if int(value["sequence"]) < 1 or int(value.get("attempt") or 1) < 1:
-            raise ValueError
-    except (TypeError, ValueError) as exc:
-        raise ValueError("runtime event sequence and attempt must be positive integers") from exc
-    if "payload" in value and not isinstance(value["payload"], Mapping):
-        raise ValueError("runtime event payload must be an object")
-    if "source_metadata" in value and not isinstance(value["source_metadata"], Mapping):
-        raise ValueError("runtime event source_metadata must be an object")
-    if "terminal" in value and (
-        not isinstance(value["terminal"], bool)
-        or value["terminal"] != (value["kind"] in TERMINAL_RUNTIME_EVENT_KINDS)
-    ):
-        raise ValueError("runtime event terminal flag does not match event kind")
+    validate_runtime_event(AgentRuntimeEvent(
+        event_id=value["event_id"], run_id=value["run_id"],
+        sequence=value["sequence"], kind=value["kind"],
+        attempt=value.get("attempt", 1), payload=value.get("payload", {}),
+        terminal=value.get("terminal", value["kind"] in TERMINAL_RUNTIME_EVENT_KINDS),
+        source_metadata=value.get("source_metadata", {}),
+    ))
+
+
+def decode_event_frame(frame: str) -> dict[str, Any]:
+    """Validate one persisted canonical SSE frame without repairing its envelope."""
+    fields: dict[str, str] = {}
+    data: list[str] = []
+    for line in frame.splitlines():
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip())
+        elif line.startswith(("id:", "event:")):
+            name, value = line.split(":", 1)
+            if name in fields:
+                raise ValueError("duplicate SSE envelope field")
+            fields[name] = value.lstrip()
+    body = json.loads("\n".join(data))
+    if not isinstance(body, dict) or not isinstance(body.get("event"), dict):
+        raise ValueError("SSE frame requires a canonical event")
+    event = body["event"]
+    validate_event_mapping(event)
+    if body.get("result") is not None:
+        if not isinstance(body["result"], Mapping):
+            raise ValueError("SSE result must be an object")
+        validate_runtime_result_for_event(event["kind"], body["result"], terminal=event.get("terminal"), event_payload=event.get("payload"))
+    if fields.get("id") != event["event_id"] or fields.get("event") != event["kind"]:
+        raise ValueError("SSE envelope does not match canonical event")
+    return body
 
 
 def sse_encode(event: Mapping[str, Any] | Any, *, result: Mapping[str, Any] | Any | None = None) -> str:
@@ -93,6 +110,7 @@ def sse_encode(event: Mapping[str, Any] | Any, *, result: Mapping[str, Any] | An
     }
     if result_value is not None:
         payload["result"] = dict(result_value)
+        validate_runtime_result_for_event(event_value["kind"], payload["result"], terminal=event_value.get("terminal"), event_payload=event_value.get("payload"))
     return f"id: {event_value['event_id']}\nevent: {event_value['kind']}\ndata: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
 
 

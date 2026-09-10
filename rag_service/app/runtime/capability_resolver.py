@@ -94,6 +94,7 @@ TASK_ONLY_OPERATIONS = frozenset({
 })
 
 CHECKPOINT_OPERATIONS = frozenset({
+    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_INSPECT_STATE,
     RuntimeOperationId.RUN_REPLAY,

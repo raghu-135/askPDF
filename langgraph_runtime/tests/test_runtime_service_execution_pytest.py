@@ -193,7 +193,7 @@ async def test_start_interrupt_resume_uses_serialized_interruption_contract(monk
 
 
 @pytest.mark.asyncio
-async def test_resume_rejects_legacy_pending_interrupt_without_calling_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resume_rejects_malformed_pending_interrupt_without_calling_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     class FakeAdapter(_FakeAdapter):
@@ -211,7 +211,7 @@ async def test_resume_rejects_legacy_pending_interrupt_without_calling_adapter(m
         AgentRuntimeEvent(
             event_id=f"{run_id}:paused",
             run_id=run_id,
-            sequence=0,
+            sequence=1,
             kind="run.paused",
             payload={},
         ).to_dict(),
@@ -325,7 +325,7 @@ async def test_completed_run_event_replay_and_repeated_start_are_read_only(monke
                         event_id=f"{request.run_id}:progress",
                         run_id=request.run_id,
                         sequence=1,
-                        kind="run.progress",
+                        kind="run.started",
                         payload={"step": 1},
                     )
                 )
@@ -362,8 +362,8 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
             await event_sink.emit_runtime_event(AgentRuntimeEvent(
                 event_id=f"{request.run_id}:resume-progress",
                 run_id=request.run_id,
-                sequence=0,
-                kind="run.progress",
+                sequence=1,
+                kind="run.started",
                 payload={"step": "resumed"},
             ))
             return AgentRuntimeResult(status="completed", output={"answer": "resumed"})
@@ -379,7 +379,7 @@ async def test_resume_event_replay_honors_caller_cursor_after_completion(monkeyp
         AgentRuntimeEvent(
             event_id=f"{run_id}:paused",
             run_id=run_id,
-            sequence=0,
+            sequence=1,
             kind="run.paused",
             payload={},
         ).to_dict(),

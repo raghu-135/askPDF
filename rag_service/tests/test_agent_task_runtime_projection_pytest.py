@@ -344,7 +344,7 @@ async def test_warning_result_enters_review_in_the_delta_transaction(
     assert stored_run is not None and stored_run.status == "awaiting_human"
     assert stored_run.pending_interrupt_json["type"] == "incomplete_result_review"
     assert stored_run.pending_interrupt_json["allowed_actions"] == ["accept", "retry_with_input"]
-    assert sum(event.event_type == "runtime.event" and (event.source_metadata_json or {}).get("source_event") == "task.result_review_requested" for event in events) == 1
+    assert sum(event.event_type == "interrupt.requested" and (event.source_metadata_json or {}).get("source_event") == "task.result_review_requested" for event in events) == 1
     assert not any(event.terminal for event in events)
 
 

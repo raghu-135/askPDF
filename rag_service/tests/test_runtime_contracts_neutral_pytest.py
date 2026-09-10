@@ -10,6 +10,65 @@ from runtime_protocol.contracts import (
     TaskOrchestrationDelta,
 )
 from runtime_protocol.transport import event_from_dict, request_from_dict, result_from_dict
+import pytest
+from runtime_protocol.adapter import AgentRuntimeAdapter
+from runtime_protocol.errors import RuntimeError
+
+
+class UnsupportedAdapter(AgentRuntimeAdapter):
+    framework = "test"
+    builder_id = "test"
+
+    async def capabilities(self, definition):
+        raise AssertionError("No discovery should run for an unsupported default")
+
+    async def validate(self, definition, spec, *, options=None):
+        raise AssertionError("No validation should run for an unsupported default")
+
+    async def start(self, request, *, context, event_sink=None):
+        raise AssertionError("No execution should run for an unsupported default")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "operation", "kwargs"), [
+    ("get_run", "run.get", {}),
+    ("wait", "run.wait", {}),
+    ("stream_events", "run.events", {}),
+    ("resume", "run.resume", {"interrupt": {}, "context": None}),
+    ("cancel", "run.cancel", {}),
+    ("pause", "task.pause", {}),
+    ("respond_to_approval", "run.approval.respond", {"response": None}),
+    ("send_followup", "run.send_followup", {"input": {}}),
+    ("interrupt_with_input", "run.interrupt_with_input", {"input": {}}),
+    ("steer_live", "run.steer_live", {"steering": None}),
+    ("update_state", "run.update_state", {"input": {}}),
+    ("submit_course_correction", "task.course_correction.submit", {"correction": None}),
+    ("inspect_state", "run.inspect_state", {}),
+    ("replay", "run.replay", {}),
+    ("fork", "run.fork", {}),
+    ("list_subagents", "subagent.list", {}),
+    ("send_to_subagent", "subagent.send", {"subagent_id": "child", "input": {}}),
+    ("cancel_subagent", "subagent.cancel", {"subagent_id": "child"}),
+    ("list_artifacts", "artifact.list", {}),
+])
+async def test_universal_optional_operations_fail_without_execution(method, operation, kwargs):
+    with pytest.raises(RuntimeError) as caught:
+        await getattr(UnsupportedAdapter(), method)(None, **kwargs)
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert caught.value.details["operation_id"] == operation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "operation", "args", "kwargs"), [
+    ("cleanup_run", "run.cleanup", ("run",), {}),
+    ("list_runs", "run.list", (), {"thread_id": "thread"}),
+    ("project_trace", "trace.project", ([],), {"run_id": "run"}),
+])
+async def test_non_request_optional_operations_are_structurally_unsupported(method, operation, args, kwargs):
+    with pytest.raises(RuntimeError) as caught:
+        await getattr(UnsupportedAdapter(), method)(*args, **kwargs)
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert caught.value.details["operation_id"] == operation
 
 
 def test_runtime_request_round_trips_as_json_only_dto():

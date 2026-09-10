@@ -104,7 +104,7 @@ async def test_cleanup_checkpoint_boundary_fences_concurrent_resume_retry_and_cl
 
 @pytest.mark.asyncio
 async def test_postgres_cleanup_phases_block_admission_and_worker_claim() -> None:
-    database_url = os.getenv("TEST_DATABASE_URL") or os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
+    database_url = os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
     if not database_url:
         pytest.skip("PostgreSQL runtime database is not configured")
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
@@ -235,7 +235,7 @@ async def test_checkpoint_execution_persists_resumable_result_and_releases_lease
 
     event = await store.checkpoint_execution(
         "run-checkpoint",
-        {"event_id": "run-checkpoint:paused", "kind": "run.paused", "payload": {}, "terminal": False},
+        {"run_id": "run-checkpoint", "sequence": 1, "event_id": "run-checkpoint:paused", "kind": "run.paused", "payload": {}, "terminal": False},
         {"status": "awaiting_human", "pending_interrupt": {"type": "task_pause"}},
         status="awaiting_human",
         continuation={"binding_type": "langgraph.checkpoint", "payload": {"checkpoint_thread_id": "cp-1"}},
@@ -255,7 +255,7 @@ async def test_checkpoint_execution_is_idempotent_after_event_was_already_persis
     store = ExecutionStore(database_url="")
     await store.create("run-checkpoint-retry", "start", {"run_id": "run-checkpoint-retry"}, {})
     first_token = await store.claim("run-checkpoint-retry")
-    event = {"event_id": "run-checkpoint-retry:paused", "kind": "run.paused", "payload": {}, "terminal": False}
+    event = {"run_id": "run-checkpoint-retry", "sequence": 1, "event_id": "run-checkpoint-retry:paused", "kind": "run.paused", "payload": {}, "terminal": False}
     result = {"status": "awaiting_human", "pending_interrupt": {"type": "task_pause"}}
     await store.checkpoint_execution(
         "run-checkpoint-retry", event, result, status="awaiting_human", continuation=None,
@@ -281,7 +281,7 @@ async def test_terminal_finalization_advances_past_a_stale_checkpoint_sequence()
     await store.create("run-stale-sequence", "start", {"run_id": "run-stale-sequence"}, {})
     await store.append(
         "run-stale-sequence",
-        {"event_id": "run-stale-sequence:checkpoint", "kind": "run.paused", "payload": {}, "terminal": False},
+        {"run_id": "run-stale-sequence", "sequence": 1, "event_id": "run-stale-sequence:checkpoint", "kind": "run.paused", "payload": {}, "terminal": False},
     )
     record = await store.get("run-stale-sequence")
     record.next_sequence = 1
@@ -289,7 +289,7 @@ async def test_terminal_finalization_advances_past_a_stale_checkpoint_sequence()
 
     terminal = await store.finalize_execution(
         "run-stale-sequence",
-        {"event_id": "run-stale-sequence:cancelled", "kind": "run.cancelled", "payload": {}, "terminal": True},
+        {"run_id": "run-stale-sequence", "sequence": 1, "event_id": "run-stale-sequence:cancelled", "kind": "run.cancelled", "payload": {}, "terminal": True},
         {"status": "cancelled"},
         status="cancelled", owner_id=store.owner_id, fencing_token=token,
     )
@@ -306,7 +306,7 @@ async def test_terminal_continuation_probe_is_immutable_under_repeated_start() -
     await store.set_status("run-1", "no_continuation")
     await store.append(
         "run-1",
-        {"event_id": "run-1:terminal", "kind": "run.continuation_empty", "terminal": True, "payload": {}},
+        {"run_id": "run-1", "sequence": 1, "event_id": "run-1:terminal", "kind": "run.completed", "terminal": True, "payload": {}},
     )
 
     with pytest.raises(ExecutionConflictError):
@@ -323,7 +323,7 @@ async def test_failed_start_is_immutable_under_transport_retry() -> None:
     await store.set_status("run-2", "failed")
     await store.append(
         "run-2",
-        {"event_id": "run-2:terminal", "kind": "run.failed", "terminal": True, "payload": {}},
+        {"run_id": "run-2", "sequence": 1, "event_id": "run-2:terminal", "kind": "run.failed", "terminal": True, "payload": {}},
     )
 
     record = await store.create("run-2", "start", {"run_id": "run-2"}, {"request": {"run_id": "run-2"}})
@@ -524,7 +524,7 @@ async def test_resume_transport_retry_is_read_only_after_terminal_completion() -
     binding = {"binding_type": "checkpoint", "payload": {"id": "cp-1"}}
     await store.append(
         "run-resume",
-        {"event_id": "run-resume:terminal", "kind": "run.completed", "terminal": True, "continuation": binding},
+        {"run_id": "run-resume", "sequence": 1, "event_id": "run-resume:terminal", "kind": "run.completed", "terminal": True, "continuation": binding},
     )
     await store.set_status("run-resume", "completed")
 
@@ -545,14 +545,14 @@ async def test_event_round_trip_preserves_neutral_continuation_metadata() -> Non
     }
     await store.append(
         "run-3",
-        {
+        {"run_id": "run-3", "sequence": 1,
             "event_id": "run-3:paused",
-            "kind": "run.interrupted",
+            "kind": "run.paused",
             "payload": {"reason": "human_input"},
             "occurred_at": "2026-08-17T12:00:00Z",
             "trace_id": "trace-3",
             "continuation": continuation,
-            "terminal": True,
+            "terminal": False,
         },
     )
 
@@ -565,9 +565,9 @@ async def test_event_round_trip_preserves_neutral_continuation_metadata() -> Non
 
 @pytest.mark.asyncio
 async def test_postgres_event_round_trip_updates_execution_continuation() -> None:
-    database_url = os.getenv("TEST_DATABASE_URL")
+    database_url = os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
     if not database_url:
-        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+        pytest.skip("AGENT_RUNTIME_EXECUTION_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
     await store.initialize()
@@ -582,13 +582,13 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
         }
         await store.append(
             run_id,
-            {
+            {"run_id": run_id, "sequence": 1,
                 "event_id": f"{run_id}:paused",
-                "kind": "run.interrupted",
+                "kind": "run.paused",
                 "payload": {"reason": "human_input"},
                 "trace_id": "trace-pg",
                 "continuation": continuation,
-                "terminal": True,
+                "terminal": False,
             },
             owner_id=store.owner_id,
             fencing_token=fencing_token,
@@ -596,7 +596,7 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
         with pytest.raises(LeaseLostError):
             await store.append(
                 run_id,
-                {"event_id": f"{run_id}:stale", "kind": "runtime.event"},
+                {"run_id": run_id, "sequence": 1, "event_id": f"{run_id}:stale", "kind": "runtime.event"},
                 owner_id="stale-worker",
                 fencing_token=fencing_token,
             )
@@ -617,9 +617,9 @@ async def test_postgres_event_round_trip_updates_execution_continuation() -> Non
 
 @pytest.mark.asyncio
 async def test_postgres_request_cancel_matches_in_memory_outcomes() -> None:
-    database_url = os.getenv("TEST_DATABASE_URL")
+    database_url = os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
     if not database_url:
-        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+        pytest.skip("AGENT_RUNTIME_EXECUTION_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
     await store.initialize()
@@ -645,9 +645,9 @@ async def test_postgres_request_cancel_matches_in_memory_outcomes() -> None:
 
 @pytest.mark.asyncio
 async def test_postgres_course_correction_matches_in_memory_outcomes() -> None:
-    database_url = os.getenv("TEST_DATABASE_URL")
+    database_url = os.getenv("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
     if not database_url:
-        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL runtime-store coverage")
+        pytest.skip("AGENT_RUNTIME_EXECUTION_DATABASE_URL is required for PostgreSQL runtime-store coverage")
 
     store = ExecutionStore(database_url.replace("postgresql+asyncpg://", "postgresql://", 1))
     await store.initialize()
@@ -672,15 +672,9 @@ async def test_postgres_course_correction_matches_in_memory_outcomes() -> None:
         await store.close()
 
 
-def test_json_safe_converts_legacy_runtime_objects() -> None:
-    value = _json_safe(
-        {
-            "run": SimpleNamespace(id="run-1"),
-            "items": [SimpleNamespace(value=1)],
-        }
-    )
-
-    assert value == {"run": {"id": "run-1"}, "items": [{"value": 1}]}
+def test_json_safe_rejects_unrecognized_runtime_objects() -> None:
+    with pytest.raises(TypeError, match="Unsupported runtime JSON value"):
+        _json_safe({"run": SimpleNamespace(id="run-1")})
 
 
 @pytest.mark.asyncio
@@ -691,7 +685,7 @@ async def test_runtime_lease_fences_competing_workers_and_mutations() -> None:
     assert first is not None
     assert await store.claim("leased", owner_id="worker-b") is None
     with pytest.raises(LeaseLostError):
-        await store.append("leased", {"event_id": "stale", "kind": "runtime.event"}, owner_id="worker-b", fencing_token=1)
+        await store.append("leased", {"run_id": "leased", "sequence": 1, "event_id": "stale", "kind": "runtime.event"}, owner_id="worker-b", fencing_token=1)
     assert await store.heartbeat("leased", owner_id="worker-a", fencing_token=first)
 
 
@@ -704,7 +698,7 @@ async def test_atomic_finalization_commits_terminal_result_status_and_lease_rele
 
     stored = await store.finalize_execution(
         "atomic",
-        {"event_id": "atomic:terminal", "kind": "run.completed", "payload": {"status": "completed"}, "terminal": True},
+        {"run_id": "atomic", "sequence": 1, "event_id": "atomic:terminal", "kind": "run.completed", "payload": {"status": "completed"}, "terminal": True},
         {"status": "completed", "output": {"answer": "done"}},
         status="completed",
         owner_id=store.owner_id,
@@ -730,7 +724,7 @@ async def test_clarification_result_is_terminal_and_replayable() -> None:
 
     stored = await store.finalize_execution(
         "clarification",
-        {
+        {"run_id": "clarification", "sequence": 1,
             "event_id": "clarification:terminal",
             "kind": "run.clarification",
             "payload": {"status": "clarification_required"},
@@ -754,13 +748,13 @@ async def test_terminal_event_is_reconciled_or_quarantined_without_recovery() ->
     await store.create("reconcile", "start", {"run_id": "reconcile"}, {"request": {"run_id": "reconcile"}})
     await store.append(
         "reconcile",
-        {"event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
+        {"run_id": "reconcile", "sequence": 1, "event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
         result={"status": "completed", "output": {"answer": "done"}},
     )
     await store.create("quarantine", "start", {"run_id": "quarantine"}, {"request": {"run_id": "quarantine"}})
     await store.append(
         "quarantine",
-        {"event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
+        {"run_id": "quarantine", "sequence": 1, "event_id": "terminal", "kind": "run.completed", "payload": {}, "terminal": True},
     )
 
     assert await store.list_recovery_candidates() == []
@@ -827,7 +821,7 @@ async def test_cleanup_run_removes_execution_operations_and_events_idempotently(
     store = ExecutionStore(database_url="")
     run_id = "cleanup-run"
     await store.create(run_id, "start", {"run_id": run_id}, {"request": {"run_id": run_id}}, operation_id="start")
-    await store.append(run_id, {"event_id": "progress", "kind": "run.progress", "payload": {}, "terminal": False})
+    await store.append(run_id, {"run_id": run_id, "sequence": 1, "event_id": "progress", "kind": "run.started", "payload": {}, "terminal": False})
     await store.set_status(run_id, "completed")
     claim = await store.begin_cleanup(run_id)
     first = await store.cleanup_run(run_id, claim=claim["claim"])
@@ -864,7 +858,7 @@ async def test_cleanup_claim_expires_and_is_reclaimed_after_restart() -> None:
 async def test_cleanup_resumes_after_checkpoint_deletion_before_execution_deletion() -> None:
     store = ExecutionStore(database_url="")
     await store.create("cleanup-boundary", "start", {"run_id": "cleanup-boundary"}, {})
-    await store.append("cleanup-boundary", {"event_id": "e1", "kind": "run.progress", "payload": {}})
+    await store.append("cleanup-boundary", {"run_id": "cleanup-boundary", "sequence": 1, "event_id": "e1", "kind": "run.started", "payload": {}})
     record = await store.get("cleanup-boundary")
     record.status = "completed"
     claim = await store.begin_cleanup("cleanup-boundary")

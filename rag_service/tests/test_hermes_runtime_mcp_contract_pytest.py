@@ -28,7 +28,6 @@ def hermes_runtime_configuration(monkeypatch):
         "HERMES_MCP_CONTEXT_SECRET": "test-hermes-mcp-context-secret-32-characters",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
-        "HERMES_RUNTIME_EVENT_ID_MODE": "durable",
         "HERMES_RUNTIME_VERSION": "test",
         "HERMES_RUN_PROFILE_MAX_AGE_SECONDS": "86400",
         "HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS": "60",

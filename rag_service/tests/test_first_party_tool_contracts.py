@@ -295,7 +295,8 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_warning_paths_still_return_valid_tool_contracts():
+async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
+    monkeypatch.setattr("app.mcp.server.persist_tool_audit", AsyncMock())
     raw = await external_research_tools.search_web.ainvoke(
         {"query": "latest diffusion"},
         config=_config(caller_node="web_worker", route="web", use_web_search=False),

@@ -1,6 +1,7 @@
 """Regression tests for graph runtime prompt behavior."""
 
 from datetime import datetime, timezone
+import pytest
 
 
 from app.agent.prompting import get_tool_catalog, normalize_tool_instructions, format_runtime_datetime_context
@@ -22,7 +23,7 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
     assert "Server current UTC datetime: 2026-06-25T19:00:00Z" in context
 
 
-def test_tool_catalog_and_legacy_instruction_keys_use_canonical_retrieval_names():
+def test_tool_catalog_and_instruction_keys_use_canonical_retrieval_names():
     catalog = {item["tool_name"]: item for item in get_tool_catalog()}
 
     assert catalog["search_thread_conversation_history"]["id"] == "thread_conversation_history"
@@ -31,13 +32,23 @@ def test_tool_catalog_and_legacy_instruction_keys_use_canonical_retrieval_names(
 
     normalized = normalize_tool_instructions(
         {
-            "deep_memory": "legacy instruction",
             "thread_conversation_history": "canonical instruction",
-            "memory_recall": "durable instruction",
-            "thread_timeline": "events instruction",
+            "durable_memory": "durable instruction",
+            "thread_events": "events instruction",
         }
     )
 
     assert normalized["thread_conversation_history"] == "canonical instruction"
     assert normalized["durable_memory"] == "durable instruction"
     assert normalized["thread_events"] == "events instruction"
+
+
+def test_unknown_tool_instruction_identifier_fails_fast():
+    with pytest.raises(ValueError, match="Unknown tool instruction identifiers"):
+        normalize_tool_instructions({"unknown_tool": "instruction"})
+
+
+def test_known_inactive_tool_instruction_is_not_mistaken_for_unknown_identifier():
+    normalized = normalize_tool_instructions({"live_web_recon": "Use fresh sources"}, tool_items=["search_documents"])
+    assert "live_web_recon" not in normalized
+    assert "document_evidence" in normalized

@@ -17,7 +17,7 @@ from runtime_protocol.errors import RuntimeError
 from runtime_protocol.protocol import json_payload
 from app.runtime.registry import RuntimeRegistry
 from hermes_runtime import api as hermes_api
-from hermes_runtime.pinned_contract import HERMES_REVISION
+from runtime_protocol.hermes_contract import HERMES_REVISION
 from hermes_runtime.execution_store import HermesExecutionStore
 
 
@@ -267,7 +267,6 @@ def test_initial_tool_requirement_is_enabled_only_for_document_backed_tasks():
         ("message.delta", "output.delta"),
         ("tool.started", "tool.started"),
         ("tool.completed", "tool.completed"),
-        ("tool.failed", "tool.failed"),
         ("reasoning.available", "reasoning.available"),
         ("approval.request", "approval.requested"),
         ("run.completed", "run.completed"),
@@ -275,11 +274,25 @@ def test_initial_tool_requirement_is_enabled_only_for_document_backed_tasks():
         ("run.cancelled", "run.cancelled"),
         ("subagent.start", "subagent.started"),
         ("subagent.complete", "subagent.completed"),
-        ("future.event", "runtime.event"),
     ],
 )
 def test_pinned_hermes_event_mapping(upstream, neutral):
     assert hermes_api._hermes_event_kind("message", {"event": upstream}) == neutral
+
+
+def test_unknown_hermes_event_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported Hermes event"):
+        hermes_api._hermes_event_kind("future.event", {"event": "future.event"})
+
+
+def test_resume_recovers_open_tool_and_approval_identities():
+    events = []
+    for sequence, (kind, payload) in enumerate([
+        ("tool.started", {"tool_call_id": "tool-1", "tool_name": "search_documents"}),
+        ("approval.requested", {"approval_id": "approval-1", "response_operation": "run.approval.respond"}),
+    ], start=1):
+        events.append({"frame": hermes_api._sse({"event_id": f"run:{sequence}", "run_id": "run", "sequence": sequence, "kind": kind, "payload": payload, "terminal": False})})
+    assert hermes_api._event_correlations(events) == ({"search_documents": "tool-1"}, "approval-1")
 
 
 def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
@@ -297,33 +310,38 @@ def test_hermes_tool_events_are_normalized_and_argument_values_are_removed():
             "request_id": "request-7",
             "arguments": {"query": "secret query", "file_hash": "secret hash"},
             "source_count": 55,
+            "duration": 0.25,
+            "error": False,
         },
     )
 
     assert kind == "tool.completed"
     assert payload["tool_name"] == "search_document_by_id"
-    assert payload["tool_call_id"] == "request-7"
-    assert payload["provided_argument_names"] == ["file_hash", "query"]
-    assert payload["result_count"] == 55
+    assert payload["tool_call_id"] is None
+    assert payload["duration_ms"] == 250
+    assert "result_count" not in payload
     assert payload["ok"] is True
     assert "arguments" not in payload
 
 
-def test_hermes_failed_tool_completion_is_projected_as_failure():
-    kind, payload = hermes_api._normalized_tool_payload(
-        "tool.completed",
-        {"tool": "tool_call", "error": {"code": "invalid_arguments"}},
-    )
+@pytest.mark.parametrize("field", ["tool_name", "name"])
+def test_hermes_tool_field_aliases_are_rejected(field):
+    with pytest.raises(ValueError, match="pinned tool field"):
+        hermes_api._normalized_tool_payload("tool.started", {field: "search_documents"})
 
-    assert kind == "tool.failed"
-    assert payload["ok"] is False
-    assert payload["event"] == "tool.failed"
+
+def test_hermes_tool_error_object_is_rejected():
+    with pytest.raises(ValueError, match="boolean error flag"):
+        hermes_api._normalized_tool_payload(
+            "tool.completed",
+            {"tool": "tool_call", "error": {"code": "invalid_arguments"}},
+        )
 
 
 def test_hermes_boolean_tool_error_is_projected_as_failure():
     kind, payload = hermes_api._normalized_tool_payload(
         "tool.completed",
-        {"tool": "search_documents", "error": True},
+        {"tool": "search_documents", "error": True, "duration": 0.1},
     )
 
     assert kind == "tool.failed"
@@ -332,11 +350,13 @@ def test_hermes_boolean_tool_error_is_projected_as_failure():
     assert payload["event"] == "tool.failed"
 
 
-def test_hermes_tool_completion_preserves_bounded_evidence_metadata():
+def test_hermes_tool_completion_does_not_invent_evidence_from_unknown_fields():
     kind, payload = hermes_api._normalized_tool_payload(
         "tool.completed",
         {
             "tool": "search_web",
+            "duration": 0,
+            "error": False,
             "result": {
                 "content": "evidence " * 500,
                 "sources": [{"url": "https://example.test"}],
@@ -346,10 +366,10 @@ def test_hermes_tool_completion_preserves_bounded_evidence_metadata():
     )
 
     assert kind == "tool.completed"
-    assert payload["result_chars"] == len("evidence " * 500)
-    assert payload["source_count"] == 1
-    assert len(payload["result_preview"]) == 2000
-    assert payload["explicit_gap"] is False
+    assert "result_chars" not in payload
+    assert "source_count" not in payload
+    assert "result_preview" not in payload
+    assert payload["duration_ms"] == 0
 
 
 def test_hermes_task_input_makes_multiple_redirects_authoritative():
@@ -531,6 +551,7 @@ def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monke
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
 def test_terminal_inspection_returns_durable_neutral_result_after_profile_retirement(monkeypatch, tmp_path, status):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     state_path = tmp_path / "state.json"
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
     store = HermesExecutionStore(str(state_path))

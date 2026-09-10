@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlparse
+from runtime_protocol.hermes_contract import HERMES_REVISION
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -26,7 +27,6 @@ class RuntimeConfigurationError(RuntimeError):
 _REFERENCE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
-_HERMES_PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
 LANGGRAPH_LIMIT_NAMES = (
     "DEFAULT_TOKEN_BUDGET",
     "REPLANS_LIMIT",
@@ -396,12 +396,12 @@ def validate_runtime_environment(
         if service == "hermes":
             _required("HERMES_API_TOKEN", values, errors)
         revision = _required("HERMES_UPSTREAM_REVISION", values, errors)
-        if revision is not None and revision != _HERMES_PINNED_REVISION:
+        if revision is not None and revision != HERMES_REVISION:
             errors.append("HERMES_UPSTREAM_REVISION does not match the pinned Hermes revision")
         if service == "hermes":
             for name in (
                 "HERMES_RUNTIME_VERSION", "HERMES_RUNTIME_STATE_PATH", "HERMES_PROFILE_ROOT",
-                "HERMES_RUNTIME_STORAGE_BACKEND", "HERMES_RUNTIME_EVENT_ID_MODE",
+                "HERMES_RUNTIME_STORAGE_BACKEND",
             ):
                 _required(name, values, errors)
             for name in ("HERMES_RUN_PROFILE_MAX_AGE_SECONDS", "HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS", "HERMES_PROFILE_UID", "HERMES_PROFILE_GID"):
@@ -409,9 +409,6 @@ def validate_runtime_environment(
             storage = values.get("HERMES_RUNTIME_STORAGE_BACKEND", "").strip().lower()
             if storage and storage != "file":
                 errors.append("HERMES_RUNTIME_STORAGE_BACKEND must be 'file'")
-            event_mode = values.get("HERMES_RUNTIME_EVENT_ID_MODE", "").strip().lower()
-            if event_mode and event_mode not in {"durable", "ephemeral"}:
-                errors.append("HERMES_RUNTIME_EVENT_ID_MODE must be 'durable' or 'ephemeral'")
         provider_name = (provider or "").lower()
         if provider_name != "lmstudio" and not values.get("OPENAI_API_KEY", "").strip():
             errors.append("OPENAI_API_KEY is required for the selected Hermes provider")

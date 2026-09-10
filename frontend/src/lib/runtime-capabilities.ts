@@ -56,8 +56,9 @@ export function runtimeOperationAvailability(
   response: AgentRuntimeCapabilityResponse | null | undefined,
   operation: RuntimeControlOperation,
 ): RuntimeOperationAvailability {
-  const descriptor = response?.runtime_available ? response.capabilities?.operations[operation] : undefined;
-  if (!descriptor || descriptor.support === 'unsupported') {
+  const descriptor = response?.runtime_available === true ? response.capabilities?.operations?.[operation] : undefined;
+  if (!descriptor || !['native', 'emulated', 'conditional'].includes(descriptor.support)
+    || !['product', 'runtime'].includes(descriptor.owner) || typeof descriptor.enabled !== 'boolean') {
     return { visible: false, enabled: false };
   }
   return {
@@ -82,13 +83,15 @@ export function runtimeOperationDisabledReason(
   return runtimeOperationAvailability(response, operation).disabledReason;
 }
 
-export function isCurrentRuntimeCapabilityRequest(requestId: number, currentRequestId: number): boolean {
-  return requestId === currentRequestId;
-}
-
 export function runtimeCapabilityResponseMatchesRun(
   response: AgentRuntimeCapabilityResponse | null | undefined,
   runId: string,
 ): boolean {
-  return response?.resource === 'run' && response.run_id === runId;
+  return response?.resource === 'run' && response.run_id === runId
+    && typeof response.runtime_available === 'boolean'
+    && (!response.runtime_available || (
+      response.capabilities !== null && typeof response.capabilities === 'object'
+      && response.capabilities.operations !== null && typeof response.capabilities.operations === 'object'
+      && !Array.isArray(response.capabilities.operations)
+    ));
 }

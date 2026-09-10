@@ -31,7 +31,7 @@ async def persist_tool_audit(
 ) -> None:
     if not run_id or not request_id:
         return
-    data = {"tool_name": tool_name, "mcp_request_id": request_id, "source": "askpdf_mcp", **dict(payload or {})}
+    data = {**dict(payload or {}), "tool_name": tool_name, "tool_call_id": request_id, "mcp_request_id": request_id, "source": "askpdf_mcp"}
     if result is not None:
         sources = list(getattr(result, "sources", None) or [])
         data.update({
@@ -54,3 +54,4 @@ async def persist_tool_audit(
         )
     except Exception:
         logger.exception("Unable to persist MCP tool audit event run_id=%s tool=%s phase=%s", run_id, tool_name, phase)
+        raise

@@ -1,10 +1,42 @@
 import time
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from langgraph_runtime.adapter import _event_from_graph
+from langgraph_runtime.adapter import _event_from_graph, _LangGraphEventBridge
 from langgraph_runtime.workflows.runtime_invocation import invoke_llm_for_node
+
+
+@pytest.mark.asyncio
+async def test_event_bridge_reports_completed_background_validation_failure():
+    bridge = _LangGraphEventBridge("run", SimpleNamespace(emit_runtime_event=AsyncMock()))
+    bridge.emit_nowait("tool.completed", {"tool_name": "search_documents"})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    with pytest.raises(ValueError, match="tool_call_id"):
+        await bridge.drain()
+
+
+@pytest.mark.parametrize(("kind", "payload"), [
+    ("output.delta", {"delta": "text"}),
+    ("tool.started", {"tool_name": "search_documents", "tool_call_id": "call"}),
+    ("subagent.started", {"subagent_id": "child"}),
+    ("artifact.created", {"artifact_id": "artifact"}),
+    ("approval.requested", {"approval_id": "approval", "response_operation": "run.approval.respond"}),
+])
+def test_translator_enforces_canonical_event_payloads(kind, payload):
+    event = _event_from_graph({"event": kind, "data": payload}, run_id="run", sequence=1)
+    assert event.kind == kind
+    with pytest.raises(ValueError):
+        _event_from_graph({"event": kind, "data": {}}, run_id="run", sequence=1)
+
+
+@pytest.mark.parametrize("event", [{}, {"kind": "run.started"}, {"event": "unknown.event"}, {"event": "run.started", "data": []}])
+def test_translator_rejects_unknown_or_malformed_upstream_envelopes(event):
+    with pytest.raises(ValueError):
+        _event_from_graph(event, run_id="run", sequence=1)
 
 
 def test_langgraph_node_translation_preserves_operation_identity_and_topology() -> None:

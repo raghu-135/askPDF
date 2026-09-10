@@ -315,7 +315,6 @@ services:
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_VERSION: integration
-      HERMES_RUNTIME_EVENT_ID_MODE: durable
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}

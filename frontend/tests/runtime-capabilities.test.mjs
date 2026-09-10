@@ -5,14 +5,13 @@ import {
   isRuntimeOperationEnabled,
   runtimeInterruptResponseOperation,
   runtimeOperationAvailability,
-  isCurrentRuntimeCapabilityRequest,
   runtimeCapabilityResponseMatchesRun,
   TASK_CONTROL_CATALOG,
 } from '../src/lib/runtime-capabilities.ts';
 
 const response = (operations) => ({
   runtime_available: true,
-  capabilities: { operations },
+  capabilities: { operations: Object.fromEntries(Object.entries(operations).map(([key, value]) => [key, { owner: 'runtime', ...value }])) },
 });
 
 test('unsupported operations are hidden and never enabled', () => {
@@ -106,9 +105,8 @@ test('paused task resume uses task.resume rather than runtime run.resume', () =>
 
 test('capability responses are applied only to their selected run', () => {
   assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-2' }, 'run-1'), false);
-  assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-1' }, 'run-1'), true);
-  assert.equal(isCurrentRuntimeCapabilityRequest(3, 4), false);
-  assert.equal(isCurrentRuntimeCapabilityRequest(4, 4), true);
+  assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-1', ...response({}) }, 'run-1'), true);
+  assert.equal(runtimeCapabilityResponseMatchesRun({ resource: 'run', run_id: 'run-1' }, 'run-1'), false);
 });
 
 test('runtime binding requirement is preserved as descriptor metadata', () => {

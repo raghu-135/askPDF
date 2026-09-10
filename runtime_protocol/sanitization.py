@@ -48,7 +48,6 @@ def bounded_value(value: Any, *, key: Any = None) -> Any:
         return {
             str(item_key): bounded_value(item, key=item_key)
             for item_key, item in list(value.items())[:100]
-            if item not in (None, "", [], {})
         }
     try:
         return json.loads(json.dumps(value, default=str, ensure_ascii=True))

@@ -166,7 +166,7 @@ async def run_tool_worker(
     if studio_queue is not None:
         await studio_queue.put({
             "event": "tool.started",
-            "data": {"tool_name": tool_name, "node_id": node_id},
+            "data": {"tool_name": tool_name, "tool_call_id": tool_config["configurable"]["tool_call_id"], "node_id": node_id},
         })
     raw = await invoke_tool_for_node(
         tool_name,

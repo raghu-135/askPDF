@@ -14,7 +14,7 @@ from app.product_orchestration.parallel_observability import enrich_parallel_eve
 from app.product_orchestration.trace_sanitization import _bounded_value
 from runtime_protocol.contracts import AgentRuntimeEvent, ContinuationBinding
 from runtime_protocol.events import RuntimeEventContractViolation, create_runtime_event, validate_runtime_event
-from app.runtime.observability import normalize_runtime_event
+from runtime_protocol.events import canonical_event_payload
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class AgentExecutionEventSink:
 
     def _event(self, event: str, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payload = enrich_parallel_event(event, data or {}) if event.startswith(PARALLEL_EVENT_PREFIXES) else dict(data or {})
-        public_event, _ = normalize_runtime_event(event, payload)
+        public_event, _ = canonical_event_payload(event, payload)
         if event.startswith(PARALLEL_EVENT_PREFIXES):
             payload.setdefault("occurred_at", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         if not self.include_details:
@@ -247,7 +247,7 @@ class AgentExecutionEventSink:
     ) -> None:
         envelope = self._event(event, data)
         event_id = str((envelope.get("data") or {}).get("event_id") or "")
-        normalized_kind, normalized_payload = normalize_runtime_event(event, envelope.get("data") or {})
+        normalized_kind, normalized_payload = canonical_event_payload(event, envelope.get("data") or {})
         source_metadata = dict(normalized_payload.get("source_metadata") or {})
         continuation_value = normalized_payload.pop("_runtime_continuation", None)
         continuation = (

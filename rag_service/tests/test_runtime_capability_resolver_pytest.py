@@ -679,6 +679,7 @@ async def test_cancellation_is_available_after_pending_marker_clears_and_termina
     RuntimeOperationId.RUN_STEER_LIVE,
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_REPLAY,
+    RuntimeOperationId.RUN_UPDATE_STATE,
 ])
 async def test_unsupported_operations_are_rejected_without_runtime_invocation(operation):
     adapter = CapabilityAdapter(unsupported={operation.value})

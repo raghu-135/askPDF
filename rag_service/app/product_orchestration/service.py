@@ -283,6 +283,8 @@ class AgentRunService:
             elif operation is RuntimeOperationId.RUN_STEER_LIVE:
                 text = str((input or {}).get("text") or "").strip()
                 result = dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
+            elif operation is RuntimeOperationId.RUN_UPDATE_STATE:
+                result = dict(await adapter.update_state(request, dict(input or {})))
             else:
                 raise ValueError(f"Unsupported runtime operation: {operation}")
             await complete_runtime_operation(operation_record.id, result=result)

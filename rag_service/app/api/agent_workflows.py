@@ -881,6 +881,21 @@ async def steer_agent_run_live(
     )
 
 
+@router.post("/agent-runs/{run_id}/state")
+async def update_agent_run_state(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
 @router.get("/agent-workflows/builtins/{builtin_key}/source")
 async def get_builtin_agent_workflow_source(builtin_key: str):
     """Return the immutable-on-disk definition used to seed a built-in workflow."""

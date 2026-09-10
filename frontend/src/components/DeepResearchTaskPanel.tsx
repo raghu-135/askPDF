@@ -298,7 +298,9 @@ export default function DeepResearchTaskPanel({
     `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
   );
   const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
-  const activeTaskCapabilities = activeCapabilitiesState.capabilities;
+  const activeTaskCapabilities = runtimeCapabilityResponseMatchesRun(
+    activeCapabilitiesState.capabilities, task?.active_run_id || '',
+  ) ? activeCapabilitiesState.capabilities : null;
   const runtimeControlError = selectedCapabilitiesState.error || activeCapabilitiesState.error || '';
 
   useEffect(() => {
@@ -663,6 +665,8 @@ export default function DeepResearchTaskPanel({
     'task.result_review.respond',
   );
   const budgetReviewAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.budget_review.respond');
+  const decisionVisible = isTaskPauseInterrupt || (isResultReview ? resultReviewAvailability.visible
+    : responseOperation ? runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).visible : false);
   const courseCorrectionAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.course_correction.submit');
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
@@ -774,7 +778,7 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : !decisionVisible ? undefined : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">Deep research paused</Typography>
       <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume above to continue or Cancel to stop the task.</Typography>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
@@ -803,8 +807,8 @@ export default function DeepResearchTaskPanel({
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">
-        {(['once', 'session', 'always'] as const).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('approve', { approvalScope: choice })}>Approve {choice}</Button>)}
-        <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>
+        {(['once', 'session', 'always'] as const).filter((choice) => pendingInterrupt.response_schema?.scope?.includes(choice) && pendingInterrupt.allowed_actions?.includes('approve')).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('approve', { approvalScope: choice })}>Approve {choice}</Button>)}
+        {pendingInterrupt.allowed_actions?.includes('reject') && <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>}
       </Stack>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
     </Box> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel

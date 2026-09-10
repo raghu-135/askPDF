@@ -62,6 +62,15 @@ def _json_object(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _validated_event(run_id: str, event: Mapping[str, Any]) -> dict[str, Any]:
+    from runtime_protocol.protocol import validate_event_mapping
+
+    validate_event_mapping(event)
+    if event["run_id"] != run_id:
+        raise ValueError("event belongs to a different LangGraph run")
+    return dict(event)
+
+
 def _json_safe(value: Any) -> Any:
     """Convert runtime results to values accepted by PostgreSQL JSONB."""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -72,11 +81,9 @@ def _json_safe(value: Any) -> Any:
         return [_json_safe(item) for item in value]
     if hasattr(value, "model_dump"):
         return _json_safe(value.model_dump(mode="json"))
-    if hasattr(value, "__dict__"):
-        return _json_safe(vars(value))
     if hasattr(value, "isoformat"):
         return value.isoformat()
-    return str(value)
+    raise TypeError(f"Unsupported runtime JSON value: {type(value).__name__}")
 
 
 def _event_row_to_dict(row: Any) -> dict[str, Any]:
@@ -1081,7 +1088,7 @@ class ExecutionStore:
                 return sorted(applied)
 
     async def append(self, run_id: str, event: Mapping[str, Any], result: Mapping[str, Any] | None = None, *, attempt: int | None = None, owner_id: str | None = None, fencing_token: int | None = None) -> dict[str, Any]:
-        item = dict(event)
+        item = _validated_event(run_id, event)
         if self._pool is None:
             record = self._records[run_id]
             if owner_id is not None and (record.owner_id != owner_id or record.fencing_token != fencing_token):
@@ -1211,7 +1218,7 @@ class ExecutionStore:
         """Atomically commit the terminal journal entry and execution state."""
         if status not in TERMINAL_STATUSES:
             raise ValueError("runtime finalization requires a terminal status")
-        item = dict(terminal_event)
+        item = _validated_event(run_id, terminal_event)
         if not bool(item.get("terminal")):
             raise ValueError("runtime finalization requires a terminal event")
         safe_result = _json_safe(dict(result))
@@ -1347,7 +1354,7 @@ class ExecutionStore:
         """Persist a resumable checkpoint and release the runtime lease."""
         if status not in {"awaiting_human", "paused"}:
             raise ValueError("runtime checkpoint requires a resumable status")
-        item = dict(checkpoint_event)
+        item = _validated_event(run_id, checkpoint_event)
         if bool(item.get("terminal")):
             raise ValueError("runtime checkpoint event must be nonterminal")
         safe_result = _json_safe(dict(result))

@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -26,7 +27,8 @@ from hermes_runtime.execution_store import (
     HermesExecutionStore,
 )
 from hermes_runtime.operational_limits import required_positive_float, required_positive_int
-from hermes_runtime.pinned_contract import HERMES_REVISION, HERMES_TERMINAL_EVENTS
+from runtime_protocol.protocol import decode_event_frame
+from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REVISION, HERMES_TERMINAL_EVENTS
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,
@@ -249,14 +251,31 @@ def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _response_session_id(value: Mapping[str, Any]) -> str | None:
-    """Extract a Hermes session ID from supported start-response shapes."""
+    """Read the pinned Runs API session identifier."""
     direct = value.get("session_id")
-    if direct:
-        return str(direct)
-    session = value.get("session")
-    if isinstance(session, Mapping) and session.get("id"):
-        return str(session["id"])
-    return None
+    if direct is None:
+        return None
+    if not isinstance(direct, str) or not direct.strip():
+        raise ValueError("Hermes session_id must be a non-empty string")
+    return direct
+
+
+def _event_correlations(events: list[Mapping[str, Any]]) -> tuple[dict[str, str], str | None]:
+    """Recover open tool and approval identities when an upstream stream resumes."""
+    tools: dict[str, str] = {}
+    approval = None
+    for item in events:
+        event = decode_event_frame(item["frame"])["event"]
+        payload = event["payload"]
+        if event["kind"] == "tool.started":
+            tools[payload["tool_name"]] = payload["tool_call_id"]
+        elif event["kind"] in {"tool.completed", "tool.failed"}:
+            tools.pop(payload["tool_name"], None)
+        elif event["kind"] == "approval.requested":
+            approval = payload["approval_id"]
+        elif event["kind"] == "approval.responded":
+            approval = None
+    return tools, approval
 
 
 def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
@@ -267,8 +286,6 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
         return "tool.started"
     if name == "tool.completed":
         return "tool.completed"
-    if name == "tool.failed":
-        return "tool.failed"
     if name == "reasoning.available":
         return "reasoning.available"
     if name == "approval.request":
@@ -285,63 +302,26 @@ def _hermes_event_kind(event_name: str, payload: Mapping[str, Any]) -> str:
         return "subagent.started"
     if name == "subagent.complete":
         return "subagent.completed"
-    return "runtime.event"
+    raise ValueError(f"Unsupported Hermes event: {name}")
 
 
 def _normalized_tool_payload(kind: str, payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Normalize pinned-Hermes tool events without retaining argument values."""
-
-    data = dict(payload)
-    tool_name = str(data.get("tool_name") or data.get("tool") or data.get("name") or "").strip()
-    call_id = str(
-        data.get("tool_call_id")
-        or data.get("call_id")
-        or data.get("request_id")
-        or data.get("id")
-        or ""
-    ).strip()
-    arguments = data.get("arguments") or data.get("args") or data.get("input")
-    argument_names = sorted(str(key) for key in arguments) if isinstance(arguments, Mapping) else []
-    error = data.get("error")
-    result_value = data.get("result") if isinstance(data.get("result"), Mapping) else {}
-    content = str(
-        data.get("content") or data.get("result_preview") or result_value.get("content") or ""
-    )
-    sources = data.get("sources") or result_value.get("sources") or []
-    warnings = data.get("warnings") or result_value.get("warnings") or []
-    warning_values = [str(value) for value in warnings] if isinstance(warnings, list) else []
-    explicit_gap_codes = {
-        "missing_document_vectors", "missing_thread_context", "no_relevant_content",
-        "no_relevant_conversation_history", "no_relevant_memory", "no_thread_documents",
-        "no_usable_web_results", "web_search_disabled",
-    }
-    ok = data.get("ok")
-    if ok is None and kind == "tool.completed":
-        ok = not bool(error)
-    if kind == "tool.completed" and ok is False:
-        kind = "tool.failed"
-    normalized = {
-        **data,
-        "event": kind,
-        "tool_name": tool_name or None,
-        "tool_call_id": call_id or None,
-        "request_id": str(data.get("request_id") or call_id or "") or None,
-        "provided_argument_names": argument_names,
-        "ok": bool(ok) if ok is not None else None,
-        "duration_ms": data.get("duration_ms") or data.get("elapsed_ms"),
-        "result_count": data.get("result_count") or data.get("source_count") or (len(sources) if isinstance(sources, list) else 0),
-        "result_chars": int(data.get("result_chars") or len(content)),
-        "source_count": int(data.get("source_count") or (len(sources) if isinstance(sources, list) else 0)),
-        "warnings": warning_values,
-        "explicit_gap": bool(not sources and warning_values and set(warning_values).issubset(explicit_gap_codes)),
-        **({"result_preview": content[:2000]} if content else {}),
-        "source": data.get("source") or "hermes",
-        "error": error,
-    }
-    for key in ("arguments", "args", "input"):
-        normalized.pop(key, None)
+    """Translate the pinned Hermes tool callback without inventing evidence."""
+    tool_name = payload.get("tool")
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        raise ValueError("Hermes tool event requires the pinned tool field")
+    normalized = {"tool_name": tool_name, "tool_call_id": None, "source": "hermes"}
+    if kind == "tool.completed":
+        error = payload.get("error")
+        duration = payload.get("duration")
+        if type(error) is not bool:
+            raise ValueError("Hermes tool completion requires a boolean error flag")
+        if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
+            raise ValueError("Hermes tool completion requires a nonnegative finite duration")
+        kind = "tool.failed" if error else kind
+        normalized.update(ok=not error, error=error, duration_ms=duration * 1000)
+    normalized["event"] = kind
     return kind, normalized
-
 
 async def _request_upstream_stop(
     hermes_api_url: str,
@@ -656,6 +636,10 @@ def create_app() -> FastAPI:
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
                     },
+                    "run.update_state": {
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
+                    },
                     "run.send_followup": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
@@ -769,7 +753,7 @@ def create_app() -> FastAPI:
         session_id = (neutral_request.get("continuation") or {}).get("payload", {}).get("session_id")
         if session_id:
             headers["X-Hermes-Session-Id"] = str(session_id)
-        sequence = store.next_sequence(run_id) if os.getenv("HERMES_RUNTIME_EVENT_ID_MODE", "").strip().lower() == "durable" else 1
+        sequence = store.next_sequence(run_id)
         event_budget = _HermesEventBudget(
             max_lifecycle_events=max_events,
             max_output_chars=max_output_chars,
@@ -788,9 +772,10 @@ def create_app() -> FastAPI:
             "last_tool_call_id": None,
         }
         started_tool_calls: set[str] = set()
+        active_tool_calls, active_approval_id = _event_correlations(store.records[run_id]["events"])
 
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
-            nonlocal sequence, terminal_seen, session_id
+            nonlocal sequence, terminal_seen, session_id, active_approval_id
             try:
                 raw = json.loads("\n".join(frame_data))
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -804,21 +789,31 @@ def create_app() -> FastAPI:
                     detail=_error("hermes_upstream_protocol_error", "Hermes emitted an invalid event envelope"),
                 )
             event_payload = raw
-            upstream_event_name = str(event_payload.get("event") or frame_event_name)
-            source_event_id = event_payload.get("event_id") or event_payload.get("id") or event_payload.get("sequence")
-            if source_event_id is not None:
-                source_event_id = f"{upstream_event_name}:{source_event_id}"
+            upstream_event_name = event_payload.get("event")
+            if not isinstance(upstream_event_name, str) or not upstream_event_name:
+                raise ValueError("Hermes event requires the pinned event field")
+            if frame_event_name and frame_event_name != upstream_event_name:
+                raise ValueError("Hermes SSE event name does not match its payload")
             kind = _hermes_event_kind(upstream_event_name, event_payload)
-            if kind == "runtime.event":
-                event_payload = {"upstream_event": upstream_event_name, "data": dict(event_payload)}
-            elif kind in {"tool.started", "tool.completed", "tool.failed"}:
+            if kind in {"tool.started", "tool.completed", "tool.failed"}:
                 kind, event_payload = _normalized_tool_payload(kind, event_payload)
+                tool_name = event_payload.get("tool_name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    raise ValueError("Hermes tool event requires a tool name")
+                # The pinned Runs API supplies tool names, but no call IDs.
+                # Allocate an adapter-owned identity and correlate only an
+                # unambiguous start/completion pair.
                 if kind == "tool.started":
-                    tool_identity = str(
-                        event_payload.get("tool_call_id")
-                        or source_event_id
-                        or f"tool-started:{sequence}"
-                    )
+                    if tool_name in active_tool_calls:
+                        raise ValueError("Hermes emitted overlapping tool calls without correlation IDs")
+                    active_tool_calls[tool_name] = f"{run_id}:tool:{sequence}"
+                    event_payload["tool_call_id"] = active_tool_calls[tool_name]
+                else:
+                    if tool_name not in active_tool_calls:
+                        raise ValueError("Hermes tool completion has no matching start")
+                    event_payload["tool_call_id"] = active_tool_calls.pop(tool_name)
+                if kind == "tool.started":
+                    tool_identity = event_payload["tool_call_id"]
                     started_tool_calls.add(tool_identity)
                     tool_activity["started"] = len(started_tool_calls)
                 elif kind == "tool.completed":
@@ -829,12 +824,31 @@ def create_app() -> FastAPI:
                 tool_activity["last_tool_name"] = event_payload.get("tool_name")
                 tool_activity["last_tool_call_id"] = event_payload.get("tool_call_id")
             terminal = kind in HERMES_TERMINAL_EVENTS
-            output_delta = str(event_payload.get("content") or event_payload.get("delta") or event_payload.get("text") or "") if kind == "output.delta" else ""
+            output_delta = event_payload.get("delta") if kind == "output.delta" else ""
+            if kind == "output.delta":
+                if not isinstance(output_delta, str):
+                    raise ValueError("Hermes message.delta requires string delta")
+                event_payload = {**event_payload, "delta": output_delta}
+            if kind == "approval.requested":
+                choices = event_payload.get("choices")
+                if not isinstance(choices, list) or not choices or any(
+                    choice not in HERMES_APPROVAL_CHOICES for choice in choices
+                ):
+                    raise ValueError("Hermes approval requires supported choices")
+                active_approval_id = f"{run_id}:approval:{sequence}"
+                event_payload = {**event_payload, "approval_id": active_approval_id, "response_operation": "run.approval.respond"}
+            elif kind == "approval.responded":
+                if active_approval_id is None:
+                    raise ValueError("Hermes approval response has no matching request")
+                event_payload = {**event_payload, "approval_id": active_approval_id}
+                active_approval_id = None
             event_budget.observe(kind, output_delta)
-            event = _neutral_event(run_id, sequence, kind, event_payload, source_event_id=source_event_id, terminal=terminal, continuation=continuation)
+            event = _neutral_event(run_id, sequence, kind, event_payload, terminal=terminal, continuation=continuation)
             result = None
             if kind == "approval.requested":
                 interrupt_id = str(event_payload.get("approval_id") or event_payload.get("id") or f"hermes-approval-{sequence}")
+                scopes = [choice for choice in event_payload["choices"] if choice != "deny"]
+                actions = (["approve"] if scopes else []) + (["reject"] if "deny" in event_payload["choices"] else [])
                 result = {
                     "status": "awaiting_human",
                     "pending_interrupt": {
@@ -842,11 +856,11 @@ def create_app() -> FastAPI:
                         "type": "hermes_approval",
                         "kind": "approval",
                         "response_operation": "run.approval.respond",
-                        "response_schema": {"decision": ["approve", "reject"], "scope": ["once", "session", "always"]},
+                        "response_schema": {"decision": actions, "scope": scopes},
                         "title": str(event_payload.get("title") or "Hermes tool approval required"),
                         "description": str(event_payload.get("command") or event_payload.get("description") or ""),
-                        "allowed_actions": ["approve", "reject"],
-                        "runtime_approval_choices": ["once", "session", "always", "deny"],
+                        "allowed_actions": actions,
+                        "runtime_approval_choices": list(event_payload["choices"]),
                         "checkpoint_resume": True,
                         "runtime_payload": dict(event_payload),
                     },
@@ -1138,7 +1152,9 @@ def create_app() -> FastAPI:
                     response_session_id = _response_session_id(start)
                     if not session_id and response_session_id:
                         session_id = response_session_id
-                    upstream_run_id = str(start.get("run_id") or start.get("id") or "")
+                    upstream_run_id = start.get("run_id")
+                    if not isinstance(upstream_run_id, str) or not upstream_run_id.strip():
+                        raise ValueError("Hermes run creation requires run_id")
                 if not upstream_run_id:
                     raise HTTPException(status_code=502, detail=_error("runtime_protocol_error", "Hermes did not return an upstream run ID"))
                 if not session_id:
@@ -1184,7 +1200,7 @@ def create_app() -> FastAPI:
                 sequence += 1
                 async with client.stream("GET", profile_upstream_url(execution_profile) + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
                     events_response.raise_for_status()
-                    event_name = "message"
+                    event_name = ""
                     data: list[str] = []
                     output_seen = False
                     async for line in events_response.aiter_lines():
@@ -1204,7 +1220,7 @@ def create_app() -> FastAPI:
                                     return
                                 if result is not None and result.get("status") == "awaiting_human":
                                     return
-                            event_name, data = "message", []
+                            event_name, data = "", []
                             continue
                         if line.startswith("event:"):
                             event_name = line[6:].strip()
@@ -1664,7 +1680,7 @@ def create_app() -> FastAPI:
     async def approval(run_id: str, request: Request, payload: Mapping[str, Any]) -> dict[str, Any]:
         response = payload.get("response") or {}
         choice = str(response.get("choice") or "").strip().lower()
-        if choice not in {"once", "session", "always", "deny"}:
+        if choice not in HERMES_APPROVAL_CHOICES:
             raise HTTPException(status_code=400, detail=_error("invalid_approval_choice", "Approval choice must be once, session, always, or deny"))
         return await _forward_control(run_id, request, payload, "approval", {"choice": choice, "resolve_all": bool(response.get("resolve_all"))})
 

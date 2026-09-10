@@ -261,6 +261,7 @@ async def invoke_tool_for_node(
         await _emit_progress_event(config, "tool.started", progress)
         result = await executor.ainvoke(tool_input, config=config)
         normalized_result = normalize_tool_result(result, tool_name=tool_name, config=config)
+        normalized_result["trace"]["tool_call_id"] = tool_call_id
         tool_ok = bool(normalized_result.get("ok", True))
         await _emit_progress_event(config, "tool.completed" if tool_ok else "tool.failed", {
             **progress,
@@ -269,7 +270,7 @@ async def invoke_tool_for_node(
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             **evidence_event_fields(normalized_result),
         })
-        return result
+        return normalized_result
     except ChatRunCancellationRequested:
         raise
     except Exception as exc:

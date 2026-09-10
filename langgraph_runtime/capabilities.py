@@ -210,6 +210,7 @@ def langgraph_capabilities(
         ),
         RuntimeOperationId.RUN_APPROVAL_RESPOND: unsupported(),
         RuntimeOperationId.RUN_STEER_LIVE: unsupported(),
+        RuntimeOperationId.RUN_UPDATE_STATE: unsupported(),
         RuntimeOperationId.RUN_SEND_FOLLOWUP: unsupported(),
         RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT: unsupported(),
         RuntimeOperationId.RUN_REPLAY: unsupported(),

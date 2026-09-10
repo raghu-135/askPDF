@@ -307,8 +307,13 @@ def _result_from_graph(
 
 
 def _event_from_graph(event: Mapping[str, Any], *, run_id: str, sequence: int) -> AgentRuntimeEvent:
-    data = dict(event.get("data") or {})
-    source_kind = str(event.get("event") or event.get("kind") or "runtime.event")
+    source_kind = event.get("event")
+    if not isinstance(source_kind, str) or not source_kind:
+        raise ValueError("LangGraph event requires an event name")
+    raw_data = event.get("data", {})
+    if not isinstance(raw_data, Mapping):
+        raise ValueError("LangGraph event data must be an object")
+    data = dict(raw_data)
     kind, data = normalize_runtime_event(source_kind, data)
     checkpoint_thread_id = data.get("checkpoint_thread_id")
     continuation = (
@@ -355,6 +360,7 @@ class _LangGraphEventBridge:
         self.sink = sink
         self.sequence = 0
         self._pending: set[asyncio.Task[None]] = set()
+        self._error: BaseException | None = None
 
     def _runtime_event(self, kind: str, payload: Mapping[str, Any] | None) -> AgentRuntimeEvent:
         self.sequence += 1
@@ -370,7 +376,13 @@ class _LangGraphEventBridge:
     def emit_nowait(self, kind: str, payload: Mapping[str, Any] | None = None) -> None:
         task = asyncio.create_task(self.emit(kind, payload))
         self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        task.add_done_callback(self._completed)
+
+    def _completed(self, task: asyncio.Task[None]) -> None:
+        self._pending.discard(task)
+        error = asyncio.CancelledError() if task.cancelled() else task.exception()
+        if error is not None and self._error is None:
+            self._error = error
 
     def parallel_events(self) -> list[Mapping[str, Any]]:
         getter = getattr(self.sink, "parallel_events", None)
@@ -379,6 +391,8 @@ class _LangGraphEventBridge:
     async def drain(self) -> None:
         if self._pending:
             await asyncio.gather(*tuple(self._pending))
+        if self._error is not None:
+            raise self._error
 
 
 def _event_bridge(run_id: str, sink: Any) -> _LangGraphEventBridge | None:

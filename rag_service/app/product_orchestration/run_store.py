@@ -6,12 +6,13 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentRun, AgentRunEvent, AgentWorkflow, ChatTurn
 from app.time_utils import parse_datetime_utc, utc_now
+from runtime_protocol.contracts import AgentRuntimeEvent
+from runtime_protocol.events import validate_runtime_event
 
 
 async def get_run(session: AsyncSession, run_id: str) -> Optional[AgentRun]:
@@ -192,6 +193,11 @@ async def append_run_event(
     terminal: bool = False,
     source_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    validate_runtime_event(AgentRuntimeEvent(
+        event_id=event_id, run_id=run_id, sequence=sequence if sequence is not None else 1,
+        attempt=attempt, kind=kind, payload=payload_json, terminal=terminal,
+        source_metadata=source_metadata_json if source_metadata_json is not None else {},
+    ))
     async with session.begin():
         run = await session.execute(
             select(AgentRun.id).where(AgentRun.id == run_id).with_for_update()
@@ -206,10 +212,15 @@ async def append_run_event(
         )
         if existing.scalar_one_or_none() is not None:
             return False
-        current = await session.execute(
-            select(func.max(AgentRunEvent.sequence)).where(AgentRunEvent.agent_run_id == run_id)
-        )
-        canonical_sequence = max(0, int(current.scalar_one_or_none() or 0)) + 1
+        latest = (await session.execute(
+            select(AgentRunEvent)
+            .where(AgentRunEvent.agent_run_id == run_id)
+            .order_by(AgentRunEvent.sequence.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest is not None and latest.terminal:
+            raise ValueError("runtime events cannot follow a terminal event")
+        canonical_sequence = latest.sequence + 1 if latest is not None else 1
         source_metadata = dict(source_metadata_json or {})
         if sequence:
             source_metadata.setdefault("source_sequence", int(sequence))
@@ -218,12 +229,12 @@ async def append_run_event(
             "agent_run_id": run_id,
             "event_id": event_id,
             "sequence": canonical_sequence,
-            "attempt": max(1, int(attempt or 1)),
+            "attempt": attempt,
             "kind": kind,
             "payload_json": dict(payload_json or {}),
             "occurred_at": parse_datetime_utc(occurred_at) if occurred_at else None,
             "trace_id": trace_id,
-            "terminal": bool(terminal),
+            "terminal": terminal,
             "source_metadata_json": source_metadata,
             "created_at": utc_now(),
         }

@@ -175,6 +175,22 @@ def _patch_runtime(monkeypatch, adapter, repository):
 
 
 @pytest.mark.asyncio
+async def test_state_update_rejects_before_adapter_or_idempotency_claim(monkeypatch):
+    adapter = RecordingAdapter(unsupported={RuntimeOperationId.RUN_UPDATE_STATE})
+    adapter.update_state = AsyncMock()
+    run = _run()
+    service = _patch_runtime(monkeypatch, adapter, FakeRepository(run))
+    with pytest.raises(RuntimeError) as caught:
+        await service.operate_agent_run(
+            run, RuntimeOperationId.RUN_UPDATE_STATE,
+            input={"values": {"answer": "changed"}}, idempotency_key="state-update",
+        )
+    assert caught.value.code == "runtime_capability_unsupported"
+    adapter.update_state.assert_not_awaited()
+    service_module.claim_runtime_operation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "call_name", "operation"),
     [

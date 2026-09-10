@@ -30,7 +30,7 @@ from app.time_utils import parse_datetime_utc, utc_now
 from app.product_orchestration.trace_details import sanitize_trace_detail
 from app.product_orchestration.trace_payloads import append_runtime_event_to_debug_payload
 from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
-from runtime_protocol.events import normalize_product_event_kind
+from runtime_protocol.events import create_runtime_event, normalize_product_event_kind
 from app.runtime.behavior import continuation_is_linked, supports_course_correction
 from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
 from app.services.agent_task_budgets import (
@@ -591,6 +591,18 @@ async def _append_event(
         .where(AgentTaskEvent.task_id == task.id)
     )
     event_sequence = int(latest.scalar_one()) + 1
+    canonical_payload = dict(payload or {})
+    if artifact_id is not None:
+        canonical_payload["artifact_id"] = artifact_id
+    if subagent_run_id is not None:
+        canonical_payload["subagent_id"] = subagent_run_id
+    if event_type == "task.approval_resolved" or event_type.startswith("web_access."):
+        canonical_payload["approval_id"] = canonical_payload["interrupt_id"]
+    canonical = create_runtime_event(
+        event_id=f"{task.id}:{event_sequence}", run_id=agent_run_id or task.id,
+        sequence=event_sequence, kind=normalized_type, payload=canonical_payload,
+        source_metadata=source_metadata,
+    )
     event = AgentTaskEvent(
         task_id=task.id,
         sequence=event_sequence,
@@ -603,7 +615,7 @@ async def _append_event(
         todo_id=todo_id,
         subagent_run_id=subagent_run_id,
         artifact_id=artifact_id,
-        payload_json=sanitize_trace_detail(payload or {})[0],
+        payload_json=sanitize_trace_detail(canonical.payload)[0],
         policy_hash=policy_hash,
         config_hash=config_hash,
         occurred_at=utc_now(),

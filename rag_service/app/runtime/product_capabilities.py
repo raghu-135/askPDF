@@ -22,6 +22,7 @@ PUBLIC_OPERATION_IDS = frozenset({
     RuntimeOperationId.RUN_LIST,
     RuntimeOperationId.RUN_EVENTS,
     RuntimeOperationId.RUN_INSPECT_STATE,
+    RuntimeOperationId.RUN_UPDATE_STATE,
     RuntimeOperationId.RUN_CANCEL,
     RuntimeOperationId.RUN_RESUME,
     RuntimeOperationId.RUN_APPROVAL_RESPOND,

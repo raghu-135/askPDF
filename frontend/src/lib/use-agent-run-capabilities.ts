@@ -9,68 +9,57 @@ export function useAgentRunCapabilities(
   threadId: string | null | undefined,
   refreshKey: string | number = '',
 ) {
-  const [capabilities, setCapabilities] = useState<AgentRuntimeCapabilityResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const identity = JSON.stringify([runId, threadId, refreshKey]);
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
   const requestId = useRef(0);
-  const refresh = useCallback(async () => {
-    if (!runId || !threadId) return;
+  const [state, setState] = useState<{
+    identity: string;
+    capabilities: AgentRuntimeCapabilityResponse | null;
+    error: string | null;
+  } | null>(null);
+
+  const refresh = useCallback(async (): Promise<boolean> => {
+    if (!runId || !threadId) return false;
     const currentRequest = ++requestId.current;
+    const isCurrent = () => currentRequest === requestId.current && identity === currentIdentity.current;
     try {
       const result = await getAgentRunCapabilities(runId, threadId);
-      if (currentRequest !== requestId.current) return;
+      if (!isCurrent()) return false;
       if (!runtimeCapabilityResponseMatchesRun(result, runId)) {
-        setCapabilities(null);
-        setError('Run capabilities did not match the selected run.');
-        return;
+        throw new Error('Run capabilities did not match the selected run.');
       }
-      setCapabilities(result);
-      setError(result.runtime_available ? null : 'The runtime deployment is unavailable. Run controls will remain disabled until it recovers.');
+      setState({
+        identity,
+        capabilities: result,
+        error: result.runtime_available ? null : 'The runtime deployment is unavailable. Run controls will remain disabled until it recovers.',
+      });
+      return !result.runtime_available;
     } catch (value) {
-      if (currentRequest !== requestId.current) return;
-      setCapabilities(null);
-      setError(value instanceof Error ? value.message : String(value));
+      if (!isCurrent()) return false;
+      setState({ identity, capabilities: null, error: value instanceof Error ? value.message : String(value) });
+      return true;
     }
-  }, [runId, threadId]);
+  }, [runId, threadId, identity]);
 
   useEffect(() => {
-    requestId.current += 1;
-    setCapabilities(null);
-    setError(null);
-    if (!runId || !threadId) return undefined;
     let active = true;
-    let timer: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let recoveryAttempt = 0;
-
     const load = async () => {
-      if (!active) return;
-      const currentRequest = ++requestId.current;
-      try {
-        const result = await getAgentRunCapabilities(runId, threadId);
-        if (!active || currentRequest !== requestId.current) return;
-        if (!runtimeCapabilityResponseMatchesRun(result, runId)) {
-          setCapabilities(null);
-          setError('Run capabilities did not match the selected run.');
-          return;
-        }
-        setCapabilities(result);
-        setError(result.runtime_available ? null : 'The runtime deployment is unavailable. Run controls will remain disabled until it recovers.');
-        if (!result.runtime_available) {
-          timer = window.setTimeout(load, RECOVERY_DELAYS_MS[Math.min(recoveryAttempt++, RECOVERY_DELAYS_MS.length - 1)]);
-        }
-      } catch (value) {
-        if (!active || currentRequest !== requestId.current) return;
-        setCapabilities(null);
-        setError(value instanceof Error ? value.message : String(value));
-        timer = window.setTimeout(load, RECOVERY_DELAYS_MS[Math.min(recoveryAttempt++, RECOVERY_DELAYS_MS.length - 1)]);
+      const retry = await refresh();
+      if (active && retry) {
+        timer = setTimeout(load, RECOVERY_DELAYS_MS[Math.min(recoveryAttempt++, RECOVERY_DELAYS_MS.length - 1)]);
       }
     };
     void load();
     return () => {
       active = false;
       requestId.current += 1;
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     };
-  }, [runId, threadId, refreshKey]);
+  }, [refresh]);
 
-  return { capabilities, error, refresh };
+  const current = state?.identity === identity ? state : null;
+  return { capabilities: current?.capabilities ?? null, error: current?.error ?? null, refresh };
 }

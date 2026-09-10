@@ -26,6 +26,21 @@ APP_DIR = Path("/app")
 REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
+    "test_agent_course_correction_reconciliation_pytest.py",
+    "test_agent_grounding_evaluator_pytest.py",
+    "test_agent_prompt_behavior.py",
+    "test_agent_run_cancellation_pytest.py",
+    "test_agent_runtime_reconciliation_pytest.py",
+    "test_agent_task_budget_steer_delivery_pytest.py",
+    "test_agent_task_events_pytest.py",
+    "test_agent_task_routes_pytest.py",
+    "test_canonical_trace_projection_pytest.py",
+    "test_content_store_pytest.py",
+    "test_external_research_tools.py",
+    "test_memory_manager_budget_pytest.py",
+    "test_runtime_hardening_pytest.py",
+    "test_runtime_operation_repository_pytest.py",
+    "test_tool_registry_contracts.py",
     "test_control_plane_import_boundary_pytest.py",
     "test_runtime_protocol_package_pytest.py",
     "test_hermes_builder_provider_pytest.py",
@@ -57,6 +72,15 @@ UNIT_TEST_FILES = [
     "test_http_client_lifecycle.py",
 ]
 
+HERMES_TEST_FILES = [
+    "test_hermes_configuration_pytest.py",
+    "test_hermes_execution_store_pytest.py",
+    "test_hermes_grounding_policy_pytest.py",
+    "test_hermes_mcp_execution_context_pytest.py",
+    "test_hermes_profile_manager_pytest.py",
+    "test_hermes_runtime_adapter_pytest.py"
+]
+
 MCP_TEST_FILES = [
     "test_mcp_context.py",
     "test_mcp_transport.py",
@@ -67,6 +91,8 @@ MCP_TEST_FILES = [
 ]
 
 DB_TEST_FILES = [
+    "test_agent_task_course_correction_pytest.py",
+    "test_project_file_repository_pytest.py",
     "test_database_connection_pytest.py",
     "test_models_sqlmodel_pytest.py",
     "test_project_memory_repository_pytest.py",
@@ -90,7 +116,6 @@ API_TEST_FILES = [
 ]
 
 INTEGRATION_TEST_FILES = [
-    "test_api_integration_pytest.py",
     "test_model_aware_integration.py",
 ]
 
@@ -121,8 +146,6 @@ def _approved_test_exclusions() -> dict[str, str]:
     disappearing from the default backend run.
     """
     manifest_path = APP_DIR / "tests" / "test_inventory.json"
-    if not manifest_path.exists():
-        manifest_path = Path(__file__).resolve().parents[1] / "tests" / "test_inventory.json"
     try:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -141,6 +164,7 @@ def _declared_control_plane_test_names() -> set[str]:
         name
         for group in (
             UNIT_TEST_FILES,
+            HERMES_TEST_FILES,
             MCP_TEST_FILES,
             DB_TEST_FILES,
             API_TEST_FILES,
@@ -159,6 +183,13 @@ def _validate_test_inventory() -> None:
     excluded_names = set(excluded)
     overlap = sorted(assigned & excluded_names)
     missing = sorted(repository_tests - assigned - excluded_names)
+    nonexistent = sorted((assigned | excluded_names) - repository_tests)
+    groups = [UNIT_TEST_FILES, HERMES_TEST_FILES, MCP_TEST_FILES, DB_TEST_FILES,
+              API_TEST_FILES, INTEGRATION_TEST_FILES, SCHEMA_TEST_FILES]
+    flattened = [name for group in groups for name in group]
+    duplicates = sorted({name for name in flattened if flattened.count(name) > 1})
+    if nonexistent or duplicates:
+        raise SystemExit(f"Invalid test ownership: nonexistent={nonexistent}; duplicates={duplicates}")
     if overlap or missing:
         details = []
         if overlap:
@@ -286,6 +317,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
     elif args.all or args.all_tests:
         group = "all"
 
+    if group == "hermes":
+        return [_test_path(name) for name in HERMES_TEST_FILES]
     if group == "unit":
         return [_test_path(name) for name in UNIT_TEST_FILES]
     if group == "db":
@@ -305,6 +338,7 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
             _test_path(name)
             for name in dict.fromkeys(
                 UNIT_TEST_FILES
+                + HERMES_TEST_FILES
                 + DB_TEST_FILES
                 + API_TEST_FILES
                 + INTEGRATION_TEST_FILES
@@ -361,6 +395,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--group",
         choices=[
             "unit",
+            "hermes",
             "control-plane-unit",
             "db",
             "control-plane-db",

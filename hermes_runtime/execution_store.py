@@ -109,6 +109,8 @@ class HermesExecutionStore:
 
     @classmethod
     def _validate_record(cls, run_id: str, record: Mapping[str, Any]) -> None:
+        from runtime_protocol.protocol import decode_event_frame
+
         if set(record) != cls._RECORD_KEYS and set(record) != cls._RECORD_KEYS - {"continuation"}:
             raise HermesStoreLoadError(f"Hermes execution journal has an invalid record shape: {run_id}")
         if record.get("run_id") != run_id or not isinstance(record.get("status"), str):
@@ -123,6 +125,12 @@ class HermesExecutionStore:
                 or not isinstance(event.get("frame"), str)
             ):
                 raise HermesStoreLoadError(f"Hermes execution journal has malformed event for run: {run_id}")
+            try:
+                canonical = decode_event_frame(event["frame"])["event"]
+                if canonical["run_id"] != run_id or canonical["event_id"] != event["event_id"]:
+                    raise ValueError("journal event identity mismatch")
+            except (TypeError, ValueError, KeyError) as exc:
+                raise HermesStoreLoadError(f"Hermes execution journal has invalid canonical event: {run_id}") from exc
         if not isinstance(record.get("payload"), Mapping):
             raise HermesStoreLoadError(f"Hermes execution journal has invalid payload for run: {run_id}")
         fingerprint = record.get("request_fingerprint")
@@ -193,55 +201,40 @@ class HermesExecutionStore:
     def next_sequence(self, run_id: str) -> int:
         record = self._record(run_id)
         value = record.get("next_sequence")
-        if isinstance(value, int) and value > 0:
-            return value
-        events = record.get("events") or []
-        value = len(events) + 1
-        record["next_sequence"] = value
+        if type(value) is not int or value < 1:
+            raise HermesStoreLoadError(f"Hermes execution journal has invalid sequence cursor: {run_id}")
         return value
 
     def _append_frame(self, run_id: str, frame: str) -> bool:
+        from runtime_protocol.protocol import decode_event_frame
+
+        body = decode_event_frame(frame)
+        event = body["event"]
+        if event["run_id"] != run_id:
+            raise ValueError("event belongs to a different Hermes run")
         record = self._record(run_id)
-        events = record.setdefault("events", [])
-        event_id = next((line[3:].strip() for line in frame.splitlines() if line.startswith("id:")), f"{run_id}:{len(events) + 1}")
-        data = next((line[5:].lstrip() for line in frame.splitlines() if line.startswith("data:")), None)
-        try:
-            decoded = json.loads(data) if data else {}
-            decoded_event = decoded.get("event") if isinstance(decoded, Mapping) else None
-            source_event_id = decoded_event.get("source_event_id") if isinstance(decoded_event, Mapping) else None
-        except (TypeError, ValueError, json.JSONDecodeError):
-            decoded = {}
-            source_event_id = None
-        if any(item.get("event_id") == event_id for item in events):
-            return False
-        if source_event_id:
-            for item in events:
-                try:
-                    prior_data = next(line[5:].lstrip() for line in str(item.get("frame", "")).splitlines() if line.startswith("data:"))
-                    prior = json.loads(prior_data).get("event") or {}
-                    if prior.get("source_event_id") == source_event_id:
-                        return False
-                except (StopIteration, TypeError, ValueError, json.JSONDecodeError):
-                    continue
+        events = record["events"]
+        event_id = event["event_id"]
+        source_event_id = event.get("source_event_id")
+        for item in events:
+            prior = decode_event_frame(item["frame"])["event"]
+            if item["event_id"] == event_id or (source_event_id and prior.get("source_event_id") == source_event_id):
+                return False
+        if events:
+            previous = decode_event_frame(events[-1]["frame"])["event"]
+            if previous["terminal"] or event["sequence"] <= previous["sequence"]:
+                raise ValueError("Hermes events must be ordered and cannot follow a terminal event")
         events.append({"event_id": event_id, "frame": frame})
-        try:
-            payload = json.loads(data) if data else {}
-            event = payload.get("event") if isinstance(payload, Mapping) else None
-            continuation = event.get("continuation") if isinstance(event, Mapping) else None
-            if continuation:
-                record["continuation"] = continuation
-            event = event if isinstance(event, Mapping) else {}
-            record["last_event_id"] = event_id
-            record["next_sequence"] = max(self.next_sequence(run_id), int(event.get("sequence") or 0) + 1)
-            source_event_id = event.get("source_event_id")
-            if source_event_id:
-                record["last_upstream_event_id"] = str(source_event_id)
-            if event.get("terminal"):
-                record["terminal_event_id"] = event_id
-                if payload.get("result") is not None:
-                    record["terminal_result"] = payload.get("result")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
+        if event.get("continuation") is not None:
+            record["continuation"] = event["continuation"]
+        record["last_event_id"] = event_id
+        record["next_sequence"] = event["sequence"] + 1
+        if source_event_id:
+            record["last_upstream_event_id"] = source_event_id
+        if event["terminal"]:
+            record["terminal_event_id"] = event_id
+            if body.get("result") is not None:
+                record["terminal_result"] = body["result"]
         return True
 
     def append(self, run_id: str, frame: str) -> bool:

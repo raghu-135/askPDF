@@ -83,7 +83,7 @@ def test_runtime_integration_bootstrap_allowlists_provider_credential():
 
 
 def test_pinned_contract_copies_match_authoritative_module():
-    from app.runtime.hermes_pinned_contract import HERMES_CONFIG_SCHEMA_VERSION, HERMES_REVISION
+    from runtime_protocol.hermes_contract import HERMES_CONFIG_SCHEMA_VERSION, HERMES_REVISION
 
     root = REPOSITORY_ROOT
     assert HERMES_REVISION in (root / "docker-compose.yml").read_text()
@@ -92,18 +92,15 @@ def test_pinned_contract_copies_match_authoritative_module():
     assert f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}" in (root / "hermes_runtime/config.yaml").read_text()
 
 
-def test_control_plane_and_gateway_pinned_contracts_are_identical():
-    from app.runtime import hermes_pinned_contract as control_plane
-    from hermes_runtime import pinned_contract as gateway
+def test_control_plane_and_gateway_use_one_pinned_contract():
+    from runtime_protocol.hermes_contract import HERMES_OFFLINE_PROFILE, HERMES_PROFILE_NAMES
+    from app.runtime import hermes_profile
+    from hermes_runtime import profile_manager
 
-    def exported(module):
-        return {
-            name: value
-            for name, value in vars(module).items()
-            if name.startswith("HERMES_")
-        }
-
-    assert exported(control_plane) == exported(gateway)
+    assert hermes_profile.HERMES_OFFLINE_PROFILE == HERMES_OFFLINE_PROFILE
+    assert profile_manager.HERMES_PROFILE_NAMES is HERMES_PROFILE_NAMES
+    assert not (REPOSITORY_ROOT / "hermes_runtime/pinned_contract.py").exists()
+    assert not (REPOSITORY_ROOT / "rag_service/app/runtime/hermes_pinned_contract.py").exists()
 
 
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():

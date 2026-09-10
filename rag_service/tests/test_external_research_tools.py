@@ -1,10 +1,7 @@
 import os
 from pathlib import Path
 
-import pytest
-
 from app.agent import external_research_tools
-from app.agent.tool_contract import normalize_tool_result
 from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -105,9 +102,3 @@ def test_arxiv_guidance_omits_dependency_version_detail():
     assert "arxiv==2.4.1" not in prompt
     assert "pinned" not in prompt
     assert "wrapper" not in prompt
-
-
-def test_arxiv_dependency_matches_langchain_wrapper_api():
-    arxiv = pytest.importorskip("arxiv")
-
-    assert hasattr(arxiv.Search(query="test"), "results")

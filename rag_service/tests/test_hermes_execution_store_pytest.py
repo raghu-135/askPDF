@@ -28,7 +28,7 @@ def _gateway_frame(
         "run_id": run_id,
         "sequence": sequence,
         "kind": kind,
-        "payload": {},
+        "payload": {"delta": "chunk"} if kind == "output.delta" else {},
         "terminal": terminal,
     }
     if source_event_id is not None:
@@ -42,6 +42,22 @@ def _gateway_frame(
 def test_missing_hermes_store_is_a_valid_empty_store(tmp_path: Path) -> None:
     store = HermesExecutionStore(str(tmp_path / "missing.json"))
     assert store.records == {}
+
+
+@pytest.mark.parametrize("frame", [
+    "data: not-json\n\n",
+    'id: run:1\nevent: tool.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"tool.started","payload":{},"terminal":false}}\n\n',
+    'id: wrong\nevent: run.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"run.started","payload":{},"terminal":false}}\n\n',
+])
+def test_malformed_canonical_frame_never_mutates_journal(tmp_path, frame):
+    path = tmp_path / "events.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run", runtime_payload("run"))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        store.append("run", frame)
+    assert path.read_bytes() == before
+    assert store.records["run"]["events"] == []
 
 
 @pytest.mark.parametrize("content", ["{not-json", "[]", '{"run-1": "invalid"}'])

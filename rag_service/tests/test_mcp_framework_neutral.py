@@ -1,8 +1,23 @@
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.mcp.registry import MCP_TOOL_DEFINITIONS, enabled_definitions
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_preserves_call_identity_and_surfaces_storage_failure(monkeypatch):
+    from app.mcp import tool_audit
+
+    append = AsyncMock()
+    monkeypatch.setattr(tool_audit, "AgentWorkflowRepository", lambda: SimpleNamespace(append_run_event_payload=append))
+    await tool_audit.persist_tool_audit(run_id="run", request_id="call", phase="started", tool_name="search_documents")
+    assert append.await_args.kwargs["payload_json"]["tool_call_id"] == "call"
+    append.side_effect = ValueError("storage rejected event")
+    with pytest.raises(ValueError, match="storage rejected event"):
+        await tool_audit.persist_tool_audit(run_id="run", request_id="call", phase="completed", tool_name="search_documents")
 
 
 def test_mcp_runner_includes_all_framework_neutral_tests():
