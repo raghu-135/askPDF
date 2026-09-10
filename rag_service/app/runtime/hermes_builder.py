@@ -193,7 +193,7 @@ class HermesBuilderProvider:
     async def source(self, definition_id: str) -> Mapping[str, Any]:
         if definition_id != "hermes_rag_agent":
             raise KeyError(definition_id)
-        from app.agent_workflows.builtin_workflows import load_builtin_workflows
+        from app.product_orchestration.builtin_workflows import load_builtin_workflows
         return next(item for item in load_builtin_workflows() if item["builtin_key"] == definition_id)
 
     async def transient_test(self, request: AgentRuntimeRequest, *, context: Any = None, event_sink: Any = None) -> AgentRuntimeResult:

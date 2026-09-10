@@ -38,7 +38,7 @@ async def test_cancellation_reconciliation_fetches_real_result_and_preserves_out
     task = SimpleNamespace(id="task-1", status="cancelling", terminal_reason="active_runtime_wake_limit")
     finalize = AsyncMock()
     monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
-    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
     monkeypatch.setattr("app.runtime.registry.get_runtime_registry", lambda: SimpleNamespace(get=lambda definition: adapter))
     monkeypatch.setattr("app.services.agent_task_repository.get_task", AsyncMock(return_value=task))
     monkeypatch.setattr("app.services.agent_task_repository.finalize_task_run", finalize)
@@ -66,7 +66,7 @@ async def test_runtime_projection_ignores_replayed_and_out_of_order_events(monke
                 state["checkpoint"] = kwargs["checkpoint_boundary_available"]
             return True
 
-    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
     projector = AgentRuntimeProjection()
     run = SimpleNamespace(id="run-1")
     newest = AgentRuntimeEvent(
@@ -144,7 +144,7 @@ async def test_terminal_projection_replay_does_not_repeat_product_side_effects(m
         stats_calls.append((thread_id, qa_chars))
 
     monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
-    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
     monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fake_create_chat_turn)
     monkeypatch.setattr("app.services.agent_runtime_projection.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
     monkeypatch.setattr("app.services.agent_runtime_projection.update_message_context_compact", fake_update_message_context_compact)
@@ -243,7 +243,7 @@ async def test_reconcile_run_by_id_projects_persisted_terminal_result(monkeypatc
             projected.append(kwargs)
             return persisted
 
-    monkeypatch.setattr("app.agent_workflows.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
     monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
     monkeypatch.setattr("app.runtime.registry.get_runtime_registry", lambda: SimpleNamespace(get=lambda definition: Adapter()))
     monkeypatch.setattr("app.services.agent_runtime_projection.AgentRuntimeProjection", Projector)

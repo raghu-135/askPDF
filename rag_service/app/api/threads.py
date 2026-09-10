@@ -26,9 +26,9 @@ from app.agent.prompting import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.workflow_runtime import (
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys
+from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
     workflow_is_chat_eligible,
     workflow_supports_replans,

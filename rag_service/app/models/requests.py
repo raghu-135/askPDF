@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,

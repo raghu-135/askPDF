@@ -132,7 +132,7 @@ def get_agent_workflow_repo():
     """Get the agent workflow repository instance."""
     global _agent_workflow_repo
     if _agent_workflow_repo is None:
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.repository import AgentWorkflowRepository
         _agent_workflow_repo = AgentWorkflowRepository()
     return _agent_workflow_repo
 

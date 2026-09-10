@@ -67,7 +67,7 @@ def test_offline_profile_removes_external_tools() -> None:
 
 def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
     definition = json.loads(
-        (Path(__file__).parents[1] / "app/agent_workflows/builtins/hermes_rag_agent.json").read_text()
+        (Path(__file__).parents[1] / "app/workflow_catalog/builtins/hermes_rag_agent.json").read_text()
     )
     prompt = definition["spec_json"]["config"]["system_prompt"]
     assert "bridge APIs are only for genuinely deferred tools" in prompt

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping
 
-from app.agent_workflows.parallel_projection_contracts import (
+from app.product_orchestration.parallel_projection_contracts import (
     PARALLEL_EVENT_JOURNAL_LIMIT,
     PARALLEL_SUMMARY_COUNT_FIELDS,
     PARALLEL_SUMMARY_METRIC_FIELDS,
     ParallelEventName,
 )
-from app.agent_workflows.parallel_observability import project_parallel_events
-from app.agent_workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
+from app.product_orchestration.parallel_observability import project_parallel_events
+from app.product_orchestration.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 
 
 def _dict_events(events: Any) -> List[Dict[str, Any]]:

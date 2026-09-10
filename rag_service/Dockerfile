@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY rag_service/requirements.txt requirements.txt
 RUN pip install -r requirements.txt
+COPY runtime_protocol /tmp/runtime_protocol
+RUN pip install --no-deps /tmp/runtime_protocol
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
@@ -36,7 +38,6 @@ RUN mkdir -p /models/hf /static
 COPY rag_service/alembic alembic
 COPY rag_service/scripts scripts
 COPY rag_service/app app
-COPY rag_service/runtime_protocol runtime_protocol
 COPY rag_service/alembic.ini rag_service/main.py ./
 
 EXPOSE 8000

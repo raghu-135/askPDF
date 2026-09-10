@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 from app.runtime.adapter import RuntimeInvocationContext

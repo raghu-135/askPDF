@@ -6,12 +6,12 @@ from fastapi import HTTPException
 
 import app.api.agent_workflows as agent_workflows_api
 import app.api.threads as threads_api
-import app.agent_workflows.service as service_module
+import app.product_orchestration.service as service_module
 import app.runtime.cleanup as runtime_cleanup
 import app.services.agent_task_repository as task_repository
 import app.services.task_artifact_service as task_artifact_service
-from app.agent_workflows.interrupts import InterruptResolutionResult
-from app.agent_workflows.service import AgentRunService
+from app.product_orchestration.interrupts import InterruptResolutionResult
+from app.product_orchestration.service import AgentRunService
 from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeResult,

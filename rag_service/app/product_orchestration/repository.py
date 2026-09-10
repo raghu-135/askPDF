@@ -9,9 +9,9 @@ from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
-from app.agent_workflows.enums import AgentRunResumeAction, HitlRejectBehavior
-from app.agent_workflows.interrupts import (
+from app.product_orchestration.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
+from app.product_orchestration.enums import AgentRunResumeAction, HitlRejectBehavior
+from app.product_orchestration.interrupts import (
     INTERRUPT_STATUS_EXPIRED,
     INTERRUPT_STATUS_PENDING,
     INTERRUPT_STATUS_REJECTED,
@@ -29,12 +29,12 @@ from app.agent_workflows.interrupts import (
     validate_interrupt_resume_guard,
     validate_pending_interrupt_request,
 )
-from app.agent_workflows.run_cleanup import (
+from app.product_orchestration.run_cleanup import (
     fail_stale_running_runs as cleanup_fail_stale_running_runs,
     prune_runtime_continuations_for_runs_before as cleanup_prune_runtime_continuations_for_runs_before,
     prune_runs_before as cleanup_prune_runs_before,
 )
-from app.agent_workflows.run_store import (
+from app.product_orchestration.run_store import (
     append_run_event as run_store_append_run_event,
     complete_run as run_store_complete_run,
     create_run as run_store_create_run,
@@ -46,7 +46,7 @@ from app.agent_workflows.run_store import (
     set_run_debug_trace as run_store_set_run_debug_trace,
     update_run_observability as run_store_update_run_observability,
 )
-from app.agent_workflows.workflow_store import (
+from app.product_orchestration.workflow_store import (
     AgentWorkflowVersion,
     get_workflow as workflow_store_get_workflow,
     get_workflow_by_builtin_key as workflow_store_get_workflow_by_builtin_key,

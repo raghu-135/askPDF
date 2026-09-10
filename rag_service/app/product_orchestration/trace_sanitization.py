@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Mapping
 
-from app.agent_workflows.trace import compact_preview
+from app.product_orchestration.trace import compact_preview
 
 
 TRACE_PREVIEW_LIMIT = 900

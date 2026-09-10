@@ -4,7 +4,7 @@ import base64
 import json
 from typing import Any, Dict, Mapping, Tuple
 
-from app.agent_workflows.trace_sanitization import TRACE_REDACTED_VALUE, _is_sensitive_key
+from app.product_orchestration.trace_sanitization import TRACE_REDACTED_VALUE, _is_sensitive_key
 
 
 TRACE_DETAIL_SCALAR_LIMIT = 256 * 1024

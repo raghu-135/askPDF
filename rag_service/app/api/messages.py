@@ -16,10 +16,10 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.agent.prompting import normalize_tool_instructions
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.service import AgentRunService
-from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
-from app.agent_workflows.workflow_runtime import workflow_supports_replans
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.service import AgentRunService
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, retain_background_task
+from app.product_orchestration.workflow_runtime import workflow_supports_replans
 from app.db import (
     MessageRole,
     delete_message_pair,

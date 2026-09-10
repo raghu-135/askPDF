@@ -27,6 +27,7 @@ REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
     "test_control_plane_import_boundary_pytest.py",
+    "test_runtime_protocol_package_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_compose_profile_pytest.py",
     "test_hermes_profile_pytest.py",
@@ -120,6 +121,8 @@ def _approved_test_exclusions() -> dict[str, str]:
     disappearing from the default backend run.
     """
     manifest_path = APP_DIR / "tests" / "test_inventory.json"
+    if not manifest_path.exists():
+        manifest_path = Path(__file__).resolve().parents[1] / "tests" / "test_inventory.json"
     try:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:

@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence, TypedDict
 
-from app.agent_workflows.trace_sanitization import _bounded_value
+from app.product_orchestration.trace_sanitization import _bounded_value
 from runtime_protocol.contracts import AgentRuntimeEvent
 
 

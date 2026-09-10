@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from app.agent_workflows.trace_otel import _artifacts_from_refs
-from app.agent_workflows.trace_sanitization import _as_dict, _as_list, _bounded_value, _clean_dict
+from app.product_orchestration.trace_otel import _artifacts_from_refs
+from app.product_orchestration.trace_sanitization import _as_dict, _as_list, _bounded_value, _clean_dict
 from app.time_utils import iso_utc_z
 
 
@@ -445,7 +445,7 @@ def merge_debug_payloads(
             base_root["end_time"] = iso_utc_z(completed_at) if completed_at is not None else None
 
     _rebuild_trace_refs(base_trace)
-    from app.agent_workflows.trace_summary import _build_summary_from_trace
+    from app.product_orchestration.trace_summary import _build_summary_from_trace
     summary = {
         **_build_summary_from_trace(base_trace, resolved_spec),
         **_as_dict(base_payload.get("summary")),
@@ -462,7 +462,7 @@ def merge_debug_payloads(
         return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row.get("event_id") or row.get("operation_id") or "")))
 
     merged_events = merge_rows("events", ("event_id",))
-    from app.agent_workflows.canonical_trace import (
+    from app.product_orchestration.canonical_trace import (
         TRACE_VISUALIZATION_PARALLEL,
         build_parallel_groups_safely,
         build_trace_diagnostics,
@@ -533,7 +533,7 @@ def merge_debug_payloads(
             visit_index = 1
         detail_by_visit[(str(detail.get("operation_id") or ""), visit_index)] = dict(detail)
     if detail_by_visit:
-        from app.agent_workflows.trace_details import TRACE_DETAIL_RUN_LIMIT, trace_detail_size
+        from app.product_orchestration.trace_details import TRACE_DETAIL_RUN_LIMIT, trace_detail_size
 
         retained_details: List[Dict[str, Any]] = []
         retained_size = 0

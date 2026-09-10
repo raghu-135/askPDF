@@ -9,9 +9,9 @@ from opentelemetry.trace import Status, StatusCode
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent.tool_registry import get_tool_contract_metadata
-from app.agent_workflows.corrective_contracts import CorrectiveEventName
-from app.agent_workflows.enums import NodeEventStatus, TraceSpanKind, TraceStatus
-from app.agent_workflows.trace_sanitization import (
+from app.product_orchestration.corrective_contracts import CorrectiveEventName
+from app.product_orchestration.enums import NodeEventStatus, TraceSpanKind, TraceStatus
+from app.product_orchestration.trace_sanitization import (
     _as_dict,
     _as_list,
     _bounded_value,

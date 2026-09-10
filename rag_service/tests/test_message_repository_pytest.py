@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,

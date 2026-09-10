@@ -6,10 +6,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 
-from app.agent_workflows.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPPORTED_RUNTIME_KINDS
+from app.product_orchestration.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPPORTED_RUNTIME_KINDS
 
 
-BUILTIN_WORKFLOW_DIR = Path(__file__).with_name("builtins")
+BUILTIN_WORKFLOW_DIR = Path(__file__).parents[1] / "workflow_catalog" / "builtins"
 
 BUILTIN_DISCOVERY_CATEGORIES = {
     "router_rag_agent": "router",

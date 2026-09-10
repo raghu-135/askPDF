@@ -7,15 +7,15 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
-from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
-from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
-from app.agent_workflows.enums import AgentRunResumeAction, InterruptStatus
-from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.agent_workflows.metrics import build_run_metrics
-from app.agent_workflows.parallel_observability import project_parallel_events
-from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.workflow_runtime import (
+from app.product_orchestration.chat_cancellation import chat_run_cancel_requested
+from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
+from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
+from app.product_orchestration.execution_stream import AgentExecutionEventSink
+from app.product_orchestration.metrics import build_run_metrics
+from app.product_orchestration.parallel_observability import project_parallel_events
+from app.product_orchestration.repository import AgentWorkflowRepository, InterruptResolutionResult
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys
+from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
     workflow_is_chat_eligible,
 )

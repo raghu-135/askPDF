@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,21 +12,13 @@ COPY rag_service/requirements.txt requirements.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
 RUN python -m spacy download en_core_web_sm
+COPY runtime_protocol /tmp/runtime_protocol
+RUN pip install --no-deps /tmp/runtime_protocol
 
 COPY rag_service/alembic alembic
 COPY rag_service/scripts scripts
 COPY rag_service/app app
-COPY rag_service/runtime_protocol runtime_protocol
 COPY rag_service/tests tests
-# These suites exercise the Hermes runtime implementation itself.  They run
-# from the Hermes/runtime integration image, where hermes_runtime is present;
-# keeping them out of this image makes the control-plane collection boundary
-# executable instead of relying on an undeclared runtime dependency.
-RUN rm -f \
-    tests/test_hermes_execution_store_pytest.py \
-    tests/test_hermes_profile_manager_pytest.py \
-    tests/test_hermes_runtime_adapter_pytest.py \
-    tests/test_hermes_runtime_mcp_contract_pytest.py
 COPY rag_service/alembic.ini rag_service/main.py ./
 
 CMD ["python", "scripts/run_tests.py"]

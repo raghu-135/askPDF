@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl g++ libgom
 
 COPY langgraph_runtime/requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt pytest pytest-asyncio
+COPY runtime_protocol /tmp/runtime_protocol
+RUN pip install --no-deps /tmp/runtime_protocol
 
 COPY langgraph_runtime /app/langgraph_runtime
-COPY rag_service/runtime_protocol /app/runtime_protocol
 
 CMD ["python", "-m", "langgraph_runtime.test_runner"]

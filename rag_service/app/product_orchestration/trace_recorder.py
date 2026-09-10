@@ -7,10 +7,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.trace import SpanKind, StatusCode, set_span_in_context
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
-from app.agent_workflows.enums import NodeEventStatus, TraceStatus
-from app.agent_workflows.parallel_projection_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
-from app.agent_workflows.parallel_observability import parallel_span_refs
-from app.agent_workflows.trace_otel import (
+from app.product_orchestration.enums import NodeEventStatus, TraceStatus
+from app.product_orchestration.parallel_projection_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
+from app.product_orchestration.parallel_observability import parallel_span_refs
+from app.product_orchestration.trace_otel import (
     _BufferedSpanExporter,
     _artifacts_from_refs,
     _decision_events,
@@ -34,14 +34,14 @@ from app.agent_workflows.trace_otel import (
     enrich_tool_event,
 )
 from runtime_protocol.contracts import AgentRuntimeEvent
-from app.agent_workflows.canonical_trace import build_canonical_trace_projection
-from app.agent_workflows.trace_payloads import (
+from app.product_orchestration.canonical_trace import build_canonical_trace_projection
+from app.product_orchestration.trace_payloads import (
     DEBUG_PAYLOAD_VERSION,
     build_interrupt_trace_event,
     build_runtime_trace_event,
     _root_event_key,
 )
-from app.agent_workflows.trace_sanitization import (
+from app.product_orchestration.trace_sanitization import (
     _as_dict,
     _as_list,
     _bounded_value,
@@ -49,8 +49,8 @@ from app.agent_workflows.trace_sanitization import (
     _otel_attr_value,
     _set_attributes,
 )
-from app.agent_workflows.trace_summary import _build_summary_from_trace
-from app.agent_workflows.trace_details import (
+from app.product_orchestration.trace_summary import _build_summary_from_trace
+from app.product_orchestration.trace_details import (
     TRACE_DETAIL_RUN_LIMIT,
     final_output_from_result,
     sanitize_trace_detail,

@@ -6,7 +6,7 @@ from app.agent.tool_registry import (
     list_tool_contract_metadata,
     validate_tool_call_allowed,
 )
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
 
 def _builtin_spec(builtin_key: str):

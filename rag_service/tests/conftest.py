@@ -241,7 +241,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         project_lifecycle_service,
         thread_management_service,
     )
-    from app.agent_workflows import (
+    from app.product_orchestration import (
         chat_cancellation,
         repository as agent_workflow_repository,
     )

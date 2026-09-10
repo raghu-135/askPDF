@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import copy
 from typing import Any, Dict, List, Optional
 
-from app.agent_workflows.trace_payloads import (
+from app.product_orchestration.trace_payloads import (
     DEBUG_PAYLOAD_VERSION,
     append_interrupt_event_to_debug_payload,
     append_runtime_event_to_debug_payload,
@@ -11,7 +11,7 @@ from app.agent_workflows.trace_payloads import (
     build_runtime_trace_event,
     merge_debug_payloads,
 )
-from app.agent_workflows.trace_recorder import AgentTraceRecorder, TRACE_SCHEMA_VERSION
+from app.product_orchestration.trace_recorder import AgentTraceRecorder, TRACE_SCHEMA_VERSION
 from runtime_protocol.events import create_runtime_event
 from app.runtime.observability import normalize_runtime_event
 

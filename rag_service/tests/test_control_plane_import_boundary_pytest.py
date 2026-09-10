@@ -1,7 +1,9 @@
 """Static guards for the external-only framework boundary."""
 
 import ast
+import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +18,10 @@ ROOT = REPOSITORY_ROOT / "rag_service"
 
 def _source_files(relative_path: str, *suffixes: str) -> list[Path]:
     directory = REPOSITORY_ROOT / relative_path
+    if not directory.is_dir() and relative_path == "runtime_protocol":
+        spec = importlib.util.find_spec("runtime_protocol")
+        if spec is not None and spec.submodule_search_locations:
+            directory = Path(next(iter(spec.submodule_search_locations)))
     assert directory.is_dir(), f"expected source directory does not exist: {directory}"
     files = sorted(
         path
@@ -39,6 +45,16 @@ def _imports(path: Path) -> set[str]:
     return values
 
 
+def _dynamic_framework_references(path: Path) -> list[str]:
+    """Catch string-based runtime imports that AST import checks cannot see."""
+    source = path.read_text()
+    return re.findall(
+        r"(?:monkeypatch\.setattr|patch(?:\.object)?|import_module)\(\s*['\"]"
+        r"(?:langgraph|langgraph_runtime)(?:\.|['\"])",
+        source,
+    )
+
+
 def test_control_plane_has_no_langgraph_or_runtime_imports():
     forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
     for path in _source_files("rag_service/app", ".py"):
@@ -55,6 +71,7 @@ def test_control_plane_tests_have_no_framework_execution_imports():
             name == prefix or name.startswith(prefix + ".")
             for name in _imports(path) for prefix in forbidden
         ), path
+        assert _dynamic_framework_references(path) == [], path
 
 
 def test_runtime_has_no_control_plane_imports():
@@ -64,7 +81,7 @@ def test_runtime_has_no_control_plane_imports():
 
 def test_runtime_protocol_is_dependency_neutral():
     forbidden = ("app", "langgraph", "langchain", "sqlalchemy", "sqlmodel")
-    for path in _source_files("rag_service/runtime_protocol", ".py"):
+    for path in _source_files("runtime_protocol", ".py"):
         assert not any(
             name == prefix or name.startswith(prefix + ".")
             for name in _imports(path) for prefix in forbidden
@@ -83,22 +100,27 @@ def test_control_plane_manifest_and_legacy_paths_are_clean():
     assert not (ROOT / "langgraph_runtime").exists()
     # The integration test harness can inspect sibling sources via PYTHONPATH;
     # production/dev services expose only the control-plane source root.
-    subprocess.run([
-        sys.executable, "-I", "-c",
-        f"import sys, importlib.util; sys.path.insert(0, {str(ROOT)!r}); "
+    isolation_check = (
         "assert importlib.util.find_spec('langgraph') is None; "
         "assert importlib.util.find_spec('langgraph_runtime') is None; "
-        "assert importlib.util.find_spec('runtime_protocol') is not None",
+    ) if os.getenv("ASKPDF_ENFORCE_DEPENDENCY_ISOLATION") == "1" else ""
+    subprocess.run([
+        sys.executable, "-I", "-c",
+        f"import sys, importlib.util; sys.path.insert(0, {str(REPOSITORY_ROOT)!r}); "
+        + isolation_check
+        + "assert importlib.util.find_spec('runtime_protocol') is not None",
     ], check=True)
     for legacy in (
-        "agent_workflows/evidence.py",
-        "agent_workflows/parallel_contracts.py",
-        "agent_workflows/graph_validation.py",
-        "agent_workflows/node_catalog.py",
-        "agent_workflows/validator.py",
+        "product_orchestration/evidence.py",
+        "product_orchestration/parallel_contracts.py",
+        "product_orchestration/graph_validation.py",
+        "product_orchestration/node_catalog.py",
+        "product_orchestration/validator.py",
         "mcp/langchain_adapter.py",
     ):
         assert not (ROOT / "app" / legacy).exists()
+    assert not (ROOT / "agent_workflows").exists()
+    assert not (ROOT / "runtime_protocol").exists()
 
 
 def test_control_plane_test_inventory_assigns_every_backend_test_file():

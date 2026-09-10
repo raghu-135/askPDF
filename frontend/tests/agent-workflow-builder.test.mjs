@@ -39,9 +39,9 @@ test('uses the backend canonical key to load a canonical built-in workflow row',
 });
 
 const seededStarterSpecs = {
-  router: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/router_rag_agent.json', import.meta.url))).spec_json,
-  plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
-  evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
+  router: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/router_rag_agent.json', import.meta.url))).spec_json,
+  plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
+  evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
 };
 
 test('parallel workflow assembly enables bounded parallel runtime metadata', () => {

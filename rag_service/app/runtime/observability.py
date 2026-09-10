@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from app.agent_workflows.trace_sanitization import _bounded_value
+from app.product_orchestration.trace_sanitization import _bounded_value
 
 
 OPERATION_KINDS = {

@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.db.models_sqlmodel import AgentRun, AgentTaskCommand, AgentWorkflow
 from app.services import agent_task_repository as repository
 from app.time_utils import utc_now

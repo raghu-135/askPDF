@@ -4,15 +4,15 @@ from typing import Any, Dict, List, Mapping
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
-from app.agent_workflows.enums import DebugGraphNodeStatus, GraphSentinel, NodeEventStatus, TraceStatus, WorkflowNodeType
-from app.agent_workflows.trace_otel import (
+from app.product_orchestration.enums import DebugGraphNodeStatus, GraphSentinel, NodeEventStatus, TraceStatus, WorkflowNodeType
+from app.product_orchestration.trace_otel import (
     _first_number,
     _node_display_name,
     _node_metadata,
     _observability_metadata,
 )
-from app.agent_workflows.trace_payloads import _interrupt_summary
-from app.agent_workflows.trace_sanitization import _as_dict, _as_list, _bounded_value
+from app.product_orchestration.trace_payloads import _interrupt_summary
+from app.product_orchestration.trace_sanitization import _as_dict, _as_list, _bounded_value
 
 
 def _as_string_list(value: Any) -> List[str]:

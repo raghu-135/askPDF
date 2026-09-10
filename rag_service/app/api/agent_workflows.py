@@ -12,27 +12,27 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_workflows.repository import (
+from app.product_orchestration.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
     BUILDER_TEST_RUN_KIND,
 )
-from app.agent_workflows.service import AgentRunService
-from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.workflow_runtime import (
+from app.product_orchestration.service import AgentRunService
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, retain_background_task
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
+from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
-from app.agent_workflows.chat_cancellation import (
+from app.product_orchestration.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
     ChatRunCancelResult,
 )
-from app.agent_workflows.trace_details import detail_manifest
-from app.agent_workflows.trace_payloads import is_current_debug_payload
-from app.agent_workflows.canonical_trace import build_parallel_groups_safely
+from app.product_orchestration.trace_details import detail_manifest
+from app.product_orchestration.trace_payloads import is_current_debug_payload
+from app.product_orchestration.canonical_trace import build_parallel_groups_safely
 from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
 logger = logging.getLogger(__name__)
 

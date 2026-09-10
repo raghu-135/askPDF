@@ -131,7 +131,7 @@ class LangGraphBuilderProvider:
         )
 
     async def source(self, definition_id: str) -> Mapping[str, Any]:
-        from app.agent_workflows.builtin_workflows import load_builtin_workflows
+        from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
         workflow = next((item for item in load_builtin_workflows() if item.get("builtin_key") == definition_id), None)
         if workflow is None:

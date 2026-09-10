@@ -1,6 +1,6 @@
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.runtime.builder_registry import get_builder_registry
 from app.runtime.builder import UnsupportedRequestOverrideError
 from runtime_protocol.contracts import AgentDefinition

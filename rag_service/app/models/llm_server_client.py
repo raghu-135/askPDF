@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
 
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 from app.services.memory_policy import (
     DEFAULT_THREAD_MEMORY_SETTINGS,

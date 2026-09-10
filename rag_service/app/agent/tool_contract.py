@@ -7,7 +7,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Protocol
 
-from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
+from app.product_orchestration.trace import artifact_summary, compact_preview, refs_from_artifacts
 from app.rag.enums import TimelineSourceType
 from app.time_utils import iso_utc_z, utc_now
 from runtime_protocol.tool_contract import (

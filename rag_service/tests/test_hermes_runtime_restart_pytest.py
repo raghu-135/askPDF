@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.mcp.execution_context_token import issue_execution_context_token
 from app.runtime.hermes_builder import HermesBuilderProvider
 from app.tools.context import ToolInvocationContext

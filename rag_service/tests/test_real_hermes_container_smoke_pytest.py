@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.mcp.execution_context_token import issue_execution_context_token
 from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest

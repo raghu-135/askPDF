@@ -10,9 +10,9 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
-from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
-from app.agent_workflows.execution_stream import AgentExecutionEventSink
-from app.agent_workflows.repository import AgentWorkflowRepository
+from app.product_orchestration.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
+from app.product_orchestration.execution_stream import AgentExecutionEventSink
+from app.product_orchestration.repository import AgentWorkflowRepository
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks

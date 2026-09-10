@@ -14,7 +14,7 @@ class AgentRuntimeProjection:
     async def apply_event(self, *, run: Any, event: Any) -> bool:
         """Apply only events newer than the persisted projection sequence."""
 
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.repository import AgentWorkflowRepository
 
         event_id = str(getattr(event, "event_id", None) or "")
         sequence = int(getattr(event, "sequence", 0) or 0)
@@ -39,8 +39,8 @@ class AgentRuntimeProjection:
     async def rebuild_trace_from_events(self, *, run: Any, result: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
         """Rebuild the product trace from the canonical runtime journal."""
 
-        from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
+        from app.product_orchestration.repository import AgentWorkflowRepository
         from runtime_protocol.contracts import AgentRuntimeEvent
 
         repository = AgentWorkflowRepository()
@@ -100,7 +100,7 @@ class AgentRuntimeProjection:
         repository = None
         projection: dict[str, Any] = {}
         if run_id:
-            from app.agent_workflows.repository import AgentWorkflowRepository
+            from app.product_orchestration.repository import AgentWorkflowRepository
 
             repository = AgentWorkflowRepository()
             fresh_run = await repository.get_run(str(run_id))

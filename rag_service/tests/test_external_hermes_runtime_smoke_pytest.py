@@ -12,7 +12,7 @@ import asyncpg
 import httpx
 import pytest
 
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.runtime.adapter import RuntimeInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from app.runtime.hermes_adapter import HermesRuntimeAdapter

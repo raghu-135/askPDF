@@ -27,8 +27,8 @@ from app.db.models_sqlmodel import (
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import parse_datetime_utc, utc_now
-from app.agent_workflows.trace_details import sanitize_trace_detail
-from app.agent_workflows.trace_payloads import append_runtime_event_to_debug_payload
+from app.product_orchestration.trace_details import sanitize_trace_detail
+from app.product_orchestration.trace_payloads import append_runtime_event_to_debug_payload
 from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
 from runtime_protocol.events import normalize_product_event_kind
 from app.runtime.behavior import continuation_is_linked, supports_course_correction

@@ -4,7 +4,7 @@ import os
 from copy import deepcopy
 from typing import Any, Dict
 
-from app.agent_workflows.enums import WorkflowNodeType, WorkflowRuntimeKind
+from app.product_orchestration.enums import WorkflowNodeType, WorkflowRuntimeKind
 
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
 DEFAULT_AGENT_WORKFLOW_KEY = "_".join((WorkflowNodeType.ROUTER.value, "rag", "agent"))

@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from sqlalchemy import func
 from sqlalchemy.future import select
 
-from app.agent_workflows.interrupts import normalize_pending_interrupt_payload, run_interrupt_resume_guard
+from app.product_orchestration.interrupts import normalize_pending_interrupt_payload, run_interrupt_resume_guard
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus
 from app.db.jsonb_utils import replace_jsonb_field

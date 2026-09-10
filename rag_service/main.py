@@ -48,8 +48,8 @@ from app.api.models import router as models_router
 from app.api.agent_workflows import router as agent_workflows_router
 from app.api.agent_tasks import router as agent_tasks_router
 from app.api.tools import router as tools_router
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.execution_stream import drain_retained_executions
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.execution_stream import drain_retained_executions
 from app.db import ensure_default_project
 from app.db.connection_sqlmodel import close_db
 from app.db.vector import close_vector_db, get_vector_db

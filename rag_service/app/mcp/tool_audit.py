@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from app.agent_workflows.repository import AgentWorkflowRepository
+from app.product_orchestration.repository import AgentWorkflowRepository
 logger = logging.getLogger(__name__)
 
 

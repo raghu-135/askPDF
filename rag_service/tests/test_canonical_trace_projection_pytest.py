@@ -3,13 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent_workflows.canonical_trace import (
+from app.product_orchestration.canonical_trace import (
     TraceProjectionError,
     build_canonical_trace_projection,
     build_parallel_groups,
     build_parallel_groups_safely,
 )
-from app.agent_workflows.trace_recorder import AgentTraceRecorder
+from app.product_orchestration.trace_recorder import AgentTraceRecorder
 from runtime_protocol.contracts import AgentRuntimeEvent
 
 

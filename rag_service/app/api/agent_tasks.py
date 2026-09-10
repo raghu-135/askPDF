@@ -8,9 +8,9 @@ from typing import Any, Mapping, Optional
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.trace_payloads import is_current_debug_payload
-from app.agent_workflows.service import AgentRunService
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.trace_payloads import is_current_debug_payload
+from app.product_orchestration.service import AgentRunService
 from app.db import get_thread, get_thread_settings
 from app.models.deep_research import (
     AgentTaskBudgetReviewRequest,

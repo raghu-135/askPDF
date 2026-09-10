@@ -10,7 +10,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, Mapping
 
-from app.agent_workflows.repository import AgentWorkflowRepository
+from app.product_orchestration.repository import AgentWorkflowRepository
 from app.time_utils import utc_now
 from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
@@ -91,7 +91,7 @@ async def reconcile_request(run: Any, adapter: Any, request: AgentRuntimeRequest
 
 async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
     """Reconcile one persisted run without creating a replacement run."""
-    from app.agent_workflows.repository import AgentWorkflowRepository
+    from app.product_orchestration.repository import AgentWorkflowRepository
     from app.runtime.catalog import continuation_from_run, definition_from_run
     from app.runtime.registry import get_runtime_registry
     from app.runtime.adapter import RuntimeInvocationContext
@@ -272,7 +272,7 @@ async def reconcile_run_by_id(run_id: str, *, dry_run: bool = False) -> str:
 
 async def reconcile_task_attempt(task_id: str, run_id: str, *, dry_run: bool = False) -> str:
     """Reconcile a task attempt through its owning AgentRun."""
-    from app.agent_workflows.repository import AgentWorkflowRepository
+    from app.product_orchestration.repository import AgentWorkflowRepository
 
     run = await AgentWorkflowRepository().get_run(run_id)
     if run is None or str(getattr(run, "task_id", "")) != str(task_id):
@@ -281,7 +281,7 @@ async def reconcile_task_attempt(task_id: str, run_id: str, *, dry_run: bool = F
 
 
 async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = False) -> dict[str, int]:
-    from app.agent_workflows.repository import AgentWorkflowRepository
+    from app.product_orchestration.repository import AgentWorkflowRepository
     from app.runtime.catalog import definition_from_run
     from app.runtime.registry import adapter_for_definition
     from app.services import agent_task_repository as tasks
