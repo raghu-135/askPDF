@@ -80,8 +80,8 @@ Hermes `session_id` from run status into its opaque continuation binding.
 Supported upstream events are `message.delta`, `tool.started`,
 `tool.completed`, `reasoning.available`, `approval.request`,
 `approval.responded`, `run.completed`, `run.failed`,
-`run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown events are
-retained as bounded `runtime.event` records for forward compatibility.
+`run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown or
+missing event kinds are rejected as runtime protocol errors.
 
 `run.clarification` is a canonical terminal event and is preserved as such in
 the product event stream. Hermes cancellation uses bounded confirmation: the

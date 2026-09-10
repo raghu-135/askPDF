@@ -405,7 +405,6 @@ from langgraph_runtime import checkpointing
 class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
     framework = "langgraph"
     builder_id = "langgraph_graph"
-    supports_task_pause = True
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,
         RuntimeOperationId.RUN_CANCEL,

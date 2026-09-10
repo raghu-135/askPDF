@@ -93,15 +93,6 @@ TASK_ONLY_OPERATIONS = frozenset({
     RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
 })
 
-CHECKPOINT_OPERATIONS = frozenset({
-    RuntimeOperationId.RUN_UPDATE_STATE,
-    RuntimeOperationId.RUN_RESUME,
-    RuntimeOperationId.RUN_INSPECT_STATE,
-    RuntimeOperationId.RUN_REPLAY,
-    RuntimeOperationId.RUN_FORK,
-    RuntimeOperationId.RUN_CLEANUP,
-})
-
 def deployment_id(adapter: Any) -> str:
     return f"{adapter.framework}:{adapter.builder_id}"
 
@@ -170,19 +161,17 @@ def _reconcile_adapter_task_operations(
     capabilities: RuntimeCapabilities,
     adapter: Any,
 ) -> RuntimeCapabilities:
-    """Reapply adapter-owned task restrictions after product operations merge."""
-    if bool(getattr(adapter, "supports_task_pause", False)) and capabilities.deployment.get("checkpoint_available", True) is not False:
-        return capabilities
+    """Reconcile product task operations that require adapter primitives."""
     operations = dict(capabilities.operations)
-    for operation_id in (RuntimeOperationId.TASK_PAUSE, RuntimeOperationId.TASK_RESUME):
-        descriptor = operations.get(operation_id)
-        if descriptor is not None:
-            operations[operation_id] = replace(
-                descriptor,
-                support=RuntimeSupportLevel.UNSUPPORTED,
-                enabled=False,
-                disabled_reason=RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
-            )
+    registered = frozenset(getattr(adapter, "implemented_operations", frozenset()))
+    descriptor = operations.get(RuntimeOperationId.TASK_PAUSE)
+    if descriptor is not None and RuntimeOperationId.TASK_PAUSE not in registered:
+        operations[RuntimeOperationId.TASK_PAUSE] = replace(
+            descriptor,
+            support=RuntimeSupportLevel.UNSUPPORTED,
+            enabled=False,
+            disabled_reason=RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNIMPLEMENTED,
+        )
     return replace(capabilities, operations=operations)
 
 
@@ -257,17 +246,48 @@ def _apply_task_start_dependency(
 ) -> None:
     """A task can start only when its runtime run can start."""
 
+    def available_for_task_dependency(descriptor: RuntimeOperationDescriptor | None) -> bool:
+        if descriptor is None or descriptor.support is RuntimeSupportLevel.UNSUPPORTED:
+            return False
+        if descriptor.enabled:
+            return True
+        return descriptor.disabled_reason in {
+            RuntimeCapabilityDisabledReason.RUN_ALREADY_CREATED,
+            RuntimeCapabilityDisabledReason.NO_PENDING_INTERRUPT,
+        }
+
     task_start = operations.get(RuntimeOperationId.TASK_START)
-    if task_start is None or not task_start.enabled:
-        return
     run_start = operations.get(RuntimeOperationId.RUN_START)
-    if run_start is None or not run_start.enabled or run_start.support is RuntimeSupportLevel.UNSUPPORTED:
+    if task_start is not None and task_start.enabled and not available_for_task_dependency(run_start):
         operations[RuntimeOperationId.TASK_START] = replace(
             task_start,
             enabled=False,
             disabled_reason=(
                 run_start.disabled_reason
                 if run_start is not None and run_start.disabled_reason is not None
+                else RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+            ),
+        )
+    task_retry = operations.get(RuntimeOperationId.TASK_RETRY)
+    if task_retry is not None and task_retry.enabled and not available_for_task_dependency(run_start):
+        operations[RuntimeOperationId.TASK_RETRY] = replace(
+            task_retry,
+            enabled=False,
+            disabled_reason=(
+                run_start.disabled_reason
+                if run_start is not None and run_start.disabled_reason is not None
+                else RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
+            ),
+        )
+    task_resume = operations.get(RuntimeOperationId.TASK_RESUME)
+    run_resume = operations.get(RuntimeOperationId.RUN_RESUME)
+    if task_resume is not None and task_resume.enabled and not available_for_task_dependency(run_resume):
+        operations[RuntimeOperationId.TASK_RESUME] = replace(
+            task_resume,
+            enabled=False,
+            disabled_reason=(
+                run_resume.disabled_reason
+                if run_resume is not None and run_resume.disabled_reason is not None
                 else RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED
             ),
         )
@@ -584,15 +604,14 @@ async def resolve_run_capability_resolution(
 
     if not binding_available and status not in TERMINAL_RUN_STATES:
         for operation, descriptor in operations.items():
-            if operation in CHECKPOINT_OPERATIONS or descriptor.requires_runtime_binding:
+            if descriptor.requires_checkpoint_boundary or descriptor.requires_runtime_binding:
                 operations[operation] = _disabled(
                     descriptor, RuntimeCapabilityDisabledReason.RUNTIME_BINDING_UNAVAILABLE
                 )
 
     if not checkpoint_boundary_available(run):
-        for operation in CHECKPOINT_OPERATIONS:
-            descriptor = operations.get(operation)
-            if descriptor is not None and descriptor.enabled:
+        for operation, descriptor in operations.items():
+            if descriptor.requires_checkpoint_boundary and descriptor.enabled:
                 operations[operation] = _disabled(
                     descriptor, RuntimeCapabilityDisabledReason.RUN_NOT_CHECKPOINT_BOUNDARY
                 )

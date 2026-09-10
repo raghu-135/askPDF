@@ -181,6 +181,7 @@ def langgraph_capabilities(
             preserves_run_id=descriptor.preserves_run_id,
             preserves_session_id=descriptor.preserves_session_id,
             requires_runtime_binding=descriptor.requires_runtime_binding,
+            requires_checkpoint_boundary=descriptor.requires_checkpoint_boundary,
         )
 
     operations: dict[RuntimeOperationId, RuntimeOperationDescriptor] = {
@@ -195,18 +196,21 @@ def langgraph_capabilities(
             semantics=RuntimeCapabilitySemantics.RESUME_FROM_INTERRUPT,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
+            requires_checkpoint_boundary=True,
         ),
         RuntimeOperationId.RUN_INSPECT_STATE: conditional(
             enabled=checkpoint,
             semantics=RuntimeCapabilitySemantics.CHECKPOINT_STATE_INSPECTION,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
+            requires_checkpoint_boundary=True,
         ),
         RuntimeOperationId.RUN_CLEANUP: conditional(
             enabled=checkpoint,
             semantics=RuntimeCapabilitySemantics.CHECKPOINT_THREAD_CLEANUP,
             disabled_reason=None if checkpoint else RuntimeCapabilityDisabledReason.CHECKPOINT_STORE_UNAVAILABLE,
             requires_runtime_binding=True,
+            requires_checkpoint_boundary=True,
         ),
         RuntimeOperationId.RUN_APPROVAL_RESPOND: unsupported(),
         RuntimeOperationId.RUN_STEER_LIVE: unsupported(),

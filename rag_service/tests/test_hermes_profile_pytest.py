@@ -11,6 +11,7 @@ from app.runtime.hermes_profile import (
     HERMES_OFFLINE_PROFILE,
     resolve_hermes_profile,
 )
+from app.runtime.catalog import definition_metadata_from_spec
 
 
 def _spec() -> dict:
@@ -63,6 +64,49 @@ def test_offline_profile_removes_external_tools() -> None:
     spec["config"]["allowed_tool_ids"] = ["search_documents", "search_web", "wikipedia"]
     profile = resolve_hermes_profile(spec)
     assert profile["mcp"]["allowed_tool_ids"] == ["search_documents"]
+
+
+def test_definition_metadata_uses_effective_managed_profile_tools() -> None:
+    spec = _spec()
+    spec["config"]["allowed_tool_ids"] = ["search_documents", "search_web"]
+    spec["managed_profile"] = {
+        "mcp": {"allowed_tool_ids": ["search_documents"], "runtime_profile": HERMES_OFFLINE_PROFILE},
+        "memory": {"persistent": True},
+        "delegation": {"enabled": False},
+        "skills": {"enabled": ["summarize"]},
+    }
+    metadata = definition_metadata_from_spec(spec)
+    assert metadata["allowed_tool_ids"] == ["search_documents"]
+    assert metadata["runtime_policy"]["allowed_tool_ids"] == ["search_documents"]
+    assert metadata["runtime_policy"]["allow_persistent_memory"] is True
+    assert metadata["runtime_policy"]["external_context_enabled"] is False
+
+
+def test_definition_metadata_does_not_fall_back_to_requested_hermes_policy() -> None:
+    spec = _spec()
+    spec["config"].update({
+        "allowed_tool_ids": ["search_documents", "search_web"],
+        "use_web_search": True,
+        "allow_persistent_memory": True,
+        "allow_subagents": True,
+        "skills": ["requested-skill"],
+    })
+    spec["managed_profile"] = {
+        "mcp": {"allowed_tool_ids": [], "runtime_profile": HERMES_OFFLINE_PROFILE},
+        "memory": {"persistent": False},
+        "delegation": {"enabled": False},
+        "skills": {"enabled": []},
+        "task_policy": {"approval_enabled": False},
+    }
+
+    metadata = definition_metadata_from_spec(spec)
+
+    assert metadata["allowed_tool_ids"] == []
+    assert metadata["runtime_policy"]["external_context_enabled"] is False
+    assert metadata["runtime_policy"]["allow_persistent_memory"] is False
+    assert metadata["runtime_policy"]["allow_subagents"] is False
+    assert metadata["runtime_policy"]["skills"] == []
+    assert metadata["runtime_policy"]["approval_enabled"] is False
 
 
 def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:

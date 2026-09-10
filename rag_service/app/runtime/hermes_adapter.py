@@ -25,7 +25,7 @@ from runtime_protocol.contracts import (
 from runtime_protocol.errors import RuntimeError
 from runtime_protocol.protocol import json_payload
 from app.runtime.adapter import AgentRuntimeAdapter
-from app.runtime.http_runtime_adapter import RuntimeTransportConnector
+from app.runtime.http_transport import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
 from app.models.llm_server_client import check_model_can_invoke_tools
 from app.mcp.execution_context_token import issue_execution_context_token
@@ -35,9 +35,6 @@ from app.tools.context import ToolInvocationContext
 class HermesRuntimeAdapter(AgentRuntimeAdapter):
     framework = "hermes"
     builder_id = "hermes_agent"
-    # The pinned Hermes HTTP Runs API has no durable pause/checkpoint
-    # primitive. Keep task pause out of its effective capabilities.
-    supports_task_pause = False
     visualization_id = "hermes.session"
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,
@@ -61,9 +58,14 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         limits = dict(getattr(task_context, "limits", {}) or {})
         spec = dict(getattr(context, "resolved_spec", {}) or {})
         config = dict(spec.get("config") or {})
-        profile = dict(spec.get("managed_profile") or {})
-        mcp = dict(profile.get("mcp") or config.get("mcp") or {})
-        allowed_tools = list(mcp.get("allowed_tool_ids") or config.get("allowed_tool_ids") or [])
+        raw_profile = spec.get("managed_profile")
+        has_managed_profile = isinstance(raw_profile, Mapping)
+        profile = dict(raw_profile) if has_managed_profile else {}
+        raw_mcp = profile.get("mcp") if has_managed_profile else config.get("mcp")
+        mcp = dict(raw_mcp) if isinstance(raw_mcp, Mapping) else {}
+        allowed_tools = list(mcp.get("allowed_tool_ids") or [])
+        raw_model_policy = profile.get("model_policy") if has_managed_profile else config
+        model_policy = dict(raw_model_policy) if isinstance(raw_model_policy, Mapping) else {}
         ttl_seconds = max(3600, int(limits.get("max_active_runtime_ms", 3_600_000)) // 1000)
         context_window = int(
             profile.get("context_window")
@@ -77,11 +79,11 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 run_id=request.run_id,
                 embedding_model=context.embedding_model,
                 context_window=context_window,
-                use_web_search=bool(config.get("use_web_search")),
+                use_web_search=mcp.get("runtime_profile") == "askpdf-deep-external",
                 use_reranker=True,
                 extensions={
                     "task_id": task_context.task_id,
-                    "llm_model": config.get("llm_model"),
+                    "llm_model": model_policy.get("model") or (None if has_managed_profile else config.get("llm_model")),
                     "correction_context_sha256": hashlib.sha256(json.dumps(
                         data.get("active_corrections") or [], sort_keys=True,
                         separators=(",", ":"), ensure_ascii=True,

@@ -315,6 +315,9 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
             requires_runtime_binding = raw_descriptor.get("requires_runtime_binding", False)
             if not isinstance(requires_runtime_binding, bool):
                 raise ValueError("requires_runtime_binding must be a bool")
+            requires_checkpoint_boundary = raw_descriptor.get("requires_checkpoint_boundary", False)
+            if not isinstance(requires_checkpoint_boundary, bool):
+                raise ValueError("requires_checkpoint_boundary must be a bool")
             descriptor = RuntimeOperationDescriptor(
                 support=support,
                 owner=owner,
@@ -327,6 +330,7 @@ def capabilities_from_dict(value: Mapping[str, Any]) -> RuntimeCapabilities:
                 preserves_run_id=raw_descriptor.get("preserves_run_id"),
                 preserves_session_id=raw_descriptor.get("preserves_session_id"),
                 requires_runtime_binding=requires_runtime_binding,
+                requires_checkpoint_boundary=requires_checkpoint_boundary,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid runtime capability descriptor for {operation!r}") from exc

@@ -33,7 +33,6 @@ class AgentRuntimeAdapter(ABC, Generic[ContextT]):
 
     framework: str
     builder_id: str
-    supports_task_pause: bool = False
     implemented_operations: frozenset[RuntimeOperationId] = frozenset()
 
     async def prepare_request(

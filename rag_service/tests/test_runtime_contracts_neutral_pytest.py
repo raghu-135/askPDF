@@ -1,11 +1,18 @@
 """Control-plane tests for the dependency-neutral runtime protocol."""
 
+import os
+from pathlib import Path
+
 from runtime_protocol.contracts import (
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeOperationId,
+    RuntimeOperationOwner,
+    RuntimeCapabilitySemantics,
+    RuntimeSupportLevel,
+    RuntimeOperationDescriptor,
     RuntimeTaskContext,
     TaskOrchestrationDelta,
 )
@@ -103,3 +110,21 @@ def test_runtime_task_context_is_json_serializable():
 
 def test_cleanup_operation_is_a_neutral_runtime_capability():
     assert RuntimeOperationId.RUN_CLEANUP.value == "run.cleanup"
+
+
+def test_operation_descriptor_round_trips_checkpoint_boundary_requirement():
+    descriptor = RuntimeOperationDescriptor(
+        support=RuntimeSupportLevel.CONDITIONAL,
+        owner=RuntimeOperationOwner.RUNTIME,
+        enabled=True,
+        semantics=RuntimeCapabilitySemantics.CHECKPOINT_STATE_INSPECTION,
+        requires_checkpoint_boundary=True,
+    )
+    assert descriptor.to_dict()["requires_checkpoint_boundary"] is True
+
+
+def test_frontend_runtime_semantics_match_backend_contract():
+    repo_root = Path(os.environ.get("ASKPDF_REPO_DIR", Path(__file__).parents[2]))
+    source = (repo_root / "frontend" / "src" / "lib" / "api.ts").read_text()
+    for semantics in RuntimeCapabilitySemantics:
+        assert f"'{semantics.value}'" in source

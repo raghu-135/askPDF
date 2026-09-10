@@ -13,5 +13,5 @@
   "cancelled": [{"event": "run.cancelled"}],
   "approval": [{"event": "approval.request", "command": "safe deterministic command", "choices": ["once", "session", "always", "deny"]}, {"event": "run.completed", "output": "approved"}],
   "completion": [{"event": "run.completed", "output": "completed"}],
-  "unknown": [{"event": "future.event", "value": "preserved"}, {"event": "run.completed", "output": "future-safe"}]
+  "unknown": [{"event": "future.event", "value": "rejected"}]
 }

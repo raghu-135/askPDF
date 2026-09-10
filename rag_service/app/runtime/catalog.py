@@ -17,9 +17,45 @@ from runtime_protocol.events import create_runtime_event
 def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    task_policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
+    managed_profile = (
+        spec.get("managed_profile")
+        if isinstance(spec.get("managed_profile"), Mapping)
+        else {}
+    )
+    has_managed_profile = isinstance(spec.get("managed_profile"), Mapping)
+    profile_mcp = (
+        managed_profile.get("mcp")
+        if isinstance(managed_profile.get("mcp"), Mapping)
+        else {}
+    )
+    effective_tools = (
+        profile_mcp.get("allowed_tool_ids", [])
+        if has_managed_profile
+        else config.get("allowed_tool_ids", [])
+    )
+    profile_memory = (
+        managed_profile.get("memory")
+        if isinstance(managed_profile.get("memory"), Mapping)
+        else {}
+    )
+    profile_delegation = (
+        managed_profile.get("delegation")
+        if isinstance(managed_profile.get("delegation"), Mapping)
+        else {}
+    )
+    profile_skills = (
+        managed_profile.get("skills")
+        if isinstance(managed_profile.get("skills"), Mapping)
+        else {}
+    )
+    effective_task_policy = (
+        managed_profile.get("task_policy")
+        if isinstance(managed_profile.get("task_policy"), Mapping)
+        else {}
+    ) if has_managed_profile else task_policy
     graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
     graph_nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
-    task_policy = config.get("task_policy") if isinstance(config.get("task_policy"), dict) else {}
     metadata = {
         "runtime_kind": runtime.get("kind"),
         "graph_node_types": sorted({
@@ -27,15 +63,27 @@ def definition_metadata_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
             for node in graph_nodes
             if isinstance(node, dict) and node.get("type")
         }),
-        "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
-        "task_profiles": sorted({str(item) for item in task_policy.get("profiles", []) if item}),
+        "allowed_tool_ids": sorted({str(item) for item in effective_tools if item}),
+        "task_profiles": sorted({str(item) for item in effective_task_policy.get("profiles", []) if item}),
         "runtime_policy": {
-            "allowed_tool_ids": sorted({str(item) for item in config.get("allowed_tool_ids", []) if item}),
-            "allow_persistent_memory": bool(config.get("allow_persistent_memory", False)),
-            "allow_subagents": bool(config.get("allow_subagents", False)),
-            "skills": sorted({str(item) for item in config.get("skills", []) if item}),
-            "approval_enabled": bool(task_policy.get("approval_enabled", True)),
-            "external_context_enabled": bool(config.get("use_web_search", False)),
+            "allowed_tool_ids": sorted({str(item) for item in effective_tools if item}),
+            "allow_persistent_memory": bool(
+                profile_memory.get("persistent", False) if has_managed_profile else config.get("allow_persistent_memory", False)
+            ),
+            "allow_subagents": bool(
+                profile_delegation.get("enabled", False) if has_managed_profile else config.get("allow_subagents", False)
+            ),
+            "skills": sorted({
+                str(item)
+                for item in (profile_skills.get("enabled", []) if has_managed_profile else config.get("skills", []))
+                if item
+            }),
+            "approval_enabled": bool(effective_task_policy.get("approval_enabled", True)),
+            "external_context_enabled": bool(
+                profile_mcp.get("runtime_profile") == "askpdf-deep-external"
+                if has_managed_profile
+                else config.get("use_web_search", False)
+            ),
         },
     }
     return metadata
@@ -145,7 +193,9 @@ def event_from_source(
     source_metadata: Mapping[str, Any] | None = None,
 ) -> AgentRuntimeEvent:
     data = dict(event.get("data") or {})
-    kind = str(event.get("event") or event.get("kind") or "runtime.event")
+    kind = event.get("event") or event.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        raise ValueError("runtime event must include a non-empty event or kind")
     return create_runtime_event(
         event_id=str(event_id or data.get("event_id") or f"{run_id}:{sequence}"),
         run_id=run_id,

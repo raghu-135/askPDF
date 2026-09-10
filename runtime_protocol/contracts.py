@@ -553,6 +553,7 @@ class RuntimeOperationDescriptor:
     preserves_run_id: Optional[bool] = None
     preserves_session_id: Optional[bool] = None
     requires_runtime_binding: bool = False
+    requires_checkpoint_boundary: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.support, RuntimeSupportLevel):
@@ -588,6 +589,8 @@ class RuntimeOperationDescriptor:
                 raise ValueError(f"{field_name} must be a bool or null")
         if not isinstance(self.requires_runtime_binding, bool):
             raise TypeError("requires_runtime_binding must be a bool")
+        if not isinstance(self.requires_checkpoint_boundary, bool):
+            raise TypeError("requires_checkpoint_boundary must be a bool")
 
     def to_dict(self) -> Dict[str, Any]:
         value: Dict[str, Any] = {
@@ -610,6 +613,8 @@ class RuntimeOperationDescriptor:
             value["preserves_session_id"] = self.preserves_session_id
         if self.requires_runtime_binding:
             value["requires_runtime_binding"] = True
+        if self.requires_checkpoint_boundary:
+            value["requires_checkpoint_boundary"] = True
         return value
 
 

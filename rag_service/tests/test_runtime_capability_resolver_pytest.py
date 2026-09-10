@@ -32,7 +32,6 @@ from app.runtime.registry import RuntimeRegistry
 class CapabilityAdapter:
     framework = "fake"
     builder_id = "fake_builder"
-    supports_task_pause = True
     implemented_operations = frozenset({
         RuntimeOperationId.RUN_START,
         RuntimeOperationId.RUN_CANCEL,
@@ -41,6 +40,7 @@ class CapabilityAdapter:
         RuntimeOperationId.RUN_INSPECT_STATE,
         RuntimeOperationId.RUN_REPLAY,
         RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        RuntimeOperationId.TASK_PAUSE,
     })
 
     def __init__(self, *, unsupported=()):
@@ -117,6 +117,33 @@ def test_public_capability_projection_excludes_spi_only_operations():
     }
     assert RuntimeOperationId.RUN_REPLAY not in projected.operations
     assert RuntimeOperationId.SUBAGENT_SEND not in projected.operations
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_boundary_requirement_is_descriptor_driven():
+    adapter = CapabilityAdapter()
+    adapter.implemented_operations = frozenset(set(adapter.implemented_operations) | {RuntimeOperationId.RUN_UPDATE_STATE})
+    adapter.capabilities = AsyncMock(return_value=RuntimeCapabilities(operations={
+        RuntimeOperationId.RUN_START: native(),
+        RuntimeOperationId.RUN_INSPECT_STATE: native(),
+        RuntimeOperationId.RUN_UPDATE_STATE: native(requires_checkpoint_boundary=True),
+    }))
+    adapter.deployment_capabilities = adapter.capabilities
+    run = SimpleNamespace(
+        status="running",
+        pending_interrupt_json=None,
+        runtime_binding_json={"binding_type": "fake"},
+        runtime_binding_status="active",
+        run_metadata_json={},
+    )
+    definition = AgentDefinition("definition", "fake", "fake_builder")
+    resolved = await resolve_capabilities(
+        definition,
+        registry=RuntimeRegistry(adapters=[adapter]),
+        run=run,
+    )
+    assert resolved.operations[RuntimeOperationId.RUN_INSPECT_STATE.value].enabled is True
+    assert resolved.operations[RuntimeOperationId.RUN_UPDATE_STATE.value].disabled_reason == "run_not_checkpoint_boundary"
 
 
 class HermesCapabilityAdapter(CapabilityAdapter):
@@ -845,7 +872,6 @@ async def test_completed_run_with_stale_pending_payload_disables_all_active_cont
 
 
 class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
-    supports_task_pause = True
     framework = "inherited"
     builder_id = "unsupported"
 
@@ -872,7 +898,8 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert error is None
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
-    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is True
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "adapter_operation_unimplemented"
 
 
 @pytest.mark.asyncio

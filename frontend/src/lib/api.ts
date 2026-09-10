@@ -1431,9 +1431,11 @@ export type RuntimeCapabilitySemantics =
   | 'product_task_resume'
   | 'product_task_cancel'
   | 'product_task_retry'
+  | 'product_task_result_review'
+  | 'product_task_budget_review'
+  | 'product_task_course_correction'
   | 'resume_from_interrupt'
   | 'checkpoint_state_inspection'
-  | 'checkpoint_boundary_update'
   | 'checkpoint_thread_cleanup'
   | 'definition_planner_nodes'
   | 'definition_parallel_dispatch'
@@ -1457,6 +1459,7 @@ export interface RuntimeOperationDescriptor {
   preserves_run_id?: boolean | null;
   preserves_session_id?: boolean | null;
   requires_runtime_binding?: boolean;
+  requires_checkpoint_boundary?: boolean;
 }
 
 export interface RuntimeFeatureDescriptor {
