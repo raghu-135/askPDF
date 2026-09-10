@@ -38,6 +38,7 @@ from langgraph_runtime.dependencies import (
     DependencyMonitor,
     langgraph_dependency_requirements,
 )
+from langgraph_runtime.prompts.loaders import validate_runtime_prompt_assets
 
 
 logger = logging.getLogger(__name__)
@@ -285,6 +286,7 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
                 or "http://127.0.0.1:8000/internal/mcp/"
             )
     validate_runtime_environment(service="langgraph", environ=validation_environment)
+    validate_runtime_prompt_assets()
     configure_runtime_limits(validation_environment)
     # Direct tests use an injected in-memory checkpointer and deliberately do
     # not model the production environment.  Use the already validated test

@@ -100,16 +100,18 @@ def test_control_plane_manifest_and_legacy_paths_are_clean():
     assert not (ROOT / "langgraph_runtime").exists()
     # The integration test harness can inspect sibling sources via PYTHONPATH;
     # production/dev services expose only the control-plane source root.
-    isolation_check = (
-        "assert importlib.util.find_spec('langgraph') is None; "
-        "assert importlib.util.find_spec('langgraph_runtime') is None; "
-    ) if os.getenv("ASKPDF_ENFORCE_DEPENDENCY_ISOLATION") == "1" else ""
-    subprocess.run([
-        sys.executable, "-I", "-c",
-        f"import sys, importlib.util; sys.path.insert(0, {str(REPOSITORY_ROOT)!r}); "
-        + isolation_check
-        + "assert importlib.util.find_spec('runtime_protocol') is not None",
-    ], check=True)
+    assert (REPOSITORY_ROOT / "runtime_protocol" / "__init__.py").is_file()
+    if (
+        os.getenv("ASKPDF_ENFORCE_DEPENDENCY_ISOLATION") == "1"
+        and not (REPOSITORY_ROOT / "langgraph_runtime").exists()
+    ):
+        subprocess.run([
+            sys.executable, "-I", "-c",
+            f"import sys, importlib.util; sys.path.insert(0, {str(REPOSITORY_ROOT)!r}); "
+            "assert importlib.util.find_spec('langgraph') is None; "
+            "assert importlib.util.find_spec('langgraph_runtime') is None; "
+            "assert importlib.util.find_spec('runtime_protocol') is not None",
+        ], check=True)
     for legacy in (
         "product_orchestration/evidence.py",
         "product_orchestration/parallel_contracts.py",

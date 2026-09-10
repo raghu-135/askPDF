@@ -143,6 +143,37 @@ def test_runtime_definition_errors_fail_closed_for_control_plane_parsing(monkeyp
     assert "detail" not in payload
 
 
+def test_runtime_prompt_preview_resolves_runtime_owned_prompts(monkeypatch):
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
+    monkeypatch.setenv("LLM_API_URL", "")
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post(
+            "/v1/prompt-preview",
+            json={
+                "definition": {
+                    "definition_id": "router_rag_agent",
+                    "framework": "langgraph",
+                    "builder_id": "langgraph_graph",
+                },
+                "spec": {"runtime": {"prompt_preview": "router"}},
+                "options": {"context_window": 8192},
+            },
+        )
+    assert response.status_code == 200
+    assert "# Router Node Prompt" in response.json()["result"]["prompt"]
+
+
+def test_runtime_startup_fails_when_required_prompt_asset_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        "langgraph_runtime.api.validate_runtime_prompt_assets",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing runtime prompt")),
+    )
+    with pytest.raises(FileNotFoundError, match="missing runtime prompt"):
+        create_app(require_auth=False)
+
+
 def test_dependency_outage_marks_readiness_unavailable_but_blocks_required_run(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "http://unavailable/mcp")

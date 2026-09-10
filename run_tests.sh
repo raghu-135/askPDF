@@ -160,6 +160,9 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
         external_runtime_diagnostics
         exit 1
     fi
+    echo "Verifying LangGraph runtime prompt assets..."
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
+        'from langgraph_runtime.prompts.loaders import RUNTIME_PROMPT_FILES, runtime_prompt_path, validate_runtime_prompt_assets; validate_runtime_prompt_assets(); assert all(runtime_prompt_path(name).is_file() for name in RUNTIME_PROMPT_FILES)'
     runtime_ready=0
     for attempt in $(seq 1 120); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
@@ -198,7 +201,11 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_service_lifecycle_pytest.py runtime-test-runner
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e ASKPDF_AGENT_CHECKPOINTER=postgres -e ASKPDF_AGENT_CHECKPOINTER_SETUP=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_checkpoint_pytest.py runtime-test-runner
     external_runtime_test test-runner --file test_agent_runtime_reconciliation_pytest.py
-    external_runtime_test test-runner --file test_control_plane_import_boundary_pytest.py
+    # The source-mounted test runner can see sibling runtime packages under
+    # /workspace. Production image isolation is asserted above against the
+    # immutable rag-service image; keep this suite focused on source imports
+    # and legacy paths in the mounted harness.
+    external_runtime_test -e ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=0 test-runner --file test_control_plane_import_boundary_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T langgraph-runtime python -c \
         'import json, urllib.error, urllib.request
 try: urllib.request.urlopen("http://127.0.0.1:8100/v1/dependencies", timeout=3); raise AssertionError("protected runtime endpoint admitted an anonymous request")

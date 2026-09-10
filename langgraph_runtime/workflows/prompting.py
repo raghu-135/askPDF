@@ -15,7 +15,7 @@ from langgraph_runtime.workflows.enums import PromptProfile, ToolName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from langgraph_runtime.workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
-from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_prompt
+from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runtime_prompt
 
 
 GRAPH_TOOL_NAMES = [
@@ -54,7 +54,7 @@ class _SafeFormatDict(dict):
 
 
 def _render_prompt(filename: str, values: Dict[str, Any]) -> str:
-    return load_prompt(filename).format_map(_SafeFormatDict({k: str(v) for k, v in values.items()}))
+    return load_runtime_prompt(filename).format_map(_SafeFormatDict({k: str(v) for k, v in values.items()}))
 
 
 def _format_prefetch_summary(bundle: Optional[Dict[str, Any]]) -> str:
@@ -167,11 +167,11 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_router_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("product_orchestration/router_rag_router.md", _prompt_context(state))
+    return _render_prompt("router_rag_router.md", _prompt_context(state))
 
 
 def build_planner_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("product_orchestration/plan_execute_planner.md", _prompt_context(state))
+    return _render_prompt("plan_execute_planner.md", _prompt_context(state))
 
 
 def _json_preview(value: Any, *, limit: int = 4000) -> str:
@@ -196,7 +196,7 @@ def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_evaluator_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("product_orchestration/evaluator_replanner_evaluator.md", _evaluator_prompt_context(state))
+    return _render_prompt("evaluator_replanner_evaluator.md", _evaluator_prompt_context(state))
 
 
 def build_replanner_prompt(state: Dict[str, Any]) -> str:
@@ -205,7 +205,7 @@ def build_replanner_prompt(state: Dict[str, Any]) -> str:
         "EVALUATOR_REPORT": _json_preview(state.get("evaluator_report") or {}, limit=5000)
         or EVALUATOR_REPORT_PLACEHOLDER,
     }
-    prompt = _render_prompt("product_orchestration/evaluator_replanner_replanner.md", values)
+    prompt = _render_prompt("evaluator_replanner_replanner.md", values)
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
         documents = [
             {"file_hash": item.get("file_hash"), "file_name": item.get("file_name") or item.get("title")}
@@ -237,7 +237,7 @@ def build_retrieval_quality_prompt(state: Dict[str, Any]) -> str:
         for item in (state.get("evidence_packets") or [])[-12:]
         if isinstance(item, dict)
     ]
-    return _render_prompt("product_orchestration/corrective_retrieval_grader.md", {
+    return _render_prompt("corrective_retrieval_grader.md", {
         **_prompt_context(state),
         "PACKETS": _json_preview(packets, limit=25_536),
         "REQUIREMENTS": _json_preview(state.get("evidence_gaps") or [state.get("question")], limit=4_000),
@@ -253,7 +253,7 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
         for source_id in packet.get("source_ids") or []
         if source_id
     })
-    return _render_prompt("product_orchestration/corrective_grounded_verifier.md", {
+    return _render_prompt("corrective_grounded_verifier.md", {
         **_prompt_context(state),
         "DRAFT_ANSWER": str(state.get("final_answer") or "")[:12_000],
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
@@ -274,7 +274,7 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
         "SYSTEM_ROLE_SECTION": f"Assistant role:\n{system_role}" if system_role else "",
         "CUSTOM_INSTRUCTIONS_SECTION": f"Custom instructions:\n{custom_instructions}" if custom_instructions else "",
     }
-    rendered = _render_prompt("product_orchestration/final_answer.md", values)
+    rendered = _render_prompt("final_answer.md", values)
     system_marker = "## System Message"
     human_marker = "## Human Message"
     if system_marker not in rendered or human_marker not in rendered:
