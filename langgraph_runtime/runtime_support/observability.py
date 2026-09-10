@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Any, Mapping
 
 from runtime_protocol.sanitization import bounded_value
 
@@ -14,6 +14,22 @@ OPERATION_KINDS = {
 
 def normalize_runtime_event(kind: str, payload: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
     data = dict(payload or {})
+    # Planner validation/repair is a LangGraph-internal lifecycle. Keep its
+    # stage and source name in the payload/metadata, but expose only the
+    # framework-neutral operation lifecycle across the runtime boundary.
+    planner_kinds = {
+        "planner.repair_started": "operation.started",
+        "planner.validation_failed": "operation.failed",
+        "planner.failed": "operation.failed",
+        "planner.completed": "operation.completed",
+    }
+    if kind in planner_kinds:
+        data.setdefault("source_event", kind)
+        data.setdefault("operation_id", "deep_task_planner")
+        data.setdefault("operation_type", "deep_task_planner")
+        data.setdefault("visit_index", 1)
+        data.setdefault("planner_stage", kind.removeprefix("planner."))
+        return planner_kinds[kind], dict(bounded_value(data))
     if kind in {"interrupt.created", "run.interrupted"}:
         data.setdefault("source_event", kind)
         return "interrupt.requested", dict(bounded_value(data))

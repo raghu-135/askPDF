@@ -96,3 +96,22 @@ async def test_shared_model_invocation_emits_bounded_lifecycle_events() -> None:
     assert sink.events[0][1]["operation_id"] == "planner"
     assert sink.events[1][1]["usage"]["total_tokens"] == 9
     assert "messages" not in str(sink.events)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("planner.repair_started", "operation.started"),
+        ("planner.validation_failed", "operation.failed"),
+        ("planner.failed", "operation.failed"),
+    ],
+)
+def test_planner_validation_events_are_translated_to_canonical_operations(source, expected):
+    from langgraph_runtime.runtime_support.observability import normalize_runtime_event
+
+    kind, payload = normalize_runtime_event(source, {"category": "json_parse_error"})
+
+    assert kind == expected
+    assert payload["operation_id"] == "deep_task_planner"
+    assert payload["operation_type"] == "deep_task_planner"
+    assert payload["source_event"] == source
