@@ -4,6 +4,43 @@ import json
 import pytest
 
 
+def test_langchain_adapter_returns_structured_tool_with_authoritative_schema():
+    from langchain_core.tools import BaseTool, StructuredTool
+
+    from app.models.memory_tools import MemorySearchInput
+    from app.mcp.langchain_adapter import create_mcp_langchain_tool
+
+    tool = create_mcp_langchain_tool("memory_search")
+
+    assert isinstance(tool, BaseTool)
+    assert isinstance(tool, StructuredTool)
+    assert tool.args_schema is MemorySearchInput
+    assert tool.name == "memory_search"
+    assert tool.args_schema.model_fields["max_results"].default == 10
+
+
+@pytest.mark.asyncio
+async def test_langchain_adapter_delegates_to_neutral_mcp_boundary(monkeypatch):
+    from app.mcp import langchain_adapter
+
+    calls = []
+
+    async def fake_call(tool_name, arguments, config):
+        calls.append((tool_name, arguments, config))
+        return "{}"
+
+    monkeypatch.setattr(langchain_adapter, "call_mcp_tool", fake_call)
+    tool = langchain_adapter.create_mcp_langchain_tool("memory_search")
+    config = {"configurable": {"run_id": "run-1"}}
+
+    await tool.ainvoke({"query": "remember this", "max_results": 3}, config=config)
+
+    assert calls[0][0] == "memory_search"
+    assert calls[0][1]["query"] == "remember this"
+    assert calls[0][1]["max_results"] == 3
+    assert calls[0][2]["configurable"]["run_id"] == "run-1"
+
+
 def test_mcp_mode_replaces_thread_shape_without_changing_tool_name(monkeypatch):
     monkeypatch.setenv("MCP_ENABLED", "true")
     monkeypatch.setenv("MCP_TOOL_MODE", "mcp")
