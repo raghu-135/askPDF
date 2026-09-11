@@ -69,7 +69,7 @@ services:
       - DOCLING_FORCE_FULL_PAGE_OCR=False
       - DOCLING_DO_FORMULA_ENRICHMENT=False
       - ASKPDF_REPO_DIR=/workspace
-      - PYTHONPATH=/app
+      - PYTHONPATH=/workspace:/app
     depends_on:
       postgresql:
         condition: service_healthy

@@ -82,7 +82,8 @@ jobs:
       - name: Collect control-plane tests
         run: |
           docker compose -p askpdf-test -f docker-compose.test.yml \
-            run --rm --entrypoint pytest test-runner --collect-only -q /app/tests
+            run --rm -e PYTHONPATH=/workspace:/app --entrypoint pytest \
+            test-runner --collect-only -q /app/tests
 
       - name: Collect LangGraph runtime tests
         run: |

@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/workspace:/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1 ASKPDF_REPO_DIR=/workspace
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,5 +20,6 @@ COPY rag_service/scripts scripts
 COPY rag_service/app app
 COPY rag_service/tests tests
 COPY rag_service/alembic.ini rag_service/main.py ./
+COPY hermes_runtime /workspace/hermes_runtime
 
 CMD ["python", "scripts/run_tests.py"]

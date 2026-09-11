@@ -6,6 +6,7 @@ including connection management, session handling, and test data.
 """
 
 import os
+import sys
 import asyncio
 import json
 import uuid
@@ -13,6 +14,21 @@ from pathlib import Path
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
+
+# Hermes tests live in the control-plane image (`/app/tests`) but import the
+# sibling `hermes_runtime` package from the repository root. CI also invokes
+# pytest with `--entrypoint pytest`, which bypasses scripts/run_tests.py's
+# PYTHONPATH. Keep the mounted repo on sys.path before those modules load.
+_REPO_CANDIDATES = (
+    Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace")),
+    Path(__file__).resolve().parents[2],
+)
+for _repo_root in _REPO_CANDIDATES:
+    if (_repo_root / "hermes_runtime").is_dir():
+        _repo_path = str(_repo_root)
+        if _repo_path not in sys.path:
+            sys.path.insert(0, _repo_path)
+        break
 
 import asyncpg
 import pytest

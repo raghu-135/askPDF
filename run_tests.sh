@@ -80,7 +80,8 @@ external_runtime_diagnostics() {
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" ps || true
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" logs --tail=200 \
         rag-service langgraph-runtime db-migrate runtime-db-migrate \
-        postgresql runtime-checkpoint-db-init fake-llm weaviate || true
+        postgresql runtime-checkpoint-db-init fake-llm weaviate \
+        hermes hermes-runtime hermes-config-init || true
 }
 
 external_runtime_test() {
@@ -274,8 +275,12 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     export HERMES_RUNTIME_COMPOSE_PROFILES=hermes
     export HERMES_RUNTIME_INTEGRATION=true
     echo "Starting deterministic Hermes runtime Hermes runtime proof..."
+    trap external_runtime_diagnostics ERR
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime
+    if ! "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime; then
+        echo "Hermes runtime Compose environment failed to start" >&2
+        exit 1
+    fi
     control_plane_ready=0
     for attempt in $(seq 1 120); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
@@ -330,6 +335,7 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
         -e ASKPDF_FAIL_IF_ALL_SKIPPED=true \
         -e HERMES_RUNTIME_RECOVERY_RUN_ID="$HERMES_RUNTIME_RECOVERY_RUN_ID" \
         test-runner --file test_hermes_runtime_restart_pytest.py --test test_recovered_run_reconnects_without_another_upstream_start
+    trap - ERR
     exit 0
 fi
 

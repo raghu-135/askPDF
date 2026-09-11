@@ -245,3 +245,4 @@ def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_comman
     assert " hermes hermes-runtime" in hermes_runtime
     assert "http://127.0.0.1:8000/health" in hermes_runtime
     assert "http://127.0.0.1:8200/readyz" in hermes_runtime
+    assert "hermes hermes-runtime hermes-config-init" in (repository / "run_tests.sh").read_text()
