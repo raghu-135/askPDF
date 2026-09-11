@@ -35,6 +35,11 @@ async def test_hermes_adapter_has_independent_identity():
     assert adapter.builder_id == "hermes_agent"
 
 
+def test_hermes_adapter_does_not_advertise_unsupported_trace_projection():
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    assert RuntimeOperationId.TRACE_PROJECT not in adapter.implemented_operations
+
+
 def test_hermes_connector_does_not_fall_back_to_upstream_credentials(monkeypatch):
     monkeypatch.delenv("HERMES_RUNTIME_TOKEN", raising=False)
     monkeypatch.setenv("HERMES_API_TOKEN", "upstream-only-token-32-characters")

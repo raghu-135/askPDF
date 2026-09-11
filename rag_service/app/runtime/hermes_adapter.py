@@ -41,7 +41,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.TRACE_PROJECT,
     })
 
     async def prepare_request(
