@@ -77,6 +77,22 @@ TERMINAL_TASK_RUN_STATUSES = {
 WEB_ACCESS_EVENT_PREFIX = "web_access."
 WEB_ACCESS_ALLOWED = "allowed_for_task"
 WEB_ACCESS_DENIED = "denied_for_task"
+COURSE_CORRECTION_DELIVERY_ACCEPTED = "accepted"
+COURSE_CORRECTION_DELIVERY_LINKED = "linked"
+COURSE_CORRECTION_DELIVERY_DELIVERED = "delivered"
+COURSE_CORRECTION_DELIVERY_INCORPORATED = "incorporated"
+COURSE_CORRECTION_DELIVERY_SATISFIED = "satisfied"
+COURSE_CORRECTION_DELIVERY_UNRESOLVED = "unresolved"
+COURSE_CORRECTION_DELIVERY_REJECTED = "rejected"
+COURSE_CORRECTION_DELIVERY_STATES = {
+    COURSE_CORRECTION_DELIVERY_ACCEPTED,
+    COURSE_CORRECTION_DELIVERY_LINKED,
+    COURSE_CORRECTION_DELIVERY_DELIVERED,
+    COURSE_CORRECTION_DELIVERY_INCORPORATED,
+    COURSE_CORRECTION_DELIVERY_SATISFIED,
+    COURSE_CORRECTION_DELIVERY_UNRESOLVED,
+    COURSE_CORRECTION_DELIVERY_REJECTED,
+}
 
 
 class AgentTaskConflict(ValueError):
@@ -89,6 +105,29 @@ class AgentTaskConflict(ValueError):
 def canonical_hash(value: Any) -> str:
     encoded = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def course_correction_delivery_state(command: AgentTaskCommand) -> str:
+    """Return the durable delivery state using the repository's accepted default."""
+
+    state = str((command.result_json or {}).get("delivery_state") or "").strip()
+    return state or COURSE_CORRECTION_DELIVERY_ACCEPTED
+
+
+def course_correction_needs_delivery(command: AgentTaskCommand) -> bool:
+    """A command remains outcome-pending after incorporation, but is deliverable only once."""
+
+    return (
+        command.status == COURSE_CORRECTION_DELIVERY_ACCEPTED
+        and course_correction_delivery_state(command) == COURSE_CORRECTION_DELIVERY_ACCEPTED
+    )
+
+
+def linked_course_correction_run_is_queued(task: AgentTask) -> bool:
+    return (
+        task.status == AgentTaskStatus.QUEUED.value
+        and task.current_phase == "course_correction_queued"
+    )
 
 
 async def create_task(
@@ -819,7 +858,7 @@ async def apply_command(
                 for pending_command in pending_corrections:
                     pending_result = dict(pending_command.result_json or {})
                     pending_result.update({
-                        "delivery_state": "rejected",
+                        "delivery_state": COURSE_CORRECTION_DELIVERY_REJECTED,
                         "error": {"code": "course_correction_cancelled"},
                     })
                     replace_jsonb_field(pending_command, "result_json", pending_result)
@@ -932,7 +971,7 @@ async def request_task_deletion(
             for pending_command in pending_corrections:
                 pending_result = dict(pending_command.result_json or {})
                 pending_result.update({
-                    "delivery_state": "rejected",
+                    "delivery_state": COURSE_CORRECTION_DELIVERY_REJECTED,
                     "error": {"code": "course_correction_task_deleted"},
                 })
                 replace_jsonb_field(pending_command, "result_json", pending_result)
@@ -2238,7 +2277,7 @@ async def respond_to_budget_review(
                     replace_jsonb_field(correction_command, "result_json", {
                         "correction": correction,
                         "delivery_mode": "linked_run" if linked_run else "same_run_safe_boundary",
-                        "delivery_state": "accepted",
+                        "delivery_state": COURSE_CORRECTION_DELIVERY_ACCEPTED,
                         "source_run_id": run.id,
                     })
                 task.status = AgentTaskStatus.QUEUED.value
@@ -2460,7 +2499,7 @@ async def submit_course_correction(
             replace_jsonb_field(command, "result_json", {
                 "correction": correction,
                 "delivery_mode": delivery_mode,
-                "delivery_state": "accepted",
+                "delivery_state": COURSE_CORRECTION_DELIVERY_ACCEPTED,
                 "source_run_id": run.id,
             })
             task.version += 1
@@ -2468,7 +2507,7 @@ async def submit_course_correction(
             await _append_event(session, task, "task.course_correction_submitted", agent_run_id=run.id, payload={
                 **correction,
                 "delivery_mode": delivery_mode,
-                "delivery_state": "accepted",
+                "delivery_state": COURSE_CORRECTION_DELIVERY_ACCEPTED,
                 "runtime_operation": "task.course_correction.submit",
                 "continuation_semantics": "checkpoint_same_run" if delivery_mode == "same_run_safe_boundary" else "linked_run",
                 "continuation_binding_present": bool(run.runtime_binding_json),
@@ -2516,7 +2555,10 @@ async def pending_course_corrections(
                 "command_id": command.id,
                 "operation_id": command.id,
                 "delivery_mode": (command.result_json or {}).get("delivery_mode"),
-                "delivery_state": (command.result_json or {}).get("delivery_state") or "accepted",
+                "delivery_state": (
+                    (command.result_json or {}).get("delivery_state")
+                    or COURSE_CORRECTION_DELIVERY_ACCEPTED
+                ),
             }
             for command in commands
         ]
@@ -2552,15 +2594,16 @@ async def mark_course_corrections_runtime_applied(
                 correction_id = str(correction.get("correction_id") or correction.get("id") or "")
                 if correction_id not in selected:
                     continue
-                if (
-                    result.get("delivery_state") == "incorporated"
-                    and int(result.get("runtime_plan_revision") or 0) == plan_revision
-                ):
+                if course_correction_delivery_state(command) not in {
+                    COURSE_CORRECTION_DELIVERY_ACCEPTED,
+                    COURSE_CORRECTION_DELIVERY_LINKED,
+                    COURSE_CORRECTION_DELIVERY_DELIVERED,
+                }:
                     continue
                 correction.update({"status": "incorporated", "runtime_plan_revision": plan_revision})
                 result.update({
                     "correction": correction,
-                    "delivery_state": "incorporated",
+                    "delivery_state": COURSE_CORRECTION_DELIVERY_INCORPORATED,
                     "runtime_plan_revision": plan_revision,
                 })
                 replace_jsonb_field(command, "result_json", result)
@@ -2579,8 +2622,17 @@ async def mark_course_correction_delivered(command_id: str, *, receipt: Dict[str
             command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
             if command is None or command.action != "steer" or command.status != "accepted":
                 return
+            if course_correction_delivery_state(command) not in {
+                COURSE_CORRECTION_DELIVERY_ACCEPTED,
+                COURSE_CORRECTION_DELIVERY_LINKED,
+                COURSE_CORRECTION_DELIVERY_DELIVERED,
+            }:
+                return
             result = dict(command.result_json or {})
-            result.update({"delivery_state": "delivered", "runtime_receipt": dict(receipt)})
+            result.update({
+                "delivery_state": COURSE_CORRECTION_DELIVERY_DELIVERED,
+                "runtime_receipt": dict(receipt),
+            })
             replace_jsonb_field(command, "result_json", result)
             correction = dict(result.get("correction") or {})
             if correction.get("source") == "budget_review":
@@ -2599,7 +2651,10 @@ async def reject_course_correction(command_id: str, *, error: Dict[str, Any]) ->
                 select(AgentTask).where(AgentTask.id == command.task_id).with_for_update()
             )).scalar_one_or_none()
             result = dict(command.result_json or {})
-            result.update({"delivery_state": "rejected", "error": dict(error)})
+            result.update({
+                "delivery_state": COURSE_CORRECTION_DELIVERY_REJECTED,
+                "error": dict(error),
+            })
             replace_jsonb_field(command, "result_json", result)
             command.status = "rejected"
             command.completed_at = utc_now()
@@ -2641,25 +2696,33 @@ async def set_course_correction_delivery_mode(
     *,
     delivery_mode: str,
     receipt: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> bool:
     async with async_session_maker() as session:
         async with session.begin():
             command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
             if command is None or command.action != "steer" or command.status != "accepted":
-                return
+                return False
+            if not course_correction_needs_delivery(command):
+                return False
             result = dict(command.result_json or {})
-            result.update({"delivery_mode": delivery_mode, "delivery_state": "accepted"})
+            result["delivery_mode"] = delivery_mode
             if receipt is not None:
                 result["runtime_receipt"] = dict(receipt)
             replace_jsonb_field(command, "result_json", result)
+            return True
 
 
 async def list_pending_course_correction_commands(*, limit: int = 100) -> list[AgentTaskCommand]:
     async with async_session_maker() as session:
+        delivery_state = AgentTaskCommand.result_json["delivery_state"].as_string()
         return list((await session.execute(
             select(AgentTaskCommand).where(
                 AgentTaskCommand.action == "steer",
-                AgentTaskCommand.status == "accepted",
+                AgentTaskCommand.status == COURSE_CORRECTION_DELIVERY_ACCEPTED,
+                or_(
+                    delivery_state.is_(None),
+                    delivery_state == COURSE_CORRECTION_DELIVERY_ACCEPTED,
+                ),
             ).order_by(AgentTaskCommand.created_at, AgentTaskCommand.id).limit(max(1, min(limit, 500)))
         )).scalars().all())
 
@@ -2710,7 +2773,7 @@ async def complete_linked_course_corrections(
                 result = dict(command.result_json or {})
                 if str(result.get("delivery_mode") or "") != "linked_run":
                     continue
-                if str(result.get("delivery_state") or "accepted") != "accepted":
+                if course_correction_delivery_state(command) != COURSE_CORRECTION_DELIVERY_ACCEPTED:
                     continue
                 correction_source_run_id = str(
                     result.get("source_run_id")
@@ -2724,7 +2787,8 @@ async def complete_linked_course_corrections(
                 correction.update({"status": "linked", "linked_run_id": linked_run_id})
                 result.update({
                     "correction": correction, "delivery_mode": "linked_run",
-                    "delivery_state": "linked", "linked_run_id": linked_run_id,
+                    "delivery_state": COURSE_CORRECTION_DELIVERY_LINKED,
+                    "linked_run_id": linked_run_id,
                 })
                 replace_jsonb_field(command, "result_json", result)
                 linked.append(correction_id)
@@ -2751,14 +2815,22 @@ async def queue_linked_course_correction(task_id: str, *, run_id: str) -> AgentT
                 dict((value.result_json or {}).get("correction") or {})
                 for value in commands
                 if (value.result_json or {}).get("delivery_mode") == "linked_run"
-                and (value.result_json or {}).get("delivery_state", "accepted") == "accepted"
+                and course_correction_needs_delivery(value)
             ]
             if not corrections:
+                return task
+            if task.status in {
+                AgentTaskStatus.RECOVERY_REQUIRED.value,
+                AgentTaskStatus.EXPIRED.value,
+            }:
                 return task
             if task.deletion_requested_at is not None or task.status in {AgentTaskStatus.CANCELLING.value, AgentTaskStatus.CANCELLED.value}:
                 for command in commands:
                     result = dict(command.result_json or {})
-                    result.update({"delivery_state": "rejected", "error": {"code": "course_correction_cancelled"}})
+                    result.update({
+                        "delivery_state": COURSE_CORRECTION_DELIVERY_REJECTED,
+                        "error": {"code": "course_correction_cancelled"},
+                    })
                     replace_jsonb_field(command, "result_json", result)
                     command.status = "rejected"
                     command.completed_at = utc_now()

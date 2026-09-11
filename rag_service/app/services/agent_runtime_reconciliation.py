@@ -311,6 +311,11 @@ async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = F
             await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
             counts["failed"] += 1
     for command in await tasks.list_pending_course_correction_commands(limit=batch_size):
+        # Command status remains accepted while an incorporated correction is
+        # awaiting its final satisfied/unresolved outcome. Delivery state is
+        # therefore the authority for whether transport may be attempted.
+        if not tasks.course_correction_needs_delivery(command):
+            continue
         if dry_run:
             counts["corrections"] += 1
             continue
@@ -319,6 +324,8 @@ async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = F
             correction = dict(result.get("correction") or {})
             task = await tasks.get_task(command.task_id)
             if task is None:
+                continue
+            if task.status in {"recovery_required", "expired"}:
                 continue
             if task.status in {"cancelling", "cancelled"} or task.deletion_requested_at is not None:
                 await tasks.reject_course_correction(
@@ -340,9 +347,10 @@ async def run_runtime_reconciliation(*, batch_size: int = 100, dry_run: bool = F
             if str(result.get("delivery_mode") or "") == "linked_run" or str(run.status) in {"completed", "failed", "cancelled", "expired", "rejected"}:
                 await tasks.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run")
                 if str(run.status) in tasks.TERMINAL_TASK_RUN_STATUSES:
-                    await tasks.queue_linked_course_correction(task.id, run_id=run.id)
-                    await ensure_task_run(task.id)
-                    counts["corrections"] += 1
+                    queued = await tasks.queue_linked_course_correction(task.id, run_id=run.id)
+                    if tasks.linked_course_correction_run_is_queued(queued):
+                        await ensure_task_run(task.id)
+                        counts["corrections"] += 1
                 continue
             definition = definition_from_run(run)
             receipt = await adapter_for_definition(definition).submit_course_correction(

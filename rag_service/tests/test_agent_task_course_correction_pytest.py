@@ -6,6 +6,7 @@ import pytest
 
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.db.models_sqlmodel import AgentRun, AgentTaskCommand, AgentWorkflow
+from app.services import agent_runtime_reconciliation as reconciliation
 from app.services import agent_task_repository as repository
 from app.time_utils import utc_now
 
@@ -100,6 +101,33 @@ async def test_course_correction_uses_command_outbox_and_cancel_rejects_it(
     assert command.result_json["delivery_mode"] == "same_run_safe_boundary"
     assert [value["command_id"] for value in await repository.pending_course_corrections(task.id)] == [command.id]
     assert "course_corrections" not in (updated.config_json or {})
+
+    await repository.mark_course_corrections_runtime_applied(
+        task.id,
+        [correction["correction_id"]],
+        plan_revision=1,
+    )
+    assert [value["command_id"] for value in await repository.pending_course_corrections(task.id)] == [command.id]
+    assert await repository.pending_course_corrections(
+        task.id,
+        delivery_state=repository.COURSE_CORRECTION_DELIVERY_ACCEPTED,
+    ) == []
+    assert await repository.list_pending_course_correction_commands() == []
+
+    await repository.mark_course_corrections_runtime_applied(
+        task.id,
+        [correction["correction_id"]],
+        plan_revision=2,
+    )
+    await repository.mark_course_correction_delivered(
+        command.id,
+        receipt={"status": "accepted-after-incorporation"},
+    )
+    async with test_session_maker() as session:
+        incorporated = await session.get(AgentTaskCommand, command.id)
+    assert incorporated.result_json["delivery_state"] == "incorporated"
+    assert incorporated.result_json["runtime_plan_revision"] == 1
+    assert "runtime_receipt" not in incorporated.result_json
 
     cancelled, _, _ = await repository.apply_command(
         task.id, action="cancel", idempotency_key="cancel", expected_version=updated.version,
@@ -221,6 +249,18 @@ async def test_hermes_linked_correction_preserves_failed_source_run(
     assert stored_command.status == "accepted"
     assert stored_linked.parent_run_id == source.id
 
+    changed = await repository.set_course_correction_delivery_mode(
+        command.id,
+        delivery_mode="linked_run",
+        receipt={"status": "terminal"},
+    )
+    async with test_session_maker() as session:
+        stored_command = await session.get(AgentTaskCommand, command.id)
+    assert changed is False
+    assert stored_command.result_json["delivery_state"] == "linked"
+    assert "runtime_receipt" not in stored_command.result_json
+    assert await repository.list_pending_course_correction_commands() == []
+
     # A linked correction is consumed by its one linked run. Terminalizing
     # that run must not make the finalizer queue another attempt for the same
     # command.
@@ -237,6 +277,165 @@ async def test_hermes_linked_correction_preserves_failed_source_run(
     ) == []
     not_requeued = await repository.queue_linked_course_correction(task.id, run_id=linked.id)
     assert not_requeued.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_incorporated_linked_correction_stays_consumed_across_maintenance(
+    test_session_maker,
+    sample_thread,
+    monkeypatch,
+):
+    workflow_id = "linked-correction-maintenance"
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(AgentWorkflow(
+                id=workflow_id,
+                name="Linked correction maintenance",
+                description="test",
+                visibility="builtin",
+                is_builtin=True,
+                schema_version=1,
+                spec_json={"schema_version": 1},
+                metadata_json={"version": 1},
+            ))
+    task, _ = await repository.create_task(
+        thread_id=sample_thread.id,
+        project_id=sample_thread.project_id,
+        user_id=None,
+        workflow_id=workflow_id,
+        objective="Research once after redirect",
+        idempotency_key="linked-correction-maintenance-task",
+        config={},
+    )
+    task, _, _ = await repository.apply_command(
+        task.id,
+        action="start",
+        idempotency_key="start",
+        expected_version=task.version,
+    )
+    source = AgentRun(
+        id=str(uuid.uuid4()),
+        thread_id=task.thread_id,
+        workflow_id=task.workflow_id,
+        framework="hermes",
+        builder_id="hermes_agent",
+        resolved_spec_json={"schema_version": 1},
+        run_metadata_json={
+            "run_kind": "agent_task",
+            "runtime_started": True,
+            "runtime_behavior": {
+                "continuation_semantics": "linked_run",
+                "usage_accounting_owner": "runtime",
+                "preserves_run_id": False,
+                "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True,
+                "required_input_fields": [],
+                "supports_pause_resume": False,
+                "supports_course_correction": True,
+                "budget_boundary_owner": "product",
+                "grounding_owner": "product",
+            },
+        },
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(source)
+    await repository.attach_run(task.id, source)
+    task = await repository.get_task(task.id)
+    _, command, _, correction = await repository.submit_course_correction(
+        task.id,
+        run_id=source.id,
+        expected_version=task.version,
+        instruction="Use the redirected scope exactly once.",
+        scope="remaining_work",
+        idempotency_key="redirect-once",
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            stored_source = await session.get(AgentRun, source.id, with_for_update=True)
+            stored_source.status = "completed"
+            stored_source.completed_at = utc_now()
+
+    async def no_runtime_candidates(_self, *, limit):
+        return []
+
+    async def attach_one_linked_run(task_id):
+        pending = await repository.pending_course_corrections(
+            task_id,
+            delivery_mode="linked_run",
+            delivery_state=repository.COURSE_CORRECTION_DELIVERY_ACCEPTED,
+        )
+        assert [value["correction_id"] for value in pending] == [correction["correction_id"]]
+        linked = AgentRun(
+            id=str(uuid.uuid4()),
+            thread_id=task.thread_id,
+            workflow_id=task.workflow_id,
+            framework="hermes",
+            builder_id="hermes_agent",
+            resolved_spec_json={"schema_version": 1},
+            run_metadata_json={
+                "run_kind": "agent_task",
+                "runtime_started": False,
+                "course_corrections": pending,
+            },
+        )
+        async with test_session_maker() as session:
+            async with session.begin():
+                session.add(linked)
+        await repository.attach_run(task_id, linked, parent_run_id=source.id)
+        await repository.complete_linked_course_corrections(
+            task_id,
+            source_run_id=source.id,
+            linked_run_id=linked.id,
+        )
+
+    monkeypatch.setattr(
+        reconciliation.AgentWorkflowRepository,
+        "list_runtime_reconciliation_candidates",
+        no_runtime_candidates,
+    )
+    monkeypatch.setattr("app.services.agent_task_runtime.ensure_task_run", attach_one_linked_run)
+
+    first = await reconciliation.run_runtime_reconciliation(batch_size=10)
+    linked_task = await repository.get_task(task.id)
+    linked_run = await repository.get_task_run(task.id)
+    await repository.mark_course_corrections_runtime_applied(
+        task.id,
+        [correction["correction_id"]],
+        plan_revision=1,
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            stored_task = await session.get(type(task), task.id, with_for_update=True)
+            stored_run = await session.get(AgentRun, linked_run.id, with_for_update=True)
+            stored_task.status = "completed"
+            stored_task.current_phase = "completed"
+            stored_task.completed_at = utc_now()
+            stored_run.status = "completed"
+            stored_run.completed_at = utc_now()
+
+    events_before = await repository.list_events(task.id)
+    linked_events_before = [event for event in events_before if event.event_type == "linked_run.created"]
+    repeated = [
+        await reconciliation.run_runtime_reconciliation(batch_size=10)
+        for _ in range(3)
+    ]
+    final_task = await repository.get_task(task.id)
+    final_command = await repository.get_course_correction_command(
+        task.id,
+        idempotency_key="redirect-once",
+    )
+    events_after = await repository.list_events(task.id)
+    linked_events_after = [event for event in events_after if event.event_type == "linked_run.created"]
+
+    assert first["corrections"] == 1
+    assert all(result["corrections"] == 0 for result in repeated)
+    assert linked_task.latest_run_attempt == 2
+    assert final_task.latest_run_attempt == 2
+    assert final_command.id == command.id
+    assert final_command.status == "accepted"
+    assert final_command.result_json["delivery_state"] == "incorporated"
+    assert len(linked_events_after) == len(linked_events_before)
 
 
 @pytest.mark.asyncio

@@ -529,7 +529,7 @@ async def respond_to_agent_task_budget_review(
                 )
             command_result = dict(command.result_json or {})
             correction = dict(command_result.get("correction") or {})
-            if command.status == "accepted" and command_result.get("delivery_state") != "delivered":
+            if repository.course_correction_needs_delivery(command):
                 definition = definition_from_run(run)
                 try:
                     receipt = await adapter_for_definition(definition).submit_course_correction(
@@ -676,9 +676,10 @@ async def submit_agent_task_course_correction(
                     await repository.set_course_correction_delivery_mode(command.id, delivery_mode="linked_run", receipt=receipt)
                     latest_run = await repository.get_task_run(task.id)
                     if latest_run is not None and latest_run.status in repository.TERMINAL_TASK_RUN_STATUSES:
-                        await repository.queue_linked_course_correction(task.id, run_id=latest_run.id)
-                        await ensure_task_run(task.id)
-                        delivery_state = "linked"
+                        queued = await repository.queue_linked_course_correction(task.id, run_id=latest_run.id)
+                        if repository.linked_course_correction_run_is_queued(queued):
+                            await ensure_task_run(task.id)
+                            delivery_state = "linked"
                 elif runtime_receipt.status == "applied":
                     await repository.mark_course_corrections_runtime_applied(
                         task.id,

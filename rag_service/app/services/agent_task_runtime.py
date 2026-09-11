@@ -334,8 +334,9 @@ async def _finalize_task_run(
     if run_status != AgentRunStatus.CANCELLED.value and await tasks.pending_course_corrections(
         task.id, delivery_mode="linked_run", delivery_state="accepted"
     ):
-        await tasks.queue_linked_course_correction(task.id, run_id=run.id)
-        await ensure_task_run(task.id)
+        queued = await tasks.queue_linked_course_correction(task.id, run_id=run.id)
+        if tasks.linked_course_correction_run_is_queued(queued):
+            await ensure_task_run(task.id)
 
 
 async def ensure_task_run(task_id: str):
@@ -443,7 +444,11 @@ async def ensure_task_run(task_id: str):
         )
     metadata = dict(getattr(workflow, "metadata_json", None) or {})
     version = int(metadata.get("version") or workflow.schema_version or 1)
-    linked_corrections = await tasks.pending_course_corrections(task.id) if active is not None else []
+    linked_corrections = await tasks.pending_course_corrections(
+        task.id,
+        delivery_mode="linked_run",
+        delivery_state=tasks.COURSE_CORRECTION_DELIVERY_ACCEPTED,
+    ) if active is not None else []
     run = await repository.create_run(
         thread_id=task.thread_id,
         workflow_id=workflow.id,
@@ -577,7 +582,10 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         dict(value) for value in (run.run_metadata_json or {}).get("course_corrections") or []
         if isinstance(value, Mapping)
     ]
-    outbox_corrections = await tasks.pending_course_corrections(task.id)
+    outbox_corrections = await tasks.pending_course_corrections(
+        task.id,
+        delivery_state=tasks.COURSE_CORRECTION_DELIVERY_ACCEPTED,
+    )
     pending_corrections = linked_run_corrections if continuation_is_linked(run) else [*linked_run_corrections, *outbox_corrections]
     seen_correction_ids: set[str] = set()
     pending_corrections = [
