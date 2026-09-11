@@ -24,13 +24,35 @@ async def test_mcp_readiness_rejects_http_errors(status):
 
 @pytest.mark.asyncio
 async def test_mcp_readiness_requires_a_valid_tools_list():
-    response = {"jsonrpc": "2.0", "id": "runtime-readiness", "result": {"tools": [{"name": "get_thread_shape"}]}}
+    response = {"status": "ok", "tools": [{"name": "get_thread_shape"}]}
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=response)))
     try:
         result = await probe_mcp("http://mcp/internal/mcp/", 1, client=client)
     finally:
         await client.aclose()
     assert result == {"ok": True, "http_status": 200, "protocol": "mcp", "capability_ids": ["get_thread_shape"]}
+
+
+@pytest.mark.asyncio
+async def test_mcp_readiness_uses_authenticated_health_probe(monkeypatch):
+    token = "langgraph-runtime-token-32-characters"
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", token)
+    requests = []
+
+    def transport(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "tools": [{"name": "get_thread_shape", "_meta": {"com.askpdf/contract-id": "thread.shape"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    try:
+        result = await probe_mcp("http://mcp/internal/mcp/", 1, client=client)
+    finally:
+        await client.aclose()
+    assert result["ok"] is True
+    assert result["capability_ids"] == ["get_thread_shape", "thread.shape"]
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == "http://mcp/internal/mcp/health"
+    assert requests[0].headers["authorization"] == f"Bearer {token}"
 
 
 @pytest.mark.asyncio

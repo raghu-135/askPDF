@@ -60,17 +60,19 @@ from app.services.memory_repair_scheduler import shutdown_memory_repairs
 from app.services.embedding_materialization_service import embedding_job_worker
 from app.services.agent_task_runtime import run_task_worker
 from app.mcp.server import get_http_app
+from app.mcp.registry import descriptor, enabled_definitions
 from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOOL_IDS
 from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
 from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.auth import valid_bearer_token
 from app.auth import authenticate, reset_principal, set_principal
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
 RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS = 30
-MCP_HTTP_APP = get_http_app()
+MCP_HTTP_APP = get_http_app(require_execution_token=True)
 
 
 async def _probe_runtime_readiness(*, startup: bool = False) -> None:
@@ -232,7 +234,7 @@ async def lifespan(app: FastAPI):
         # mounted app for every FastAPI lifespan so TestClient restarts,
         # reloads, and application shutdown/startup cycles get a fresh manager.
         global MCP_HTTP_APP, HERMES_OFFLINE_MCP_APP, HERMES_EXTERNAL_MCP_APP
-        MCP_HTTP_APP = get_http_app()
+        MCP_HTTP_APP = get_http_app(require_execution_token=True)
         HERMES_OFFLINE_MCP_APP = get_http_app(
             allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
         )
@@ -379,6 +381,28 @@ async def hermes_mcp_preflight(
         logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
         raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc
     return {"status": "ok", "run_id": context.run_id}
+
+
+@app.get("/internal/mcp/health", include_in_schema=False)
+async def mcp_runtime_health(authorization: str | None = Header(default=None)):
+    """Authenticated capability probe for external runtime dependency checks.
+
+    This is deliberately separate from the MCP protocol mount: runtime services
+    must authenticate their service-to-service health check, while actual MCP
+    discovery and tool calls continue to require signed execution grants.
+    """
+    expected = os.getenv("LANGGRAPH_RUNTIME_TOKEN", "").strip()
+    if not expected or not valid_bearer_token(authorization, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "runtime_unauthorized", "message": "A valid runtime bearer token is required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return {
+        "status": "ok",
+        "service": "askpdf-mcp",
+        "tools": [descriptor(name, definition) for name, definition in enabled_definitions().items()],
+    }
 
 # CORS Middleware for cross-service communication
 app.add_middleware(

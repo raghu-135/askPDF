@@ -26,21 +26,19 @@ async def probe_mcp(url: str, timeout: float, *, client: httpx.AsyncClient | Non
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=timeout)
     try:
-        response = await client.post(
-            url,
-            headers={"accept": "application/json, text/event-stream"},
-            json={"jsonrpc": "2.0", "id": "runtime-dependency-check", "method": "tools/list", "params": {}},
-        )
+        health_url = url.rstrip("/") + "/health"
+        headers = {"accept": "application/json"}
+        runtime_token = os.getenv("LANGGRAPH_RUNTIME_TOKEN", "").strip()
+        if runtime_token:
+            headers["authorization"] = f"Bearer {runtime_token}"
+        response = await client.get(health_url, headers=headers)
         if not 200 <= response.status_code < 300:
             return {"ok": False, "reason": "unexpected_status", "http_status": response.status_code}
         try:
             payload = response.json()
         except ValueError:
             return {"ok": False, "reason": "invalid_json", "http_status": response.status_code}
-        result = payload.get("result") if isinstance(payload, Mapping) else None
-        tools = result.get("tools") if isinstance(result, Mapping) else None
-        if not isinstance(payload, Mapping) or payload.get("error"):
-            return {"ok": False, "reason": "mcp_error", "http_status": response.status_code}
+        tools = payload.get("tools") if isinstance(payload, Mapping) else None
         if not isinstance(tools, list):
             return {"ok": False, "reason": "invalid_tools_list", "http_status": response.status_code}
         tool_ids: set[str] = set()

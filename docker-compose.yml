@@ -32,7 +32,10 @@ services:
       context: .
       dockerfile: rag_service/Dockerfile
     ports:
-      - "8000:8000"
+      # Keep the control plane private; the frontend and runtime containers
+      # reach it over the Compose network. Expose it on localhost only for
+      # local development and authenticated reverse-proxy deployments.
+      - "127.0.0.1:8000:8000"
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf

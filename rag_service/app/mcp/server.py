@@ -278,8 +278,14 @@ class MCPServer:
         return schema
 
 
-def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = False) -> Any:
-    """Return the SDK streamable-HTTP app backed by the low-level Server."""
+def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = True) -> Any:
+    """Return an authenticated SDK streamable-HTTP app.
+
+    In-process callers use ``get_sdk_server`` directly and therefore do not
+    cross an HTTP trust boundary. HTTP callers must present a signed,
+    run-scoped execution grant by default. Tests and explicitly isolated
+    internal hosts may opt out with ``require_execution_token=False``.
+    """
     validate_mcp_configuration()
 
     server = MCPServer(allowed_tools=allowed_tools, require_execution_token=require_execution_token)

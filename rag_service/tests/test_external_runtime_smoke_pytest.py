@@ -117,7 +117,12 @@ async def test_production_control_plane_executes_external_runtime_via_product_ap
     base_url = os.getenv("EXTERNAL_RUNTIME_CONTROL_PLANE_URL", "http://rag-service:8000")
     unique = uuid.uuid4().hex
     timeout = httpx.Timeout(float(os.getenv("EXTERNAL_RUNTIME_SMOKE_TIMEOUT_SECONDS", "120")))
-    async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+    admin_token = "integration-control-plane-token-012345678901234567890123"
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        timeout=timeout,
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ) as client:
         project_response = await client.post(
             "/api/projects",
             json={

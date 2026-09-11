@@ -331,7 +331,7 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 
     try:
         with TestClient(app) as test_client:
-            test_client.headers.update({"Authorization": "Bearer test-control-plane-token-32-characters"})
+            test_client.headers.update({"Authorization": f"Bearer {os.environ['ASKPDF_ADMIN_TOKEN']}"})
             yield test_client
             test_client.portal.call(_drop_test_schema, engine)
     finally:
@@ -376,7 +376,7 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
-            headers={"Authorization": "Bearer test-control-plane-token-32-characters"},
+            headers={"Authorization": f"Bearer {os.environ['ASKPDF_ADMIN_TOKEN']}"},
         ) as client:
             yield client
     finally:

@@ -100,7 +100,7 @@ async def test_transports_reject_unsupported_methods_consistently():
     with pytest.raises(RuntimeError, match="Unsupported MCP method"):
         await InProcessMCPClient().request("resources/list")
 
-    mcp_app = get_http_app()
+    mcp_app = get_http_app(require_execution_token=False)
     async with mcp_app.router.lifespan_context(mcp_app):
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             with pytest.raises(RuntimeError, match="Unsupported MCP method"):
@@ -200,9 +200,18 @@ async def test_mcp_cancellation_preserves_real_run_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_internal_http_endpoint_preserves_mcp_protocol():
+async def test_internal_http_endpoint_rejects_missing_execution_token():
     from main import app
     from main import MCP_HTTP_APP
+    from app.mcp.execution_context_token import TOKEN_HEADER, issue_execution_context_token
+    from app.tools.context import ToolInvocationContext
+
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
+        task_id="task-1",
+        allowed_tools=["get_thread_shape"],
+        runtime="langgraph",
+    )
 
     async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
@@ -213,14 +222,42 @@ async def test_internal_http_endpoint_preserves_mcp_protocol():
             )
     assert response.status_code == 200
     assert response.json()["id"] == 9
-    assert {item["name"] for item in response.json()["result"]["tools"]} >= {"wikipedia", "get_thread_shape"}
+    assert isinstance(response.json().get("error"), dict)
+
+    async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+            response = await client.post(
+                "/internal/mcp/",
+                headers={"accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {"name": "get_thread_shape", "arguments": {}},
+                },
+            )
+    assert response.status_code == 200
+    assert response.json()["id"] == 10
+    assert response.json()["result"]["isError"] is True
+    assert "execution context is required" in response.json()["result"]["content"][0]["text"]
+
+    async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+            response = await client.post(
+                "/internal/mcp/",
+                headers={"accept": "application/json, text/event-stream", TOKEN_HEADER: token},
+                json={"jsonrpc": "2.0", "id": 11, "method": "tools/list", "params": {}},
+            )
+    assert response.status_code == 200
+    assert response.json()["id"] == 11
+    assert "get_thread_shape" in {item["name"] for item in response.json()["result"]["tools"]}
 
 
 @pytest.mark.asyncio
 async def test_internal_http_endpoint_can_restart_its_lifespan():
     from app.mcp.server import get_http_app
 
-    mcp_app = get_http_app()
+    mcp_app = get_http_app(require_execution_token=False)
     for _ in range(2):
         async with mcp_app.router.lifespan_context(mcp_app):
             async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as client:
@@ -238,7 +275,7 @@ async def test_loopback_client_initializes_lists_and_calls_over_streamable_http(
     from app.mcp.server import get_http_app
     from app.mcp.transport import LoopbackHTTPMCPClient
 
-    mcp_app = get_http_app()
+    mcp_app = get_http_app(require_execution_token=False)
     async with mcp_app.router.lifespan_context(mcp_app):
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
