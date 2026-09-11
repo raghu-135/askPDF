@@ -5,7 +5,7 @@ import {
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
 import { API_BASE, buildAgentWorkflowCatalogUrl } from "./api-config";
-import { consumeAgentExecutionStream, consumeCanonicalAgentRunEventStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
+import { consumeAgentExecutionStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
 import {
   ProcessStatus as ProcessStatusEnum,
   ThreadFileSourceType,
@@ -2284,20 +2284,6 @@ export function agentRunEventsUrl(
     after_sequence: String(afterSequence),
   });
   return `${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/events?${params.toString()}`;
-}
-
-export async function streamAgentRunEvents(
-  runId: string,
-  threadId: string,
-  afterSequence: number,
-  onEvent: (event: AgentExecutionStreamEnvelope) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const response = await fetch(agentRunEventsUrl(runId, threadId, afterSequence), {
-    headers: { Accept: 'text/event-stream' },
-    signal,
-  });
-  await consumeCanonicalAgentRunEventStream(response, onEvent);
 }
 
 export async function cancelChatAgentRun(
