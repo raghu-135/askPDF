@@ -213,7 +213,7 @@ async def _owned_task(task_id: str, thread_id: str, *, include_deleted: bool = F
         include_deleted=include_deleted,
     )
     if task is None or await get_thread(thread_id) is None:
-        raise HTTPException(status_code=404, detail={"code": "agent_task_not_found"})
+        raise HTTPException(status_code=404, detail={"code": "agent_task_not_found", "message": "Agent task not found"})
     return task
 
 

@@ -372,7 +372,9 @@ export default function DeepResearchTaskPanel({
   }, [threadId]);
 
   const addFinalToChat = useCallback(async (item: AgentTaskTimelineItem) => {
-    const artifactId = item.artifacts?.find((artifact) => artifact.kind === 'final_report')?.id;
+    const artifactId = item.artifacts?.find((artifact) => artifact.kind === 'final_report')?.id
+      || (item.id.startsWith('final:') ? item.id.slice('final:'.length) : '')
+      || item.artifact_ids?.[0];
     if (!selectedTaskId || !artifactId || item.published_chat_turn_id) return;
     setAddingToChat(true);
     try {
