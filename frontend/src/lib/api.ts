@@ -2415,6 +2415,7 @@ export interface AgentTaskArtifact {
   validity: string;
   sensitivity: string;
   created_at: string;
+  provenance?: Record<string, any>;
 }
 
 export interface AgentTaskRun {
@@ -2469,6 +2470,7 @@ export interface AgentTaskTimelineItem {
   sources?: AgentTaskTimelineSource[];
   evidence_manifest?: Array<Record<string, any>>;
   trace_anchor?: Record<string, any> | null;
+  published_chat_turn_id?: string | null;
 }
 
 export interface AgentTaskSubagentRun {
@@ -2668,6 +2670,20 @@ export async function getAgentTaskArtifacts(taskId: string, threadId: string, ru
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/artifacts?${query}`);
   if (!response.ok) throw new Error(await readApiError(response));
   return (await response.json()).artifacts;
+}
+
+export async function publishAgentTaskFinalToChat(
+  taskId: string,
+  threadId: string,
+  artifactId: string,
+): Promise<{ chat_turn_id: string; user_message_id: string; assistant_message_id: string; duplicate: boolean }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/final-report/chat-turns?${taskQuery(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artifact_id: artifactId }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
 }
 
 export async function deleteAgentTask(taskId: string, threadId: string, version: number): Promise<void> {

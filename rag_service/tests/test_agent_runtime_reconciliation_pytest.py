@@ -172,6 +172,50 @@ async def test_terminal_projection_replay_does_not_repeat_product_side_effects(m
 
 
 @pytest.mark.asyncio
+async def test_task_backed_terminal_result_is_not_projected_into_chat(monkeypatch):
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        task_id="task-1",
+        run_metadata_json={},
+    )
+    persisted_run = SimpleNamespace(id=run.id, task_id="task-1", run_metadata_json={})
+    turns = []
+
+    class Repository:
+        async def get_run(self, run_id):
+            return persisted_run
+
+        async def list_chat_turns_for_run(self, run_id):
+            return list(turns)
+
+        async def list_run_events(self, run_id):
+            return []
+
+        async def update_runtime_projection(self, run_id, projection):
+            persisted_run.run_metadata_json = {"projection": dict(projection)}
+            return persisted_run
+
+    async def fail_create_chat_turn(**kwargs):
+        raise AssertionError("task-backed runs must not create chat turns")
+
+    monkeypatch.setattr(reconciliation, "AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
+    monkeypatch.setattr("app.services.agent_runtime_projection.create_chat_turn", fail_create_chat_turn)
+
+    projector = AgentRuntimeProjection()
+    result = await projector.project_terminal_result(
+        run=run,
+        result={"status": "completed", "question": "Question?", "answer": "Answer."},
+        terminal_event_id="event-1",
+    )
+
+    assert "chat_turn_id" not in result
+    assert turns == []
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_preserves_paused_runs():
     run = SimpleNamespace(id="run-1", status="awaiting_human")
 

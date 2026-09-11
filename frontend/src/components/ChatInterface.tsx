@@ -844,6 +844,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadProjectMemorySettings]);
 
+    const wasDeepResearchOpenRef = useRef(false);
+    useEffect(() => {
+        const wasOpen = wasDeepResearchOpenRef.current;
+        wasDeepResearchOpenRef.current = deepResearchOpen;
+        if (!activeThread || isTestRuntime || deepResearchOpen || !wasOpen) return;
+        void loadMessages();
+        void recoverPendingHumanReview(activeThread.id);
+    }, [deepResearchOpen, activeThread?.id, isTestRuntime]);
+
     useEffect(() => {
         if (activeThread) {
             setClarificationOptions(null);
@@ -975,9 +984,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const recoverPendingHumanReview = async (threadId: string) => {
         try {
-            const response = await listThreadAgentRuns(threadId, { status: 'awaiting_human', limit: 1 });
+            const response = await listThreadAgentRuns(threadId, { status: 'awaiting_human', limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
-            const latest = response.agent_runs?.[0];
+            const latest = (response.agent_runs || []).find((run) => !run.task_id);
             if (!latest?.id || !latest.pending_interrupt) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
@@ -986,8 +995,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             const run = await getAgentRun(latest.id, threadId);
             if (activeThreadIdRef.current !== threadId) return;
+            if (run.task_id) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
             if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            if (typeof interrupt.response_operation === 'string' && interrupt.response_operation.startsWith('task.')) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;

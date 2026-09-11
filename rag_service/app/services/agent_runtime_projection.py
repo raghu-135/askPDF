@@ -81,6 +81,16 @@ class AgentRuntimeProjection:
 
             repository = AgentWorkflowRepository()
             fresh_run = await repository.get_run(str(run_id))
+            if getattr(fresh_run, "task_id", None):
+                projected.update(
+                    {
+                        "answer": projected.get("final_answer") or projected.get("answer") or "",
+                        "agent_run_turn_kind": "assistant_final",
+                        "agent_run_sequence": 0,
+                        "duration_ms": duration_ms,
+                    }
+                )
+                return projected
             projection = dict(
                 ((getattr(fresh_run, "run_metadata_json", None) or {}).get("projection") or {})
             )
@@ -197,6 +207,9 @@ class AgentRuntimeProjection:
             return run
         if str(result.get("status") or "") in {"awaiting_human", "paused"}:
             return run
+        if getattr(run, "task_id", None):
+            await self.rebuild_trace_from_events(run=run, result=result)
+            return result
         projected = await self.project_chat_result(
             thread_id=run.thread_id,
             question=str(result.get("question") or ""),

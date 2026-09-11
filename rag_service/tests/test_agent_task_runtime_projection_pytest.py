@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import replace
 
+from unittest.mock import AsyncMock
+
 import pytest
 from sqlalchemy import select
 
@@ -605,3 +607,62 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
         stored_command = await session.get(AgentTaskCommand, command.id)
     assert stored_command.status == "completed"
     assert stored_command.result_json["delivery_state"] == "satisfied"
+
+
+@pytest.mark.asyncio
+async def test_unpublished_task_turns_stay_out_of_chat_until_final_report_is_published(
+    test_session_maker, sample_thread, monkeypatch,
+):
+    from app.db import create_chat_turn, get_thread_messages
+    from app.services.agent_task_chat_publish import publish_final_report_to_chat
+    from app.services.embedding_model_service import EmbeddingModelUnavailableError
+
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    await apply_neutral_task_completion(
+        task_id=task.id,
+        agent_run_id=run.id,
+        operation_id="publish-operation",
+        runtime_status="completed",
+        task_result={
+            "status": "completed",
+            "text": "Hermes completed answer.",
+            "warnings": [],
+            "gaps": [],
+            "usage": {
+                "operation_id": "publish-operation",
+                "model_tokens": 12,
+                "measured_dimensions": ["model_tokens"],
+            },
+        },
+    )
+    await create_chat_turn(
+        thread_id=sample_thread.id,
+        question=task.objective,
+        answer="Automatically projected research output.",
+        agent_run_id=run.id,
+        agent_run_turn_kind="assistant_final",
+        agent_run_sequence=0,
+    )
+    leaked = await get_thread_messages(sample_thread.id)
+    assert leaked == []
+
+    artifacts = await repository.list_artifacts(task.id, agent_run_id=run.id)
+    final_report = next(artifact for artifact in artifacts if artifact.kind == "final_report")
+    monkeypatch.setattr(
+        "app.services.agent_task_chat_publish.require_thread_embedding_ready",
+        AsyncMock(side_effect=EmbeddingModelUnavailableError("skip indexing")),
+    )
+
+    first = await publish_final_report_to_chat(
+        task_id=task.id, artifact_id=final_report.id, thread_id=sample_thread.id,
+    )
+    second = await publish_final_report_to_chat(
+        task_id=task.id, artifact_id=final_report.id, thread_id=sample_thread.id,
+    )
+    assert first["duplicate"] is False
+    assert second["duplicate"] is True
+    assert first["chat_turn_id"] == second["chat_turn_id"]
+
+    messages = await get_thread_messages(sample_thread.id)
+    assert [message.content for message in messages] == [task.objective, "Hermes completed answer."]
+    assert all(message.metadata.get("published_from_task") is True for message in messages)

@@ -23,6 +23,7 @@ import {
   getAgentTaskTodos,
   getAgentTaskTimeline,
   listAgentTasks,
+  publishAgentTaskFinalToChat,
   resumeAgentRun,
   respondToAgentTaskResultReview,
   respondToAgentTaskBudgetReview,
@@ -138,6 +139,8 @@ function TimelineBubble({
   taskId,
   threadId,
   onSaveToMemory,
+  onAddToChat,
+  addingToChat,
   copied,
   active,
   onCopy,
@@ -149,6 +152,8 @@ function TimelineBubble({
   taskId: string;
   threadId: string;
   onSaveToMemory?: (content: string) => void;
+  onAddToChat?: (item: AgentTaskTimelineItem) => void;
+  addingToChat?: boolean;
   copied: boolean;
   active: boolean;
   onCopy: () => void;
@@ -177,6 +182,15 @@ function TimelineBubble({
     badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
       {onSaveToMemory && ['todo_result', 'final_report'].includes(item.type) && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
+      {item.type === 'final_report' && onAddToChat && (
+        <Button
+          size="small"
+          disabled={addingToChat || Boolean(item.published_chat_turn_id) || !item.primary_content}
+          onClick={() => onAddToChat(item)}
+        >
+          {item.published_chat_turn_id ? 'Added to chat' : 'Add to chat'}
+        </Button>
+      )}
     </ConversationMessageActions>}
     afterContent={foldEntries.length || (item.sources || []).length || (item.artifacts || []).length ? <Box sx={{ mt: 1 }}>
       {sourceGroups.map(([kind, label]) => {
@@ -263,6 +277,7 @@ export default function DeepResearchTaskPanel({
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [addingToChat, setAddingToChat] = useState(false);
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
   const taskContextRef = useRef(selectedTaskId);
@@ -355,6 +370,20 @@ export default function DeepResearchTaskPanel({
     setTask(value.task);
     setItems(value.items);
   }, [threadId]);
+
+  const addFinalToChat = useCallback(async (item: AgentTaskTimelineItem) => {
+    const artifactId = item.artifacts?.find((artifact) => artifact.kind === 'final_report')?.id;
+    if (!selectedTaskId || !artifactId || item.published_chat_turn_id) return;
+    setAddingToChat(true);
+    try {
+      await publishAgentTaskFinalToChat(selectedTaskId, threadId, artifactId);
+      if (selectedRun?.id) await refreshTimeline(selectedTaskId, selectedRun.id);
+    } catch (value) {
+      setError(String(value));
+    } finally {
+      setAddingToChat(false);
+    }
+  }, [refreshTimeline, selectedRun?.id, selectedTaskId, threadId]);
 
   useEffect(() => {
     setTask(null);
@@ -697,6 +726,8 @@ export default function DeepResearchTaskPanel({
       taskId={task?.id || ''}
       threadId={threadId}
       onSaveToMemory={onSaveToMemory}
+      onAddToChat={addFinalToChat}
+      addingToChat={addingToChat}
       copied={copiedId === item.id}
       active={activeItemId === item.id}
       onCopy={() => copyItem(item)}

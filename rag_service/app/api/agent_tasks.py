@@ -17,9 +17,11 @@ from app.models.deep_research import (
     AgentTaskCommandRequest,
     AgentTaskCourseCorrectionRequest,
     AgentTaskCreateRequest,
+    AgentTaskPublishFinalToChatRequest,
     AgentTaskResultReviewRequest,
 )
 from app.services import agent_task_repository as repository
+from app.services.agent_task_chat_publish import publish_final_report_to_chat
 from app.services.agent_task_runtime import (
     ensure_task_run,
 )
@@ -250,7 +252,7 @@ async def _require_task_capability(task: Any, action: str) -> None:
 
 
 def _conflict(exc: repository.AgentTaskConflict) -> HTTPException:
-    return HTTPException(status_code=404 if exc.code == "task_not_found" else 409, detail={
+    return HTTPException(status_code=404 if exc.code in {"task_not_found", "final_report_not_found"} else 409, detail={
         "code": exc.code, "message": str(exc), "current_version": exc.current_version,
     })
 
@@ -443,6 +445,24 @@ async def command_agent_task(
             status_code=500,
             detail={"code": "task_run_initialization_failed"},
         ) from exc
+
+
+@router.post("/agent-tasks/{task_id}/final-report/chat-turns")
+async def publish_agent_task_final_report_to_chat(
+    task_id: str,
+    req: AgentTaskPublishFinalToChatRequest,
+    thread_id: str = Query(min_length=1),
+):
+    await _owned_task(task_id, thread_id)
+    try:
+        publication = await publish_final_report_to_chat(
+            task_id=task_id,
+            artifact_id=req.artifact_id,
+            thread_id=thread_id,
+        )
+    except repository.AgentTaskConflict as exc:
+        raise _conflict(exc) from exc
+    return publication
 
 
 @router.post("/agent-tasks/{task_id}/result-review/responses")
@@ -899,7 +919,9 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             "artifacts": [_artifact_payload(final_report)],
             "sources": timeline_sources(evidence_artifacts, attempts_by_run=attempts_by_run, selected_run_id=run_id),
             "evidence_manifest": evidence_manifest,
-            "artifact_ids": [final_report.id], "trace_anchor": {"node_type": "finalizer"},
+            "artifact_ids": [final_report.id],
+            "trace_anchor": {"node_type": "finalizer"},
+            "published_chat_turn_id": final_provenance.get("published_chat_turn_id"),
         })
     if run.status == "failed":
         run_error = dict(run.error_json or {})

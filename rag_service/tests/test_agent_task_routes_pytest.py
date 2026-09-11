@@ -24,10 +24,12 @@ def test_agent_task_post_routes_do_not_shadow_static_actions():
     assert "/agent-tasks/{task_id}/course-corrections" in post_paths
     assert "/agent-tasks/{task_id}/result-review/responses" in post_paths
     assert "/agent-tasks/{task_id}/budget-review/responses" in post_paths
+    assert "/agent-tasks/{task_id}/final-report/chat-turns" in post_paths
 
     assert _resolved_endpoint("/agent-tasks/task-1/course-corrections") == "submit_agent_task_course_correction"
     assert _resolved_endpoint("/agent-tasks/task-1/result-review/responses") == "respond_to_agent_task_result_review"
     assert _resolved_endpoint("/agent-tasks/task-1/budget-review/responses") == "respond_to_agent_task_budget_review"
+    assert _resolved_endpoint("/agent-tasks/task-1/final-report/chat-turns") == "publish_agent_task_final_report_to_chat"
     assert _resolved_endpoint("/agent-tasks/task-1/commands/not-an-action") == "command_agent_task"
     assert _resolved_endpoint("/agent-tasks/task-1/not-an-action") is None
 

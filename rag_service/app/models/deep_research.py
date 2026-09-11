@@ -130,6 +130,10 @@ class AgentTaskCommandRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class AgentTaskPublishFinalToChatRequest(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=200)
+
+
 class AgentTaskResultReviewRequest(BaseModel):
     run_id: str = Field(min_length=1, max_length=200)
     interrupt_id: str = Field(min_length=1, max_length=300)

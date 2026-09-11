@@ -147,14 +147,23 @@ def test_ci_environment_includes_hermes_mcp_urls():
     assert values["HERMES_API_URL"] == "http://hermes:8642"
 
 
-def test_ci_environment_includes_control_plane_tool_instruction_limit():
+def test_ci_environment_includes_control_plane_startup_settings():
     values = {}
     for line in (REPOSITORY_ROOT / ".env.ci").read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value
 
-    assert values["MAX_TOOL_INSTRUCTION_CHARS"] == "500"
+    assert {
+        "LOCAL_EMBEDDING_MODEL": "BAAI/bge-m3",
+        "LOCAL_RERANKER_MODEL": "BAAI/bge-reranker-v2-m3",
+        "EMBEDDING_DEVICE": "cpu",
+        "RERANKER_DEVICE": "cpu",
+        "MAX_TOOL_INSTRUCTION_CHARS": "500",
+        "MAX_ITERATIONS_SUFFICIENT_COVERAGE": "2",
+        "MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE": "4",
+        "WEB_SEARCH_ITERATION_BONUS": "2",
+    }.items() <= values.items()
 
 
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():
