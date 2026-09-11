@@ -99,23 +99,20 @@ async def test_hermes_provider_catalog_is_framework_specific():
 
 
 @pytest.mark.asyncio
-async def test_hermes_resolution_drops_langgraph_request_overrides():
+async def test_hermes_resolution_rejects_langgraph_request_overrides():
     provider = HermesBuilderProvider()
-    resolved = await provider.resolve(
-        _definition(),
-        _spec(),
-        request_overrides={
-            "use_web_search": True,
-            "replans": 3,
-            "system_role": "LangGraph-only role",
-            "arbitrary": "must-not-persist",
-        },
-    )
-    assert set(resolved["config"]) <= provider._allowed_config_keys
-    assert resolved["config"]["use_web_search"] is True
-    assert "replans" not in resolved["config"]
-    assert "system_role" not in resolved["config"]
-    assert "arbitrary" not in resolved["config"]
+    with pytest.raises(UnsupportedRequestOverrideError) as exc_info:
+        await provider.resolve(
+            _definition(),
+            _spec(),
+            request_overrides={
+                "use_web_search": True,
+                "replans": 3,
+                "system_role": "LangGraph-only role",
+                "arbitrary": "must-not-persist",
+            },
+        )
+    assert exc_info.value.keys == ("arbitrary", "replans", "system_role")
 
 
 @pytest.mark.asyncio

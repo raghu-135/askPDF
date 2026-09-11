@@ -20,12 +20,12 @@ def hermes_runtime_configuration(monkeypatch):
     """Give direct Hermes app tests the same strict config as the image."""
 
     values = {
-        "API_SERVER_KEY": "test-hermes-server-key",
-        "HERMES_API_TOKEN": "test-hermes-api-token",
+        "HERMES_RUNTIME_TOKEN": "test-hermes-runtime-token-32-characters",
+        "HERMES_API_TOKEN": "test-hermes-api-token-32-characters",
         "ASKPDF_MCP_URL": "http://rag-service:8000/internal/mcp/",
         "ASKPDF_MCP_HEALTH_URL": "http://rag-service:8000/health",
         "ASKPDF_MCP_REQUIRED": "false",
-        "HERMES_MCP_CONTEXT_SECRET": "test-hermes-mcp-context-secret-32-characters",
+        "MCP_EXECUTION_CONTEXT_SECRET": "test-mcp-execution-context-secret-32-characters",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "HERMES_RUNTIME_VERSION": "test",
@@ -78,6 +78,66 @@ def hermes_runtime_configuration(monkeypatch):
         monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
 
 
+@pytest.mark.parametrize("authorization", [None, "", "raw-token", "Basic wrong", "bearer wrong", "Bearer wrong", "Bearer  wrong"])
+def test_hermes_runtime_rejects_noncanonical_or_wrong_service_credentials(authorization):
+    client = TestClient(create_app())
+    headers = {"authorization": authorization} if authorization is not None else {}
+    response = client.get("/v1/capabilities", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+def test_hermes_runtime_accepts_its_exact_service_credential():
+    client = TestClient(create_app())
+    response = client.get(
+        "/v1/capabilities",
+        headers={"authorization": "Bearer test-hermes-runtime-token-32-characters"},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/capabilities"),
+        ("POST", "/v1/validate"),
+        ("POST", "/v1/runs/start"),
+        ("GET", "/v1/runs/run-1/events"),
+        ("POST", "/v1/runs/run-1/inspect"),
+        ("POST", "/v1/runs/run-1/approval"),
+        ("POST", "/v1/runs/run-1/cancel"),
+    ],
+)
+def test_hermes_runtime_protects_every_operation_family(method, path):
+    response = TestClient(create_app()).request(method, path)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize(
+    "foreign_token",
+    [
+        "langgraph-runtime-boundary-token-012345678901234567",
+        "hermes-upstream-boundary-token-012345678901234567",
+        "mcp-execution-context-secret-012345678901234567",
+        "langgraph-binding-secret-0123456789012345678901",
+    ],
+)
+def test_hermes_runtime_rejects_every_foreign_boundary_credential(foreign_token):
+    response = TestClient(create_app()).get(
+        "/v1/capabilities",
+        headers={"authorization": f"Bearer {foreign_token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/readyz"])
+def test_hermes_operational_health_does_not_require_authentication(path):
+    client = TestClient(create_app())
+    assert client.get(path).status_code != 401
+
+
 def _payload(allowed_tools):
     return {
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
@@ -94,7 +154,7 @@ def _payload(allowed_tools):
 
 def test_hermes_reports_frozen_profile_tool_allowlist(monkeypatch):
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         response = client.post("/v1/validate", json=_payload(["search_documents", "get_thread_shape"]))
     assert response.status_code == 200
     validation = response.json()["result"]["validation"]
@@ -105,7 +165,7 @@ def test_hermes_reports_frozen_profile_tool_allowlist(monkeypatch):
 def test_environment_cannot_override_frozen_profile_tool_allowlist(monkeypatch):
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "admin_delete_everything")
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(require_auth=False)) as client:
         response = client.post("/v1/validate", json=_payload(["search_documents"]))
     validation = response.json()["result"]["validation"]
     assert validation["valid"] is True

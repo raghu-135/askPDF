@@ -62,7 +62,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         *,
         context: RuntimeInvocationContext,
     ) -> AgentRuntimeRequest:
-        from app.mcp.execution_context_token import issue_execution_context_token
+        from app.mcp.execution_context_token import execution_context_ttl_seconds, issue_execution_context_token
         from app.mcp.registry import MCP_TOOL_DEFINITIONS
         from app.tools.context import ToolInvocationContext
 
@@ -91,7 +91,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         task_context = context.task_context
         task_id = str(request.task_id or request.run_id)
         limits = dict(task_context.limits or {}) if task_context is not None else {}
-        ttl_seconds = max(3600, int(limits.get("max_active_runtime_ms", 3_600_000)) // 1000)
+        ttl_seconds = execution_context_ttl_seconds(limits)
         token = issue_execution_context_token(
             ToolInvocationContext(
                 thread_id=request.thread_id,

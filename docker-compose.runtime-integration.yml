@@ -70,7 +70,8 @@ services:
       COMPOSE_PROFILES: ${HERMES_RUNTIME_COMPOSE_PROFILES:-}
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       HERMES_MODEL_PROVIDER: lmstudio
-      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
+      MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
+      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       WEAVIATE_URL: http://weaviate:8080
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
@@ -241,8 +242,7 @@ services:
       dockerfile: hermes_runtime/Dockerfile
     command: ["python", "-m", "hermes_runtime.profile_manager"]
     environment:
-      API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       HERMES_MODEL_PROVIDER: lmstudio
       HERMES_DATA_ROOT: /opt/data
@@ -304,13 +304,12 @@ services:
       LOG_LEVEL: INFO
       HERMES_API_URL: http://hermes:8642
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       OPENAI_API_KEY: askpdf-hermes-integration-local
       LLM_API_URL: http://fake-llm:9000/v1
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_HEALTH_URL: http://rag-service:8000/health
       ASKPDF_MCP_REQUIRED: "false"
-      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
       HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
@@ -450,10 +449,10 @@ services:
       NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: "2000"
       NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: "2000"
       COMPOSE_PROFILES: "hermes"
-      HERMES_MCP_CONTEXT_SECRET: hermes-runtime-hermes-context-secret-32-bytes-minimum
+      MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642
-      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"

@@ -86,6 +86,18 @@ def _json_safe(value: Any) -> Any:
     raise TypeError(f"Unsupported runtime JSON value: {type(value).__name__}")
 
 
+def _without_execution_grants(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _without_execution_grants(item)
+            for key, item in value.items()
+            if str(key).lower() not in {"mcp_execution_context_token", "_askpdf_context_token"}
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_without_execution_grants(item) for item in value]
+    return value
+
+
 def _event_row_to_dict(row: Any) -> dict[str, Any]:
     """Convert a PostgreSQL event row back to the complete wire envelope."""
     item = dict(row)
@@ -108,7 +120,7 @@ def request_fingerprint(operation: str, request: Mapping[str, Any]) -> str:
         "definition_id": request.get("definition_id"),
         "framework": request.get("framework"),
         "builder_id": request.get("builder_id"),
-        "input": request.get("input") or {},
+        "input": _without_execution_grants(request.get("input") or {}),
         "options": request.get("options") or {},
         "interrupt": request.get("interrupt") or {},
         "continuation": request.get("continuation"),
@@ -125,7 +137,7 @@ def operation_fingerprint(
     """Fingerprint the complete durable operation, including its context."""
 
     encoded = json.dumps(
-        _json_safe({"operation": operation, "request": request, "payload": payload}),
+        _json_safe(_without_execution_grants({"operation": operation, "request": request, "payload": payload})),
         sort_keys=True,
         separators=(",", ":"),
     )

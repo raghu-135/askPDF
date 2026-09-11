@@ -79,16 +79,13 @@ def render_bootstrap_config() -> None:
 
     provider = configured_provider()
     required_secrets = {
-        "API_SERVER_KEY": os.getenv("API_SERVER_KEY", "").strip(),
-        "HERMES_MCP_CONTEXT_SECRET": os.getenv("HERMES_MCP_CONTEXT_SECRET", "").strip(),
+        "HERMES_API_TOKEN": os.getenv("HERMES_API_TOKEN", "").strip(),
     }
     if provider_requires_api_key(provider):
         required_secrets["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "").strip()
     missing = [name for name, value in required_secrets.items() if not value]
     if missing:
         raise RuntimeError("Hermes profile requires: " + ", ".join(missing))
-    if len(required_secrets["HERMES_MCP_CONTEXT_SECRET"]) < 32:
-        raise RuntimeError("HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters")
     context_length = configured_context_length()
     template_root = Path(os.getenv("HERMES_CONFIG_TEMPLATE_ROOT", "/app/hermes_runtime"))
     data_root = Path(os.getenv("HERMES_DATA_ROOT", "/opt/data"))
@@ -108,6 +105,19 @@ def render_bootstrap_config() -> None:
             raise RuntimeError(f"unrendered Hermes context length in {source}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
+    profile_environment = [f"API_SERVER_KEY={required_secrets['HERMES_API_TOKEN']}"]
+    provider_key = required_secrets.get("OPENAI_API_KEY")
+    if provider_key:
+        profile_environment.append(f"OPENAI_API_KEY={provider_key}")
+    rendered_environment = "\n".join(profile_environment) + "\n"
+    for target in (
+        data_root / ".env",
+        data_root / "profiles/askpdf-deep-offline/.env",
+        data_root / "profiles/askpdf-deep-external/.env",
+    ):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered_environment)
+        target.chmod(0o600)
 
 
 def configured_provider() -> str:

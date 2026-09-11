@@ -78,6 +78,8 @@ def _binding(value: Mapping[str, Any] | None) -> ContinuationBinding | None:
 
 
 def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
+    if "authentication" in value:
+        raise ValueError("runtime request authentication is not part of the neutral contract")
     return AgentRuntimeRequest(
         run_id=str(value["run_id"]),
         thread_id=str(value["thread_id"]),
@@ -90,7 +92,6 @@ def request_from_dict(value: Mapping[str, Any]) -> AgentRuntimeRequest:
         parent_run_id=value.get("parent_run_id"),
         continuation=_binding(value.get("continuation")),
         trace_id=value.get("trace_id"),
-        authentication=dict(value.get("authentication") or {}),
         permissions=dict(value.get("permissions") or {}),
     )
 

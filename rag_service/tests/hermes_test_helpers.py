@@ -11,6 +11,10 @@ RUNTIME_URL = os.getenv("HERMES_RUNTIME_URL", "http://hermes-runtime:8200")
 LEGACY_PROFILE_MODEL = "askpdf-runtime-selected"
 
 
+def runtime_auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {os.environ['HERMES_RUNTIME_TOKEN']}"}
+
+
 def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[str, Any]:
     return {
         "request": {

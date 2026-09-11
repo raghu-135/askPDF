@@ -109,13 +109,11 @@ class RuntimeTransportConnector:
         read_timeout: float | None = None,
         framework: str = "langgraph",
         authorization_env: str = "LANGGRAPH_RUNTIME_TOKEN",
-        authorization_envs: tuple[str, ...] | None = None,
         visualization_id: str | None = None,
         replay_by_event_id: bool = False,
     ) -> None:
         self.framework = framework
         self.authorization_env = authorization_env
-        self.authorization_envs = authorization_envs or (authorization_env,)
         self.visualization_id = visualization_id
         self.replay_by_event_id = replay_by_event_id
         configured_base_url = base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "").strip()
@@ -136,9 +134,8 @@ class RuntimeTransportConnector:
         self._reconnect_deadline = required_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS")
         self._output_delta_flush_seconds = required_positive_float("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS")
         self._output_delta_flush_bytes = required_positive_int("AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES")
-        if not any(os.getenv(name, "").strip() for name in self.authorization_envs):
-            names = " or ".join(self.authorization_envs)
-            raise RuntimeError("runtime_configuration_invalid", f"{names} is required for the external {self.framework} runtime")
+        if not os.getenv(self.authorization_env, "").strip():
+            raise RuntimeError("runtime_configuration_invalid", f"{self.authorization_env} is required for the external {self.framework} runtime")
 
     async def _client_for_request(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -166,18 +163,12 @@ class RuntimeTransportConnector:
             tracestate = request.options.get("tracestate")
             if tracestate:
                 headers["tracestate"] = str(tracestate)
-            if request.authentication.get("token"):
-                headers["authorization"] = str(request.authentication["token"])
             if request.permissions:
                 headers["x-agent-permissions"] = json.dumps(dict(request.permissions), separators=(",", ":"))
-        for env_name in self.authorization_envs:
-            token = os.getenv(env_name)
-            if token:
-                headers["authorization"] = f"Bearer {token}"
-                break
-        if "authorization" not in headers:
-            names = " or ".join(self.authorization_envs)
-            raise RuntimeError("runtime_configuration_invalid", f"{names} is required for the external {self.framework} runtime")
+        token = os.getenv(self.authorization_env, "").strip()
+        if not token:
+            raise RuntimeError("runtime_configuration_invalid", f"{self.authorization_env} is required for the external {self.framework} runtime")
+        headers["authorization"] = f"Bearer {token}"
         return headers
 
     async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:

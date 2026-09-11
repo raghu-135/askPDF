@@ -48,6 +48,7 @@ services:
       - AGENT_CHECKPOINT_DATABASE_URL=
       - AGENT_RUNTIME_EXECUTION_DATABASE_URL=
       - LANGGRAPH_RUNTIME_BINDING_SECRET=
+      - HERMES_API_TOKEN=
     env_file:
       - path: .env
         required: true
@@ -163,8 +164,7 @@ services:
       - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
       - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
-      - API_SERVER_KEY=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
-      - HERMES_MCP_CONTEXT_SECRET=${HERMES_MCP_CONTEXT_SECRET:?HERMES_MCP_CONTEXT_SECRET must be set in .env}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
     volumes:
@@ -184,6 +184,8 @@ services:
       - GATEWAY_MULTIPLEX_PROFILES=true
       - ASKPDF_HERMES_COMPAT_ENABLED=1
       - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
+      - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
     command: ["gateway"]
     depends_on:
@@ -193,9 +195,6 @@ services:
         condition: service_started
     volumes:
       - hermes_data:/opt/data
-      - ./.env:/opt/data/.env:ro
-      - ./.env:/opt/data/profiles/askpdf-deep-offline/.env:ro
-      - ./.env:/opt/data/profiles/askpdf-deep-external/.env:ro
       - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
@@ -213,14 +212,14 @@ services:
       - HERMES_API_URL=http://hermes:8642
       - ASKPDF_MCP_URL=http://rag-service:8000/internal/mcp/
       - ASKPDF_MCP_HEALTH_URL=http://rag-service:8000/health
-      - HERMES_API_TOKEN=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
-      - API_SERVER_KEY=${API_SERVER_KEY:?API_SERVER_KEY must be set in .env}
+      - HERMES_RUNTIME_TOKEN=${HERMES_RUNTIME_TOKEN:?HERMES_RUNTIME_TOKEN must be set in .env}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:?ASKPDF_MCP_REQUIRED must be set in .env}
-      - HERMES_MCP_CONTEXT_SECRET=${HERMES_MCP_CONTEXT_SECRET:?HERMES_MCP_CONTEXT_SECRET must be set in .env}
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
       - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:?HERMES_MODEL_PROVIDER must be set in .env}
       - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:?HERMES_RUNTIME_VERSION must be set in .env}
+      - HERMES_RUNTIME_WORKERS=${HERMES_RUNTIME_WORKERS:?HERMES_RUNTIME_WORKERS must be set in .env}
       - HERMES_RUNTIME_STATE_PATH=${HERMES_RUNTIME_STATE_PATH:?HERMES_RUNTIME_STATE_PATH must be set in .env}
       - HERMES_RUNTIME_STORAGE_BACKEND=${HERMES_RUNTIME_STORAGE_BACKEND:?HERMES_RUNTIME_STORAGE_BACKEND must be set in .env}
       - HERMES_RUN_PROFILE_MAX_AGE_SECONDS=${HERMES_RUN_PROFILE_MAX_AGE_SECONDS:?HERMES_RUN_PROFILE_MAX_AGE_SECONDS must be set in .env}

@@ -7,6 +7,7 @@ specific behavior remains in the owning runtime packages.
 
 from __future__ import annotations
 
+import hmac
 import math
 import os
 import re
@@ -27,6 +28,7 @@ class RuntimeConfigurationError(RuntimeError):
 _REFERENCE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
+_SECRET_PLACEHOLDER_PREFIXES = ("replace-with-", "change-me", "changeme")
 LANGGRAPH_LIMIT_NAMES = (
     "DEFAULT_TOKEN_BUDGET",
     "REPLANS_LIMIT",
@@ -68,6 +70,25 @@ def _required(name: str, values: Mapping[str, str], errors: list[str]) -> str | 
         errors.append(f"{name} is required")
         return None
     return value.strip()
+
+
+def _secret(name: str, values: Mapping[str, str], errors: list[str]) -> str | None:
+    value = _required(name, values, errors)
+    if value is None:
+        return None
+    if len(value) < 32:
+        errors.append(f"{name} must contain at least 32 characters")
+    if value.lower().startswith(_SECRET_PLACEHOLDER_PREFIXES):
+        errors.append(f"{name} must not use a documented placeholder value")
+    return value
+
+
+def _distinct_secrets(names: tuple[str, ...], values: Mapping[str, str], errors: list[str]) -> None:
+    populated = [(name, values.get(name, "").strip()) for name in names if values.get(name, "").strip()]
+    for index, (name, value) in enumerate(populated):
+        reused = [other for other, other_value in populated[index + 1:] if hmac.compare_digest(value, other_value)]
+        if reused:
+            errors.append(f"{name} must be distinct from {', '.join(reused)}")
 
 
 def _positive_int(name: str, values: Mapping[str, str], errors: list[str]) -> int | None:
@@ -319,10 +340,7 @@ def validate_runtime_environment(
                 errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
             elif provider is not None and provider.lower() != "lmstudio" and context < 64000:
                 errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 64000 for the selected Hermes provider")
-        secret = _required("HERMES_MCP_CONTEXT_SECRET", values, errors)
-        if secret is not None and len(secret) < 32:
-            errors.append("HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters")
-        _required("API_SERVER_KEY", values, errors)
+        _secret("HERMES_API_TOKEN", values, errors)
         _required("HERMES_PROFILE_ROOT", values, errors)
         _positive_int("HERMES_PROFILE_UID", values, errors)
         _positive_int("HERMES_PROFILE_GID", values, errors)
@@ -353,12 +371,13 @@ def validate_runtime_environment(
                 errors.append("LLM_KEYLESS_PROVIDER must be lmstudio, ollama, or local")
         elif auth_mode == "required" and not values.get("OPENAI_API_KEY", "").strip():
             errors.append("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
-        binding_secret = _required("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
-        if binding_secret is not None and len(binding_secret) < 32:
-            errors.append("LANGGRAPH_RUNTIME_BINDING_SECRET must contain at least 32 characters")
-        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
-        if runtime_token is not None and len(runtime_token) < 32:
-            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
+        _secret("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
+        _secret("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        _distinct_secrets(
+            ("LANGGRAPH_RUNTIME_BINDING_SECRET", "LANGGRAPH_RUNTIME_TOKEN"),
+            values,
+            errors,
+        )
         checkpoint = _required("ASKPDF_AGENT_CHECKPOINTER", values, errors)
         if checkpoint is not None and checkpoint != "postgres":
             errors.append("ASKPDF_AGENT_CHECKPOINTER must be 'postgres' for the external runtime")
@@ -368,9 +387,8 @@ def validate_runtime_environment(
         _database_url("AGENT_RUNTIME_EXECUTION_DATABASE_URL", values, errors)
     if service == "control_plane":
         _url("LANGGRAPH_RUNTIME_URL", values, errors)
-        runtime_token = _required("LANGGRAPH_RUNTIME_TOKEN", values, errors)
-        if runtime_token is not None and len(runtime_token) < 32:
-            errors.append("LANGGRAPH_RUNTIME_TOKEN must contain at least 32 characters")
+        _secret("LANGGRAPH_RUNTIME_TOKEN", values, errors)
+        _secret("MCP_EXECUTION_CONTEXT_SECRET", values, errors)
 
     if hermes_enabled:
         if service == "hermes":
@@ -388,13 +406,22 @@ def validate_runtime_environment(
                 errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
             elif provider is not None and provider.lower() != "lmstudio" and context < 64000:
                 errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 64000 for the selected Hermes provider")
-        secret = _required("HERMES_MCP_CONTEXT_SECRET", values, errors)
-        if secret is not None and len(secret) < 32:
-            errors.append("HERMES_MCP_CONTEXT_SECRET must contain at least 32 characters")
-        _required("API_SERVER_KEY", values, errors)
         _boolean("ASKPDF_MCP_REQUIRED", values, errors)
         if service == "hermes":
-            _required("HERMES_API_TOKEN", values, errors)
+            _secret("HERMES_RUNTIME_TOKEN", values, errors)
+            _secret("HERMES_API_TOKEN", values, errors)
+            _distinct_secrets(
+                ("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN"),
+                values,
+                errors,
+            )
+        elif service == "control_plane":
+            _secret("HERMES_RUNTIME_TOKEN", values, errors)
+            _distinct_secrets(
+                ("LANGGRAPH_RUNTIME_TOKEN", "HERMES_RUNTIME_TOKEN", "MCP_EXECUTION_CONTEXT_SECRET"),
+                values,
+                errors,
+            )
         revision = _required("HERMES_UPSTREAM_REVISION", values, errors)
         if revision is not None and revision != HERMES_REVISION:
             errors.append("HERMES_UPSTREAM_REVISION does not match the pinned Hermes revision")

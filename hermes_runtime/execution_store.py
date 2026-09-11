@@ -18,6 +18,21 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 
+_EXECUTION_GRANT_KEYS = frozenset({"mcp_execution_context_token", "_askpdf_context_token"})
+
+
+def _without_execution_grants(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _without_execution_grants(item)
+            for key, item in value.items()
+            if str(key).lower() not in _EXECUTION_GRANT_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_execution_grants(item) for item in value]
+    return value
+
+
 class HermesExecutionStoreProtocol(Protocol):
     """Storage contract for replacing proof storage with PostgreSQL later."""
 
@@ -49,7 +64,7 @@ def request_fingerprint(payload: Mapping[str, Any]) -> str:
         "definition_id": request.get("definition_id"),
         "framework": request.get("framework"),
         "builder_id": request.get("builder_id"),
-        "input": request.get("input") or {},
+        "input": _without_execution_grants(request.get("input") or {}),
         "options": request.get("options") or {},
         "interrupt": request.get("interrupt") or {},
         "resolved_config": resolved_spec.get("config") or {},
@@ -147,10 +162,12 @@ class HermesExecutionStore:
             raise HermesStoreLoadError(f"Hermes execution journal has invalid continuation: {run_id}")
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         temporary.write_text(json.dumps(self.records, separators=(",", ":"), default=str))
+        temporary.chmod(0o600)
         temporary.replace(self.path)
+        self.path.chmod(0o600)
 
     def create(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         fingerprint = request_fingerprint(payload)

@@ -51,6 +51,7 @@ def configure_runtime_test_environment():
     for name, value in defaults.items():
         os.environ.setdefault(name, value)
     os.environ.setdefault("LANGGRAPH_RUNTIME_BINDING_SECRET", "test-langgraph-runtime-binding-secret-32-characters")
+    os.environ.setdefault("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
     os.environ.setdefault("DEFAULT_TOKEN_BUDGET", "8192")
     os.environ.setdefault("REPLANS_LIMIT", "10")
     os.environ.setdefault("MAX_CUSTOM_INSTRUCTIONS_CHARS", "2000")

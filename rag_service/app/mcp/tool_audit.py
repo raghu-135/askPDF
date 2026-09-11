@@ -1,4 +1,4 @@
-"""Durable, framework-neutral observability for Hermes MCP execution."""
+"""Durable, framework-neutral observability for MCP execution."""
 
 from __future__ import annotations
 

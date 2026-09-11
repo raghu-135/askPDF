@@ -17,7 +17,7 @@ def _compose(name: str) -> dict:
     return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
 
 
-def test_example_environment_enables_hermes_with_replace_me_api_key():
+def test_example_environment_enables_hermes_with_distinct_placeholder_tokens():
     values = {}
     for line in (REPOSITORY_ROOT / ".env.example").read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
@@ -25,7 +25,8 @@ def test_example_environment_enables_hermes_with_replace_me_api_key():
             values[key] = value
 
     assert values["COMPOSE_PROFILES"] == "hermes"
-    assert values["API_SERVER_KEY"] == "replace-with-a-long-random-api-server-key"
+    assert values["HERMES_RUNTIME_TOKEN"] != values["HERMES_API_TOKEN"]
+    assert values["HERMES_API_TOKEN"].startswith("replace-with-")
 
 
 def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():
@@ -53,6 +54,10 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in hermes["volumes"]
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
+    assert any(
+        entry.startswith("HERMES_RUNTIME_WORKERS=")
+        for entry in adapter["environment"]
+    )
     assert adapter["depends_on"]["hermes"]["condition"] == "service_healthy"
     assert "COMPOSE_PROFILES" not in services["rag-service"].get("environment", {})
     assert services["rag-service"]["env_file"][0]["path"] == ".env"
@@ -71,7 +76,7 @@ def test_hermes_bootstrap_has_explicit_complete_environment():
     assert {
         "HERMES_DATA_ROOT", "HERMES_CONFIG_TEMPLATE_ROOT", "HERMES_MODEL_PROVIDER",
         "HERMES_MODEL_CONTEXT_LENGTH", "HERMES_PROFILE_ROOT", "HERMES_PROFILE_UID",
-        "HERMES_PROFILE_GID", "API_SERVER_KEY", "HERMES_MCP_CONTEXT_SECRET",
+        "HERMES_PROFILE_GID", "HERMES_API_TOKEN",
         "OPENAI_API_KEY",
     } <= {entry.split("=", 1)[0] for entry in bootstrap["environment"]}
 
@@ -111,3 +116,10 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
     service = compose["services"]["hermes-runtime"]
     assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"
+    assert "HERMES_RUNTIME_TOKEN" in service["environment"]
+    assert "API_SERVER_KEY" not in service["environment"]
+
+
+def test_main_compose_does_not_mount_the_project_environment_into_hermes():
+    hermes = _compose("docker-compose.yml")["services"]["hermes"]
+    assert all(".env:" not in volume for volume in hermes.get("volumes", []))

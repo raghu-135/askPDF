@@ -78,7 +78,7 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.time_utils import iso_utc_z, utc_now
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.tool_adapter import create_mcp_tool
 from app.mcp.result_decoder import DecodedMCPResult, decode_mcp_result
 
 
@@ -444,10 +444,10 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         }
     }
     tools = [
-        create_mcp_langchain_tool("memory_search"),
-        create_mcp_langchain_tool("memory_get"),
-        create_mcp_langchain_tool("memory_prepare_change"),
-        create_mcp_langchain_tool("internet_search"),
+        create_mcp_tool("memory_search"),
+        create_mcp_tool("memory_get"),
+        create_mcp_tool("memory_prepare_change"),
+        create_mcp_tool("internet_search"),
     ]
     tools_by_name = {tool.name: tool for tool in tools}
     tool_call_count = 0
@@ -583,7 +583,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         llm = get_llm(req.llm_model, temperature=0.0)
         supports_tools = await check_model_supports_tools(req.llm_model)
         if supports_tools:
-            bound = llm.bind_tools(tools)
+            bound = llm.bind_tools([tool.model_tool_schema() for tool in tools])
             loop_count = 0
             while loop_count < memory_manager_tool_call_limit() + memory_manager_web_call_limit():
                 loop_count += 1

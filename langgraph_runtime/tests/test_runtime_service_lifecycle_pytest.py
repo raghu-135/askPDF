@@ -68,6 +68,65 @@ def test_runtime_healthz_is_liveness_only(monkeypatch):
     assert response.json() == {"status": "ok", "service": "langgraph-runtime"}
 
 
+@pytest.mark.parametrize("authorization", [None, "", "raw-token", "Basic wrong", "bearer wrong", "Bearer wrong", "Bearer  wrong"])
+def test_langgraph_runtime_rejects_noncanonical_or_wrong_service_credentials(authorization):
+    client = TestClient(create_app())
+    headers = {"authorization": authorization} if authorization is not None else {}
+    response = client.get("/v1/capabilities", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+def test_langgraph_runtime_accepts_its_exact_service_credential(monkeypatch):
+    token = "langgraph-boundary-token-012345678901234567"
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", token)
+    client = TestClient(create_app())
+    response = client.get("/v1/capabilities", headers={"authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/capabilities"),
+        ("POST", "/v1/validate"),
+        ("POST", "/v1/runs/start"),
+        ("GET", "/v1/runs/run-1/events"),
+        ("POST", "/v1/runs/run-1/inspect"),
+        ("POST", "/v1/runs/run-1/course-corrections"),
+        ("POST", "/v1/runs/run-1/cancel"),
+    ],
+)
+def test_langgraph_runtime_protects_every_operation_family(method, path):
+    response = TestClient(create_app()).request(method, path)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize(
+    "foreign_token",
+    [
+        "hermes-runtime-boundary-token-012345678901234567",
+        "hermes-upstream-boundary-token-012345678901234567",
+        "mcp-execution-context-secret-012345678901234567",
+        "langgraph-binding-secret-0123456789012345678901",
+    ],
+)
+def test_langgraph_runtime_rejects_every_foreign_boundary_credential(foreign_token):
+    response = TestClient(create_app()).get(
+        "/v1/capabilities",
+        headers={"authorization": f"Bearer {foreign_token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/startupz", "/readyz"])
+def test_langgraph_operational_health_does_not_require_authentication(path):
+    client = TestClient(create_app())
+    assert client.get(path).status_code != 401
+
+
 def test_runtime_readyz_is_structured_when_optional_probes_are_unconfigured(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")

@@ -12,8 +12,6 @@ services:
     env_file:
       - ./hermes_runtime/smoke.env
     command: ["gateway"]
-    ports:
-      - "8642:8642"
     volumes:
       - ./hermes_runtime/smoke-config.yaml:/opt/data/config.yaml:ro
       - ./hermes_runtime/smoke.env:/opt/data/.env:ro
@@ -50,12 +48,11 @@ services:
       HERMES_RUNTIME_WORKERS: "1"
       HERMES_MODEL: hermes-runtime-deterministic
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
+      HERMES_RUNTIME_TOKEN: hermes-runtime-smoke-token-012345678901234567890123
       ASKPDF_MCP_REQUIRED: "false"
     depends_on:
       hermes-real:
         condition: service_healthy
-    ports:
-      - "8201:8200"
     volumes:
       - real_hermes_gateway_state_v2:/var/lib/hermes
 
@@ -70,6 +67,8 @@ services:
       HERMES_RUNTIME_REAL_SMOKE: "true"
       COMPOSE_PROFILES: "hermes"
       HERMES_RUNTIME_URL: http://hermes-runtime-real:8200
+      HERMES_RUNTIME_TOKEN: hermes-runtime-smoke-token-012345678901234567890123
+      MCP_EXECUTION_CONTEXT_SECRET: hermes-smoke-mcp-context-secret-012345678901234567
     command: ["pytest", "--noconftest", "-q", "tests/test_real_hermes_container_smoke_pytest.py"]
     depends_on:
       hermes-runtime-real:

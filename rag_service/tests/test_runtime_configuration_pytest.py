@@ -59,8 +59,9 @@ def _environment() -> dict[str, str]:
         "LLM_KEYLESS_PROVIDER": "local",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
-        "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
-        "API_SERVER_KEY": "server-key",
+        "MCP_EXECUTION_CONTEXT_SECRET": "x" * 32,
+        "HERMES_RUNTIME_TOKEN": "h" * 32,
+        "HERMES_API_TOKEN": "a" * 32,
         "HERMES_RUNTIME_URL": "http://hermes-runtime:8200",
         "DEFAULT_TOKEN_BUDGET": "8192",
         "REPLANS_LIMIT": "10",
@@ -265,8 +266,7 @@ def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
         environ={
             "HERMES_MODEL_CONTEXT_LENGTH": "32768",
             "HERMES_MODEL_PROVIDER": "lmstudio",
-            "HERMES_MCP_CONTEXT_SECRET": "x" * 32,
-            "API_SERVER_KEY": "server-key",
+            "HERMES_API_TOKEN": "a" * 32,
             "HERMES_PROFILE_ROOT": "/opt/data/profiles",
             "HERMES_PROFILE_UID": "10000",
             "HERMES_PROFILE_GID": "10000",
@@ -274,6 +274,28 @@ def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
     )
 
     assert validated.get("HERMES_MODEL_PROVIDER") == "lmstudio"
+
+
+@pytest.mark.parametrize("name", [
+    "LANGGRAPH_RUNTIME_TOKEN",
+    "LANGGRAPH_RUNTIME_BINDING_SECRET",
+    "MCP_EXECUTION_CONTEXT_SECRET",
+    "HERMES_RUNTIME_TOKEN",
+    "HERMES_API_TOKEN",
+])
+def test_service_secrets_reject_short_values(name):
+    values = _environment()
+    values[name] = "too-short"
+    service = "langgraph" if name == "LANGGRAPH_RUNTIME_BINDING_SECRET" else "hermes" if name == "HERMES_API_TOKEN" else "control_plane"
+    with pytest.raises(RuntimeConfigurationError, match=name):
+        validate_runtime_environment(service=service, environ={**values, "COMPOSE_PROFILES": "hermes"})
+
+
+def test_control_plane_rejects_reused_boundary_secrets():
+    values = _environment()
+    values["HERMES_RUNTIME_TOKEN"] = values["LANGGRAPH_RUNTIME_TOKEN"]
+    with pytest.raises(RuntimeConfigurationError, match="must be distinct"):
+        validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": "hermes"})
 
 
 def test_unused_environment_names_are_not_documented():

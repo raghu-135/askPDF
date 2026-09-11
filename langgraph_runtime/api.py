@@ -5,7 +5,6 @@ import logging
 import os
 import time
 import uuid
-import hmac
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Mapping
@@ -33,6 +32,7 @@ from langgraph_runtime.capabilities import LangGraphDeploymentProfile, langgraph
 from langgraph_runtime.budgets import deep_agent_budgets
 from langgraph_runtime.models.llm import configure_runtime_limits
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.auth import PUBLIC_OPERATIONAL_PATHS, valid_bearer_token
 from langgraph_runtime.execution_store import CleanupClaimError, ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
 from langgraph_runtime.dependencies import (
     DependencyMonitor,
@@ -434,13 +434,10 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: Any) -> Any:
-        if not require_auth or request.url.path in {"/healthz", "/startupz", "/readyz"}:
+        if not require_auth or request.url.path in PUBLIC_OPERATIONAL_PATHS:
             return await call_next(request)
         expected = os.environ["LANGGRAPH_RUNTIME_TOKEN"]
-        supplied = request.headers.get("authorization", "")
-        if supplied.startswith("Bearer "):
-            supplied = supplied[7:]
-        if not hmac.compare_digest(supplied, expected):
+        if not valid_bearer_token(request.headers.get("authorization"), expected):
             return JSONResponse(
                 status_code=401,
                 content=json_envelope(

@@ -835,7 +835,7 @@ async def test_curator_memory_prefetch_domain_error_returns_retry_clarification(
 
     monkeypatch.setattr(
         memory_manager_engine,
-        "create_mcp_langchain_tool",
+        "create_mcp_tool",
         lambda name: FakeTool(name),
     )
     response = await memory_manager_engine.respond_to_memory_manager(
@@ -1241,10 +1241,8 @@ async def test_curator_native_tool_call_prepares_proposal(curator_sessionmaker, 
     captured_tools = []
 
     def bind_tools(tools):
-        from langchain_core.tools import BaseTool
-
         captured_tools.extend(tools)
-        assert all(isinstance(tool, BaseTool) for tool in tools)
+        assert all(tool.get("type") == "function" for tool in tools)
         return bound
 
     llm = SimpleNamespace(bind_tools=bind_tools, ainvoke=AsyncMock())
@@ -1264,7 +1262,7 @@ async def test_curator_native_tool_call_prepares_proposal(curator_sessionmaker, 
     assert response["tool_calls_used"] == 1
     assert response["operations"][0]["action"] == "create"
     assert response["operation_summaries"][0]["label"] == "Create thread memory"
-    assert {tool.name for tool in captured_tools} == {
+    assert {tool["function"]["name"] for tool in captured_tools} == {
         "memory_search",
         "memory_get",
         "memory_prepare_change",

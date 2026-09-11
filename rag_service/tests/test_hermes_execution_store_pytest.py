@@ -124,6 +124,24 @@ def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: P
         reloaded.create("fingerprinted-run", conflicting)
 
 
+def test_refreshed_mcp_grant_is_not_a_semantic_start_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    original = runtime_payload("grant-run")
+    original["request"]["input"]["mcp_execution_context_token"] = "first.signed-grant"
+    store = HermesExecutionStore(str(path))
+    created = store.create("grant-run", original)
+    refreshed = json.loads(json.dumps(original))
+    refreshed["request"]["input"]["mcp_execution_context_token"] = "second.signed-grant"
+    assert store.create("grant-run", refreshed)["request_fingerprint"] == created["request_fingerprint"]
+
+
+def test_hermes_journal_is_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("protected-run", runtime_payload("protected-run"))
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_hermes_store_preserves_sequence_and_terminal_result_across_reload(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
     store = HermesExecutionStore(str(path))

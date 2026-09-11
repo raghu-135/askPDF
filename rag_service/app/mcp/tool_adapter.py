@@ -193,6 +193,20 @@ class MCPToolAdapter:
     description: str
     args_schema: type[Any]
 
+    def model_tool_schema(self) -> dict[str, Any]:
+        """Return a provider-neutral function schema for model tool binding."""
+
+        if not hasattr(self.args_schema, "model_json_schema"):
+            raise TypeError(f"MCP tool {self.name!r} has no JSON-schema model")
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.args_schema.model_json_schema(),
+            },
+        }
+
     async def ainvoke(
         self,
         value: Any = None,

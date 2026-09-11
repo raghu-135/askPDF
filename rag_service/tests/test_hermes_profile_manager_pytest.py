@@ -5,6 +5,7 @@ import time
 import pytest
 
 from hermes_runtime.hermes_pinned_patch.sitecustomize import _apply_initial_tool_requirement, _context_header_digests
+import hermes_runtime.profile_manager as profile_manager
 
 
 def test_initial_tool_requirement_is_profile_local_and_consumed_once() -> None:
@@ -16,7 +17,7 @@ def test_initial_tool_requirement_is_profile_local_and_consumed_once() -> None:
     assert first["tool_choice"] == "required"
     assert "tool_choice" not in second
     assert "tool_choice" not in unrelated
-from hermes_runtime.profile_manager import RunProfileManager, configured_context_length
+from hermes_runtime.profile_manager import RunProfileManager, configured_context_length, render_bootstrap_config
 
 
 def _managed(profile: str, tools: list[str], model: str, provider: str, context: int) -> dict:
@@ -28,6 +29,26 @@ def _managed(profile: str, tools: list[str], model: str, provider: str, context:
         "limits": {"max_output_chars": 12000, "max_duration_seconds": 300, "max_event_count": 200},
         "context_window": context, "task_policy": {"builtin_only": True},
     }
+
+
+def test_bootstrap_generates_minimal_owner_only_environment(monkeypatch, tmp_path: Path):
+    template_root = Path(profile_manager.__file__).resolve().parent
+    monkeypatch.setenv("HERMES_CONFIG_TEMPLATE_ROOT", str(template_root))
+    monkeypatch.setenv("HERMES_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_API_TOKEN", "upstream-hermes-token-32-characters")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-key")
+
+    render_bootstrap_config()
+
+    for path in (
+        tmp_path / ".env",
+        tmp_path / "profiles/askpdf-deep-offline/.env",
+        tmp_path / "profiles/askpdf-deep-external/.env",
+    ):
+        assert path.read_text() == "API_SERVER_KEY=upstream-hermes-token-32-characters\n"
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("value", [8192, 32768, 131072])

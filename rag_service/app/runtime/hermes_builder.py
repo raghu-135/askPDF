@@ -159,7 +159,7 @@ class HermesBuilderProvider:
         filtered_overrides = dict(self.filter_request_overrides(
             definition,
             request_overrides,
-            reject_unsupported=False,
+            reject_unsupported=True,
         ))
         selected_model = str(
             filtered_overrides.pop("llm_model", None)

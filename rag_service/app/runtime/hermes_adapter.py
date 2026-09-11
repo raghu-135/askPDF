@@ -28,7 +28,7 @@ from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.http_transport import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
 from app.models.llm_server_client import check_model_can_invoke_tools
-from app.mcp.execution_context_token import issue_execution_context_token
+from app.mcp.execution_context_token import execution_context_ttl_seconds, issue_execution_context_token
 from app.tools.context import ToolInvocationContext
 
 
@@ -66,7 +66,10 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         allowed_tools = list(mcp.get("allowed_tool_ids") or [])
         raw_model_policy = profile.get("model_policy") if has_managed_profile else config
         model_policy = dict(raw_model_policy) if isinstance(raw_model_policy, Mapping) else {}
-        ttl_seconds = max(3600, int(limits.get("max_active_runtime_ms", 3_600_000)) // 1000)
+        ttl_seconds = execution_context_ttl_seconds(
+            limits,
+            max_duration_seconds=int(config.get("max_duration_seconds") or 0) or None,
+        )
         context_window = int(
             profile.get("context_window")
             or config.get("context_window")
@@ -107,7 +110,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self.transport = RuntimeTransportConnector(
             base_url=configured_base_url,
             framework=self.framework,
-            authorization_envs=("HERMES_RUNTIME_TOKEN", "HERMES_API_TOKEN", "API_SERVER_KEY"),
+            authorization_env="HERMES_RUNTIME_TOKEN",
             visualization_id=self.visualization_id,
             replay_by_event_id=True,
             **kwargs,

@@ -106,7 +106,8 @@ journal with PostgreSQL or another shared transactional store with a retention
 policy before horizontal production rollout.
 
 Hermes and the askPDF adapter are part of the default Compose application.
-Configure `API_SERVER_KEY` in the shared `.env`, then start normally. Each run
+Configure distinct `HERMES_RUNTIME_TOKEN`, `HERMES_API_TOKEN`, and
+`MCP_EXECUTION_CONTEXT_SECRET` values in `.env`, then start normally. Each run
 inherits the thread's selected `llm_model` and uses askPDF's existing
 OpenAI-compatible `LLM_API_URL` through Hermes's custom provider:
 

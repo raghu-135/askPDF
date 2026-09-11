@@ -44,6 +44,7 @@ from runtime_protocol import (
     json_payload,
 )
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.auth import PUBLIC_OPERATIONAL_PATHS, valid_bearer_token
 from runtime_protocol.contracts import RuntimeUsageSnapshot
 
 
@@ -457,8 +458,14 @@ async def _stop_and_confirm_upstream_run(
     }
 
 
-def create_app() -> FastAPI:
-    validate_runtime_environment(service="hermes")
+def create_app(*, require_auth: bool = True) -> FastAPI:
+    validation_environment = None
+    if not require_auth:
+        validation_environment = {
+            **os.environ,
+            "HERMES_RUNTIME_TOKEN": "test-hermes-runtime-token-32-characters",
+        }
+    validate_runtime_environment(service="hermes", environ=validation_environment)
     hermes_api_url = os.getenv("HERMES_API_URL", "").strip()
     if not hermes_api_url:
         raise RuntimeError(
@@ -514,6 +521,26 @@ def create_app() -> FastAPI:
                 pass
 
     app = FastAPI(title="AskPDF Hermes Runtime", version=os.getenv("HERMES_RUNTIME_VERSION", ""), lifespan=lifespan)
+
+    @app.middleware("http")
+    async def authenticate(request: Request, call_next: Any) -> Any:
+        if not require_auth or request.url.path in PUBLIC_OPERATIONAL_PATHS:
+            return await call_next(request)
+        expected = os.environ["HERMES_RUNTIME_TOKEN"]
+        if not valid_bearer_token(request.headers.get("authorization"), expected):
+            return JSONResponse(
+                status_code=401,
+                content=_envelope(
+                    status="failed",
+                    request_id=request.headers.get("x-request-id"),
+                    error=_error(
+                        "runtime_unauthorized",
+                        "Runtime authentication failed",
+                        retryable=False,
+                    ),
+                ),
+            )
+        return await call_next(request)
 
     def upstream_url() -> str:
         return hermes_api_url.rstrip("/")

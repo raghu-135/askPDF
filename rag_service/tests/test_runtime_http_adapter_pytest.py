@@ -249,7 +249,7 @@ async def test_http_adapter_parses_shared_cleanup_result(monkeypatch):
 async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch):
     from app.mcp.execution_context_token import decode_execution_context_token
 
-    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
     # LangGraph task context windows are independent of the Hermes model limit.
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     adapter = HttpLangGraphRuntimeAdapter("http://runtime")

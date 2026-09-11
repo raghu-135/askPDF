@@ -4,24 +4,24 @@ import json
 import pytest
 
 
-def test_langchain_adapter_returns_structured_tool_with_authoritative_schema():
-    from langchain_core.tools import BaseTool, StructuredTool
-
+def test_neutral_adapter_returns_authoritative_model_tool_schema():
     from app.models.memory_tools import MemorySearchInput
-    from app.mcp.langchain_adapter import create_mcp_langchain_tool
+    from app.mcp.tool_adapter import create_mcp_tool
 
-    tool = create_mcp_langchain_tool("memory_search")
+    tool = create_mcp_tool("memory_search")
 
-    assert isinstance(tool, BaseTool)
-    assert isinstance(tool, StructuredTool)
     assert tool.args_schema is MemorySearchInput
     assert tool.name == "memory_search"
     assert tool.args_schema.model_fields["max_results"].default == 10
+    schema = tool.model_tool_schema()
+    assert schema["type"] == "function"
+    assert schema["function"]["name"] == "memory_search"
+    assert schema["function"]["parameters"] == MemorySearchInput.model_json_schema()
 
 
 @pytest.mark.asyncio
-async def test_langchain_adapter_delegates_to_neutral_mcp_boundary(monkeypatch):
-    from app.mcp import langchain_adapter
+async def test_neutral_adapter_delegates_to_mcp_boundary(monkeypatch):
+    from app.mcp import tool_adapter
 
     calls = []
 
@@ -29,8 +29,8 @@ async def test_langchain_adapter_delegates_to_neutral_mcp_boundary(monkeypatch):
         calls.append((tool_name, arguments, config))
         return "{}"
 
-    monkeypatch.setattr(langchain_adapter, "call_mcp_tool", fake_call)
-    tool = langchain_adapter.create_mcp_langchain_tool("memory_search")
+    monkeypatch.setattr(tool_adapter, "call_mcp_tool", fake_call)
+    tool = tool_adapter.create_mcp_tool("memory_search")
     config = {"configurable": {"run_id": "run-1"}}
 
     await tool.ainvoke({"query": "remember this", "max_results": 3}, config=config)

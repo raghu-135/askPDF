@@ -29,6 +29,8 @@ from httpx import ASGITransport, AsyncClient
 
 
 os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
+os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
+os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,

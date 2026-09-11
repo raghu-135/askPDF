@@ -11,6 +11,7 @@ from .protocol import (
     validate_event_mapping,
 )
 from .configuration import RuntimeConfigurationError, RuntimeEnvironment, parse_bounded_ratio, validate_runtime_environment
+from .auth import PUBLIC_OPERATIONAL_PATHS, bearer_token, valid_bearer_token
 from .tool_contract import (
     MAX_TOOL_RESULT_BYTES,
     MAX_TOOL_RESULT_COLLECTION_ITEMS,
@@ -44,6 +45,9 @@ __all__ = [
     "RuntimeEnvironment",
     "parse_bounded_ratio",
     "validate_runtime_environment",
+    "PUBLIC_OPERATIONAL_PATHS",
+    "bearer_token",
+    "valid_bearer_token",
     "ToolError",
     "ToolErrorCode",
     "ToolMetrics",

@@ -128,3 +128,15 @@ def test_frontend_runtime_semantics_match_backend_contract():
     source = (repo_root / "frontend" / "src" / "lib" / "api.ts").read_text()
     for semantics in RuntimeCapabilitySemantics:
         assert f"'{semantics.value}'" in source
+def test_runtime_request_rejects_request_level_authentication():
+    from runtime_protocol.transport import request_from_dict
+
+    with pytest.raises(ValueError, match="authentication is not part"):
+        request_from_dict({
+            "run_id": "run-1",
+            "thread_id": "thread-1",
+            "definition_id": "definition-1",
+            "framework": "langgraph",
+            "builder_id": "langgraph_graph",
+            "authentication": {"token": "must-not-cross-the-wire"},
+        })

@@ -8,14 +8,22 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-
 from langgraph_runtime.execution_store import (
     CLEANUP_INCOMPLETE_PHASES,
     ExecutionConflictError,
     ExecutionStore,
     LeaseLostError,
     _json_safe,
+    operation_fingerprint,
+    request_fingerprint,
 )
+
+
+def test_runtime_fingerprints_exclude_refreshable_mcp_grants() -> None:
+    first = {"run_id": "run-1", "input": {"question": "q", "mcp_execution_context_token": "first"}}
+    second = {"run_id": "run-1", "input": {"question": "q", "mcp_execution_context_token": "second"}}
+    assert request_fingerprint("start", first) == request_fingerprint("start", second)
+    assert operation_fingerprint("start", first, {"request": first}) == operation_fingerprint("start", second, {"request": second})
 
 
 @pytest.mark.asyncio

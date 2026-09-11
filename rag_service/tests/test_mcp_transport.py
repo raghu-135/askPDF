@@ -43,7 +43,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
     from app.tools.context import ToolInvocationContext
     from app.agent.tool_contract import ToolResult
 
-    monkeypatch.setenv("HERMES_MCP_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
     definition = server_module.MCP_TOOL_DEFINITIONS["get_thread_shape"]
 
@@ -73,7 +73,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
         ) as http_client:
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
             listed = await client.request("tools/list")
-            assert {tool["name"] for tool in listed["tools"]} == {"get_thread_shape", "search_documents"}
+            assert {tool["name"] for tool in listed["tools"]} == {"get_thread_shape"}
             assert all("_askpdf_context_token" not in tool["inputSchema"].get("properties", {}) for tool in listed["tools"])
             accepted = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
             assert accepted["isError"] is False

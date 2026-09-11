@@ -21,6 +21,7 @@ from app.mcp.execution_context_token import (
     TOKEN_ARGUMENT,
     TOKEN_HEADER,
     ExecutionContextTokenError,
+    decode_execution_context_grant,
     decode_execution_context_token,
     verified_token_run_id,
 )
@@ -86,16 +87,17 @@ class MCPServer:
     def _register_handlers(self) -> None:
         @self.sdk.list_tools()
         async def list_tools() -> list[types.Tool]:
+            grant_allowed_tools: frozenset[str] | None = None
             if self.require_execution_token:
                 execution_token = _transport_execution_token.get()
                 if not execution_token:
-                    logger.warning("Hermes MCP discovery rejected reason=missing")
-                    raise ValueError("Hermes MCP execution context is required")
+                    logger.warning("MCP discovery rejected reason=missing")
+                    raise ValueError("MCP execution context is required")
                 try:
-                    decode_execution_context_token(str(execution_token))
+                    _context, grant_allowed_tools = decode_execution_context_grant(str(execution_token))
                 except ExecutionContextTokenError as exc:
-                    logger.warning("Hermes MCP discovery rejected reason=%s", exc.reason)
-                    raise ValueError("Invalid Hermes MCP execution context") from exc
+                    logger.warning("MCP discovery rejected reason=%s", exc.reason)
+                    raise ValueError("Invalid MCP execution context") from exc
             return [
                 types.Tool(
                     name=name,
@@ -110,6 +112,7 @@ class MCPServer:
                 )
                 for name, definition in enabled_definitions().items()
                 if self.allowed_tools is None or name in self.allowed_tools
+                if grant_allowed_tools is None or name in grant_allowed_tools
             ]
 
         @self.sdk.call_tool(validate_input=True)
@@ -123,8 +126,8 @@ class MCPServer:
             argument_token = arguments.pop(TOKEN_ARGUMENT, None)
             execution_token = _transport_execution_token.get() if self.require_execution_token else argument_token
             if self.require_execution_token and not execution_token:
-                logger.warning("Hermes MCP tool rejected tool=%s reason=missing", name)
-                raise ValueError("Hermes MCP execution context is required")
+                logger.warning("MCP tool rejected tool=%s reason=missing", name)
+                raise ValueError("MCP execution context is required")
             request_context = self.sdk.request_context
             meta = request_context.meta
             if hasattr(meta, "model_dump"):
@@ -136,7 +139,7 @@ class MCPServer:
                 try:
                     context = decode_execution_context_token(str(execution_token), tool_name=name)
                 except ExecutionContextTokenError as exc:
-                    logger.warning("Hermes MCP tool rejected tool=%s reason=%s", name, exc.reason)
+                    logger.warning("MCP tool rejected tool=%s reason=%s", name, exc.reason)
                     rejected_run_id = verified_token_run_id(str(execution_token))
                     if rejected_run_id:
                         await persist_tool_audit(
@@ -150,7 +153,7 @@ class MCPServer:
                                 "error": {"code": "mcp_execution_context_rejected", "retryable": exc.reason == "expired"},
                             },
                         )
-                    raise ValueError("Invalid Hermes MCP execution context") from exc
+                    raise ValueError("Invalid MCP execution context") from exc
             if not context.mcp_request_id:
                 context = context.__class__.from_mapping({
                     **context.as_dict(), "mcp_request_id": str(request_context.request_id),

@@ -510,7 +510,6 @@ class AgentRuntimeRequest:
     parent_run_id: Optional[str] = None
     continuation: Optional[ContinuationBinding] = None
     trace_id: Optional[str] = None
-    authentication: Mapping[str, Any] = field(default_factory=dict)
     permissions: Mapping[str, Any] = field(default_factory=dict)
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)

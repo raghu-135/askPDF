@@ -13,7 +13,7 @@ from app.runtime.hermes_builder import HermesBuilderProvider
 from app.tools.context import ToolInvocationContext
 from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest
 from runtime_protocol.protocol import json_payload
-from hermes_test_helpers import RUNTIME_URL, read_sse
+from hermes_test_helpers import RUNTIME_URL, read_sse, runtime_auth_headers
 
 
 pytestmark = pytest.mark.skipif(
@@ -77,7 +77,12 @@ async def test_seed_restart_recovery_record() -> None:
     payload = await _recovery_payload()
     started = False
     async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
-        async with client.stream("POST", "/v1/runs/start", json=payload) as response:
+        async with client.stream(
+            "POST",
+            "/v1/runs/start",
+            headers=runtime_auth_headers(),
+            json=payload,
+        ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
@@ -92,5 +97,10 @@ async def test_seed_restart_recovery_record() -> None:
 @pytest.mark.asyncio
 async def test_recovered_run_reconnects_without_another_upstream_start() -> None:
     async with httpx.AsyncClient(base_url=RUNTIME_URL, timeout=30) as client:
-        events = await read_sse(client, "GET", f"/v1/runs/{RECOVERY_RUN_ID}/events")
+        events = await read_sse(
+            client,
+            "GET",
+            f"/v1/runs/{RECOVERY_RUN_ID}/events",
+            headers=runtime_auth_headers(),
+        )
     assert any(item["event"].get("terminal") for item in events)

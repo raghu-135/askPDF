@@ -35,6 +35,21 @@ async def test_hermes_adapter_has_independent_identity():
     assert adapter.builder_id == "hermes_agent"
 
 
+def test_hermes_connector_does_not_fall_back_to_upstream_credentials(monkeypatch):
+    monkeypatch.delenv("HERMES_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setenv("HERMES_API_TOKEN", "upstream-only-token-32-characters")
+    monkeypatch.setenv("API_SERVER_KEY", "legacy-upstream-token-32-characters")
+    with pytest.raises(RuntimeError, match="HERMES_RUNTIME_TOKEN"):
+        HermesRuntimeAdapter(base_url="http://hermes.test")
+
+
+def test_hermes_connector_uses_only_runtime_boundary_credential(monkeypatch):
+    monkeypatch.setenv("HERMES_RUNTIME_TOKEN", "runtime-only-token-32-characters")
+    monkeypatch.setenv("HERMES_API_TOKEN", "upstream-only-token-32-characters")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    assert adapter.transport._headers()["authorization"] == "Bearer runtime-only-token-32-characters"
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_validates_the_canonical_builtin_definition(monkeypatch):
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
@@ -51,7 +66,7 @@ async def test_hermes_adapter_validates_the_canonical_builtin_definition(monkeyp
     definition = definition_from_workflow(workflow)
 
     client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=hermes_api.create_app()),
+        transport=httpx.ASGITransport(app=hermes_api.create_app(require_auth=False)),
         base_url="http://hermes.test",
     )
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
@@ -157,7 +172,7 @@ def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(mon
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
 
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         capabilities = client.get("/v1/capabilities")
         steer = client.post("/v1/runs/run-1/steer", json={})
 
@@ -201,7 +216,7 @@ def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tm
     stop = AsyncMock(return_value={"confirmed": True, "status": "cancelled", "acknowledged_status": "stopping"})
     monkeypatch.setattr(hermes_api, "_stop_and_confirm_upstream_run", stop)
 
-    client = TestClient(hermes_api.create_app())
+    client = TestClient(hermes_api.create_app(require_auth=False))
     response = client.post(
         "/v1/runs/start",
         json={
@@ -542,7 +557,7 @@ def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monke
         lambda _self, profile: retired.append(profile),
     )
 
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
 
     assert response.json()["result"]["status"] == "cancelled"
@@ -559,7 +574,7 @@ def test_terminal_inspection_returns_durable_neutral_result_after_profile_retire
     result = {"status": status, "artifacts": [{"id": "artifact-1"}], "usage": {"total_tokens": 42}}
     event = {"event_id": "terminal-1", "run_id": "run-1", "sequence": 1, "kind": f"run.{status}", "payload": {}, "terminal": True}
     store.finalize("run-1", hermes_api._sse(event, result), status=status)
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         # No upstream binding or live profile is needed for a durable result.
         response = client.post("/v1/runs/run-1/inspect", json={})
     assert response.status_code == 200
@@ -588,7 +603,7 @@ def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp
         lambda _self, profile: retired.append(profile),
     )
 
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
 
     body = response.json()
@@ -716,13 +731,13 @@ def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):
     monkeypatch.delenv("HERMES_API_URL", raising=False)
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
     with pytest.raises(builtins.RuntimeError, match="HERMES_API_URL is required"):
-        hermes_api.create_app()
+        hermes_api.create_app(require_auth=False)
 
 
 def test_hermes_healthz_is_liveness_only(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_API_URL", "http://unavailable.test")
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
 
@@ -733,7 +748,7 @@ def test_hermes_file_store_rejects_multiple_workers(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "file")
     monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "2")
     with pytest.raises(builtins.RuntimeError, match="one worker only"):
-        hermes_api.create_app()
+        hermes_api.create_app(require_auth=False)
 
 
 def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
@@ -742,7 +757,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "postgres")
     monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "1")
     with pytest.raises(builtins.RuntimeError, match="HERMES_RUNTIME_STORAGE_BACKEND must be 'file'"):
-        hermes_api.create_app()
+        hermes_api.create_app(require_auth=False)
 
 
 @pytest.mark.asyncio
@@ -796,7 +811,7 @@ def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200,
     monkeypatch.setenv("ASKPDF_MCP_HEALTH_URL", "http://mcp.test/healthz")
     monkeypatch.setenv("ASKPDF_MCP_REQUIRED", "true" if mcp_required else "false")
     monkeypatch.setattr(hermes_api.httpx, "AsyncClient", client_factory)
-    with TestClient(hermes_api.create_app()) as client:
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
         response = client.get("/readyz")
     return response, requested_urls
 
@@ -833,7 +848,7 @@ def test_hermes_readiness_does_not_invent_health_route_from_mcp_transport(monkey
     monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
     monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
     with pytest.raises(builtins.RuntimeError, match="ASKPDF_MCP_HEALTH_URL is required"):
-        hermes_api.create_app()
+        hermes_api.create_app(require_auth=False)
 
 
 def test_hermes_readiness_rejects_unhealthy_required_mcp(monkeypatch, tmp_path):
