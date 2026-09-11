@@ -164,14 +164,29 @@ def _reconcile_adapter_task_operations(
     """Reconcile product task operations that require adapter primitives."""
     operations = dict(capabilities.operations)
     registered = frozenset(getattr(adapter, "implemented_operations", frozenset()))
-    descriptor = operations.get(RuntimeOperationId.TASK_PAUSE)
-    if descriptor is not None and RuntimeOperationId.TASK_PAUSE not in registered:
-        operations[RuntimeOperationId.TASK_PAUSE] = replace(
-            descriptor,
-            support=RuntimeSupportLevel.UNSUPPORTED,
-            enabled=False,
-            disabled_reason=RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNIMPLEMENTED,
-        )
+    # Product operations remain universal, but these two operations require a
+    # concrete runtime primitive when delivered to an active run. Keep their
+    # public endpoints available while disabling them for adapters that cannot
+    # execute the corresponding operation.
+    dependencies = {
+        RuntimeOperationId.TASK_PAUSE: (
+            RuntimeOperationId.TASK_PAUSE,
+            RuntimeCapabilityDisabledReason.ADAPTER_OPERATION_UNIMPLEMENTED,
+        ),
+        RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT: (
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
+            RuntimeCapabilityDisabledReason.RUNTIME_CAPABILITY_UNSUPPORTED,
+        ),
+    }
+    for operation_id, (dependency_id, disabled_reason) in dependencies.items():
+        descriptor = operations.get(operation_id)
+        if descriptor is not None and dependency_id not in registered:
+            operations[operation_id] = replace(
+                descriptor,
+                support=RuntimeSupportLevel.UNSUPPORTED,
+                enabled=False,
+                disabled_reason=disabled_reason,
+            )
     return replace(capabilities, operations=operations)
 
 

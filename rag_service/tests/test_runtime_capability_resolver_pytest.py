@@ -879,6 +879,7 @@ class InheritedUnsupportedAdapter(AgentRuntimeAdapter):
         return RuntimeCapabilities(operations={
             RuntimeOperationId.RUN_CANCEL: native(),
             RuntimeOperationId.TASK_PAUSE: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
+            RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT: conditional(owner=RuntimeOperationOwner.PRODUCT, enabled=True),
         })
 
     async def validate(self, definition, spec, *, options=None):
@@ -900,6 +901,8 @@ async def test_discovery_rejects_enabled_operation_that_only_inherits_base_unsup
     assert capabilities.operations[RuntimeOperationId.RUN_CANCEL.value].disabled_reason == "adapter_operation_unimplemented"
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].enabled is False
     assert capabilities.operations[RuntimeOperationId.TASK_PAUSE.value].disabled_reason == "adapter_operation_unimplemented"
+    assert capabilities.operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT.value].enabled is False
+    assert capabilities.operations[RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT.value].disabled_reason == "runtime_capability_unsupported"
 
 
 @pytest.mark.asyncio

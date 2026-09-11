@@ -99,7 +99,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
                 "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
                 "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
-                "supports_pause_resume": False, "supports_course_correction": True,
+                "supports_pause_resume": False, "supports_course_correction": False,
                 "budget_boundary_owner": "product", "grounding_owner": "product",
             },
         }),
@@ -128,6 +128,9 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     assert definition.operations["task.pause"].enabled is False
     assert definition.operations["task.pause"].support.value == "unsupported"
     assert definition.operations["task.pause"].disabled_reason == "adapter_operation_unimplemented"
+    assert definition.operations["task.course_correction.submit"].enabled is False
+    assert definition.operations["task.course_correction.submit"].support.value == "unsupported"
+    assert definition.operations["task.course_correction.submit"].disabled_reason == "runtime_capability_unsupported"
     assert definition.features[RuntimeFeatureId.TOOLS].details["allowed_tool_ids"] == ["search_documents"]
     assert definition.features[RuntimeFeatureId.MEMORY].enabled is False
     assert definition.features[RuntimeFeatureId.DELEGATION].enabled is False

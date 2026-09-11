@@ -87,6 +87,9 @@ missing event kinds are rejected as runtime protocol errors.
 the product event stream. Hermes cancellation uses bounded confirmation: the
 gateway acknowledges `/stop`, waits for a terminal upstream status, and reports
 an explicit still-stopping error when that bound expires.
+Hermes does not expose an active-run course-correction control operation in v1;
+the universal `task.course_correction.submit` endpoint therefore remains present
+but is capability-disabled for Hermes.
 
 Hermes definitions resolve into a deterministic managed profile containing MCP
 and tool policy, model/provider policy, skills, memory, delegation, and limits.
