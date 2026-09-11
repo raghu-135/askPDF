@@ -9,6 +9,7 @@ from app.product_orchestration.canonical_trace import (
     build_parallel_groups,
     build_parallel_groups_safely,
 )
+from app.product_orchestration.debug_trace import build_debug_payload_from_journal
 from app.product_orchestration.trace_recorder import AgentTraceRecorder
 from runtime_protocol.contracts import AgentRuntimeEvent
 
@@ -236,6 +237,37 @@ def test_terminal_only_failure_reports_observability_gap_and_omits_large_runtime
     assert "runtime_binding" not in payload
     assert "headers" not in payload
     assert "generated response" not in str(projection)
+
+
+def test_journal_projection_builds_in_flight_debug_payload() -> None:
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        framework="langgraph",
+        status="running",
+        started_at=None,
+        completed_at=None,
+        resolved_spec_json={},
+        metrics_json={},
+        error_json=None,
+        debug_trace_json=None,
+    )
+    payload = build_debug_payload_from_journal(run, [
+        _event(1, "operation.started", {
+            "operation_id": "planner",
+            "operation_type": "planner",
+            "operation_label": "Planner",
+            "visit_index": 1,
+        }),
+        _event(2, "tool.completed", {"tool_name": "search_documents", "ok": True}),
+    ])
+
+    assert payload is not None
+    assert payload["version"] == 1
+    assert payload["trace"]["status"] == "running"
+    assert payload["operations"][0]["operation_id"] == "planner"
+    assert payload["events"][0]["kind"] == "operation.started"
 
 
 def test_trace_recorder_emits_version_one_from_canonical_events() -> None:
