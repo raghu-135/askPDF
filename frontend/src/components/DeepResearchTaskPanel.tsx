@@ -485,7 +485,6 @@ export default function DeepResearchTaskPanel({
       label: `Deep Research · attempt ${run.attempt}`,
       status: run.status,
       running,
-      liveEventSource: 'agent_run_events' as const,
     };
     onOpenTrace(descriptor);
     const details = await getAgentRun(run.id, threadId);

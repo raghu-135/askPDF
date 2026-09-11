@@ -128,12 +128,16 @@ function AgentRunDebugPanel({
 
   useEffect(() => {
     if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
-    const attempts = traceRefreshAttemptedRef.current.get(runId) || 0;
-    if (attempts >= 5) {
-      setTraceRefreshExhausted(true);
-      return;
+    const live = String(runDetails.status) === 'running' || String(runDetails.status) === 'awaiting_human';
+    if (!live) {
+      const attempts = traceRefreshAttemptedRef.current.get(runId) || 0;
+      if (attempts >= 5) {
+        setTraceRefreshExhausted(true);
+        return;
+      }
+      traceRefreshAttemptedRef.current.set(runId, attempts + 1);
     }
-    traceRefreshAttemptedRef.current.set(runId, attempts + 1);
+    const attempts = traceRefreshAttemptedRef.current.get(runId) || 1;
     const timer = window.setTimeout(() => {
       void getAgentRun(runId, executionThreadId)
         .then((refreshed) => {
@@ -141,7 +145,7 @@ function AgentRunDebugPanel({
           onRunDetailsChange?.(refreshed);
         })
         .catch(() => undefined);
-    }, 500 * (attempts + 1));
+    }, live ? 1000 : 500 * attempts);
     return () => window.clearTimeout(timer);
   }, [executionThreadId, onRunDetailsChange, runDetails, runId]);
 

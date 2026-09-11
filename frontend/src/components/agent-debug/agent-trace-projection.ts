@@ -14,8 +14,9 @@ export function getRetainedRunErrorMessage(runDetails: { error_json?: Record<str
 }
 
 export function shouldRefreshRetainedTrace(runDetails: AgentRunDetails): boolean {
-  const terminal = ['completed', 'failed', 'cancelled'].includes(String(runDetails.status));
-  return terminal && !runDetails.debug;
+  const status = String(runDetails.status);
+  if (status === 'running' || status === 'awaiting_human') return true;
+  return ['completed', 'failed', 'cancelled'].includes(status) && !runDetails.debug;
 }
 
 export interface TraceOperationView {

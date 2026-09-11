@@ -19,7 +19,8 @@ test('retained run errors remain visible when no trace was captured', () => {
   );
   assert.equal(getRetainedRunErrorMessage({ error_json: {} }), null);
   assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'failed' }), true);
-  assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'running' }), false);
+  assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'running' }), true);
+  assert.equal(shouldRefreshRetainedTrace({ id: 'run-1', status: 'completed', debug: { version: 1 } }), false);
 });
 
 test('corrective inspection preserves wave outcomes, packet grades, and exact claim sources', () => {

@@ -39,40 +39,17 @@ class AgentRuntimeProjection:
     async def rebuild_trace_from_events(self, *, run: Any, result: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
         """Rebuild the product trace from the canonical runtime journal."""
 
-        from app.product_orchestration.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
+        from app.product_orchestration.debug_trace import build_debug_payload_from_journal
         from app.product_orchestration.repository import AgentWorkflowRepository
-        from runtime_protocol.contracts import AgentRuntimeEvent
 
         repository = AgentWorkflowRepository()
-        events = await repository.list_run_events(run.id)
-        if not events:
-            return None
-        recorder = AgentTraceRecorder(run)
-        for event in events:
-            recorder.record_agent_runtime_event(AgentRuntimeEvent(
-                event_id=str(event.event_id),
-                run_id=str(event.agent_run_id),
-                sequence=int(event.sequence),
-                attempt=int(event.attempt),
-                kind=str(event.kind),
-                payload=event.payload_json if isinstance(event.payload_json, dict) else {},
-                occurred_at=str(event.occurred_at) if event.occurred_at else None,
-                terminal=bool(event.terminal),
-                source_metadata=event.source_metadata_json if isinstance(event.source_metadata_json, dict) else {},
-            ))
-        result_payload = dict(result or {})
-        debug = finalize_and_merge_debug_payload(
-            recorder=recorder,
-            run=run,
-            metrics=dict(getattr(run, "metrics_json", None) or {}),
-            result=result_payload or None,
-            chat_turn_id=result_payload.get("chat_turn_id"),
-            route=result_payload.get("route"),
-            route_reason=result_payload.get("route_reason"),
-            error=result_payload.get("agent_error") or getattr(run, "error_json", None),
-            run_status=str(result_payload.get("status") or getattr(run, "status", "")),
-            completed_at=getattr(run, "completed_at", None),
+        debug = build_debug_payload_from_journal(
+            run,
+            await repository.list_run_events(run.id),
+            result=result,
         )
+        if debug is None:
+            return None
         await repository.set_run_debug_trace(run.id, debug)
         return debug
 

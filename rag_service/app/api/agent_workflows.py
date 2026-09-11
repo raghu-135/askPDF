@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any, Dict, Literal, Mapping, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
@@ -31,6 +32,7 @@ from app.product_orchestration.chat_cancellation import (
     ChatRunCancelResult,
 )
 from app.product_orchestration.trace_details import detail_manifest
+from app.product_orchestration.debug_trace import build_debug_payload_from_journal
 from app.product_orchestration.trace_payloads import is_current_debug_payload
 from app.product_orchestration.canonical_trace import build_parallel_groups_safely
 from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
@@ -346,7 +348,6 @@ def _pending_interrupt_payload(run) -> Dict[str, Any] | None:
 def _run_payload(run, turns=None) -> Dict[str, Any]:
     turns = turns or []
     payload = {
-        "id": run.id,
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,
@@ -385,6 +386,30 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
                 )
             ),
         },
+    }
+    return payload
+
+
+async def _run_payload_for_read(run, turns=None) -> Dict[str, Any]:
+    """Return a run payload, projecting debug from the event journal when needed."""
+
+    payload = _run_payload(run, turns)
+    if payload.get("debug") is not None:
+        return payload
+    projected = build_debug_payload_from_journal(run, await AgentWorkflowRepository().list_run_events(run.id))
+    if not projected:
+        return payload
+    debug_holder = SimpleNamespace(id=run.id, debug_trace_json=projected)
+    payload["debug"] = _debug_payload_for_response(debug_holder)
+    payload["debug_trace_failure"] = _debug_trace_failure_for_response(debug_holder)
+    payload["final_output"] = projected.get("final_output")
+    visualizations = projected.get("visualizations") if isinstance(projected.get("visualizations"), dict) else {}
+    payload["observability"] = {
+        "event_projection_version": 2,
+        "topology_available": any(
+            isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+            for value in visualizations.values()
+        ),
     }
     return payload
 
@@ -1012,7 +1037,7 @@ async def get_latest_internal_agent_workflow_test(
     if run is None:
         raise HTTPException(status_code=404, detail="Builder test run not found")
     turns = await AgentWorkflowRepository().list_chat_turns_for_run(run.id)
-    payload = _run_payload(run, turns)
+    payload = await _run_payload_for_read(run, turns)
     try:
         payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
     except RuntimeError as exc:
@@ -1322,7 +1347,7 @@ async def get_agent_run(
     if not run or run.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent run not found")
     turns = await repo.list_chat_turns_for_run(run.id)
-    return {"agent_run": _run_payload(run, turns)}
+    return {"agent_run": await _run_payload_for_read(run, turns)}
 
 
 @router.get("/agent-runs/{run_id}/operations/{operation_id}/details")
@@ -1501,7 +1526,7 @@ async def resume_agent_run(
     repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
     return {
-        "agent_run": _run_payload(result.run, turns),
+        "agent_run": await _run_payload_for_read(result.run, turns),
         "interrupt": result.interrupt,
         "outcome": result.outcome,
         "duplicate": result.duplicate,
