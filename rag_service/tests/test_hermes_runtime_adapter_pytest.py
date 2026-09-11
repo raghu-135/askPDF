@@ -24,6 +24,11 @@ from hermes_runtime.execution_store import HermesExecutionStore
 @pytest.fixture(autouse=True)
 def external_hermes_transport_environment(monkeypatch):
     """Hermes runtime tests exercise the external service contract."""
+    # Keep these tests independent from a developer's repository .env.  The
+    # gateway forwards this upstream credential during profile-conflict and
+    # cancellation tests, so its expected value must be fixture-owned.
+    monkeypatch.setenv("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
+    monkeypatch.setenv("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
     monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
 

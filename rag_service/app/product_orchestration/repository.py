@@ -261,7 +261,6 @@ class AgentWorkflowRepository:
             result = await session.execute(
                 select(AgentRun)
                 .where(AgentRun.status.in_([RUN_STATUS_RUNNING, RUN_STATUS_AWAITING_HUMAN]))
-                .where(AgentRun.framework == "langgraph")
                 .order_by(AgentRun.started_at.asc(), AgentRun.id.asc())
                 .limit(bounded)
             )

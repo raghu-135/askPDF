@@ -378,7 +378,6 @@ async def list_task_runtime_runs_for_threads(thread_ids: Iterable[str]) -> list[
             select(AgentRun)
             .where(
                 AgentRun.thread_id.in_(ids),
-                AgentRun.framework == "langgraph",
             )
         )
         return list(result.scalars().all())
@@ -393,7 +392,6 @@ async def list_terminal_task_runtime_runs_before(cutoff: Any, *, limit: int = 10
                 AgentRun.completed_at.is_not(None),
                 AgentRun.completed_at <= cutoff,
                 AgentRun.status.in_(TERMINAL_TASK_RUN_STATUSES),
-                AgentRun.framework == "langgraph",
             )
             .order_by(AgentRun.completed_at, AgentRun.id)
             .limit(max(1, min(limit, 500)))

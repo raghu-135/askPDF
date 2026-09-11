@@ -121,7 +121,11 @@ async def test_external_hermes_runtime_contract_and_execution():
 async def test_product_api_executes_and_persists_hermes_deep_research_task():
     unique = uuid.uuid4().hex
     base_url = os.getenv("HERMES_RUNTIME_CONTROL_PLANE_URL", "http://rag-service:8000")
-    async with httpx.AsyncClient(base_url=base_url, timeout=120) as client:
+    admin_token = os.getenv("ASKPDF_ADMIN_TOKEN", "").strip()
+    if not admin_token:
+        raise RuntimeError("ASKPDF_ADMIN_TOKEN is required for the product API Hermes smoke test")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    async with httpx.AsyncClient(base_url=base_url, timeout=120, headers=headers) as client:
         project = await client.post(
             "/api/projects",
             json={"name": f"Hermes runtime smoke {unique}", "embedding_model": "hermes-runtime-deterministic-embedding"},

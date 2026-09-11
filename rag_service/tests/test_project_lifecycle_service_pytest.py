@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -7,6 +8,7 @@ from sqlalchemy.future import select
 
 from app.db.models_sqlmodel import (
     AgentRun,
+    AgentTask,
     AgentWorkflow,
     ChatTurn,
     File,
@@ -19,6 +21,7 @@ from app.db.models_sqlmodel import (
     ThreadFile,
 )
 from app.services import project_lifecycle_service
+from app.services import agent_task_repository
 from app.time_utils import utc_now
 
 
@@ -365,8 +368,73 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
 
     vector_db.delete_thread_data.assert_awaited_once_with("source-thread")
     cleanup_runs = checkpoint_cleanup.await_args.args[0]
-    assert [run.id for run in cleanup_runs] == ["terminal-run", "ordinary-run-without-binding"]
+    assert [run.id for run in cleanup_runs] == [
+        "terminal-run",
+        "ordinary-run-without-binding",
+        "hermes-run",
+    ]
     delete_artifacts.assert_awaited_once_with("orphan-file")
+
+
+@pytest.mark.asyncio
+async def test_runtime_lifecycle_queries_include_all_frameworks(lifecycle_sessionmaker):
+    now = utc_now()
+    async with lifecycle_sessionmaker() as session:
+        async with session.begin():
+            session.add(Project(id="runtime-project", name="Runtime", embedding_model="BAAI/bge-m3"))
+            session.add(Thread(
+                id="runtime-thread",
+                project_id="runtime-project",
+                name="Runtime thread",
+                embedding_model="BAAI/bge-m3",
+            ))
+            session.add(AgentWorkflow(
+                id="runtime-workflow",
+                name="Runtime workflow",
+                spec_json={},
+                validation_result_json={},
+            ))
+            await session.flush()
+            session.add(AgentTask(
+                id="runtime-task",
+                thread_id="runtime-thread",
+                project_id="runtime-project",
+                workflow_id="runtime-workflow",
+                objective="Retain runtime lifecycle coverage",
+                objective_hash="runtime-task-hash",
+                create_idempotency_key="runtime-task-key",
+            ))
+            await session.flush()
+            session.add_all([
+                AgentRun(
+                    id="langgraph-terminal",
+                    thread_id="runtime-thread",
+                    workflow_id="runtime-workflow",
+                    framework="langgraph",
+                    builder_id="langgraph_graph",
+                    task_id="runtime-task",
+                    status="completed",
+                    completed_at=now,
+                ),
+                AgentRun(
+                    id="hermes-terminal",
+                    thread_id="runtime-thread",
+                    workflow_id="runtime-workflow",
+                    framework="hermes",
+                    builder_id="hermes_agent",
+                    task_id="runtime-task",
+                    status="completed",
+                    completed_at=now,
+                ),
+            ])
+
+    thread_runs = await agent_task_repository.list_task_runtime_runs_for_threads(["runtime-thread"])
+    retained_runs = await agent_task_repository.list_terminal_task_runtime_runs_before(
+        now + timedelta(seconds=1),
+    )
+
+    assert {run.id for run in thread_runs} == {"langgraph-terminal", "hermes-terminal"}
+    assert {run.id for run in retained_runs} == {"langgraph-terminal", "hermes-terminal"}
 
 
 @pytest.mark.asyncio

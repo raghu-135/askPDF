@@ -419,6 +419,7 @@ services:
       WEB_SEARCH_ITERATION_BONUS: "1"
       LOCAL_EMBEDDING_MODEL: external_runtime-deterministic-embedding
       LOCAL_RERANKER_MODEL: external_runtime-deterministic-reranker
+      ASKPDF_ADMIN_TOKEN: integration-control-plane-token-012345678901234567890123
       DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS: "10000"
       DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS: "500000"
       DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS: "100"
