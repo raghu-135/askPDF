@@ -142,12 +142,15 @@ async def get_task(
     task_id: str,
     *,
     thread_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     include_deleted: bool = False,
 ) -> Optional[AgentTask]:
     async with async_session_maker() as session:
         query = select(AgentTask).where(AgentTask.id == task_id)
         if thread_id is not None:
             query = query.where(AgentTask.thread_id == thread_id)
+        if user_id is not None:
+            query = query.where(AgentTask.user_id == user_id)
         if not include_deleted:
             query = query.where(AgentTask.deletion_requested_at.is_(None))
         return (await session.execute(query)).scalar_one_or_none()
@@ -282,11 +285,15 @@ async def requeue_after_wake(task_id: str, *, reason: str) -> Optional[AgentTask
         return task
 
 
-async def list_tasks(thread_id: str, *, limit: int = 50) -> list[AgentTask]:
+async def list_tasks(thread_id: str, *, limit: int = 50, user_id: Optional[str] = None) -> list[AgentTask]:
     async with async_session_maker() as session:
+        query = select(AgentTask).where(
+            AgentTask.thread_id == thread_id, AgentTask.deletion_requested_at.is_(None)
+        )
+        if user_id is not None:
+            query = query.where(AgentTask.user_id == user_id)
         result = await session.execute(
-            select(AgentTask)
-            .where(AgentTask.thread_id == thread_id, AgentTask.deletion_requested_at.is_(None))
+            query
             .order_by(AgentTask.created_at.desc(), AgentTask.id.desc())
             .limit(max(1, min(limit, 100)))
         )

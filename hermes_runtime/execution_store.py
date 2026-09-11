@@ -171,6 +171,7 @@ class HermesExecutionStore:
 
     def create(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         fingerprint = request_fingerprint(payload)
+        persisted_payload = _without_execution_grants(payload)
         existing = self.records.get(run_id)
         if existing is not None:
             existing_fingerprint = existing.get("request_fingerprint")
@@ -192,7 +193,10 @@ class HermesExecutionStore:
             "run_id": run_id,
             "status": "queued",
             "events": [],
-            "payload": dict(payload),
+            # Execution grants are short-lived bearer capabilities.  They are
+            # intentionally excluded from the durable journal; recovery must
+            # be re-admitted with a fresh grant by the control plane.
+            "payload": persisted_payload,
             "request_fingerprint": fingerprint,
             "next_sequence": 1,
             "last_event_id": None,

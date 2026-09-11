@@ -31,6 +31,8 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
 os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
 os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
+os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-characters")
+os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
@@ -329,6 +331,7 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 
     try:
         with TestClient(app) as test_client:
+            test_client.headers.update({"Authorization": "Bearer test-control-plane-token-32-characters"})
             yield test_client
             test_client.portal.call(_drop_test_schema, engine)
     finally:
@@ -370,7 +373,11 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
     app = main_module.app
 
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer test-control-plane-token-32-characters"},
+        ) as client:
             yield client
     finally:
         app.dependency_overrides.clear()

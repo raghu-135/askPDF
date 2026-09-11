@@ -333,7 +333,8 @@ Environment variables are now managed using a `.env` file for better security an
 **Frontend Service**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | Required | Public RAG service URL baked into the frontend at build time; the frontend refuses to start or build when it is missing or blank |
+| `NEXT_PUBLIC_API_URL` | Required | Frontend API base. Use `/api/backend` so the Next.js server can attach the server-only `ASKPDF_ADMIN_TOKEN`; direct external deployments may use a public API URL only when their proxy supplies authentication. |
+| `ASKPDF_BACKEND_URL` | Required for the frontend proxy | Server-only RAG service URL used by the Next.js API proxy (for example, `http://rag-service:8000` in Compose or `http://localhost:8000` for local Next.js development). |
 
 **RAG Service - Core Configuration**
 | Variable | Default | Description |
@@ -519,6 +520,10 @@ For questions, issues, or suggestions, please open an issue on the [GitHub repos
 Hermes is enabled by the example configuration as an engine for durable Deep Research tasks; standard chat workflows remain on LangGraph. The integration is pinned to `NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894` (Hermes config schema 37).
 
 Hermes is controlled through one switch. The example configuration sets `COMPOSE_PROFILES=hermes`; set it to an empty value or remove `hermes` to disable Hermes completely. When enabled, configure distinct `HERMES_RUNTIME_TOKEN`, `HERMES_API_TOKEN`, and `MCP_EXECUTION_CONTEXT_SECRET` values (at least 32 random characters each), plus `OPENAI_API_KEY`, `HERMES_MODEL_CONTEXT_LENGTH`, and `HERMES_MODEL_PROVIDER`, then run `docker compose up -d`. Generate each service token with `openssl rand -hex 32`; replace all example placeholders before shared or production use. The same `COMPOSE_PROFILES` value both starts the three Hermes services and advertises Hermes through rag-service. Check `docker compose ps` and `docker compose exec hermes-runtime curl -f http://localhost:8200/readyz`; stop the stack with `docker compose down`. Runtime and upstream Hermes ports are intentionally available only on the internal Compose network. Enabled Hermes configuration is validated fail-fast: startup and task creation remain unavailable when required values are missing, malformed, reused, or incompatible. The pinned revision normally requires at least 64,000 tokens, but explicitly permits a smaller configured value for its first-class `lmstudio` provider. askPDF validates that compatibility rule, renders the exact deployment value into Hermes configuration, and freezes it into each new Hermes task; definitions contain no credentials.
+
+### Control-plane authentication
+
+Product APIs require a bearer token in `ASKPDF_ADMIN_TOKEN`; generate it with `openssl rand -hex 32`. Set `ASKPDF_CORS_ORIGINS` to the exact browser origins that may call the API. Health endpoints remain public, while runtime and MCP endpoints use separate service credentials and must remain on the private Compose network. Deployments using an authenticated reverse proxy may set `ASKPDF_TRUST_PROXY_AUTH=true` and provide `X-Authenticated-User` only from that trusted proxy. Rotate the admin token, runtime tokens, upstream Hermes token, and `MCP_EXECUTION_CONTEXT_SECRET` together during maintenance; never reuse one secret across boundaries.
 
 LangGraph remains the default Deep Research engine. Select Hermes explicitly in the Deep Research workspace. The selected engine, model, context window, and workflow definition are frozen on the task and retained for retries and inspection.
 

@@ -31,6 +31,7 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
+from app.auth import current_principal
 from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
 from app.services.embedding_model_service import (
@@ -233,7 +234,9 @@ async def thread_chat_endpoint(
             req.custom_instructions_override = thread_settings["custom_instructions"]
         service = AgentRunService()
         if "text/event-stream" not in str(accept or "").lower():
-            return await service.run_thread_chat(thread_id, req, embedding_context.embedding_model)
+            return await service.run_thread_chat(
+                thread_id, req, embedding_context.embedding_model, user_id=current_principal()
+            )
 
         sink = AgentExecutionEventSink(include_details=False)
 
@@ -243,6 +246,7 @@ async def thread_chat_endpoint(
                     thread_id,
                     req,
                     embedding_context.embedding_model,
+                    user_id=current_principal(),
                     execution_event_sink=sink,
                 )
                 await sink.queue.put({"event": "__result__", "data": result})

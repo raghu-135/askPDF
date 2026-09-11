@@ -389,6 +389,13 @@ def validate_runtime_environment(
         _url("LANGGRAPH_RUNTIME_URL", values, errors)
         _secret("LANGGRAPH_RUNTIME_TOKEN", values, errors)
         _secret("MCP_EXECUTION_CONTEXT_SECRET", values, errors)
+        _secret("ASKPDF_ADMIN_TOKEN", values, errors)
+        cors_origins = _required("ASKPDF_CORS_ORIGINS", values, errors)
+        if cors_origins is not None:
+            for origin in cors_origins.split(","):
+                _url_value = origin.strip()
+                if _url_value:
+                    _url("ASKPDF_CORS_ORIGINS", {"ASKPDF_CORS_ORIGINS": _url_value}, errors)
 
     if hermes_enabled:
         if service == "hermes":

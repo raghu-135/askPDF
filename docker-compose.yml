@@ -5,13 +5,15 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: /api/backend
         NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set in .env}
         NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set in .env}
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=/api/backend
+      - ASKPDF_BACKEND_URL=http://rag-service:8000
+      - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:?ASKPDF_ADMIN_TOKEN must be set in .env}
     env_file:
       - path: .env
         required: true

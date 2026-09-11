@@ -135,6 +135,22 @@ def test_refreshed_mcp_grant_is_not_a_semantic_start_conflict(tmp_path: Path) ->
     assert store.create("grant-run", refreshed)["request_fingerprint"] == created["request_fingerprint"]
 
 
+def test_execution_grants_are_not_written_to_the_journal(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    payload = runtime_payload("redacted-run")
+    payload["request"]["input"] = {
+        "question": "hello",
+        "mcp_execution_context_token": "secret.signed-grant",
+        "nested": {"_askpdf_context_token": "another.signed-grant"},
+    }
+    HermesExecutionStore(str(path)).create("redacted-run", payload)
+    raw = path.read_text()
+    assert "secret.signed-grant" not in raw
+    assert "another.signed-grant" not in raw
+    persisted = json.loads(raw)["redacted-run"]["payload"]
+    assert persisted["request"]["input"] == {"question": "hello", "nested": {}}
+
+
 def test_hermes_journal_is_owner_only(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
     store = HermesExecutionStore(str(path))

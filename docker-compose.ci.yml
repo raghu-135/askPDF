@@ -2,7 +2,9 @@ services:
   frontend:
     env_file: []
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=/api/backend
+      - ASKPDF_BACKEND_URL=http://rag-service:8000
+      - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:?ASKPDF_ADMIN_TOKEN must be set}
 
   rag-service:
     env_file: []

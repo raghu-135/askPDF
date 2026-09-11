@@ -65,6 +65,7 @@ from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
 from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
 from runtime_protocol.configuration import validate_runtime_environment
+from app.auth import authenticate, reset_principal, set_principal
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
@@ -321,6 +322,27 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def control_plane_authentication(request, call_next):
+    """Protect product APIs while leaving health and internal MCP boundaries independent."""
+    path = request.url.path
+    if path in {"/health", "/ready"} or path.startswith("/internal/"):
+        return await call_next(request)
+    principal = authenticate(request)
+    if principal is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": {"code": "unauthorized", "message": "Authentication is required"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = set_principal(principal)
+    request.state.principal = principal
+    try:
+        return await call_next(request)
+    finally:
+        reset_principal(token)
+
+
 @app.get("/internal/hermes-mcp/preflight", include_in_schema=False)
 async def hermes_mcp_preflight(
     execution_context: str | None = Header(default=None, alias="X-AskPDF-Execution-Context"),
@@ -361,8 +383,8 @@ async def hermes_mcp_preflight(
 # CORS Middleware for cross-service communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[value.strip() for value in os.getenv("ASKPDF_CORS_ORIGINS", "http://localhost:3000").split(",") if value.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

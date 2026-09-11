@@ -29,6 +29,7 @@ from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
+from app.auth import current_principal
 from app.runtime.capability_resolver import resolve_definition_capability_resolution, require_capability
 from app.runtime.catalog import definition_from_run, definition_from_workflow
 from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeCourseCorrection, RuntimeOperationId
@@ -203,7 +204,12 @@ def _subagent_timeline_type(status: str) -> Optional[str]:
 
 
 async def _owned_task(task_id: str, thread_id: str, *, include_deleted: bool = False):
-    task = await repository.get_task(task_id, thread_id=thread_id, include_deleted=include_deleted)
+    task = await repository.get_task(
+        task_id,
+        thread_id=thread_id,
+        user_id=current_principal(),
+        include_deleted=include_deleted,
+    )
     if task is None or await get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail={"code": "agent_task_not_found"})
     return task
@@ -310,7 +316,7 @@ async def create_agent_task(
     task, duplicate = await repository.create_task(
         thread_id=thread_id,
         project_id=thread.project_id,
-        user_id=None,
+        user_id=current_principal(),
         workflow_id=definition.definition_id,
         objective=req.objective,
         idempotency_key=idempotency_key,
@@ -323,7 +329,9 @@ async def create_agent_task(
 async def list_agent_tasks(thread_id: str, limit: int = Query(default=50, ge=1, le=100)):
     if await get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
-    return {"tasks": [_task_payload(task) for task in await repository.list_tasks(thread_id, limit=limit)]}
+    return {"tasks": [_task_payload(task) for task in await repository.list_tasks(
+        thread_id, limit=limit, user_id=current_principal()
+    )]}
 
 
 @router.get("/agent-tasks/{task_id}")

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from runtime_protocol.hermes_contract import (
     HERMES_CONFIG_SCHEMA_VERSION, HERMES_PROFILE_NAMES, provider_requires_api_key,
@@ -127,6 +128,23 @@ def configured_provider() -> str:
     return provider
 
 
+def configured_mcp_url(endpoint: str) -> str:
+    """Return the configured askPDF MCP endpoint for a Hermes profile."""
+    if endpoint not in {"offline", "external"}:
+        raise RuntimeError("Hermes MCP endpoint must be offline or external")
+    raw = os.getenv("ASKPDF_MCP_URL", "").strip()
+    if not raw:
+        raise RuntimeError("ASKPDF_MCP_URL is required for Hermes profiles")
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("ASKPDF_MCP_URL must be an absolute HTTP URL")
+    path = parsed.path.rstrip("/")
+    if path.endswith("/internal/mcp"):
+        path = path[: -len("/internal/mcp")]
+    path = f"{path}/internal/hermes-mcp/{endpoint}/"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 class RunProfileManager:
     def __init__(self, root: str | None = None) -> None:
         self.root = Path(root or os.getenv("HERMES_PROFILE_ROOT", ""))
@@ -187,6 +205,7 @@ class RunProfileManager:
             shutil.rmtree(destination)
         temporary = Path(tempfile.mkdtemp(prefix=f".{profile_name}-", dir=self.root))
         endpoint = "external" if policy_profile.endswith("external") else "offline"
+        mcp_url = configured_mcp_url(endpoint)
         # Pinned Hermes keeps MCP connections in a process-global registry keyed
         # only by server name. A stable `askpdf` key would reuse another run's
         # connection and its headers, so every run requires its own namespace.
@@ -222,7 +241,7 @@ class RunProfileManager:
             "    enabled: false\n"
             "mcp_servers:\n"
             f"  {mcp_server_name}:\n"
-            f"    url: http://rag-service:8000/internal/hermes-mcp/{endpoint}/\n"
+            f"    url: {mcp_url}\n"
             "    enabled: true\n"
             "    headers:\n"
             f"      {TOKEN_HEADER}: {json.dumps(context_token)}\n"
@@ -309,6 +328,20 @@ class RunProfileManager:
             return False
         destination = self.root / profile_name
         return (destination / "config.yaml").is_file() and (destination / ".env").is_file()
+
+    def restore(self, profile_name: str | None, *, token_expires_at: int | None = None) -> bool:
+        """Re-register a persisted profile after a gateway restart."""
+        if not profile_name or not re.fullmatch(r"askpdf-run-[0-9a-f]{20}", profile_name):
+            return False
+        if token_expires_at is not None and token_expires_at <= int(time.time()):
+            return False
+        destination = self.root / profile_name
+        if not ((destination / "config.yaml").is_file() and (destination / ".env").is_file()):
+            return False
+        if (destination / TOMBSTONE_FILE).exists():
+            return False
+        self._active.add(profile_name)
+        return True
 
     def verify(self, profile: RunProfile) -> bool:
         config_path = profile.directory / "config.yaml"

@@ -99,11 +99,17 @@ async def test_pinned_real_hermes_completion_stream_and_session_capture(monkeypa
     sink = _Sink()
     request, context = await _invocation("Reply with exactly: smoke-ok")
     try:
+        readiness = await adapter.readiness()
+        assert readiness["status"] == "ok"
         result = await adapter.start(request, context=context, event_sink=sink)
         assert result.status == "completed"
         assert result.continuation is not None
         assert result.continuation.payload["session_id"]
         assert any(event.kind == "output.delta" for event in sink.events)
+        inspected = await adapter.inspect_state(
+            AgentRuntimeRequest(**{**request.__dict__, "continuation": result.continuation})
+        )
+        assert inspected["run_id"] == request.run_id
         # Terminal events are consumed by the connector to build the returned
         # result; only non-terminal trace events are forwarded to product sinks.
     finally:

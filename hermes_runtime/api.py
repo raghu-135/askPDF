@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -32,6 +33,7 @@ from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REV
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,
+    configured_mcp_url,
     configured_context_length,
     configured_provider,
     validate_provider_context,
@@ -502,10 +504,40 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 await asyncio.sleep(interval)
                 profile_manager.sweep_stale(max_age_seconds=profile_max_age)
         profile_sweeper = asyncio.create_task(sweep_profiles(), name="hermes-profile-sweeper")
-        # Recovered records remain inspectable. Their upstream bindings are
-        # intentionally not discarded when the gateway process restarts.
+        # Recovered records remain inspectable. Execution grants are never
+        # persisted, so an active run cannot be resumed without fresh control-
+        # plane admission and is durably terminated as recovery-required.
         for run_id, record in list(store.records.items()):
+            continuation = record.get("continuation") if isinstance(record.get("continuation"), Mapping) else {}
+            binding = continuation.get("payload") if isinstance(continuation, Mapping) else {}
+            profile_name = str((binding or {}).get("runtime_profile") or "")
+            restored = profile_manager.restore(
+                profile_name,
+                token_expires_at=(binding or {}).get("token_expires_at"),
+            )
+            payload = record.get("payload") if isinstance(record.get("payload"), Mapping) else {}
+            request_payload = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
+            input_payload = request_payload.get("input") if isinstance(request_payload.get("input"), Mapping) else {}
             if record.get("status") in {"queued", "running"} and record.get("payload"):
+                if not input_payload.get("mcp_execution_context_token"):
+                    sequence = store.next_sequence(run_id)
+                    error = _error(
+                        "runtime_recovery_required",
+                        "Hermes execution requires fresh control-plane admission after restart",
+                        retryable=False,
+                    )
+                    event = _neutral_event(
+                        run_id,
+                        sequence,
+                        "run.failed",
+                        {"error": error, "recovery_required": True},
+                        terminal=True,
+                        continuation=continuation or None,
+                    )
+                    store.finalize(run_id, _sse(event, {"status": "failed", "error": error}), status="failed")
+                    continue
+                if not restored:
+                    continue
                 state["active"][run_id] = asyncio.create_task(
                     _background_run(_recovery_payload(record), None),
                     name=f"hermes-runtime-recovery-{run_id}",
@@ -800,6 +832,15 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
         }
         started_tool_calls: set[str] = set()
         active_tool_calls, active_approval_id = _event_correlations(store.records[run_id]["events"])
+        consumed_upstream_events = {
+            str(item.get("source_event_id"))
+            for item in (
+                decode_event_frame(value["frame"])["event"]
+                for value in store.records[run_id].get("events", [])
+                if isinstance(value, Mapping) and isinstance(value.get("frame"), str)
+            )
+            if item.get("source_event_id")
+        }
 
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id, active_approval_id
@@ -816,6 +857,11 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     detail=_error("hermes_upstream_protocol_error", "Hermes emitted an invalid event envelope"),
                 )
             event_payload = raw
+            source_event_id = str(
+                event_payload.get("event_id")
+                or event_payload.get("id")
+                or hashlib.sha256(json.dumps(event_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            )
             upstream_event_name = event_payload.get("event")
             if not isinstance(upstream_event_name, str) or not upstream_event_name:
                 raise ValueError("Hermes event requires the pinned event field")
@@ -870,7 +916,15 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 event_payload = {**event_payload, "approval_id": active_approval_id}
                 active_approval_id = None
             event_budget.observe(kind, output_delta)
-            event = _neutral_event(run_id, sequence, kind, event_payload, terminal=terminal, continuation=continuation)
+            event = _neutral_event(
+                run_id,
+                sequence,
+                kind,
+                event_payload,
+                source_event_id=source_event_id,
+                terminal=terminal,
+                continuation=continuation,
+            )
             result = None
             if kind == "approval.requested":
                 interrupt_id = str(event_payload.get("approval_id") or event_payload.get("id") or f"hermes-approval-{sequence}")
@@ -1142,8 +1196,11 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                             },
                         )) from exc
                     try:
+                        mcp_url = configured_mcp_url(
+                            "external" if runtime_profile.endswith("external") else "offline"
+                        )
                         mcp_response = await client.get(
-                            "http://rag-service:8000/internal/hermes-mcp/preflight",
+                            mcp_url.rsplit("/", 2)[0] + "/preflight",
                             headers={
                                 "x-askpdf-execution-context": context_token,
                                 "x-askpdf-expected-run-id": run_id,
@@ -1235,7 +1292,22 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
                             if data:
+                                try:
+                                    candidate = json.loads("\n".join(data))
+                                    candidate_source = str(
+                                        candidate.get("event_id")
+                                        or candidate.get("id")
+                                        or hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                                    ) if isinstance(candidate, Mapping) else None
+                                except (TypeError, ValueError, json.JSONDecodeError):
+                                    candidate_source = None
+                                if candidate_source and candidate_source in consumed_upstream_events:
+                                    data = []
+                                    event_name = ""
+                                    continue
                                 event, result, operation_event, output_complete_event = process_frame(event_name, data, output_seen=output_seen)
+                                if event.get("source_event_id"):
+                                    consumed_upstream_events.add(str(event["source_event_id"]))
                                 if operation_event is not None:
                                     yield _sse(operation_event)
                                 if event["kind"] == "output.delta":

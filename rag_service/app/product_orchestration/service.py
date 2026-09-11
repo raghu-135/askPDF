@@ -308,6 +308,7 @@ class AgentRunService:
         embedding_model: str,
         *,
         execution_event_sink: Any = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
         hitl_web_approval_override = getattr(req, "hitl_web_approval", None)
@@ -407,6 +408,7 @@ class AgentRunService:
             builder_id=definition.builder_id,
             definition_category=getattr(workflow, "category", None),
             resolved_spec_json=stored_resolved_spec,
+            user_id=user_id,
             run_metadata_json={
                 "executed_workflow_id": workflow.id,
                 "framework": definition.framework,

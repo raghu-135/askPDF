@@ -60,6 +60,8 @@ def _environment() -> dict[str, str]:
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "MCP_EXECUTION_CONTEXT_SECRET": "x" * 32,
+        "ASKPDF_ADMIN_TOKEN": "u" * 32,
+        "ASKPDF_CORS_ORIGINS": "http://localhost:3000",
         "HERMES_RUNTIME_TOKEN": "h" * 32,
         "HERMES_API_TOKEN": "a" * 32,
         "HERMES_RUNTIME_URL": "http://hermes-runtime:8200",
