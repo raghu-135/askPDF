@@ -15,6 +15,21 @@ test('opening another trace preserves multiple runs', () => {
   assert.deepEqual(next.map((tab) => tab.id), ['run-1', 'run-2']);
 });
 
+test('a delayed metadata update does not clear a live trace view', () => {
+  const liveTraceView = { status: 'running', events: [{ sequence: 1 }] };
+  const tabs = [{ id: 'run-1', status: 'running', liveTraceView }];
+
+  const next = upsertTraceTab(tabs, {
+    id: 'run-1',
+    status: 'running',
+    runDetails: { id: 'run-1' },
+    liveTraceView: undefined,
+  });
+
+  assert.equal(next[0].liveTraceView, liveTraceView);
+  assert.deepEqual(next[0].runDetails, { id: 'run-1' });
+});
+
 test('closing the active trace selects its left neighbor', () => {
   const result = closeTraceTab([{ id: 'run-1' }, { id: 'run-2' }, { id: 'run-3' }], 'run-3', 'run-3');
   assert.deepEqual(result.tabs.map((tab) => tab.id), ['run-1', 'run-2']);

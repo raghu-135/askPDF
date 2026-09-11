@@ -278,7 +278,6 @@ export default function DeepResearchTaskPanel({
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
   const [definitionId, setDefinitionId] = useState('');
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
-  const [liveTraceEvents, setLiveTraceEvents] = useState<BuilderTestStreamEnvelope[]>([]);
   const [traceLiveRequested, setTraceLiveRequested] = useState(false);
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -428,7 +427,6 @@ export default function DeepResearchTaskPanel({
   useEffect(() => {
     if (!traceLiveRequested || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) {
       liveTraceEventsRef.current = [];
-      setLiveTraceEvents([]);
       return undefined;
     }
     let active = true;
@@ -457,7 +455,6 @@ export default function DeepResearchTaskPanel({
         const envelope = { id: value.id || sequence, event: kind, data } as BuilderTestStreamEnvelope;
         if (active) {
           liveTraceEventsRef.current = [...liveTraceEventsRef.current, envelope];
-          setLiveTraceEvents(liveTraceEventsRef.current);
           const liveTraceView = buildLiveTraceView(liveTraceEventsRef.current);
           onOpenTrace?.({
             id: runId,
@@ -573,10 +570,34 @@ export default function DeepResearchTaskPanel({
 
   const openTrace = async () => {
     if (!selectedRun || !onOpenTrace) return;
+    const run = selectedRun;
+    const taskId = task?.id;
+    const running = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(run.status);
+    const descriptor = {
+      id: run.id,
+      threadId,
+      messageId: `agent-task:${taskId}:${run.id}`,
+      label: `Deep Research · attempt ${run.attempt}`,
+      status: run.status,
+      running,
+    };
     setTraceLiveRequested(true);
-    const details = await getAgentRun(selectedRun.id, threadId);
+    onOpenTrace({
+      ...descriptor,
+      runDetails: liveTraceRunDetailsRef.current,
+      liveTraceView: liveTraceEventsRef.current.length
+        ? buildLiveTraceView(liveTraceEventsRef.current)
+        : undefined,
+    });
+    const details = await getAgentRun(run.id, threadId);
     liveTraceRunDetailsRef.current = details;
-    onOpenTrace({ id: selectedRun.id, threadId, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details, liveTraceView: liveTraceEvents.length ? buildLiveTraceView(liveTraceEvents) : undefined, running: !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(selectedRun.status) });
+    onOpenTrace({
+      ...descriptor,
+      runDetails: details,
+      liveTraceView: liveTraceEventsRef.current.length
+        ? buildLiveTraceView(liveTraceEventsRef.current)
+        : undefined,
+    });
   };
 
   const decide = async (
