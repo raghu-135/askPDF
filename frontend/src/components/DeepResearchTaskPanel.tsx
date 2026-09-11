@@ -65,6 +65,7 @@ import {
   ConversationMessageBubble,
   ConversationPanelTemplate,
   ConversationTranscriptFrame,
+  ResizableDecisionPanel,
   SourceList,
 } from './conversation';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
@@ -268,6 +269,7 @@ export default function DeepResearchTaskPanel({
   taskContextRef.current = selectedTaskId;
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
+  const panelRef = useRef<HTMLDivElement>(null);
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
   const activeCapabilitiesState = useAgentRunCapabilities(
@@ -603,6 +605,13 @@ export default function DeepResearchTaskPanel({
   const decisionVisible = isTaskPauseInterrupt || (isResultReview ? resultReviewAvailability.visible
     : responseOperation ? runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).visible : false);
   const courseCorrectionAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.course_correction.submit');
+  const showCourseCorrectionForm = Boolean(
+    task
+    && selectedRun
+    && courseCorrectionAvailability.visible
+    && ['queued', 'running'].includes(task.status),
+  );
+  const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
     if (!task || !selectedRun || !pendingInterrupt) return;
@@ -643,6 +652,7 @@ export default function DeepResearchTaskPanel({
   }, [interactionDescriptors, interactionOperation]);
 
   return <ConversationPanelTemplate
+    ref={panelRef}
     sx={{ p: 1 }}
     header={<ConversationHeader
       models={models}
@@ -701,32 +711,38 @@ export default function DeepResearchTaskPanel({
       <Typography variant="subtitle2">Deep research paused</Typography>
       <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume to continue or Cancel to stop the task.</Typography>
       {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
-    </Box> : pendingInterrupt && isBudgetReview ? <Box sx={{ p: 2 }}>
-      <Typography variant="subtitle2">{pendingInterrupt.title || 'Research budget reached'}</Typography>
-      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
-      {pendingInterrupt.provisional_answer ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', maxHeight: 280, overflow: 'auto', mb: 1 }}>{String(pendingInterrupt.provisional_answer)}</Typography> : <Alert severity="warning" sx={{ mb: 1 }}>No usable provisional answer was produced. Continue or steer the research.</Alert>}
-      <TextField fullWidth multiline minRows={2} maxRows={6} label="Optional guidance for the next tranche" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} sx={{ mb: 1 }} />
-      <Stack direction="row" spacing={1} flexWrap="wrap">
+    </Box> : pendingInterrupt && isBudgetReview ? <ResizableDecisionPanel
+      title={pendingInterrupt.title || 'Research budget reached'}
+      variant="approval"
+      rootRef={panelRef}
+      horizontalInset={1}
+    >
+      <Typography variant="body2">{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
+      {pendingInterrupt.provisional_answer
+        ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} />
+        : <Alert severity="warning">No usable provisional answer was produced. Continue or steer the research.</Alert>}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Optional guidance for the next tranche" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
         <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Accept partial answer</Button>
         <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('continue')}>Continue research</Button>
         <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('steer')}>Steer and continue</Button>
-      </Stack>
-      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
-    </Box> : pendingInterrupt && isResultReview ? <Box sx={{ p: 2 }}>
-      <Typography variant="subtitle2">{pendingInterrupt.title || 'Review incomplete result'}</Typography>
-      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
-      {pendingInterrupt.provisional_answer ? (
-        <Box sx={{ maxHeight: 240, overflow: 'auto', mb: 1 }}>
-          <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} />
-        </Box>
-      ) : null}
-      <TextField fullWidth multiline minRows={2} maxRows={6} label="Guidance for retry" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} sx={{ mb: 1 }} />
-      <Stack direction="row" spacing={1}>
+      </Box>
+      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+    </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
+      title={pendingInterrupt.title || 'Review incomplete result'}
+      variant="approval"
+      rootRef={panelRef}
+      horizontalInset={1}
+    >
+      <Typography variant="body2">{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
+      {pendingInterrupt.provisional_answer ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} /> : null}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Guidance for retry" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
         <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('accept')}>Accept with warnings</Button>
         <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
-      </Stack>
-      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
-    </Box> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
+      </Box>
+      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+    </ResizableDecisionPanel> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
       <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -741,6 +757,7 @@ export default function DeepResearchTaskPanel({
       disabled={!runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).visible || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)}
       disabledReason={runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).disabledReason}
       scopeOptions={approvalScopeOptions}
+      rootRef={panelRef}
       onAction={(action, options) => void decide(action, options)}
     /> : undefined}
     composer={<Box sx={{ pb: 1 }}>
@@ -767,8 +784,8 @@ export default function DeepResearchTaskPanel({
       </Box>}
       {!task ? (
         <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-      ) : interactionDescriptors.length > 0 || courseCorrectionAvailability.visible ? <>
-      {courseCorrectionAvailability.visible && ['queued', 'running', 'paused', 'awaiting_approval'].includes(task.status) ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
+      ) : interactionDescriptors.length > 0 || showCourseCorrectionForm || hasCourseCorrectionHistory ? <>
+      {showCourseCorrectionForm ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
         <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
         <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
           if (!selectedRun || !task) return;

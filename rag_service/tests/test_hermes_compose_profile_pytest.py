@@ -147,6 +147,16 @@ def test_ci_environment_includes_hermes_mcp_urls():
     assert values["HERMES_API_URL"] == "http://hermes:8642"
 
 
+def test_ci_environment_includes_control_plane_tool_instruction_limit():
+    values = {}
+    for line in (REPOSITORY_ROOT / ".env.ci").read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            values[key] = value
+
+    assert values["MAX_TOOL_INSTRUCTION_CHARS"] == "500"
+
+
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():
     hermes = _compose("docker-compose.yml")["services"]["hermes"]
     assert all(".env:" not in volume for volume in hermes.get("volumes", []))
