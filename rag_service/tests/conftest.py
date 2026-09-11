@@ -33,6 +33,13 @@ os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-char
 os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
 os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-characters")
 os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
+os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
+os.environ.setdefault("ASKPDF_MCP_HEALTH_URL", "http://127.0.0.1:8000/health")
+# Control-plane pytest invokes first-party tools in-process. CI copies
+# `.env.ci` into the test runner, and that file uses loopback HTTP against
+# `rag-service`, which is not part of docker-compose.test.yml.
+os.environ["MCP_TRANSPORT"] = "in_process"
+os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,

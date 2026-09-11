@@ -276,6 +276,34 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     echo "Starting deterministic Hermes runtime Hermes runtime proof..."
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime
+    control_plane_ready=0
+    for attempt in $(seq 1 120); do
+        if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
+            'import json, urllib.request; health=json.load(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)); assert health["status"] == "ok"' 2>/dev/null; then
+            control_plane_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$control_plane_ready" != "1" ]; then
+        echo "Control plane readiness timed out after 120 seconds" >&2
+        external_runtime_diagnostics
+        exit 1
+    fi
+    hermes_runtime_ready=0
+    for attempt in $(seq 1 120); do
+        if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes-runtime python -c \
+            'import json, urllib.request; ready=json.load(urllib.request.urlopen("http://127.0.0.1:8200/readyz", timeout=5)); assert ready["status"] == "ok"' 2>/dev/null; then
+            hermes_runtime_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$hermes_runtime_ready" != "1" ]; then
+        echo "Hermes runtime work readiness timed out after 120 seconds" >&2
+        external_runtime_diagnostics
+        exit 1
+    fi
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes-runtime python -c \
         'import importlib.util; import hermes_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py

@@ -114,10 +114,33 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert compose["services"]["hermes"]["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
+    assert compose["services"]["hermes"]["depends_on"]["rag-service"]["condition"] == "service_healthy"
     service = compose["services"]["hermes-runtime"]
     assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"
+    assert service["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
+    assert service["depends_on"]["rag-service"]["condition"] == "service_healthy"
+    assert service["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_RUNTIME_TOKEN" in service["environment"]
     assert "API_SERVER_KEY" not in service["environment"]
+
+
+def test_control_plane_test_runner_does_not_inherit_ci_loopback_mcp():
+    environment = _compose("docker-compose.test.yml")["services"]["test-runner"]["environment"]
+    assert "MCP_TRANSPORT=in_process" in environment
+    assert "MCP_LOOPBACK_URL=http://127.0.0.1:8000/internal/mcp/" in environment
+    assert "ASKPDF_MCP_URL=http://127.0.0.1:8000/internal/mcp/" in environment
+
+
+def test_ci_environment_includes_hermes_mcp_urls():
+    values = {}
+    for line in (REPOSITORY_ROOT / ".env.ci").read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            values[key] = value
+    assert values["MCP_TRANSPORT"] == "loopback_http"
+    assert values["ASKPDF_MCP_URL"] == "http://rag-service:8000/internal/mcp/"
+    assert values["ASKPDF_MCP_HEALTH_URL"] == "http://rag-service:8000/health"
+    assert values["HERMES_API_URL"] == "http://hermes:8642"
 
 
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():

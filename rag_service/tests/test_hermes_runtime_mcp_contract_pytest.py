@@ -243,3 +243,5 @@ def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_comman
     assert "hermes-fake" not in hermes_runtime
     assert "test_real_hermes_container_smoke_pytest.py" in hermes_runtime
     assert " hermes hermes-runtime" in hermes_runtime
+    assert "http://127.0.0.1:8000/health" in hermes_runtime
+    assert "http://127.0.0.1:8200/readyz" in hermes_runtime

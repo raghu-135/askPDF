@@ -50,6 +50,10 @@ services:
       - LLM_KEYLESS_PROVIDER=local
       - OPENAI_API_KEY=
       - LANGGRAPH_RUNTIME_TOKEN=test-langgraph-runtime-token-32-characters
+      - MCP_TRANSPORT=in_process
+      - MCP_LOOPBACK_URL=http://127.0.0.1:8000/internal/mcp/
+      - ASKPDF_MCP_URL=http://127.0.0.1:8000/internal/mcp/
+      - ASKPDF_MCP_HEALTH_URL=http://127.0.0.1:8000/health
       - DEFAULT_TOKEN_BUDGET=8192
       - REPLANS_LIMIT=10
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000

@@ -31,6 +31,9 @@ def external_hermes_transport_environment(monkeypatch):
     monkeypatch.setenv("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
     monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
     monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://rag-service:8000/internal/mcp/")
+    monkeypatch.setenv("ASKPDF_MCP_HEALTH_URL", "http://rag-service:8000/health")
+    monkeypatch.setenv("ASKPDF_MCP_REQUIRED", "true")
 
 
 @pytest.mark.asyncio

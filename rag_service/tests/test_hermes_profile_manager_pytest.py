@@ -59,6 +59,7 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
     monkeypatch.setenv("HERMES_PROFILE_UID", str(os.getuid()))
     monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
     manager = RunProfileManager(str(tmp_path))
     profile = manager.create(
         run_id=f"run-{value}", context_token="signed.token",
@@ -112,6 +113,7 @@ def test_run_profiles_are_isolated_and_stale_profiles_are_swept(monkeypatch, tmp
     monkeypatch.setenv("LLM_API_URL", "http://provider.test/v1")
     monkeypatch.setenv("HERMES_PROFILE_UID", str(os.getuid()))
     monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
     manager = RunProfileManager(str(tmp_path))
     first = manager.create(run_id="run-one", context_token="one.token", managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "model-one", "lmstudio", 24576))
     second = manager.create(run_id="run-two", context_token="two.token", managed_profile=_managed("askpdf-deep-external", ["search_web"], "model-two", "lmstudio", 24576))

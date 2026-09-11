@@ -17,6 +17,7 @@ export type TraceRunTab = {
   traceRefs?: AgentTraceRefs | null;
   runDetails?: AgentRunDetails;
   liveTraceView?: TraceRunView;
+  liveEventSource?: 'agent_run_events';
   loading?: boolean;
   error?: string;
   running?: boolean;

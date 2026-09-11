@@ -12,7 +12,6 @@ import PsychologyIcon from '@mui/icons-material/Psychology';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import {
   API_BASE,
-  agentRunEventsUrl,
   commandAgentTask,
   createAgentTask,
   deleteAgentTask,
@@ -36,9 +35,7 @@ import {
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
   type AgentRunResumeAction,
-  type AgentRunDetails,
   type AgentDefinitionCatalogEntry,
-  type BuilderTestStreamEnvelope,
 } from '../lib/api';
 import {
   isRunOwnedBySelectedTask,
@@ -56,7 +53,7 @@ import {
   type ConversationSentenceCache,
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
-import { buildLiveTraceView } from './agent-debug/agent-trace-projection';
+import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
 import {
   ConversationComposer,
   ConversationArtifactList,
@@ -69,24 +66,6 @@ import {
   ConversationTranscriptFrame,
   SourceList,
 } from './conversation';
-
-function requiredPositiveMilliseconds(name: string, raw: string | undefined): number {
-  const value = Number(raw);
-  if (!raw || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`Required environment variable ${name} must be a positive number`);
-  }
-  return value;
-}
-
-const AGENT_TASK_POLL_INTERVAL_MS = requiredPositiveMilliseconds(
-  'NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS',
-  process.env.NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS,
-);
-const AGENT_SSE_RECONNECT_INTERVAL_MS = requiredPositiveMilliseconds(
-  'NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS',
-  process.env.NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS,
-);
-
 
 export function DeepResearchTaskPicker({
   threadId,
@@ -278,13 +257,10 @@ export default function DeepResearchTaskPanel({
   const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
   const [definitionId, setDefinitionId] = useState('');
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
-  const [traceLiveRequested, setTraceLiveRequested] = useState(false);
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
-  const liveTraceEventsRef = useRef<BuilderTestStreamEnvelope[]>([]);
-  const liveTraceRunDetailsRef = useRef<AgentRunDetails | undefined>(undefined);
   const taskContextRef = useRef(selectedTaskId);
   taskContextRef.current = selectedTaskId;
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
@@ -381,8 +357,6 @@ export default function DeepResearchTaskPanel({
     setTodos([]);
     setItems([]);
     setRunIndex(-1);
-    setTraceLiveRequested(false);
-    liveTraceRunDetailsRef.current = undefined;
     setError('');
     sequenceRunId.current = null;
     lastSequence.current = 0;
@@ -423,75 +397,6 @@ export default function DeepResearchTaskPanel({
     if (!terminalStatuses.includes(String(task?.status)) && !terminalStatuses.includes(String(selectedRun.status))) return;
     void refreshTimeline(selectedTaskId, selectedRun.id).catch((value) => setError(String(value)));
   }, [refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status]);
-
-  useEffect(() => {
-    if (!traceLiveRequested || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) {
-      liveTraceEventsRef.current = [];
-      return undefined;
-    }
-    let active = true;
-    let source: EventSource | null = null;
-    const runId = selectedRun.id;
-    let afterSequence = 0;
-    const connect = () => {
-      if (!active) return;
-      source = new EventSource(agentRunEventsUrl(runId, threadId, afterSequence));
-      source.addEventListener('run_event', (event) => {
-        let value: Record<string, any>;
-        try { value = JSON.parse((event as MessageEvent).data || '{}'); } catch { return; }
-        const sequence = Number(value.sequence || 0);
-        if (sequence > 0 && sequence <= afterSequence) return;
-        afterSequence = Math.max(afterSequence, sequence);
-        const kind = String(value.kind || 'runtime.event');
-        const payload = value.payload && typeof value.payload === 'object' ? value.payload : {};
-        const data = {
-          ...payload,
-          event_id: value.event_id ?? (payload as Record<string, any>).event_id,
-          sequence: value.sequence,
-          attempt: value.attempt,
-          occurred_at: value.occurred_at,
-          parallel_groups: value.parallel_groups,
-        };
-        const envelope = { id: value.id || sequence, event: kind, data } as BuilderTestStreamEnvelope;
-        if (active) {
-          liveTraceEventsRef.current = [...liveTraceEventsRef.current, envelope];
-          const liveTraceView = buildLiveTraceView(liveTraceEventsRef.current);
-          onOpenTrace?.({
-            id: runId,
-            threadId,
-            messageId: `agent-task:${selectedTaskId}:${runId}`,
-            label: `Deep Research · attempt ${selectedRun.attempt}`,
-            status: ['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind) ? kind.slice(4) : 'running',
-            liveTraceView,
-            runDetails: liveTraceRunDetailsRef.current,
-            running: !['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind),
-          });
-        }
-        if (['run.completed', 'run.failed', 'run.cancelled', 'run.clarification'].includes(kind)) {
-          void refreshTimeline(selectedTaskId, runId).catch((value) => setError(String(value)));
-          void refresh().catch((value) => setError(String(value)));
-          active = false;
-          // The terminal event is the end of the live projection. Stop the
-          // subscription immediately; task polling will provide the retained
-          // authoritative trace without reopening the SSE stream from zero.
-          setTraceLiveRequested(false);
-          source?.close();
-          source = null;
-        }
-      });
-      source.onerror = () => {
-        source?.close();
-        source = null;
-        if (active) window.setTimeout(connect, AGENT_SSE_RECONNECT_INTERVAL_MS);
-      };
-    };
-    connect();
-    return () => {
-      active = false;
-      source?.close();
-      source = null;
-    };
-  }, [onOpenTrace, refresh, refreshTimeline, selectedRun?.attempt, selectedRun?.id, selectedTaskId, task?.status, threadId, traceLiveRequested]);
 
   useEffect(() => {
     if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;
@@ -580,23 +485,16 @@ export default function DeepResearchTaskPanel({
       label: `Deep Research · attempt ${run.attempt}`,
       status: run.status,
       running,
+      liveEventSource: 'agent_run_events' as const,
     };
-    setTraceLiveRequested(true);
-    onOpenTrace({
-      ...descriptor,
-      runDetails: liveTraceRunDetailsRef.current,
-      liveTraceView: liveTraceEventsRef.current.length
-        ? buildLiveTraceView(liveTraceEventsRef.current)
-        : undefined,
-    });
+    onOpenTrace(descriptor);
     const details = await getAgentRun(run.id, threadId);
-    liveTraceRunDetailsRef.current = details;
+    const detailsRunning = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(details.status);
     onOpenTrace({
       ...descriptor,
+      status: details.status,
+      running: detailsRunning,
       runDetails: details,
-      liveTraceView: liveTraceEventsRef.current.length
-        ? buildLiveTraceView(liveTraceEventsRef.current)
-        : undefined,
     });
   };
 
