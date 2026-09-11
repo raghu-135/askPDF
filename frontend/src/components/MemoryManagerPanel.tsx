@@ -541,17 +541,13 @@ export default function MemoryManagerPanel({
             beforeModelControls={(
               <WebSearchModeControl mode={webSearchMode} disabled={busy} onChange={setWebSearchMode} />
             )}
-            leading={(
-              <Box sx={{ minWidth: 0, overflow: 'hidden' }}>
-                {curatorEmbeddingModel && (
-                  <EmbeddingModelReadinessIndicator
-                    model={curatorEmbeddingModel}
-                    ready={workspaceReadiness?.embedding_model_ready ?? null}
-                    size={18}
-                  />
-                )}
-              </Box>
-            )}
+            leading={curatorEmbeddingModel ? (
+              <EmbeddingModelReadinessIndicator
+                model={curatorEmbeddingModel}
+                ready={workspaceReadiness?.embedding_model_ready ?? null}
+                size={18}
+              />
+            ) : undefined}
           />
         </>
       )}

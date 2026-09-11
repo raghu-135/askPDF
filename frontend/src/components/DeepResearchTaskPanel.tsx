@@ -66,6 +66,7 @@ import {
   ConversationTranscriptFrame,
   SourceList,
 } from './conversation';
+import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
 
 export function DeepResearchTaskPicker({
   threadId,
@@ -98,15 +99,16 @@ export function DeepResearchTaskPicker({
   };
 
   return <>
-    <Button
-      size="small"
-      color="inherit"
-      startIcon={<TravelExploreIcon fontSize="small" />}
-      onClick={(event) => { setAnchor(event.currentTarget); void refresh(); }}
-      sx={{ maxWidth: 230, textTransform: 'none' }}
-    >
-      <Typography variant="body2" noWrap>{selected?.objective || 'Deep Research'}</Typography>
-    </Button>
+    <Tooltip title="Deep Research">
+      <IconButton
+        size="small"
+        color="inherit"
+        aria-label="Deep Research"
+        onClick={(event) => { setAnchor(event.currentTarget); void refresh(); }}
+      >
+        <TravelExploreIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
     <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)} slotProps={{ paper: { sx: { width: 360, maxWidth: '90vw' } } }}>
       <MenuItem onClick={() => { onSelect(null); setAnchor(null); }}>
         <ListItemIcon><TravelExploreIcon fontSize="small" /></ListItemIcon>
@@ -548,6 +550,20 @@ export default function DeepResearchTaskPanel({
       ? 'off'
       : configuredWebMode;
   const selectedDefinition = definitions.find((entry) => entry.definition_id === definitionId);
+  const selectedAgentId = frozen ? String(task?.workflow_id || definitionId) : definitionId;
+  const agentSelectOptions = useMemo(() => {
+    const options = definitions.map((entry) => ({
+      definition_id: entry.definition_id,
+      display_name: entry.display_name,
+    }));
+    if (selectedAgentId && !options.some((entry) => entry.definition_id === selectedAgentId)) {
+      options.push({ definition_id: selectedAgentId, display_name: selectedAgentId });
+    }
+    return options;
+  }, [definitions, selectedAgentId]);
+  const agentSelectValue = agentSelectOptions.some((entry) => entry.definition_id === selectedAgentId)
+    ? selectedAgentId
+    : (agentSelectOptions[0]?.definition_id || '');
   const definitionFields = selectedDefinition?.configuration.fields || [];
   const modelField = definitionFields.find((field) => field.id === 'llm_model');
   const contextWindowField = definitionFields.find((field) => field.id === 'context_window');
@@ -636,18 +652,23 @@ export default function DeepResearchTaskPanel({
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
-      beforeModelControls={<Stack direction="row" spacing={1} alignItems="center">
-        <Chip size="small" label={frozen ? String(task?.workflow_id || definitionId) : (selectedDefinition?.display_name || 'Select definition')} />
-        {!frozen && definitions.length > 1 ? (
-          <select value={definitionId} onChange={(event) => setDefinitionId(event.target.value)} aria-label="Agent definition">
-            {definitions.map((entry) => <option key={entry.definition_id} value={entry.definition_id}>{entry.display_name}</option>)}
-          </select>
-        ) : null}
-        {webSearchField ? renderWebControl(
-          frozen ? frozenWebMode : webSearchMode,
-          frozen || webSearchField.enabled === false,
-        ) : null}
-      </Stack>}
+      beforeModelControls={webSearchField ? renderWebControl(
+        frozen ? frozenWebMode : webSearchMode,
+        frozen || webSearchField.enabled === false,
+      ) : null}
+      afterModelControls={agentSelectValue ? (
+        <WorkbenchSelect
+          label="Select agent"
+          aria-label="Agent definition"
+          value={agentSelectValue}
+          disabled={frozen}
+          onChange={setDefinitionId}
+        >
+          {agentSelectOptions.map((entry) => (
+            <MenuItem key={entry.definition_id} value={entry.definition_id}>{entry.display_name}</MenuItem>
+          ))}
+        </WorkbenchSelect>
+      ) : null}
       trailingActions={<DeepResearchTaskPicker threadId={threadId} selectedTaskId={selectedTaskId} onSelect={onTaskSelect} />}
     />}
     status={<>
