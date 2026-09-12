@@ -1,0 +1,11 @@
+{
+  "excluded": {
+    "test_external_hermes_runtime_smoke_pytest.py": "run only by the Hermes external-runtime proof",
+    "test_external_runtime_smoke_pytest.py": "run only by the LangGraph external-runtime proof",
+    "test_real_hermes_container_smoke_pytest.py": "run only by the Hermes external-runtime proof",
+    "test_hermes_runtime_mcp_contract_pytest.py": "run only by the Hermes external-runtime proof",
+    "test_hermes_runtime_restart_pytest.py": "run only by the Hermes restart proof",
+    "test_modular_visualization.py": "standalone visualization fixture, explicitly ignored by pytest",
+    "test_parsing_service.py": "standalone parser script, not a pytest suite"
+  }
+}

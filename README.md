@@ -129,9 +129,9 @@ docker compose up --build
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      Docker Compose                                         │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────┬─────────────────────┤
-│    Frontend     │   RAG Service   │  Browser Capture│   PostgreSQL    │      Weaviate       │
-│   (Next.js)     │    (FastAPI)    │   (Selenium)    │   (Primary DB)  │   (Vector DB)       │
-│   Port: 3000    │   Port: 8000    │   Port: 8090    │   Port: 5432    │   Port: 8080        │
+│    Frontend     │   RAG Service   │ LangGraph runtime│ Hermes runtime │ Browser Capture      │
+│   (Next.js)     │ control plane   │  (FastAPI/SSE)   │  (HTTP gateway)│   (Selenium)         │
+│   Port: 3000    │   Port: 8000    │   Port: 8100      │   Port: 8200   │   Port: 8090          │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴─────────────────────┘
                                                    │
                                                    ▼
@@ -147,17 +147,21 @@ docker compose up --build
 | Service | Port | Description |
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
-| **RAG Service** | 8000 | FastAPI server for PDF processing, indexing, chat, and the integrated durable agent-task worker |
+| **RAG Service** | 8000 | Product/control-plane APIs for PDF processing, indexing, chat, task orchestration, artifacts, MCP, and trace projection |
+| **LangGraph runtime** | 8100 | External LangGraph validation, graph compilation, Deep Agent execution, checkpoints, dependency discovery, and framework HITL |
+| **Hermes runtime** | 8200 | Separate Hermes execution gateway for Hermes-backed task runs |
 | **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
-The current deployment runs `rag-service` as one Uvicorn process. Its integrated
-agent-task worker shares the service's PostgreSQL pool and uses database leases
-and checkpoints for restart recovery. Do not enable multiple Uvicorn/Gunicorn
-worker processes until agent execution is extracted into its planned dedicated
-service; each server process would otherwise start another task worker.
+The control plane and execution runtimes are separate services. The control
+plane owns product databases, task state, artifacts, MCP authorization, and
+debug projections. `langgraph-runtime` owns graph execution and checkpoint
+storage; `hermes-runtime` owns native Hermes execution. Runtime calls use the
+strictly validated `runtime_protocol` over HTTP/SSE, and product APIs expose only opaque
+continuations—not framework checkpoint identifiers. The HTTP/SSE contract is
+strictly validated but does not negotiate protocol versions.
 
 </details>
 
@@ -165,7 +169,7 @@ service; each server process would otherwise start another task worker.
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Agent Workflow Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with persisted run metadata
+- **Agent Workflow Runtime**: External LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with product-projected run metadata
 - **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
 - **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
 - **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
@@ -186,17 +190,23 @@ service; each server process would otherwise start another task worker.
 <details>
 <summary>🛠️ Technology Stack</summary>
 
-### RAG Service
+### RAG Service / Control Plane
 | Technology | Purpose |
 |------------|---------|
 | **FastAPI** | Web framework |
-| **LangChain** | LLM/Embedding integration |
-| **LangGraph** | Stateful multi-agent workflow |
+| **LangChain** | Product-side LLM/embedding integration where required |
 | **Weaviate Client** | Vector database operations |
 | **SQLModel** | ORM built on SQLAlchemy |
 | **SQLAlchemy** | Async database operations |
 | **Alembic** | Database migration management |
 | **asyncpg** | Async PostgreSQL driver |
+
+### LangGraph Runtime
+| Technology | Purpose |
+|------------|---------|
+| **FastAPI + HTTP/SSE** | External runtime protocol and event streaming |
+| **LangGraph / LangChain** | Graph compilation and stateful Deep Agent execution |
+| **Checkpoint store** | Runtime-owned pause, resume, and restart recovery |
 
 ### Browser Capture Service
 | Technology | Purpose |
@@ -323,7 +333,8 @@ Environment variables are now managed using a `.env` file for better security an
 **Frontend Service**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | Required | Public RAG service URL baked into the frontend at build time; the frontend refuses to start or build when it is missing or blank |
+| `NEXT_PUBLIC_API_URL` | Required | Frontend API base. Use `/api/backend` so the Next.js server can attach the server-only `ASKPDF_ADMIN_TOKEN`; direct external deployments may use a public API URL only when their proxy supplies authentication. |
+| `ASKPDF_BACKEND_URL` | Required for the frontend proxy | Server-only RAG service URL used by the Next.js API proxy (for example, `http://rag-service:8000` in Compose or `http://localhost:8000` for local Next.js development). |
 
 **RAG Service - Core Configuration**
 | Variable | Default | Description |
@@ -332,20 +343,30 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
-| `ASKPDF_AGENT_CHECKPOINTER` | `memory` (`postgres` in Docker/CI) | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
-| `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
-| `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
-| `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
+| `LANGGRAPH_RUNTIME_URL` | `http://langgraph-runtime:8100` | Required internal URL for the external LangGraph runtime |
 | `ASKPDF_CONTENT_ROOT` | `/static` | Backend-only shared-volume root for PDFs and Deep Research artifacts |
 
 **Agent Runtime Operations**
-- Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
-- Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
+- Local development runs the control plane and `langgraph-runtime` together through Compose, or points `LANGGRAPH_RUNTIME_URL` at a separately launched runtime. The control plane has no in-process LangGraph mode.
+- Checkpoint configuration and credentials belong only to `langgraph-runtime`; the runtime fails closed when durable checkpoint storage is unavailable.
 - Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
 - The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
-- Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
+- Runtime checkpoint administration is performed from the `langgraph-runtime` image and never from the control plane.
+- The Hermes adapter implements the production API contract pinned to NousResearch/hermes-agent commit `bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894`. Definitions resolve deterministically into managed profiles; credentials remain environment-owned. The bundled gateway journal is still single-worker/single-replica and requires a shared transactional store before horizontal scaling.
+
+The default Compose stack builds the pinned Hermes API and its askPDF adapter.
+Set distinct `HERMES_RUNTIME_TOKEN`, `HERMES_API_TOKEN`, and
+`MCP_EXECUTION_CONTEXT_SECRET` values in `.env`, then start the application normally. Hermes uses
+the model selected for each askPDF thread and the existing OpenAI-compatible
+`LLM_API_URL`; no separate Hermes model setting is required:
+
+```bash
+docker compose up --build
+```
+
+Hermes uses `/health`; the adapter uses `/readyz`, which also verifies MCP.
 
 ### Setup Instructions
 
@@ -442,7 +463,6 @@ run for debugging.
 - `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
 - `--integration` - Run integration tests
-- `--agent-checkpoint` - Run the Postgres checkpoint/resume hardening test
 - `--schema` - Run schema guardrail tests
 - `--standalone` - Run standalone verification scripts
 - `--all` / `--all-tests` - Run the full pytest suite plus standalone checks
@@ -495,3 +515,18 @@ This project uses the following third-party technologies:
 ## 📧 Contact
 
 For questions, issues, or suggestions, please open an issue on the [GitHub repository](https://github.com/raghu13590/askpdf).
+# Hermes Deep Research runtime
+
+Hermes is enabled by the example configuration as an engine for durable Deep Research tasks; standard chat workflows remain on LangGraph. The integration is pinned to `NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894` (Hermes config schema 37).
+
+Hermes is controlled through one switch. The example configuration sets `COMPOSE_PROFILES=hermes`; set it to an empty value or remove `hermes` to disable Hermes completely. When enabled, configure distinct `HERMES_RUNTIME_TOKEN`, `HERMES_API_TOKEN`, and `MCP_EXECUTION_CONTEXT_SECRET` values (at least 32 random characters each), plus `OPENAI_API_KEY`, `HERMES_MODEL_CONTEXT_LENGTH`, and `HERMES_MODEL_PROVIDER`, then run `docker compose up -d`. Generate each service token with `openssl rand -hex 32`; replace all example placeholders before shared or production use. The same `COMPOSE_PROFILES` value both starts the three Hermes services and advertises Hermes through rag-service. Check `docker compose ps` and `docker compose exec hermes-runtime curl -f http://localhost:8200/readyz`; stop the stack with `docker compose down`. Runtime and upstream Hermes ports are intentionally available only on the internal Compose network. Enabled Hermes configuration is validated fail-fast: startup and task creation remain unavailable when required values are missing, malformed, reused, or incompatible. The pinned revision normally requires at least 64,000 tokens, but explicitly permits a smaller configured value for its first-class `lmstudio` provider. askPDF validates that compatibility rule, renders the exact deployment value into Hermes configuration, and freezes it into each new Hermes task; definitions contain no credentials.
+
+### Control-plane authentication
+
+Product APIs require a bearer token in `ASKPDF_ADMIN_TOKEN`; generate it with `openssl rand -hex 32`. Set `ASKPDF_CORS_ORIGINS` to the exact browser origins that may call the API. Health endpoints remain public, while runtime and all HTTP MCP endpoints use separate service credentials and must remain on the private Compose network. The generic `/internal/mcp/` endpoint requires the same signed, short-lived execution grant used by framework-specific MCP endpoints; only the in-process MCP path bypasses HTTP authentication. Deployments using an authenticated reverse proxy may set `ASKPDF_TRUST_PROXY_AUTH=true` and provide `X-Authenticated-User` only from that trusted proxy; the control-plane port must remain private and is bound to localhost by the default Compose stack. Authentication is supported in v1, while multi-user resource authorization and tenant isolation are not implemented. Runtime capability and MCP tool allowlists are execution safeguards, not user authorization. Rotate the admin token, runtime tokens, upstream Hermes token, and `MCP_EXECUTION_CONTEXT_SECRET` together during maintenance; never reuse one secret across boundaries.
+
+LangGraph remains the default Deep Research engine. Select Hermes explicitly in the Deep Research workspace. The selected engine, model, context window, and workflow definition are frozen on the task and retained for retries and inspection.
+
+Hermes Deep Research uses two reproducible managed profiles. The offline profile exposes thread shape, broad and focused document retrieval, conversation history, timeline, and durable-memory search. Tasks created with web mode `ask` or `on` use the external profile, which additionally exposes live web search, Wikipedia, Wikidata, arXiv, PubMed, Semantic Scholar, Stack Exchange, and Yahoo Finance News. For each run, askPDF derives a short-lived isolated profile and supplies its signed execution context through an MCP transport header; the model never receives or copies that credential. Legacy aliases and memory-curator mutation tools are not exposed, and the ordinary LangGraph MCP endpoint and contracts are unchanged. A Hermes report is published only after a permitted evidence tool returns nonempty evidence; otherwise the run fails with `required_evidence_unavailable` and remains retryable.
+
+The pinned revision discovers MCP servers only at gateway startup. The Compose integration therefore mounts a revision-guarded askPDF compatibility hook that activates newly generated profile MCP servers during `/p/<profile>/v1/toolsets`, verifies the profile identity and complete tool surface before model execution, and retires only that run's MCP connection afterward. Remove the hook when the pinned upstream revision provides equivalent dynamic-profile lifecycle support.

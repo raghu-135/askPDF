@@ -1,0 +1,144 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.api.agent_tasks import _run_payload
+from app.runtime.adapter import AgentRuntimeAdapter
+from app.runtime.hermes_adapter import HermesRuntimeAdapter
+from app.services import agent_task_runtime
+from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
+
+
+evaluator = AgentGroundingEvaluator()
+
+
+def _event(kind, **payload):
+    return SimpleNamespace(kind=kind, payload_json={"source": "askpdf_mcp", **payload})
+
+
+def test_document_grounding_summary_reports_missing_document_evidence():
+    events = [
+        _event("tool.failed", tool_name="search_document_by_id", error={"code": "tool_arguments_invalid"}),
+        _event("tool.completed", tool_name="search_web", ok=True, result_count=4),
+    ]
+    summary = evaluator.evaluate({}, events, documents_present=True)
+    assert summary["grounded"] is False
+    assert summary["failure_codes"] == ["tool_arguments_invalid"]
+
+
+def test_grounding_summary_handles_boolean_error_markers():
+    summary = evaluator.evaluate(
+        {},
+        [_event("tool.failed", tool_name="search_document_by_id", error=True)],
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["failure_codes"] == ["tool_failed"]
+
+
+def test_later_successful_document_retrieval_satisfies_grounding():
+    events = [
+        _event("tool.failed", tool_name="search_documents", error={"code": "tool_execution_failed"}),
+        _event("tool.completed", tool_name="search_document_by_id", ok=True, result_count=3),
+    ]
+    summary = evaluator.evaluate({}, events, documents_present=True)
+    assert summary["grounded"] is True
+    assert summary["evidence_result_count"] == 3
+
+
+def test_no_document_task_accepts_research_evidence_but_not_context_discovery():
+    assert evaluator.evaluate({}, [
+        _event("tool.completed", tool_name="search_thread_conversation_history", ok=True, result_count=2),
+    ], documents_present=False)["grounded"] is False
+    assert evaluator.evaluate({}, [
+        _event("tool.completed", tool_name="wikipedia", ok=True, result_count=2),
+    ], documents_present=False)["grounded"] is True
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "hermes"])
+def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
+    result = {
+        "final_answer": "draft",
+        "task_evidence_manifest": [],
+        "grounding_report": {"verified_claims": []},
+    }
+    events = [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})]
+
+    summary = evaluator.evaluate(
+        result,
+        events,
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["requirement"] == "document"
+
+
+def test_missing_retrieval_does_not_define_a_terminal_error():
+    summary = evaluator.evaluate(
+        {"final_answer": "answer", "task_evidence_manifest": [], "grounding_report": {"verified_claims": []}},
+        [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})],
+        documents_present=True,
+    )
+
+    assert summary["grounded"] is False
+    assert summary["failure_codes"] == ["missing"]
+
+
+def test_grounding_evaluator_validates_result_evidence_against_artifacts():
+    artifact = SimpleNamespace(id="artifact-1", validity="valid", deleted_at=None)
+    result = {"task_evidence_manifest": [{"id": "artifact-1"}, {"id": "missing"}]}
+
+    summary = evaluator.evaluate(result, [], documents_present=True, artifacts=[artifact])
+
+    assert summary["grounded"] is True
+    assert summary["evidence_result_count"] == 1
+
+
+def test_grounding_policy_is_not_part_of_the_runtime_adapter_spi():
+    assert not hasattr(AgentRuntimeAdapter, "grounding_summary")
+    assert not hasattr(HermesRuntimeAdapter, "grounding_summary")
+
+
+def test_agent_task_run_payload_preserves_required_trace_details():
+    run = SimpleNamespace(
+        id="run-1", task_id="task-1", task_attempt=1, parent_run_id=None,
+        status="failed", pending_interrupt_json=None,
+        runtime_binding_status=None,
+        metrics_json={}, error_json={"code": "runtime_limit_exceeded"},
+        started_at=None, completed_at=None,
+        debug_trace_json={"version": 1, "trace": {"status": "failed"}, "summary": {}, "details": [{"operation_id": "hermes"}]},
+    )
+
+    payload = _run_payload(run)
+
+    assert payload["debug"]["trace"]["status"] == "failed"
+    assert payload["debug"]["details"] == [{"operation_id": "hermes"}]
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_and_trace_are_written_atomically(monkeypatch):
+    repository = SimpleNamespace(complete_run=AsyncMock(return_value=SimpleNamespace(id="run-1")))
+    run = SimpleNamespace(id="run-1", status="running", completed_at=None, debug_trace_json=None)
+    monkeypatch.setattr(
+        agent_task_runtime,
+        "finalize_and_merge_debug_payload",
+        lambda **kwargs: {"version": 1, "trace": {"status": kwargs["run_status"]}, "summary": {}},
+    )
+
+    await agent_task_runtime._complete_run_with_trace(
+        repository,
+        run=run,
+        recorder=SimpleNamespace(),
+        status="failed",
+        metrics={"duration_ms": 300000},
+        result={},
+        error={"code": "runtime_limit_exceeded"},
+    )
+
+    repository.complete_run.assert_awaited_once()
+    call = repository.complete_run.await_args
+    assert call.kwargs["debug_trace_json"]["trace"]["status"] == "failed"
+    assert call.kwargs["completed_at"] is not None

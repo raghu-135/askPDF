@@ -1,19 +1,21 @@
-import React, { useId, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   IconButton,
-  FormControl,
-  InputLabel,
   List,
   MenuItem,
   Paper,
-  Select,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { SxProps, Theme } from '@mui/material/styles';
+import {
+  WorkbenchSelect,
+  WorkbenchToolbar,
+  workbenchControlOutlineSx,
+} from '../workbench/WorkbenchToolbar';
 
 export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   header: React.ReactNode;
@@ -61,8 +63,10 @@ export function ConversationHeader({
   model,
   contextWindow,
   disabled = false,
+  contextWindowDisabled = false,
   leading,
   beforeModelControls,
+  afterModelControls,
   trailingActions,
   sx,
   onModelChange,
@@ -72,28 +76,17 @@ export function ConversationHeader({
   model: string;
   contextWindow: number;
   disabled?: boolean;
+  contextWindowDisabled?: boolean;
   leading?: React.ReactNode;
   beforeModelControls?: React.ReactNode;
+  afterModelControls?: React.ReactNode;
   trailingActions?: React.ReactNode;
   sx?: SxProps<Theme>;
   onModelChange: (model: string) => void;
   onContextWindowChange: (contextWindow: number) => void;
 }) {
-  const labelId = useId();
   const [showContextHighlight, setShowContextHighlight] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
-  const selectOutlineSx = {
-    '& fieldset': {
-      borderColor: 'transparent',
-      borderWidth: '1px',
-    },
-    '&:hover fieldset': {
-      borderColor: 'primary.main',
-    },
-    '&.Mui-focused fieldset': {
-      borderColor: 'primary.main',
-    },
-  };
 
   const handleModelChange = (nextModel: string) => {
     setShowContextHighlight(true);
@@ -107,103 +100,75 @@ export function ConversationHeader({
   };
 
   return (
-    <Box sx={{
-      mb: 0.5,
-      pt: 0.5,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 2,
-      flexWrap: 'nowrap',
-      flexShrink: 0,
-      minWidth: 0,
-      ...sx,
-    }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
-        {leading}
-      </Box>
-      <Box sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        flex: '0 0 auto',
-        minWidth: 0,
-        gap: 1,
-        flexWrap: 'nowrap',
-      }}>
-        {beforeModelControls && (
-          <Box sx={{ minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
-            {beforeModelControls}
+    <WorkbenchToolbar
+      sx={[{ mb: 0.5, pt: 0.5, flexShrink: 0 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
+    >
+      {leading}
+      {beforeModelControls}
+      <Tooltip
+        title={
+          <Box sx={{ p: 0.5 }}>
+            <Typography variant="caption" sx={{ display: 'block' }}>
+              Set context window size for the LLM.
+            </Typography>
+            <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
+              Find the model context length at{' '}
+              <a
+                href="https://llm-explorer.com/list/"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#90caf9', textDecoration: 'underline' }}
+              >
+                llm-explorer.com
+              </a>
+              . Enter the numeric Context Len value, such as 8000 or 128000.
+              Larger windows allow more context but can increase latency and cost.
+            </Typography>
           </Box>
-        )}
-        <Tooltip
-          title={
-            <Box sx={{ p: 0.5 }}>
-              <Typography variant="caption" sx={{ display: 'block' }}>
-                Set context window size for the LLM.
-              </Typography>
-              <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
-                Find the model context length at{' '}
-                <a
-                  href="https://llm-explorer.com/list/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: '#90caf9', textDecoration: 'underline' }}
-                >
-                  llm-explorer.com
-                </a>
-                . Enter the numeric Context Len value, such as 8000 or 128000.
-                Larger windows allow more context but can increase latency and cost.
-              </Typography>
-            </Box>
-          }
-          placement="top"
-          open={tooltipOpen}
-          onOpen={() => setTooltipOpen(true)}
-          onClose={() => {
-            if (!showContextHighlight) setTooltipOpen(false);
-          }}
-        >
-          <TextField
-            size="small"
-            label="Ctx size"
-            type="number"
-            value={contextWindow}
-            disabled={disabled}
-            onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
-            onClick={dismissContextHelp}
-            onFocus={dismissContextHelp}
-            sx={{
-              width: 116,
-              flex: '0 0 116px',
-              '& .MuiOutlinedInput-root': {
-                transition: 'all 0.3s ease',
-                backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
-                ...selectOutlineSx,
-                '& fieldset': {
-                  borderColor: showContextHighlight ? 'primary.main' : 'transparent',
-                  borderWidth: showContextHighlight ? '2px' : '1px',
-                },
+        }
+        placement="top"
+        open={tooltipOpen}
+        onOpen={() => setTooltipOpen(true)}
+        onClose={() => {
+          if (!showContextHighlight) setTooltipOpen(false);
+        }}
+      >
+        <TextField
+          size="small"
+          label="Ctx size"
+          type="number"
+          value={contextWindow}
+          disabled={disabled || contextWindowDisabled}
+          onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
+          onClick={dismissContextHelp}
+          onFocus={dismissContextHelp}
+          sx={{
+            width: 116,
+            flex: '0 0 116px',
+            '& .MuiOutlinedInput-root': {
+              transition: 'all 0.3s ease',
+              backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+              ...workbenchControlOutlineSx,
+              '& fieldset': {
+                borderColor: showContextHighlight ? 'primary.main' : 'transparent',
+                borderWidth: showContextHighlight ? '2px' : '1px',
               },
-            }}
-            slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
-          />
-        </Tooltip>
-        <FormControl size="small" disabled={disabled} sx={{ flex: '0 0 220px', minWidth: 220 }}>
-          <InputLabel id={labelId}>Select LLM</InputLabel>
-          <Select
-            labelId={labelId}
-            value={model}
-            label="Select LLM"
-            onChange={(event) => handleModelChange(String(event.target.value))}
-            sx={selectOutlineSx}
-          >
-            {models.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
-          </Select>
-        </FormControl>
-        {trailingActions}
-      </Box>
-    </Box>
+            },
+          }}
+          slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
+        />
+      </Tooltip>
+      <WorkbenchSelect
+        label="Select LLM"
+        value={model}
+        disabled={disabled}
+        onChange={handleModelChange}
+      >
+        {models.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
+      </WorkbenchSelect>
+      {afterModelControls}
+      {trailingActions}
+    </WorkbenchToolbar>
   );
 }
 

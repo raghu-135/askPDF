@@ -320,7 +320,10 @@ class AgentWorkflow(SQLModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
     )
-    schema_version: int = Field(default=2)
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    category: Optional[str] = Field(default=None, index=True)
+    schema_version: int = Field(default=1)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -367,6 +370,14 @@ class AgentRun(SQLModel, table=True):
     workflow_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_workflows.id", ondelete="RESTRICT"), index=True)
     )
+    framework: str = Field(default="langgraph", index=True)
+    builder_id: str = Field(default="langgraph_graph", index=True)
+    definition_category: Optional[str] = Field(default=None, index=True)
+    runtime_binding_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    runtime_binding_status: str = Field(default="active", index=True)
     run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -376,7 +387,6 @@ class AgentRun(SQLModel, table=True):
         sa_column=Column(JSONB, default=dict)
     )
     status: str = Field(default=AgentRunStatus.RUNNING.value, index=True)
-    checkpoint_thread_id: Optional[str] = None
     task_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True),
@@ -452,6 +462,42 @@ class AgentRun(SQLModel, table=True):
         self.run_metadata_json = metadata
 
 
+class AgentRunEvent(SQLModel, table=True):
+    """Canonical, framework-neutral observability event for an agent run."""
+    __tablename__ = "agent_run_events"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    agent_run_id: str = Field(
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    )
+    event_id: str = Field(index=True)
+    sequence: int = Field(default=0)
+    attempt: int = Field(default=1)
+    kind: str = Field(index=True)
+    occurred_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    payload_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    trace_id: Optional[str] = Field(default=None, index=True)
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now()),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("agent_run_id", "event_id", name="uq_agent_run_events_run_event"),
+        Index("idx_agent_run_events_run_sequence", "agent_run_id", "attempt", "sequence"),
+        CheckConstraint("attempt >= 1", name="ck_agent_run_events_attempt"),
+        CheckConstraint("sequence >= 0", name="ck_agent_run_events_sequence"),
+    )
+
+
 class AgentTask(SQLModel, table=True):
     """Durable user-facing task that owns one or more agent run attempts."""
     __tablename__ = "agent_tasks"
@@ -493,7 +539,7 @@ class AgentTask(SQLModel, table=True):
         CheckConstraint("length(btrim(objective)) > 0", name="ck_agent_tasks_objective_nonempty"),
         CheckConstraint("length(btrim(objective_hash)) > 0", name="ck_agent_tasks_objective_hash_nonempty"),
         CheckConstraint("length(btrim(create_idempotency_key)) > 0", name="ck_agent_tasks_idempotency_nonempty"),
-        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
+        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','recovery_required','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
         CheckConstraint("version >= 1 and latest_run_attempt >= 0", name="ck_agent_tasks_versions"),
         CheckConstraint("progress between 0 and 100 and completed_todos >= 0 and total_todos >= 0", name="ck_agent_tasks_progress"),
         Index(
@@ -647,6 +693,8 @@ class AgentTaskEvent(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
     sequence: int
+    event_id: Optional[str] = Field(default=None, index=True)
+    causal_key: Optional[str] = Field(default=None, index=True)
     event_type: str = Field(index=True)
     actor_type: str
     actor_id: Optional[str] = None
@@ -657,13 +705,51 @@ class AgentTaskEvent(SQLModel, table=True):
     payload_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
     policy_hash: Optional[str] = None
     config_hash: Optional[str] = None
+    occurred_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
 
     __table_args__ = (
         CheckConstraint("sequence >= 1", name="ck_agent_task_events_sequence"),
         UniqueConstraint("task_id", "sequence", name="uq_agent_task_event_sequence"),
+        UniqueConstraint("task_id", "causal_key", name="uq_agent_task_event_causal_key"),
         Index("idx_agent_task_events_stream", "task_id", "sequence"),
         Index("idx_agent_task_events_run_stream", "task_id", "agent_run_id", "sequence"),
+    )
+
+
+class AgentTaskRuntimeDelta(SQLModel, table=True):
+    """Exactly-once ledger for runtime-owned orchestration boundaries."""
+
+    __tablename__ = "agent_task_runtime_deltas"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    attempt_id: str
+    operation_id: str
+    event_id: str
+    idempotency_key: str
+    payload_sha256: str
+    observed_task_version: int
+    observed_plan_revision: int
+    applied_task_version: int
+    applied_plan_revision: int
+    applied_runtime_plan_revision: int = 0
+    applied_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint(
+            "observed_task_version >= 0 and observed_plan_revision >= 0 and "
+            "applied_task_version >= 1 and applied_plan_revision >= 0 and applied_runtime_plan_revision >= 0",
+            name="ck_agent_task_runtime_delta_versions",
+        ),
+        UniqueConstraint("agent_run_id", "event_id", name="uq_agent_task_runtime_delta_event"),
+        UniqueConstraint("task_id", "idempotency_key", name="uq_agent_task_runtime_delta_idempotency"),
     )
 
 
@@ -683,9 +769,34 @@ class AgentTaskCommand(SQLModel, table=True):
     completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     __table_args__ = (
-        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete')", name="ck_agent_task_commands_action"),
+        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete','steer')", name="ck_agent_task_commands_action"),
         CheckConstraint("status in ('accepted','completed','rejected') and expected_version >= 1", name="ck_agent_task_commands_state"),
         UniqueConstraint("task_id", "action", "idempotency_key", name="uq_agent_task_command_idempotency"),
+    )
+
+
+class AgentRuntimeOperation(SQLModel, table=True):
+    """Product-owned idempotency record for a runtime control operation."""
+    __tablename__ = "agent_runtime_operations"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    operation: str = Field(index=True)
+    idempotency_key: str
+    request_fingerprint: str
+    status: str = Field(default="in_progress", index=True)
+    result_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    error_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claimed_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claim_expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        CheckConstraint("status in ('in_progress', 'completed', 'failed')", name="ck_agent_runtime_operations_status"),
+        CheckConstraint("length(btrim(idempotency_key)) > 0", name="ck_agent_runtime_operations_key_nonempty"),
+        UniqueConstraint("run_id", "operation", "idempotency_key", name="uq_agent_runtime_operation_idempotency"),
+        Index("idx_agent_runtime_operations_run_operation", "run_id", "operation"),
     )
 
 

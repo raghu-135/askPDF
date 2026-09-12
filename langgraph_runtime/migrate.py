@@ -1,0 +1,30 @@
+"""Apply the dedicated Alembic migrations to the runtime database."""
+
+import os
+import subprocess
+from pathlib import Path
+
+
+RUNTIME_ROOT = Path(__file__).resolve().parent
+REPOSITORY_ROOT = RUNTIME_ROOT.parent
+
+
+def _run_alembic(*args: str) -> None:
+    subprocess.run(["alembic", *args], check=True, cwd=REPOSITORY_ROOT)
+
+
+def main() -> None:
+    if os.environ.get("RUN_RUNTIME_DB_MIGRATIONS", "true").strip().lower() in {"0", "false", "no", "off"}:
+        print("Runtime database migrations are disabled because RUN_RUNTIME_DB_MIGRATIONS=false.", flush=True)
+        return
+
+    database_url = os.environ.get("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("AGENT_RUNTIME_EXECUTION_DATABASE_URL is required")
+
+    os.environ["DATABASE_URL"] = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    _run_alembic("-c", str(RUNTIME_ROOT / "alembic.ini"), "upgrade", "head")
+
+
+if __name__ == "__main__":
+    main()

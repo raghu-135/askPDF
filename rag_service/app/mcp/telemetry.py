@@ -14,7 +14,7 @@ def otel_enabled() -> bool:
     Tracing is opt-in for MCP.  Invalid values fail closed so a typo cannot
     unexpectedly enable telemetry in production.
     """
-    value = os.getenv("MCP_OTEL_ENABLED", "false").strip().lower()
+    value = os.getenv("MCP_OTEL_ENABLED", "").strip().lower()
     if value in {"1", "true", "yes", "on"}:
         return True
     if value in {"0", "false", "no", "off", ""}:

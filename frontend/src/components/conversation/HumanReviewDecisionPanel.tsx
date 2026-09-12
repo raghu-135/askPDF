@@ -22,6 +22,8 @@ export function HumanReviewDecisionPanel({
   rootRef,
   onEditTextChange,
   onAction,
+  disabled = false,
+  disabledReason,
 }: {
   interrupt: AgentRunPendingInterrupt;
   submitting?: AgentRunResumeAction | null;
@@ -34,6 +36,8 @@ export function HumanReviewDecisionPanel({
     action: AgentRunResumeAction,
     options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown> },
   ) => void | Promise<void>;
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const actions = useMemo(
     () => new Set(Array.isArray(interrupt.allowed_actions) ? interrupt.allowed_actions.map(String) : []),
@@ -96,7 +100,7 @@ export function HumanReviewDecisionPanel({
             <FormControlLabel
               key={option.id}
               sx={{ m: 0, alignItems: 'flex-start' }}
-              control={<Checkbox size="small" checked={selectedIds.includes(option.id)} onChange={() => toggleOption(option.id)} disabled={Boolean(submitting)} />}
+              control={<Checkbox size="small" checked={selectedIds.includes(option.id)} onChange={() => toggleOption(option.id)} disabled={disabled || Boolean(submitting)} />}
               label={<Box><Typography variant="caption">{option.label}</Typography>{option.description && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{option.description}</Typography>}</Box>}
             />
           ))}
@@ -111,19 +115,20 @@ export function HumanReviewDecisionPanel({
           maxRows={12}
           label={actions.has(ResumeAction.Edit) ? 'Final answer draft' : 'Proposed final answer'}
           value={editText}
-          disabled={!actions.has(ResumeAction.Edit) || Boolean(submitting)}
+          disabled={disabled || !actions.has(ResumeAction.Edit) || Boolean(submitting)}
           onChange={(event) => onEditTextChange?.(event.target.value)}
           sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
         />
       )}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isWebApproval ? 'Approve once' : 'Approve'}</Button>}
-        {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
-        {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
-        {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
-        {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isWebApproval ? 'Continue without web research' : 'Continue'}</Button>}
-        {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : isWebApproval ? 'Continue without web research' : 'Reject'}</Button>}
+        {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isWebApproval ? 'Approve once' : 'Approve'}</Button>}
+        {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
+        {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
+        {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
+        {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isWebApproval ? 'Continue without web research' : 'Continue'}</Button>}
+        {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : isWebApproval ? 'Continue without web research' : 'Reject'}</Button>}
       </Box>
+      {disabled && disabledReason && <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>}
       {error && <Typography variant="caption" color="error">{error}</Typography>}
     </ResizableDecisionPanel>
   );

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "askpdf-runtime-protocol"
+version = "0.1.0"
+description = "Dependency-neutral contracts shared by askPDF runtimes and control plane"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2,<3"]
+
+[tool.setuptools]
+packages = ["runtime_protocol"]
+
+[tool.setuptools.package-dir]
+runtime_protocol = "."

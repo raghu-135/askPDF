@@ -20,6 +20,7 @@ class AgentTaskStatus(str, Enum):
     PAUSED = "paused"
     AWAITING_APPROVAL = "awaiting_approval"
     CANCELLING = "cancelling"
+    RECOVERY_REQUIRED = "recovery_required"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -35,6 +36,42 @@ class AgentTaskTodoStatus(str, Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+
+
+class AgentTaskInterventionKind(str, Enum):
+    BUDGET_REVIEW = "budget_review"
+    COURSE_CORRECTION = "course_correction"
+
+
+class AgentTaskBudgetReviewDecision(str, Enum):
+    CONTINUE = "continue"
+    ACCEPT_PARTIAL = "accept_partial"
+    STEER = "steer"
+
+
+class AgentTaskBudgetBoundaryStrategy(str, Enum):
+    SAFE_ATOMIC_BOUNDARY = "safe_atomic_boundary"
+
+
+class AgentTaskContinuationSemantics(str, Enum):
+    CHECKPOINT_SAME_RUN = "checkpoint_same_run"
+    LINKED_RUN = "linked_run"
+
+
+class AgentTaskBudgetCounters(BaseModel):
+    model_calls: int = Field(default=0, ge=0)
+    model_tokens: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
+    elapsed_active_ms: int = Field(default=0, ge=0)
+
+
+class AgentTaskBudgetUsage(BaseModel):
+    tranche_index: int = Field(ge=1)
+    tranche_limits: AgentTaskBudgetCounters
+    tranche_usage: AgentTaskBudgetCounters
+    lifetime_usage: AgentTaskBudgetCounters
+    exhausted_dimensions: List[Literal["model_calls", "model_tokens", "tool_calls", "elapsed_active_ms"]] = Field(default_factory=list)
+    boundary_strategy: AgentTaskBudgetBoundaryStrategy = AgentTaskBudgetBoundaryStrategy.SAFE_ATOMIC_BOUNDARY
 
 
 class SubagentProfileId(str, Enum):
@@ -53,6 +90,7 @@ class DeepResearchLimits(BaseModel):
     max_attempts_per_todo: int = Field(default=2, ge=1, le=2)
     subagent_timeout_ms: int = Field(default=180_000, ge=1_000, le=180_000)
     max_active_runtime_ms: int = Field(default=3_600_000, ge=60_000, le=86_400_000)
+    max_model_calls: int = Field(default=10_000, ge=1, le=100_000)
     max_tool_calls: int = Field(default=100, ge=1, le=100)
     max_model_tokens: int = Field(default=500_000, ge=1_000, le=500_000)
     max_artifacts: int = Field(default=200, ge=1, le=200)
@@ -61,6 +99,7 @@ class DeepResearchLimits(BaseModel):
 
 
 class AgentTaskCreateRequest(BaseModel):
+    definition_id: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=20_000)
     llm_model: str = Field(min_length=1, max_length=300)
     context_window: int = Field(default=32_768, ge=2_048, le=2_000_000)
@@ -70,7 +109,7 @@ class AgentTaskCreateRequest(BaseModel):
         SubagentProfileId.MEMORY,
         SubagentProfileId.CRITIC,
     ])
-    limits: DeepResearchLimits = Field(default_factory=DeepResearchLimits)
+    limits: Optional[DeepResearchLimits] = None
 
     @model_validator(mode="after")
     def validate_profiles(self):
@@ -89,6 +128,53 @@ class AgentTaskCreateRequest(BaseModel):
 
 class AgentTaskCommandRequest(BaseModel):
     expected_version: int = Field(ge=1)
+
+
+class AgentTaskPublishFinalToChatRequest(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=200)
+
+
+class AgentTaskResultReviewRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200)
+    interrupt_id: str = Field(min_length=1, max_length=300)
+    expected_version: int = Field(ge=1)
+    decision: Literal["accept", "retry_with_input"]
+    followup_input: Optional[str] = Field(default=None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_followup(self):
+        if self.decision == "retry_with_input" and not str(self.followup_input or "").strip():
+            raise ValueError("retry_with_input requires followup_input")
+        if self.followup_input is not None:
+            self.followup_input = " ".join(self.followup_input.split()).strip()
+        return self
+
+
+class AgentTaskBudgetReviewRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200)
+    interrupt_id: str = Field(min_length=1, max_length=300)
+    expected_version: int = Field(ge=1)
+    decision: AgentTaskBudgetReviewDecision
+    guidance: Optional[str] = Field(default=None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_guidance(self):
+        if self.decision is AgentTaskBudgetReviewDecision.STEER and not str(self.guidance or "").strip():
+            raise ValueError("steer requires guidance")
+        self.guidance = " ".join(str(self.guidance or "").split()).strip() or None
+        return self
+
+
+class AgentTaskCourseCorrectionRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200)
+    expected_version: int = Field(ge=1)
+    instruction: str = Field(min_length=1, max_length=20_000)
+    scope: Literal["remaining_work"] = "remaining_work"
+
+    @field_validator("instruction")
+    @classmethod
+    def normalize_instruction(cls, value: str) -> str:
+        return " ".join(value.split()).strip()
 
 
 class DeepResearchTodoProposal(BaseModel):

@@ -1,0 +1,131 @@
+# Agent runtime operational guardrails
+
+## LangGraph runtime
+
+Capability discovery derives checkpoint-dependent operations from the deployment
+configuration. External runtime deployments require
+`ASKPDF_AGENT_CHECKPOINTER=postgres` and a dedicated checkpoint database URL.
+In-memory checkpointing is available only through explicit test dependency
+injection and is never selected by runtime environment configuration.
+
+The built-in `deep_research_agent` remains a LangGraph deployment. Its capability
+response additionally describes planning, parallel dispatch, artifacts, memory,
+tools, and product-managed subagent orchestration from the frozen workflow
+definition. Runtime subagent control operations remain unsupported until a
+runtime adapter implements them.
+
+The runtime execution store uses PostgreSQL and assigns one owner, lease, and
+fencing token to every active execution. A worker that loses its lease must
+stop and may not append events or finalize a run.
+
+Runtime schema is migration-owned. The runtime refuses to start when its
+required tables are missing; it never creates or alters them. Apply the normal
+application migrations with `DATABASE_URL`, then apply the independent runtime
+migration with the dedicated bootstrap command:
+
+```bash
+AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints \
+python -m langgraph_runtime.migrate
+```
+
+The runtime database has its own Alembic configuration and one complete schema
+revision. It is independent of the application migration graph. Runtime
+checkpoint state is intentionally initialized as a clean schema for this
+feature branch.
+
+The control-plane HTTP adapter reconnects to the durable events endpoint after
+an SSE transport failure. `AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS`,
+`AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS`, and
+`AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS` bound this recovery.
+
+HTTP/SSE request handling is provided by the composable `RuntimeTransportConnector`;
+framework adapters own endpoint mapping and framework-specific translation. The
+product-facing capability projection exposes `run.inspect_state` because both
+current adapters implement it. Replay, historical fork, runtime subagent control,
+and continuation cleanup remain internal SPI operations until dedicated product
+routes and stable product semantics are defined; they are intentionally omitted
+from public capability responses.
+
+The runtime contract is intentionally unversioned. Runtime identity is taken
+from the persisted deployment and definition binding; missing identity is an
+error, not a default. Capability responses are layered: deployment discovery
+is narrowed by definition policy and then by the persisted run state and
+pending interaction.
+
+Run operations accept an idempotency operation ID. The runtime store records
+the request fingerprint, attempt, status, and result transactionally. An
+identical retry replays the original operation without invoking the adapter;
+reusing the ID with different input returns a structured conflict. Capability
+and dependency rejection happens before this record is created. A run has one
+terminal event, and its result is attached to that event for both the initial
+stream and replayed streams.
+
+Product task lifecycle operations use the `task.*` namespace: `task.start`,
+`task.pause`, `task.resume`, `task.cancel`, and `task.retry`. Runtime execution
+operations remain under `run.*`; `run.resume` is reserved for runtime
+interrupt or approval continuation and is not used for resuming a paused
+product task. The task event stream closes after emitting the terminal event
+for its requested scope and resumes incremental queries from the last event
+sequence.
+
+## Hermes runtime integration
+
+The upstream contract is pinned to NousResearch/hermes-agent commit
+`bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894`. The verified surface is
+`POST /v1/runs`, `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events`, and the
+run-scoped `/approval` and `/stop` operations. askPDF sends the user
+input at top level, maps `system_prompt` to `instructions`, and captures the
+Hermes `session_id` from run status into its opaque continuation binding.
+
+Supported upstream events are `message.delta`, `tool.started`,
+`tool.completed`, `reasoning.available`, `approval.request`,
+`approval.responded`, `run.completed`, `run.failed`,
+`run.cancelled`, `subagent.start`, and `subagent.complete`. Unknown or
+missing event kinds are rejected as runtime protocol errors.
+
+`run.clarification` is a canonical terminal event and is preserved as such in
+the product event stream. Hermes cancellation uses bounded confirmation: the
+gateway acknowledges `/stop`, waits for a terminal upstream status, and reports
+an explicit still-stopping error when that bound expires.
+Hermes does not expose an active-run course-correction control operation in v1;
+the universal `task.course_correction.submit` endpoint therefore remains present
+but is capability-disabled for Hermes.
+
+Hermes definitions resolve into a deterministic managed profile containing MCP
+and tool policy, model/provider policy, skills, memory, delegation, and limits.
+The profile hash is reproducible. API keys, tokens, passwords, credentials, and
+other provider secrets are rejected from definitions and must be supplied via
+the runtime environment.
+
+The bundled gateway currently uses an atomic whole-file journal and is intentionally limited
+to one worker and one replica. `HERMES_RUNTIME_STORAGE_BACKEND=file` and
+`HERMES_RUNTIME_WORKERS=1` are enforced at startup. A production Hermes
+deployment must replace this store with the PostgreSQL execution-store
+contract before scaling horizontally.
+
+It rewrites the complete journal for every state or event update and retains
+events indefinitely. Do not run multiple workers or replicas; replace the file
+journal with PostgreSQL or another shared transactional store with a retention
+policy before horizontal production rollout.
+
+Hermes and the askPDF adapter are part of the default Compose application.
+Configure distinct `HERMES_RUNTIME_TOKEN`, `HERMES_API_TOKEN`, and
+`MCP_EXECUTION_CONTEXT_SECRET` values in `.env`, then start normally. Each run
+inherits the thread's selected `llm_model` and uses askPDF's existing
+OpenAI-compatible `LLM_API_URL` through Hermes's custom provider:
+
+```bash
+docker compose up --build
+```
+
+`/healthz` is liveness-only. Compose and deployment readiness use `/readyz`,
+which requires both the Hermes upstream and the configured MCP dependency.
+
+`./run_tests.sh --hermes-runtime` builds the same pinned Hermes revision and runs it
+against an isolated deterministic OpenAI-compatible provider. Rare event and
+protocol failures use checked-in data fixtures and mocked transports; there is
+no executable fake Hermes runtime or fallback path.
+
+```bash
+./run_tests.sh --hermes-runtime
+```

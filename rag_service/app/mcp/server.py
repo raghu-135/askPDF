@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from mcp.server.lowlevel import Server
@@ -15,6 +17,14 @@ from starlette.routing import Mount
 
 from app.mcp.config import mcp_mode, mcp_transport, validate_mcp_configuration
 from app.mcp.context_codec import decode_context
+from app.mcp.execution_context_token import (
+    TOKEN_ARGUMENT,
+    TOKEN_HEADER,
+    ExecutionContextTokenError,
+    decode_execution_context_grant,
+    decode_execution_context_token,
+    verified_token_run_id,
+)
 from app.mcp.registry import (
     MCP_TOOL_DEFINITIONS,
     TOOL_RESULT_OUTPUT_SCHEMA,
@@ -24,8 +34,37 @@ from app.mcp.registry import (
     validate_registry,
 )
 from app.mcp.telemetry import extracted_trace_context, tool_span
+from app.mcp.tool_audit import persist_tool_audit
+from app.runtime.cancellation import race_with_cancellation
+from app.services.agent_task_repository import run_cancel_requested
+from runtime_protocol.tool_contract import ToolError, ToolResult, ToolTrace, ToolMetrics
 
 logger = logging.getLogger(__name__)
+_transport_execution_token: ContextVar[str | None] = ContextVar(
+    "askpdf_mcp_execution_token", default=None,
+)
+
+
+async def _mcp_run_cancel_requested(run_id: str) -> bool:
+    """Check cancellation without requiring every MCP call to own an AgentRun.
+
+    Curator and other system calls use ephemeral correlation IDs for tracing.
+    They still pass through the common MCP cancellation race, but those IDs are
+    not persisted product runs.  A missing run therefore means there is no
+    durable cancellation request; malformed or orphaned persisted runs should
+    continue to surface as errors.
+    """
+
+    try:
+        return await run_cancel_requested(run_id)
+    except ValueError as exc:
+        if str(exc) == f"Agent run {run_id!r} does not exist":
+            logger.debug(
+                "MCP call has no persisted AgentRun; continuing without cancellation polling | run_id=%s",
+                run_id,
+            )
+            return False
+        raise
 
 
 def _schema(model: type[Any]) -> dict[str, Any]:
@@ -37,20 +76,33 @@ class MCPServer:
 
     protocol_version = "2025-06-18"
 
-    def __init__(self) -> None:
+    def __init__(self, *, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = False) -> None:
         validate_mcp_configuration()
         validate_registry()
+        self.allowed_tools = allowed_tools
+        self.require_execution_token = require_execution_token
         self.sdk = Server("askpdf-first-party", version="1")
         self._register_handlers()
 
     def _register_handlers(self) -> None:
         @self.sdk.list_tools()
         async def list_tools() -> list[types.Tool]:
+            grant_allowed_tools: frozenset[str] | None = None
+            if self.require_execution_token:
+                execution_token = _transport_execution_token.get()
+                if not execution_token:
+                    logger.warning("MCP discovery rejected reason=missing")
+                    raise ValueError("MCP execution context is required")
+                try:
+                    _context, grant_allowed_tools = decode_execution_context_grant(str(execution_token))
+                except ExecutionContextTokenError as exc:
+                    logger.warning("MCP discovery rejected reason=%s", exc.reason)
+                    raise ValueError("Invalid MCP execution context") from exc
             return [
                 types.Tool(
                     name=name,
                     description=TOOL_FRIENDLY_CONFIG[name]["description"],
-                    inputSchema=_schema(definition.request_model),
+                    inputSchema=self._input_schema(definition.request_model),
                     outputSchema=TOOL_RESULT_OUTPUT_SCHEMA,
                     _meta={
                         "com.askpdf/contract-id": TOOL_FRIENDLY_CONFIG[name]["id"],
@@ -59,13 +111,23 @@ class MCPServer:
                     },
                 )
                 for name, definition in enabled_definitions().items()
+                if self.allowed_tools is None or name in self.allowed_tools
+                if grant_allowed_tools is None or name in grant_allowed_tools
             ]
 
         @self.sdk.call_tool(validate_input=True)
         async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
             definition = MCP_TOOL_DEFINITIONS.get(name)
-            if definition is None or name not in enabled_definitions():
+            if definition is None or name not in enabled_definitions() or (
+                self.allowed_tools is not None and name not in self.allowed_tools
+            ):
                 raise ValueError(f"Unknown tool: {name}")
+            arguments = dict(arguments or {})
+            argument_token = arguments.pop(TOKEN_ARGUMENT, None)
+            execution_token = _transport_execution_token.get() if self.require_execution_token else argument_token
+            if self.require_execution_token and not execution_token:
+                logger.warning("MCP tool rejected tool=%s reason=missing", name)
+                raise ValueError("MCP execution context is required")
             request_context = self.sdk.request_context
             meta = request_context.meta
             if hasattr(meta, "model_dump"):
@@ -73,6 +135,25 @@ class MCPServer:
             elif not isinstance(meta, dict):
                 meta = dict(meta or {})
             context = decode_context(meta)
+            if execution_token:
+                try:
+                    context = decode_execution_context_token(str(execution_token), tool_name=name)
+                except ExecutionContextTokenError as exc:
+                    logger.warning("MCP tool rejected tool=%s reason=%s", name, exc.reason)
+                    rejected_run_id = verified_token_run_id(str(execution_token))
+                    if rejected_run_id:
+                        await persist_tool_audit(
+                            run_id=rejected_run_id,
+                            request_id=str(request_context.request_id),
+                            phase="failed",
+                            tool_name=name,
+                            payload={
+                                "failure_stage": "execution_context",
+                                "token_rejection_reason": exc.reason,
+                                "error": {"code": "mcp_execution_context_rejected", "retryable": exc.reason == "expired"},
+                            },
+                        )
+                    raise ValueError("Invalid MCP execution context") from exc
             if not context.mcp_request_id:
                 context = context.__class__.from_mapping({
                     **context.as_dict(), "mcp_request_id": str(request_context.request_id),
@@ -83,53 +164,179 @@ class MCPServer:
                 "MCP tool call start tool=%s thread_id=%s run_id=%s tool_call_id=%s mcp_request_id=%s",
                 name, context.thread_id, context.run_id, context.tool_call_id, context.mcp_request_id,
             )
+            audit_request_id = str(context.mcp_request_id or request_context.request_id)
+            await persist_tool_audit(
+                run_id=str(context.run_id or ""), request_id=audit_request_id,
+                phase="started", tool_name=name,
+                payload={"argument_names": sorted(arguments)},
+            )
             async with extracted_trace_context(meta):
                 async with tool_span(
                     "askpdf.mcp.tool", tool_name=name, contract_id=config["id"],
                     thread_id=context.thread_id,
                 ):
-                    request_model = definition.request_model
-                    request = request_model.model_validate(arguments)
-                    result = await definition.handler(request, context)
-            structured = result.structured(
-                contract_id=config["id"],
-                contract_version=config.get("contract_version", "1"),
+                    try:
+                        request_model = definition.request_model
+                        request = request_model.model_validate(arguments)
+                        run_id = str(context.run_id or "").strip()
+                        if run_id:
+                            result = await race_with_cancellation(
+                                definition.handler(request, context),
+                                lambda: _mcp_run_cancel_requested(run_id),
+                            )
+                        else:
+                            result = await definition.handler(request, context)
+                    except asyncio.CancelledError:
+                        await persist_tool_audit(
+                            run_id=str(context.run_id or ""), request_id=audit_request_id,
+                            phase="cancelled", tool_name=name,
+                            payload={"failure_stage": "handler", "error": {"code": "run_cancelled", "retryable": False}},
+                        )
+                        raise
+                    except Exception as exc:
+                        missing_fields = []
+                        invalid_fields = []
+                        if hasattr(exc, "errors"):
+                            for issue in exc.errors():
+                                field = ".".join(str(value) for value in issue.get("loc") or [])
+                                if issue.get("type") == "missing":
+                                    missing_fields.append(field)
+                                elif field:
+                                    invalid_fields.append(field)
+                        await persist_tool_audit(
+                            run_id=str(context.run_id or ""), request_id=audit_request_id,
+                            phase="failed", tool_name=name,
+                            payload={
+                                "failure_stage": "arguments" if missing_fields or invalid_fields else "handler",
+                                "missing_arguments": sorted(missing_fields),
+                                "invalid_arguments": sorted(invalid_fields),
+                                "error": {"code": "tool_arguments_invalid" if missing_fields or invalid_fields else "tool_execution_failed", "retryable": True},
+                            },
+                        )
+                        raise
+            # MCP structuredContent is the shared runtime_protocol tool
+            # envelope.  Registry and transport metadata belongs in the
+            # descriptor/context, not in the canonical result object; adding
+            # arbitrary top-level keys here makes remote runtimes reject an
+            # otherwise valid result as a different wire contract.
+            try:
+                if not isinstance(result, ToolResult):
+                    raise ValueError("MCP handler returned a non-canonical result")
+                structured = result.to_payload()
+            except Exception as exc:
+                cause = str(exc)[:700]
+                failure = ToolResult(
+                    ok=False,
+                    content=f"{name} failed: {cause}",
+                    sources=[],
+                    artifacts={},
+                    warnings=["tool_result_boundary_failure"],
+                    error=ToolError(
+                        code="tool_result_size_exceeded" if "size" in cause or "length" in cause or "maximum" in cause else "mcp_protocol_error",
+                        message=cause,
+                        type=type(exc).__name__,
+                        retryable=False,
+                    ),
+                    metrics=ToolMetrics(result_chars=min(len(cause), 700), warning_count=1),
+                    trace=ToolTrace(tool_name=name, thread_id=context.thread_id, agent_run_id=context.run_id, tool_call_id=context.tool_call_id, mcp_request_id=context.mcp_request_id),
+                )
+                structured = failure.to_payload()
+                await persist_tool_audit(
+                    run_id=str(context.run_id or ""), request_id=audit_request_id,
+                    phase="failed", tool_name=name, result=failure,
+                    payload={"failure_stage": "serialization", "error": {"code": failure.error.code, "type": type(exc).__name__, "message": cause}},
+                )
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=failure.content)],
+                    structuredContent=structured,
+                    isError=True,
+                )
+            await persist_tool_audit(
+                run_id=str(context.run_id or ""), request_id=audit_request_id,
+                phase="completed" if result.ok and result.error is None else "failed",
+                tool_name=name, result=result,
+                payload={"failure_stage": "handler"} if not result.ok or result.error is not None else None,
             )
             trace = structured.setdefault("trace", {})
             trace.setdefault("mcp_request_id", context.mcp_request_id)
             trace.setdefault("tool_call_id", context.tool_call_id)
-            structured.update({
-                "mcp_server": config.get("mcp_server"),
-                "mcp_contract_version": config.get("contract_version", "1"),
-                "transport": mcp_transport(),
-                "mcp_mode": mcp_mode(),
-            })
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=result.content)],
                 structuredContent=structured,
                 isError=not result.ok or result.error is not None,
             )
 
+    def _input_schema(self, model: type[Any]) -> dict[str, Any]:
+        schema = dict(_schema(model))
+        properties = dict(schema.get("properties") or {})
+        if not self.require_execution_token:
+            properties[TOKEN_ARGUMENT] = {
+                "type": "string",
+                "description": "Opaque askPDF execution context supplied by an authorized runtime.",
+            }
+        schema["properties"] = properties
+        return schema
 
-def get_http_app() -> Any:
-    """Return the SDK streamable-HTTP app backed by the low-level Server."""
+
+def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_execution_token: bool = True) -> Any:
+    """Return an authenticated SDK streamable-HTTP app.
+
+    In-process callers use ``get_sdk_server`` directly and therefore do not
+    cross an HTTP trust boundary. HTTP callers must present a signed,
+    run-scoped execution grant by default. Tests and explicitly isolated
+    internal hosts may opt out with ``require_execution_token=False``.
+    """
     validate_mcp_configuration()
-    manager = StreamableHTTPSessionManager(
-        app=get_sdk_server(),
-        json_response=True,
-        stateless=True,
-        security_settings=TransportSecuritySettings(
-            allowed_hosts=["localhost", "127.0.0.1", "rag-service", "host.docker.internal"],
-        ),
-    )
+
+    server = MCPServer(allowed_tools=allowed_tools, require_execution_token=require_execution_token)
+
+    def create_manager() -> StreamableHTTPSessionManager:
+        return StreamableHTTPSessionManager(
+            app=server.sdk,
+            json_response=True,
+            stateless=True,
+            security_settings=TransportSecuritySettings(
+                allowed_hosts=[
+                    "localhost",
+                    "127.0.0.1",
+                    "rag-service",
+                    "rag-service:8000",
+                    "host.docker.internal",
+                ],
+            ),
+        )
+
+    # The SDK manager is single-use: its run() context cannot be entered a
+    # second time. Starlette applications may nevertheless be started and
+    # stopped repeatedly by tests, reloaders, and embedded service hosts.
+    # Keep the mounted ASGI endpoint stable while replacing the manager for
+    # each application lifespan.
+    manager: StreamableHTTPSessionManager | None = None
+
+    async def handle_request(scope: Any, receive: Any, send: Any) -> None:
+        if manager is None:
+            raise RuntimeError("MCP HTTP application is not running")
+        token = None
+        if scope.get("type") == "http":
+            token = next((value.decode("latin-1") for key, value in scope.get("headers") or [] if key.decode("latin-1").lower() == TOKEN_HEADER), None)
+        marker = _transport_execution_token.set(token)
+        try:
+            await manager.handle_request(scope, receive, send)
+        finally:
+            _transport_execution_token.reset(marker)
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):
-        async with manager.run():
-            yield
+        nonlocal manager
+        manager = create_manager()
+        try:
+            async with manager.run():
+                yield
+        finally:
+            manager = None
 
     return Starlette(
-        routes=[Mount("/", app=manager.handle_request)],
+        routes=[Mount("/", app=handle_request)],
         lifespan=lifespan,
     )
 

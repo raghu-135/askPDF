@@ -15,9 +15,11 @@ Flexible chat content lives in JSONB only where the fields vary per interaction.
   - API compatibility expands one turn into user/assistant message bubbles at the boundary.
 
 - `agent_runs`
-  - One row per agent execution, including `checkpoint_thread_id` for resumable LangGraph runs.
+  - One row per agent execution. Resumable runtime state is represented only by
+    an opaque `runtime_binding_json` value; checkpoint identifiers remain inside
+    the owning runtime service.
   - HITL pauses keep the run in `awaiting_human`; stale-running cleanup must not mark these rows failed.
-  - Old terminal runs can have their LangGraph checkpoints pruned through the checkpointer API before or alongside run-retention cleanup.
+  - Runtime checkpoint cleanup is requested through the runtime boundary before or alongside run-retention cleanup.
 
 - `files`
   - One row per unique content object, keyed by `file_hash`.
@@ -47,11 +49,11 @@ Flexible chat content lives in JSONB only where the fields vary per interaction.
 
 ## LangGraph Checkpoint Tables
 
-When `ASKPDF_AGENT_CHECKPOINTER=postgres`, LangGraph owns its checkpoint tables
+When `ASKPDF_AGENT_CHECKPOINTER=postgres`, `langgraph-runtime` owns its checkpoint tables
 (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, and
-`checkpoint_migrations`). askPDF should clean these through the configured
-checkpointer (`adelete_thread`) instead of raw SQL so LangGraph schema changes
-remain isolated.
+`checkpoint_migrations`). The runtime performs checkpoint cleanup through its
+configured checkpointer (`adelete_thread`) instead of raw SQL so LangGraph
+schema changes remain isolated from the control plane.
 
 ## Simplification Rules
 

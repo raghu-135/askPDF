@@ -2,28 +2,38 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import timedelta
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.services import agent_task_repository as tasks
 from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import utc_now
+from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
 
 
 logger = logging.getLogger(__name__)
-CHECKPOINT_RETENTION_DAYS = 7
-MAINTENANCE_INTERVAL_SECONDS = 60.0
-MAINTENANCE_BATCH_SIZE = 100
 _maintenance_lock = asyncio.Lock()
 
 
-async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> dict[str, int]:
+def task_maintenance_interval_seconds() -> float:
+    return float(os.environ["AGENT_TASK_MAINTENANCE_INTERVAL_SECONDS"])
+
+
+def task_maintenance_batch_size() -> int:
+    return int(os.environ["AGENT_TASK_MAINTENANCE_BATCH_SIZE"])
+
+
+def checkpoint_retention_days() -> int:
+    return int(os.environ["TASK_CHECKPOINT_RETENTION_DAYS"])
+
+
+async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, int]:
     """Run bounded, idempotent maintenance without overlapping in one process."""
     if _maintenance_lock.locked():
         return {"skipped": 1}
     async with _maintenance_lock:
-        bounded = max(1, min(int(batch_size), 500))
+        bounded = max(1, min(int(batch_size if batch_size is not None else task_maintenance_batch_size()), 500))
         expired_tasks = await tasks.expire_stale_tasks()
         recovered_leases = await tasks.release_stale_task_leases(limit=bounded)
         deleted_tasks = 0
@@ -55,13 +65,19 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
                 await store.delete(key)
                 orphaned_content += 1
 
-        checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
-            utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
+        deleted_checkpoints = 0
+        runtime_runs = await tasks.list_terminal_task_runtime_runs_before(
+            utc_now() - timedelta(days=checkpoint_retention_days()),
             limit=bounded,
         )
-        deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
-        await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
-        deleted_checkpoints = len(deleted_checkpoint_ids)
+        from app.runtime.cleanup import cleanup_runs
+
+        cleanup_results = await cleanup_runs(runtime_runs)
+        await tasks.clear_task_runtime_bindings(
+            result.run_id for result in cleanup_results if result.cleaned
+        )
+        deleted_checkpoints = sum(1 for result in cleanup_results if result.cleaned)
+        runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,
             "recovered_leases": recovered_leases,
@@ -70,4 +86,5 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
             "missing_artifacts": missing_artifacts,
             "orphaned_content": orphaned_content,
             "deleted_checkpoints": deleted_checkpoints,
+            **{f"runtime_{key}": value for key, value in runtime_reconciliation.items()},
         }

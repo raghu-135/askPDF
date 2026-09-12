@@ -1,4 +1,5 @@
 export * from './ConversationComposer';
+export * from './ConversationMarkdown';
 export * from './DecisionChoiceList';
 export * from './ConversationMessageBubble';
 export * from './ConversationMessageActions';

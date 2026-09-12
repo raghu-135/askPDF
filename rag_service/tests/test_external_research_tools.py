@@ -1,9 +1,7 @@
-import pytest
-from langchain_core.tools import tool
+import os
+from pathlib import Path
 
 from app.agent import external_research_tools
-from app.agent.tool_contract import normalize_tool_result
-from app.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -16,13 +14,19 @@ TOOL_PACKAGE_PINS = {
 
 
 def _requirements_lines() -> set[str]:
-    requirements_path = external_research_tools.__file__.split("/app/agent/")[0]
-    with open(f"{requirements_path}/requirements.txt", encoding="utf-8") as req_file:
-        return {
-            line.strip()
-            for line in req_file
-            if line.strip() and not line.lstrip().startswith("#")
-        }
+    repository_root = Path(os.getenv("ASKPDF_REPO_DIR", Path(__file__).resolve().parents[2]))
+    lines: set[str] = set()
+    for path in (
+        repository_root / "rag_service/requirements.txt",
+        repository_root / "langgraph_runtime/requirements.txt",
+    ):
+        with path.open(encoding="utf-8") as req_file:
+            lines.update(
+                line.strip()
+                for line in req_file
+                if line.strip() and not line.lstrip().startswith("#") and not line.startswith("-r ")
+            )
+    return lines
 
 
 def test_tool_dependencies_are_exactly_pinned():
@@ -98,22 +102,3 @@ def test_arxiv_guidance_omits_dependency_version_detail():
     assert "arxiv==2.4.1" not in prompt
     assert "pinned" not in prompt
     assert "wrapper" not in prompt
-
-
-def test_arxiv_dependency_matches_langchain_wrapper_api():
-    arxiv = pytest.importorskip("arxiv")
-
-    assert hasattr(arxiv.Search(query="test"), "results")
-
-
-def test_orchestrator_tool_node_configures_recoverable_tool_errors():
-    @tool
-    def failing_tool(query: str) -> str:
-        """Test tool that always fails."""
-        raise RuntimeError("simulated tool outage")
-
-    node = RecoverableToolNode([failing_tool])
-    message = node._handle_tool_errors(RuntimeError("simulated tool outage"))
-
-    assert "Tool execution failed: RuntimeError: simulated tool outage" in message
-    assert "continue with other available evidence" in message

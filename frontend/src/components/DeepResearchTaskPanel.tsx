@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Box, Button, Chip,
   Divider, IconButton, LinearProgress, ListItemIcon, ListItemText,
-  Menu, MenuItem, Stack, Tooltip, Typography,
+  Menu, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -16,40 +16,60 @@ import {
   createAgentTask,
   deleteAgentTask,
   downloadAgentTaskArtifact,
-  getDeepResearchCapabilities,
+  listAgentDefinitions,
   getAgentRun,
   getAgentTask,
   getAgentTaskRuns,
   getAgentTaskTodos,
   getAgentTaskTimeline,
   listAgentTasks,
+  publishAgentTaskFinalToChat,
   resumeAgentRun,
+  respondToAgentTaskResultReview,
+  respondToAgentTaskBudgetReview,
+  submitAgentTaskCourseCorrection,
+  sendAgentRunFollowup,
+  interruptAgentRunWithInput,
+  steerAgentRunLive,
   type AgentTaskRun,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
   type AgentRunResumeAction,
+  type AgentDefinitionCatalogEntry,
 } from '../lib/api';
-import { mergeActiveAgentTaskRun, shouldPollAgentTask } from '../lib/deep-research-ui-state';
+import {
+  isRunOwnedBySelectedTask,
+  isTerminalAgentTaskEvent,
+  mergeActiveAgentTaskRun,
+  shouldPollAgentTask,
+  shouldRefreshAgentTaskTimeline,
+  shouldSubscribeToAgentTaskEvents,
+} from '../lib/deep-research-ui-state';
+import { isRuntimeOperationEnabled, runtimeCapabilityResponseMatchesRun, runtimeInterruptResponseOperation, runtimeOperationAvailability, TASK_CONTROL_CATALOG } from '../lib/runtime-capabilities';
+import { useAgentRunCapabilities } from '../lib/use-agent-run-capabilities';
 import {
   deriveConversationSentences,
   type ConversationSentence,
   type ConversationSentenceCache,
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
+import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
 import {
   ConversationComposer,
   ConversationArtifactList,
   ConversationDisclosure,
   ConversationHeader,
+  ConversationMarkdown,
   ConversationMessageActions,
   HumanReviewDecisionPanel,
   ConversationMessageBubble,
   ConversationPanelTemplate,
   ConversationTranscriptFrame,
+  ResizableDecisionPanel,
   SourceList,
 } from './conversation';
-
+import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
 
 export function DeepResearchTaskPicker({
   threadId,
@@ -82,15 +102,16 @@ export function DeepResearchTaskPicker({
   };
 
   return <>
-    <Button
-      size="small"
-      color="inherit"
-      startIcon={<TravelExploreIcon fontSize="small" />}
-      onClick={(event) => { setAnchor(event.currentTarget); void refresh(); }}
-      sx={{ maxWidth: 230, textTransform: 'none' }}
-    >
-      <Typography variant="body2" noWrap>{selected?.objective || 'Deep Research'}</Typography>
-    </Button>
+    <Tooltip title="Deep Research">
+      <IconButton
+        size="small"
+        color="inherit"
+        aria-label="Deep Research"
+        onClick={(event) => { setAnchor(event.currentTarget); void refresh(); }}
+      >
+        <TravelExploreIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
     <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)} slotProps={{ paper: { sx: { width: 360, maxWidth: '90vw' } } }}>
       <MenuItem onClick={() => { onSelect(null); setAnchor(null); }}>
         <ListItemIcon><TravelExploreIcon fontSize="small" /></ListItemIcon>
@@ -103,7 +124,7 @@ export function DeepResearchTaskPicker({
           secondary={`${task.status.replaceAll('_', ' ')} · attempt ${task.run_attempt || 0}`}
           slotProps={{ primary: { noWrap: true }, secondary: { noWrap: true } }}
         />
-        {['completed', 'failed', 'expired', 'cancelled'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
+        {['completed', 'failed', 'expired', 'cancelled', 'recovery_required'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
           <DeleteIcon fontSize="small" />
         </IconButton>}
       </MenuItem>)}
@@ -118,6 +139,8 @@ function TimelineBubble({
   taskId,
   threadId,
   onSaveToMemory,
+  onAddToChat,
+  addingToChat,
   copied,
   active,
   onCopy,
@@ -129,6 +152,8 @@ function TimelineBubble({
   taskId: string;
   threadId: string;
   onSaveToMemory?: (content: string) => void;
+  onAddToChat?: (item: AgentTaskTimelineItem) => void;
+  addingToChat?: boolean;
   copied: boolean;
   active: boolean;
   onCopy: () => void;
@@ -154,9 +179,18 @@ function TimelineBubble({
     content={item.primary_content}
     active={active}
     wide={!isObjective}
-    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={item.type === 'todo_failure' ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
+    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
       {onSaveToMemory && ['todo_result', 'final_report'].includes(item.type) && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
+      {item.type === 'final_report' && onAddToChat && (
+        <Button
+          size="small"
+          disabled={addingToChat || Boolean(item.published_chat_turn_id) || !item.primary_content}
+          onClick={() => onAddToChat(item)}
+        >
+          {item.published_chat_turn_id ? 'Added to chat' : 'Add to chat'}
+        </Button>
+      )}
     </ConversationMessageActions>}
     afterContent={foldEntries.length || (item.sources || []).length || (item.artifacts || []).length ? <Box sx={{ mt: 1 }}>
       {sourceGroups.map(([kind, label]) => {
@@ -233,15 +267,36 @@ export default function DeepResearchTaskPanel({
   const [items, setItems] = useState<AgentTaskTimelineItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
+  const [reviewGuidance, setReviewGuidance] = useState('');
+  const [courseCorrection, setCourseCorrection] = useState('');
+  const [courseCorrectionStatus, setCourseCorrectionStatus] = useState('');
   const [decisionError, setDecisionError] = useState('');
   const [error, setError] = useState('');
-  const [webCapability, setWebCapability] = useState<boolean | null>(null);
-  const [capabilityError, setCapabilityError] = useState('');
+  const [definitions, setDefinitions] = useState<AgentDefinitionCatalogEntry[]>([]);
+  const [definitionId, setDefinitionId] = useState('');
+  const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
+  const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [addingToChat, setAddingToChat] = useState(false);
   const lastSequence = useRef(0);
+  const sequenceRunId = useRef<string | null>(null);
+  const taskContextRef = useRef(selectedTaskId);
+  taskContextRef.current = selectedTaskId;
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
+  const panelRef = useRef<HTMLDivElement>(null);
   const selectedRun = runs[runIndex] || null;
+  const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
+  const activeCapabilitiesState = useAgentRunCapabilities(
+    task?.active_run_id,
+    threadId,
+    `${task?.status}:${task?.version}:${task?.active_run?.runtime_binding_status}:${task?.active_run?.pending_interrupt?.interrupt_id}:${task?.active_run?.pending_interrupt?.status}`,
+  );
+  const selectedRunCapabilities = selectedCapabilitiesState.capabilities;
+  const activeTaskCapabilities = runtimeCapabilityResponseMatchesRun(
+    activeCapabilitiesState.capabilities, task?.active_run_id || '',
+  ) ? activeCapabilitiesState.capabilities : null;
+  const runtimeControlError = selectedCapabilitiesState.error || activeCapabilitiesState.error || '';
 
   useEffect(() => {
     setChatPlaybackSourceKey(`deep-research:${selectedTaskId || 'new'}:${selectedRun?.id || 'none'}`);
@@ -273,24 +328,35 @@ export default function DeepResearchTaskPanel({
 
   useEffect(() => {
     let active = true;
-    setCapabilityError('');
-    void getDeepResearchCapabilities()
-      .then((capabilities) => { if (active) setWebCapability(capabilities.web_enabled); })
+    setDeepResearchDiscoveryError('');
+    void listAgentDefinitions()
+      .then((catalog) => {
+        if (!active) return;
+        const eligible = catalog.filter((entry) => entry.available && entry.task_eligible && entry.task_start_available);
+        setDefinitions(eligible);
+        setDefinitionId((current) => (
+          eligible.some((entry) => entry.definition_id === current)
+            ? current
+            : eligible[0]?.definition_id || ''
+        ));
+      })
       .catch(() => {
         if (!active) return;
-        setWebCapability(false);
-        setCapabilityError('Deep Research capabilities could not be loaded. Internet research is unavailable until the service recovers.');
+        setDefinitions([]);
+        setDeepResearchDiscoveryError('Deep Research capabilities could not be loaded. Internet research is unavailable until the service recovers.');
       });
     return () => { active = false; };
   }, []);
 
   const refresh = useCallback(async () => {
     if (!selectedTaskId) { setTask(null); setRuns([]); setTodos([]); setItems([]); setRunIndex(-1); return; }
+    const requestedTaskId = selectedTaskId;
     const [nextTask, fetchedRuns, nextTodos] = await Promise.all([
-      getAgentTask(selectedTaskId, threadId),
-      getAgentTaskRuns(selectedTaskId, threadId),
-      getAgentTaskTodos(selectedTaskId, threadId),
+      getAgentTask(requestedTaskId, threadId),
+      getAgentTaskRuns(requestedTaskId, threadId),
+      getAgentTaskTodos(requestedTaskId, threadId),
     ]);
+    if (taskContextRef.current !== requestedTaskId) return;
     const nextRuns = mergeActiveAgentTaskRun(nextTask, fetchedRuns);
     setTask(nextTask);
     setRuns(nextRuns);
@@ -298,7 +364,42 @@ export default function DeepResearchTaskPanel({
     setRunIndex((current) => current >= 0 && current < nextRuns.length ? current : nextRuns.length - 1);
   }, [selectedTaskId, threadId]);
 
-  useEffect(() => { setError(''); void refresh().catch((value) => setError(String(value))); }, [refresh]);
+  const refreshTimeline = useCallback(async (taskId: string, runId: string) => {
+    const value = await getAgentTaskTimeline(taskId, runId, threadId);
+    if (taskContextRef.current !== taskId) return;
+    setTask(value.task);
+    setItems(value.items);
+  }, [threadId]);
+
+  const addFinalToChat = useCallback(async (item: AgentTaskTimelineItem) => {
+    const artifactId = item.artifacts?.find((artifact) => artifact.kind === 'final_report')?.id
+      || (item.id.startsWith('final:') ? item.id.slice('final:'.length) : '')
+      || item.artifact_ids?.[0];
+    if (!selectedTaskId || !artifactId || item.published_chat_turn_id) return;
+    setAddingToChat(true);
+    try {
+      await publishAgentTaskFinalToChat(selectedTaskId, threadId, artifactId);
+      if (selectedRun?.id) await refreshTimeline(selectedTaskId, selectedRun.id);
+    } catch (value) {
+      setError(String(value));
+    } finally {
+      setAddingToChat(false);
+    }
+  }, [refreshTimeline, selectedRun?.id, selectedTaskId, threadId]);
+
+  useEffect(() => {
+    setTask(null);
+    setRuns([]);
+    setTodos([]);
+    setItems([]);
+    setRunIndex(-1);
+    setError('');
+    sequenceRunId.current = null;
+    lastSequence.current = 0;
+    void refresh().catch((value) => {
+      if (taskContextRef.current === selectedTaskId) setError(String(value));
+    });
+  }, [refresh, selectedTaskId]);
   useEffect(() => {
     if (!shouldPollAgentTask(task)) return;
     let cancelled = false;
@@ -306,49 +407,101 @@ export default function DeepResearchTaskPanel({
     const poll = async () => {
       try { await refresh(); }
       catch (value) { if (!cancelled) setError(String(value)); }
-      if (!cancelled) timer = window.setTimeout(poll, 2000);
+      if (!cancelled) timer = window.setTimeout(poll, AGENT_TASK_POLL_INTERVAL_MS);
     };
-    timer = window.setTimeout(poll, 2000);
+    timer = window.setTimeout(poll, AGENT_TASK_POLL_INTERVAL_MS);
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
   }, [refresh, task?.status]);
   useEffect(() => {
-    if (!selectedTaskId || !selectedRun) { setItems([]); return; }
-    void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => { setTask(value.task); setItems(value.items); }).catch((value) => setError(String(value)));
+    if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) { setItems([]); return; }
+    let active = true;
+    const taskId = selectedTaskId;
+    const runId = selectedRun.id;
+    void getAgentTaskTimeline(taskId, runId, threadId).then((value) => {
+      if (!active || taskContextRef.current !== taskId) return;
+      setTask(value.task);
+      setItems(value.items);
+    }).catch((value) => {
+      if (active && taskContextRef.current === taskId) setError(String(value));
+    });
+    return () => { active = false; };
   }, [selectedRun?.id, selectedTaskId, threadId]);
 
   useEffect(() => {
-    if (!selectedTaskId || !selectedRun) return;
-    lastSequence.current = 0;
-    const query = new URLSearchParams({ thread_id: threadId, run_id: selectedRun.id, scope: 'run', after_sequence: String(lastSequence.current) });
-    const source = new EventSource(`${API_BASE}/api/agent-tasks/${encodeURIComponent(selectedTaskId)}/events?${query}`);
-    source.addEventListener('task_event', (event) => {
-      lastSequence.current = Math.max(lastSequence.current, Number(event.lastEventId || 0));
-      let payload: any = {};
-      try { payload = JSON.parse((event as MessageEvent).data || '{}'); } catch { payload = {}; }
-      const type = String(payload.type || '');
-      if (type.startsWith('task.') || type.startsWith('todo.') || type.startsWith('subagent.')) void refresh();
-      if (/^(plan\.|todo\.|subagent\.|artifact\.|task\.approval|task\.(completed|failed|cancelled))/.test(type)) {
-        void getAgentTaskTimeline(selectedTaskId, selectedRun.id, threadId).then((value) => setItems(value.items));
-      }
-    });
-    return () => source.close();
-  }, [selectedRun?.id, selectedTaskId, threadId, refresh]);
+    if (!selectedTaskId || !selectedRun || !isRunOwnedBySelectedTask(selectedTaskId, selectedRun)) return;
+    const terminalStatuses = ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'];
+    if (!terminalStatuses.includes(String(task?.status)) && !terminalStatuses.includes(String(selectedRun.status))) return;
+    void refreshTimeline(selectedTaskId, selectedRun.id).catch((value) => setError(String(value)));
+  }, [refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status]);
+
+  useEffect(() => {
+    if (!isRunOwnedBySelectedTask(selectedTaskId, selectedRun) || !shouldSubscribeToAgentTaskEvents(task, selectedRun)) return;
+    let active = true;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+    const taskId = selectedTaskId;
+    const runId = selectedRun.id;
+    if (sequenceRunId.current !== runId) {
+      sequenceRunId.current = runId;
+      lastSequence.current = 0;
+    }
+
+    const close = () => {
+      active = false;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      source?.close();
+      source = null;
+    };
+    const connect = () => {
+      if (!active) return;
+      const query = new URLSearchParams({
+        thread_id: threadId,
+        run_id: runId,
+        scope: 'run',
+        after_sequence: String(lastSequence.current),
+      });
+      source = new EventSource(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/events?${query}`);
+      source.addEventListener('task_event', (event) => {
+        const sequence = Number(event.lastEventId || 0);
+        if (sequence > 0 && sequence <= lastSequence.current) return;
+        lastSequence.current = Math.max(lastSequence.current, sequence);
+        let payload: Record<string, unknown> = {};
+        try { payload = JSON.parse((event as MessageEvent).data || '{}'); } catch { payload = {}; }
+        const type = String(payload.type || '');
+        const terminal = isTerminalAgentTaskEvent(payload);
+        if (terminal) {
+          void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));
+          close();
+          void refresh().catch((value) => setError(String(value)));
+          return;
+        }
+        if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
+        if (shouldRefreshAgentTaskTimeline(payload)) {
+          void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));
+        }
+      });
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (active) reconnectTimer = window.setTimeout(connect, AGENT_SSE_RECONNECT_INTERVAL_MS);
+      };
+    };
+    connect();
+    return close;
+  }, [refresh, refreshTimeline, selectedRun?.id, selectedRun?.status, selectedTaskId, task?.status, threadId]);
 
   const launch = async (objective: string) => {
-    if (webSearchMode !== 'off' && webCapability !== true) {
-      setError('Internet research is not available for Deep Research. Switch Internet Search off and try again.');
-      return;
-    }
+    if (!definitionId) { setError('Select an available agent definition first.'); return; }
     setBusy(true); setError('');
     try {
-      const created = await createAgentTask(threadId, { objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode });
+      const created = await createAgentTask(threadId, { definition_id: definitionId, objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);
     } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
     finally { setBusy(false); }
   };
 
-  const command = async (action: 'pause' | 'resume' | 'cancel' | 'retry') => {
+  const command = async (action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry') => {
     if (!task) return;
     setBusy(true); setError('');
     try { setTask(await commandAgentTask(task.id, threadId, action, task.version)); await refresh(); }
@@ -358,16 +511,40 @@ export default function DeepResearchTaskPanel({
 
   const openTrace = async () => {
     if (!selectedRun || !onOpenTrace) return;
-    const details = await getAgentRun(selectedRun.id, threadId);
-    onOpenTrace({ id: selectedRun.id, messageId: `agent-task:${task?.id}:${selectedRun.id}`, label: `Deep Research · attempt ${selectedRun.attempt}`, status: selectedRun.status, runDetails: details });
+    const run = selectedRun;
+    const taskId = task?.id;
+    const running = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(run.status);
+    const descriptor = {
+      id: run.id,
+      threadId,
+      messageId: `agent-task:${taskId}:${run.id}`,
+      label: `Deep Research · attempt ${run.attempt}`,
+      status: run.status,
+      running,
+    };
+    onOpenTrace(descriptor);
+    const details = await getAgentRun(run.id, threadId);
+    const detailsRunning = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(details.status);
+    onOpenTrace({
+      ...descriptor,
+      status: details.status,
+      running: detailsRunning,
+      runDetails: details,
+    });
   };
 
   const decide = async (
     action: AgentRunResumeAction,
-    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown> },
+    options?: { selectedOptionIds?: string[]; editedPayload?: Record<string, unknown>; approvalScope?: 'once' | 'session' | 'always' | 'deny' },
   ) => {
     const pending = selectedRun?.pending_interrupt;
     if (!selectedRun || !pending) return;
+    const responseOperation = runtimeInterruptResponseOperation(pending);
+    if (!responseOperation) {
+      setDecisionError('This approval request has an invalid runtime response contract.');
+      return;
+    }
+    if (!isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)) return;
     setDecisionSubmitting(action);
     setDecisionError('');
     try {
@@ -380,29 +557,55 @@ export default function DeepResearchTaskPanel({
         selected_option_ids: options?.selectedOptionIds,
         edited_payload: options?.editedPayload,
         client_metadata: { source: 'deep_research_task_panel' },
+        approval_scope: options?.approvalScope === 'deny' ? undefined : options?.approvalScope,
       });
       await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
     finally { setDecisionSubmitting(null); }
   };
 
-  const actions = useMemo(() => {
-    if (!task) return [] as Array<'pause' | 'resume' | 'cancel' | 'retry'>;
-    if (task.status === 'running' || task.status === 'queued') return ['pause', 'cancel'] as const;
-    if (task.status === 'paused') return ['resume', 'cancel'] as const;
-    if (task.status === 'awaiting_approval') return ['cancel'] as const;
-    if (task.status === 'failed' || task.status === 'expired') return ['retry'] as const;
-    return [] as Array<'pause' | 'resume' | 'cancel' | 'retry'>;
-  }, [task]);
+  const effectiveSelectedRunCapabilities = runtimeCapabilityResponseMatchesRun(
+    selectedRunCapabilities,
+    selectedRun?.id || '',
+  ) ? selectedRunCapabilities : null;
+
+  const taskControls = useMemo(() => TASK_CONTROL_CATALOG.map((control) => ({
+    ...control,
+    availability: runtimeOperationAvailability(activeTaskCapabilities, control.operation),
+  })).filter((control) => control.availability.visible), [activeTaskCapabilities]);
   const frozen = Boolean(selectedRun);
+  const displayedContextWindow = frozen
+    ? Number(task?.configuration?.context_window || contextWindow)
+    : contextWindow;
   const configuredWebMode = String(task?.configuration?.web_search_mode || 'off') as 'off' | 'ask' | 'on';
   const frozenWebMode = task?.web_access === 'allowed_for_task'
     ? 'on'
     : task?.web_access === 'denied_for_task'
       ? 'off'
       : configuredWebMode;
-  const requestedWebUnavailable = !frozen && webSearchMode !== 'off' && webCapability !== true;
+  const selectedDefinition = definitions.find((entry) => entry.definition_id === definitionId);
+  const selectedAgentId = frozen ? String(task?.workflow_id || definitionId) : definitionId;
+  const agentSelectOptions = useMemo(() => {
+    const options = definitions.map((entry) => ({
+      definition_id: entry.definition_id,
+      display_name: entry.display_name,
+    }));
+    if (selectedAgentId && !options.some((entry) => entry.definition_id === selectedAgentId)) {
+      options.push({ definition_id: selectedAgentId, display_name: selectedAgentId });
+    }
+    return options;
+  }, [definitions, selectedAgentId]);
+  const agentSelectValue = agentSelectOptions.some((entry) => entry.definition_id === selectedAgentId)
+    ? selectedAgentId
+    : (agentSelectOptions[0]?.definition_id || '');
+  const definitionFields = selectedDefinition?.configuration.fields || [];
+  const modelField = definitionFields.find((field) => field.id === 'llm_model');
+  const contextWindowField = definitionFields.find((field) => field.id === 'context_window');
+  const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
+  const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
+  const isApprovalInterrupt = pendingInterrupt?.kind === 'approval';
+  const isTaskPauseInterrupt = pendingInterrupt?.type === 'task_pause' || pendingInterrupt?.node_id === 'task_pause_gate';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
     : [];
@@ -412,34 +615,112 @@ export default function DeepResearchTaskPanel({
   });
   useEffect(() => setDecisionError(''), [pendingInterrupt?.interrupt_id]);
 
+  const interactionDescriptors = useMemo(() => {
+    const candidates: Array<{ id: 'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'; label: string; placeholder: string }> = [
+      { id: 'run.send_followup' as const, label: 'Follow up', placeholder: 'Send input after the current run finishes…' },
+      { id: 'run.interrupt_with_input' as const, label: 'Interrupt with input', placeholder: 'Interrupt the run and continue with new input…' },
+      { id: 'run.steer_live' as const, label: 'Steer live', placeholder: 'Guide the active run without replacing it…' },
+    ];
+    return candidates
+      .map((item) => ({ ...item, availability: runtimeOperationAvailability(effectiveSelectedRunCapabilities, item.id) }))
+      .filter((item) => item.availability.visible);
+  }, [effectiveSelectedRunCapabilities]);
+  const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
+  const isResultReview = pendingInterrupt?.response_operation === 'task.result_review.respond';
+  const isBudgetReview = pendingInterrupt?.response_operation === 'task.budget_review.respond';
+  const resultReviewAvailability = runtimeOperationAvailability(
+    effectiveSelectedRunCapabilities,
+    'task.result_review.respond',
+  );
+  const budgetReviewAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.budget_review.respond');
+  const decisionVisible = isTaskPauseInterrupt || (isResultReview ? resultReviewAvailability.visible
+    : responseOperation ? runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).visible : false);
+  const courseCorrectionAvailability = runtimeOperationAvailability(effectiveSelectedRunCapabilities, 'task.course_correction.submit');
+  const showCourseCorrectionForm = Boolean(
+    task
+    && selectedRun
+    && courseCorrectionAvailability.visible
+    && ['queued', 'running'].includes(task.status),
+  );
+  const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
+  const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
+  const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
+    if (!task || !selectedRun || !pendingInterrupt) return;
+    const followup = decision === 'retry_with_input' ? reviewGuidance : undefined;
+    if (decision === 'retry_with_input' && !followup?.trim()) return;
+    setDecisionSubmitting('approve');
+    setDecisionError('');
+    try {
+      await respondToAgentTaskResultReview(task.id, threadId, {
+        run_id: selectedRun.id,
+        interrupt_id: pendingInterrupt.interrupt_id,
+        expected_version: task.version,
+        decision,
+        followup_input: followup?.trim(),
+      });
+      await refresh();
+    } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
+    finally { setDecisionSubmitting(null); }
+  };
+  const respondToBudgetReview = async (decision: 'continue' | 'accept_partial' | 'steer') => {
+    if (!task || !selectedRun || !pendingInterrupt) return;
+    if (decision === 'steer' && !reviewGuidance.trim()) return;
+    setDecisionSubmitting('approve'); setDecisionError('');
+    try {
+      await respondToAgentTaskBudgetReview(task.id, threadId, {
+        run_id: selectedRun.id, interrupt_id: pendingInterrupt.interrupt_id,
+        expected_version: task.version, decision,
+        guidance: decision === 'steer' ? reviewGuidance.trim() : undefined,
+      });
+      setReviewGuidance(''); await refresh();
+    } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
+    finally { setDecisionSubmitting(null); }
+  };
+  useEffect(() => {
+    if (interactionDescriptors.length && !interactionDescriptors.some((operation) => operation.id === interactionOperation)) {
+      setInteractionOperation(interactionDescriptors[0].id);
+    }
+  }, [interactionDescriptors, interactionOperation]);
+
   return <ConversationPanelTemplate
+    ref={panelRef}
     sx={{ p: 1 }}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
-      contextWindow={frozen ? Number(task?.configuration?.context_window || contextWindow) : contextWindow}
-      disabled={frozen}
+      contextWindow={displayedContextWindow}
+      disabled={frozen || modelField?.read_only === true}
+      contextWindowDisabled={frozen || contextWindowField?.read_only === true}
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
-      beforeModelControls={renderWebControl(frozen ? frozenWebMode : webSearchMode, frozen || webCapability === false)}
+      beforeModelControls={webSearchField ? renderWebControl(
+        frozen ? frozenWebMode : webSearchMode,
+        frozen || webSearchField.enabled === false,
+      ) : null}
+      afterModelControls={agentSelectValue ? (
+        <WorkbenchSelect
+          label="Select agent"
+          aria-label="Agent definition"
+          value={agentSelectValue}
+          disabled={frozen}
+          onChange={setDefinitionId}
+        >
+          {agentSelectOptions.map((entry) => (
+            <MenuItem key={entry.definition_id} value={entry.definition_id}>{entry.display_name}</MenuItem>
+          ))}
+        </WorkbenchSelect>
+      ) : null}
       trailingActions={<DeepResearchTaskPicker threadId={threadId} selectedTaskId={selectedTaskId} onSelect={onTaskSelect} />}
     />}
     status={<>
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-      {capabilityError && <Alert severity="warning" sx={{ mb: 1 }}>{capabilityError}</Alert>}
-      {task && <Box sx={{ borderTop: 1, borderBottom: 1, borderColor: 'divider', py: 0.75, px: 1 }}>
-        <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
-          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'primary'} />
-          <Typography variant="caption">Attempt {selectedRun?.attempt || 0} of {runs.length}</Typography>
-          <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
-          <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
-          <Box sx={{ flex: 1 }} />
-          {actions.map((action) => <Button key={action} size="small" color={action === 'cancel' ? 'error' : 'primary'} disabled={busy} onClick={() => void command(action)}>{action}</Button>)}
-          <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
-        </Stack>
-        <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
-      </Box>}
+      {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
+      {requestedWebUnavailable && <Alert severity="warning" sx={{ mb: 1 }}>The selected definition does not allow web search.</Alert>}
+      {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
+      {task?.status === 'recovery_required' && <Alert severity="warning" sx={{ mb: 1 }}>
+        Runtime execution finished, but its product-state update could not be applied safely. Retry the task or ask an administrator to reconcile this run.
+      </Alert>}
     </>}
     transcript={<ConversationTranscriptFrame>{items.map((item) => <TimelineBubble
       key={item.id}
@@ -447,6 +728,8 @@ export default function DeepResearchTaskPanel({
       taskId={task?.id || ''}
       threadId={threadId}
       onSaveToMemory={onSaveToMemory}
+      onAddToChat={addFinalToChat}
+      addingToChat={addingToChat}
       copied={copiedId === item.id}
       active={activeItemId === item.id}
       onCopy={() => copyItem(item)}
@@ -457,17 +740,158 @@ export default function DeepResearchTaskPanel({
         if (index >= 0) setRunIndex(index);
       }}
     />)}</ConversationTranscriptFrame>}
-    decision={pendingInterrupt ? <HumanReviewDecisionPanel
+    decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : !decisionVisible ? undefined : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">Deep research paused</Typography>
+      <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume to continue or Cancel to stop the task.</Typography>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && isBudgetReview ? <ResizableDecisionPanel
+      title={pendingInterrupt.title || 'Research budget reached'}
+      variant="approval"
+      rootRef={panelRef}
+      horizontalInset={1}
+    >
+      <Typography variant="body2">{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
+      {pendingInterrupt.provisional_answer
+        ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} />
+        : <Alert severity="warning">No usable provisional answer was produced. Continue or steer the research.</Alert>}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Optional guidance for the next tranche" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Accept partial answer</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('continue')}>Continue research</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('steer')}>Steer and continue</Button>
+      </Box>
+      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+    </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
+      title={pendingInterrupt.title || 'Review incomplete result'}
+      variant="approval"
+      rootRef={panelRef}
+      horizontalInset={1}
+    >
+      <Typography variant="body2">{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
+      {pendingInterrupt.provisional_answer ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} /> : null}
+      <TextField fullWidth multiline minRows={2} maxRows={6} label="Guidance for retry" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('accept')}>Accept with warnings</Button>
+        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
+      </Box>
+      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+    </ResizableDecisionPanel> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
+      <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
+      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
+      <Stack direction="row" spacing={1} flexWrap="wrap">
+        {(['once', 'session', 'always'] as const).filter((choice) => pendingInterrupt.response_schema?.scope?.includes(choice) && pendingInterrupt.allowed_actions?.includes('approve')).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('approve', { approvalScope: choice })}>Approve {choice}</Button>)}
+        {pendingInterrupt.allowed_actions?.includes('reject') && <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>}
+      </Stack>
+      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
+    </Box> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}
+      disabled={!runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).visible || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)}
+      disabledReason={runtimeOperationAvailability(effectiveSelectedRunCapabilities, responseOperation).disabledReason}
       scopeOptions={approvalScopeOptions}
+      rootRef={panelRef}
       onAction={(action, options) => void decide(action, options)}
     /> : undefined}
-    composer={!task ? <Box sx={{ pb: 1 }}>
-      <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
-    </Box> : <Box sx={{ px: 2, py: 1 }}><Typography variant="body2" color="text.secondary">
-      {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
-    </Typography></Box>}
+    composer={<Box sx={{ pb: 1 }}>
+      {task && <Box sx={{ borderTop: 1, borderColor: 'divider', py: 0.75, px: 1, mb: 1 }}>
+        <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
+          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />
+          <Typography variant="caption">Attempt {selectedRun?.attempt || 0} of {runs.length}</Typography>
+          <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
+          <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
+          <Box sx={{ flex: 1 }} />
+          {taskControls.map(({ action, label, availability }) => {
+            return <Button
+              key={action}
+              size="small"
+              color={action === 'cancel' ? 'error' : 'primary'}
+              disabled={busy || !availability.enabled}
+              title={availability.disabledReason}
+              onClick={() => void command(action)}
+            >{label}</Button>;
+          })}
+          <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
+        </Stack>
+        <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
+      </Box>}
+      {!task ? (
+        <ConversationComposer placeholder="Describe a new Deep Research objective…" busy={busy} disabled={!model || requestedWebUnavailable} onSubmit={(value) => void launch(value)} />
+      ) : interactionDescriptors.length > 0 || showCourseCorrectionForm || hasCourseCorrectionHistory ? <>
+      {showCourseCorrectionForm ? <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="flex-start">
+        <TextField fullWidth multiline minRows={2} label="Redirect research after active workers finish" value={courseCorrection} onChange={(event) => setCourseCorrection(event.target.value)} />
+        <Button variant="outlined" disabled={!courseCorrection.trim() || !courseCorrectionAvailability.enabled || !selectedRun} onClick={() => {
+          if (!selectedRun || !task) return;
+          void submitAgentTaskCourseCorrection(task.id, threadId, { run_id: selectedRun.id, expected_version: task.version, instruction: courseCorrection.trim() })
+            .then((response) => {
+              setCourseCorrection('');
+              setCourseCorrectionStatus(
+                response.delivery_state === 'linked'
+                  ? 'Correction linked to a follow-up run.'
+                  : response.delivery_state === 'incorporated'
+                    ? 'Correction is incorporated into this attempt and remains active until the result verifies coverage.'
+                  : response.delivery_state === 'satisfied'
+                    ? 'Correction was verified in the final result.'
+                  : response.delivery_state === 'unresolved'
+                    ? 'Execution finished without fully resolving this correction. Review the partial result or retry.'
+                  : response.delivery_state === 'delivered'
+                    ? 'Correction delivered and waiting for the next safe planning boundary.'
+                    : 'Correction accepted and queued for delivery.',
+              );
+              return refresh();
+            })
+            .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+        }}>Redirect research</Button>
+      </Stack> : null}
+      {courseCorrectionStatus ? <Alert severity="info" sx={{ mb: 1 }}>{courseCorrectionStatus}</Alert> : null}
+      {task.course_corrections?.length ? <Stack spacing={0.75} sx={{ mb: 1 }}>
+        {task.course_corrections.map((correction) => <Alert
+          key={correction.correction_id}
+          severity={correction.delivery_state === 'unresolved' ? 'warning' : correction.delivery_state === 'satisfied' ? 'success' : 'info'}
+          icon={false}
+        >
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Chip size="small" label={correction.delivery_state.replaceAll('_', ' ')} />
+            <Typography variant="body2">{correction.instruction}</Typography>
+          </Stack>
+          {correction.delivery_state === 'unresolved' ? <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+            {correction.runtime_outcome?.unresolved_reason || 'Execution finished without fully addressing this redirect. Retry or accept the partial result.'}
+          </Typography> : null}
+        </Alert>)}
+      </Stack> : null}
+      <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+        {interactionDescriptors.map((operation) => <Button
+          key={operation.id}
+          size="small"
+          variant={interactionOperation === operation.id ? 'contained' : 'outlined'}
+          disabled={!operation.availability.enabled}
+          title={operation.availability.disabledReason}
+          onClick={() => setInteractionOperation(operation.id)}
+        >{operation.label}</Button>)}
+      </Stack>
+      {interactionDescriptors.length > 0 && <ConversationComposer
+          placeholder={interactionDescriptors.find((operation) => operation.id === interactionOperation)?.placeholder || 'Send runtime input…'}
+          busy={busy}
+          disabled={!interactionDescriptors.find((operation) => operation.id === interactionOperation)?.availability.enabled}
+          onSubmit={async (value) => {
+            if (!selectedRun) return;
+            setBusy(true); setError('');
+            try {
+              if (interactionOperation === 'run.send_followup') await sendAgentRunFollowup(selectedRun.id, threadId, value);
+              else if (interactionOperation === 'run.interrupt_with_input') await interruptAgentRunWithInput(selectedRun.id, threadId, value);
+              else await steerAgentRunLive(selectedRun.id, threadId, value);
+              await refresh();
+            } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+            finally { setBusy(false); }
+          }}
+        />}
+      </> : (
+        <Box sx={{ px: 2, py: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'recovery_required' ? 'Runtime execution stopped at a product-state recovery boundary. Retry or cancel the task above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
+          </Typography>
+        </Box>
+      )}
+    </Box>}
   />;
 }

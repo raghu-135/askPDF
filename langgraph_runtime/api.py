@@ -1,0 +1,1502 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import Any, AsyncIterator, Mapping
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from langgraph_runtime.context import RuntimeExecutionContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeEvent, AgentRuntimeResult, RuntimeCleanupResult, RuntimeOperationId, RuntimeTaskContext, TaskOrchestrationDelta
+from runtime_protocol.events import create_runtime_event
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.transport import (
+    definition_from_dict,
+    course_correction_from_dict,
+    event_from_dict,
+    request_from_dict,
+    result_from_dict,
+    sse_encode,
+    json_envelope,
+)
+from runtime_protocol.protocol import json_payload
+from langgraph_runtime.capabilities import LangGraphDeploymentProfile, langgraph_capabilities, langgraph_deployment_capabilities
+from langgraph_runtime.budgets import deep_agent_budgets
+from langgraph_runtime.models.llm import configure_runtime_limits
+from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.auth import PUBLIC_OPERATIONAL_PATHS, valid_bearer_token
+from langgraph_runtime.execution_store import CleanupClaimError, ExecutionStore, LeaseLostError, ExecutionConflictError, TERMINAL_STATUSES, operation_fingerprint, request_fingerprint
+from langgraph_runtime.dependencies import (
+    DependencyMonitor,
+    langgraph_dependency_requirements,
+)
+from langgraph_runtime.prompts.loaders import validate_runtime_prompt_assets
+
+
+logger = logging.getLogger(__name__)
+
+
+class DependencyUnavailable(Exception):
+    def __init__(self, details: Mapping[str, Any]) -> None:
+        self.details = dict(details)
+        super().__init__("A dependency required by this agent is unavailable")
+
+
+def _definition_http_error(exc: Exception) -> HTTPException:
+    """Expose admission failures as structured non-retryable API errors."""
+    if isinstance(exc, RuntimeError):
+        detail = exc.to_dict()
+    else:
+        message = str(exc)[:2000] or "Agent definition is invalid"
+        code = (
+            "runtime_configuration_invalid"
+            if "unknown config keys:" in message
+            or "unsupported runtime configuration overrides:" in message
+            else "runtime_definition_invalid"
+        )
+        detail = {
+            "code": code,
+            "safe_message": message,
+            "retryable": False,
+            "details": {"configuration": message} if code == "runtime_configuration_invalid" else {},
+        }
+    return HTTPException(status_code=400, detail=detail)
+
+
+def _request_from_payload(payload: Mapping[str, Any]) -> Any:
+    """Parse an incoming request and expose negotiation failures as 4xx errors."""
+
+    request_value = payload.get("request") if isinstance(payload, Mapping) else None
+    try:
+        return request_from_dict(request_value)
+    except (TypeError, ValueError) as exc:
+        raise
+
+
+def _cross_service_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: Any,
+    code: str = "runtime_request_rejected",
+) -> JSONResponse:
+    """Serialize every ``/v1`` rejection as a negotiated runtime envelope.
+
+    FastAPI's default exception handlers return ``{"detail": ...}``.  That is
+    suitable for browser-facing endpoints, but it is not a valid runtime
+    response: the control-plane connector must be able to negotiate and parse
+    every cross-service response, including admission and validation errors.
+    """
+
+    if isinstance(detail, Mapping):
+        error = dict(detail)
+        error.setdefault("code", code)
+        error.setdefault("safe_message", "Runtime request was rejected")
+        error.setdefault("retryable", status_code >= 500)
+        error.setdefault("details", {})
+    else:
+        message = str(detail)[:2000] if detail is not None else "Runtime request was rejected"
+        error = {
+            "code": code,
+            "safe_message": message,
+            "retryable": status_code >= 500,
+            "details": {},
+        }
+    return JSONResponse(
+        status_code=status_code,
+        content=json_envelope(
+            status="failed",
+            request_id=request.headers.get("x-request-id"),
+            error=error,
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        ),
+    )
+
+
+def _namespace(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return SimpleNamespace(**{str(key): _namespace(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [_namespace(item) for item in value]
+    return value
+
+
+def _task_context(value: Any) -> RuntimeTaskContext | None:
+    if not isinstance(value, Mapping):
+        return None
+    task_id = value.get("task_id")
+    objective = value.get("objective", "")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise RuntimeError("runtime_context_invalid", "Runtime task context is missing task identity")
+    if not isinstance(objective, str):
+        raise RuntimeError("runtime_context_invalid", "Runtime task objective must be a string")
+
+    def mapping(name: str) -> dict[str, Any]:
+        item = value.get(name) or {}
+        if not isinstance(item, Mapping):
+            raise RuntimeError("runtime_context_invalid", f"Runtime task {name} must be an object")
+        return dict(item)
+
+    def mapping_sequence(name: str) -> tuple[dict[str, Any], ...]:
+        items = value.get(name) or ()
+        if not isinstance(items, (list, tuple)) or any(not isinstance(item, Mapping) for item in items):
+            raise RuntimeError("runtime_context_invalid", f"Runtime task {name} must be an array of objects")
+        return tuple(dict(item) for item in items)
+
+    artifact_contents = mapping("artifact_contents")
+    if any(not isinstance(key, str) or not isinstance(item, str) for key, item in artifact_contents.items()):
+        raise RuntimeError("runtime_context_invalid", "Runtime task artifact contents must contain strings")
+    return RuntimeTaskContext(
+        task_id=task_id.strip(),
+        objective=objective,
+        todos=mapping_sequence("todos"),
+        artifact_manifests=mapping_sequence("artifact_manifests"),
+        artifact_contents=artifact_contents,
+        limits=mapping("limits"),
+        permissions=mapping("permissions"),
+        metadata=mapping("metadata"),
+        context_data=mapping("context_data"),
+        active_corrections=tuple(
+            course_correction_from_dict(item)
+            for item in value.get("active_corrections") or []
+            if isinstance(item, Mapping)
+        ),
+    )
+
+
+def _context(
+    payload: Mapping[str, Any],
+    request: Any,
+    *,
+    cancellation_checker: Any = None,
+    pause_checker: Any = None,
+    pause_token_reader: Any = None,
+    pause_consumer: Any = None,
+    claimed_pause_token: str | None = None,
+    course_correction_reader: Any = None,
+    course_correction_acknowledger: Any = None,
+    operation_id: str | None = None,
+    attempt_id: str | None = None,
+    boundary_event_id: str | None = None,
+) -> RuntimeExecutionContext:
+    value = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
+    run_context = dict(value.get("agent_run_context") or {})
+    if isinstance(run_context.get("run"), Mapping):
+        run_context["run"] = _namespace(run_context["run"])
+    resolved_spec = dict(value.get("resolved_spec") or {})
+    if resolved_spec and run_context.get("run") is not None:
+        # Keep the persisted execution snapshot synchronized with the explicit
+        # neutral context field rather than relying on ORM serialization.
+        run_context["run"].resolved_spec_json = resolved_spec
+    request_payload = value.get("request_payload")
+    request_values = {
+        **(dict(request_payload) if isinstance(request_payload, Mapping) else {}),
+        **dict(request.input or {}),
+        **dict(request.options or {}),
+    }
+    mcp_token = request_values.get("mcp_execution_context_token")
+    if mcp_token:
+        run_context["mcp_execution_context_token"] = str(mcp_token)
+    # Only the top-level request needs attribute access for graph execution.
+    # Preserve nested options as ordinary dict/list values because
+    # they may be copied into LangGraph state and must remain checkpointable.
+    return RuntimeExecutionContext(
+        request=SimpleNamespace(**request_values),
+        embedding_model=value.get("embedding_model") or request.options.get("embedding_model"),
+        resolved_spec=resolved_spec,
+        agent_run_context=run_context,
+        task_id=value.get("task_id") or request.task_id,
+        task_worker_id=value.get("task_worker_id"),
+        task_context=_task_context(value.get("task_context")),
+        cancellation_checker=cancellation_checker,
+        pause_checker=pause_checker,
+        pause_token_reader=pause_token_reader,
+        pause_consumer=pause_consumer,
+        claimed_pause_token=claimed_pause_token,
+        course_correction_reader=course_correction_reader,
+        course_correction_acknowledger=course_correction_acknowledger,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        boundary_event_id=boundary_event_id,
+    )
+
+
+def _terminal_result(
+    request: Any,
+    context: RuntimeExecutionContext | None,
+    *,
+    status: str,
+    error: Mapping[str, Any],
+    operation_id: str,
+    attempt_id: str,
+    boundary_event_id: str,
+) -> AgentRuntimeResult:
+    task = context.task_context if context is not None else None
+    metadata = dict(task.metadata or {}) if task is not None else {}
+    delta = TaskOrchestrationDelta(
+        event_id=boundary_event_id,
+        attempt_id=attempt_id,
+        operation_id=operation_id,
+        idempotency_key=f"task-delta:{boundary_event_id}",
+        observed_task_version=int(metadata.get("task_version") or getattr(request, "agent_task_version", 0) or 0),
+        observed_plan_revision=int(metadata.get("plan_revision") or getattr(request, "task_plan_revision", 0) or 0),
+        pending_interrupt={"operation": "clear"},
+        result={"status": status, "error": dict(error)},
+    )
+    return AgentRuntimeResult(status=status, error=dict(error), orchestration_delta=delta)
+
+
+def create_app(*, execution_store: ExecutionStore | None = None, require_auth: bool = True) -> FastAPI:
+    validation_environment = None
+    if not require_auth:
+        validation_environment = dict(os.environ)
+        # Unit tests inject an in-memory checkpointer and do not represent a
+        # production deployment. Validate the production-shaped configuration
+        # while leaving the injected test implementation untouched.
+        validation_environment["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
+        validation_environment["AGENT_CHECKPOINT_DATABASE_URL"] = (
+            validation_environment.get("AGENT_CHECKPOINT_DATABASE_URL")
+            or "postgresql://runtime-test:runtime-test@localhost/runtime-test"
+        )
+        validation_environment["AGENT_RUNTIME_EXECUTION_DATABASE_URL"] = (
+            validation_environment.get("AGENT_RUNTIME_EXECUTION_DATABASE_URL")
+            or "postgresql://runtime-test:runtime-test@localhost/runtime-test"
+        )
+        validation_environment["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
+        validation_environment["LLM_AUTH_MODE"] = validation_environment.get("LLM_AUTH_MODE") or "none"
+        validation_environment["LLM_KEYLESS_PROVIDER"] = validation_environment.get("LLM_KEYLESS_PROVIDER") or "local"
+        # ``require_auth=False`` is the injected, in-process test app.  It is
+        # intentionally allowed to validate against a production-shaped
+        # external-runtime configuration even when the developer's .env still
+        # contains the control-plane-only ``in_process`` transport setting.
+        # This does not alter the real process environment or relax production
+        # startup validation.
+        if validation_environment.get("MCP_TRANSPORT", "").strip() not in {"", "loopback_http"}:
+            validation_environment["MCP_TRANSPORT"] = "loopback_http"
+            validation_environment["MCP_LOOPBACK_URL"] = (
+                validation_environment.get("MCP_LOOPBACK_URL")
+                or "http://127.0.0.1:8000/internal/mcp/"
+            )
+    validate_runtime_environment(service="langgraph", environ=validation_environment)
+    validate_runtime_prompt_assets()
+    configure_runtime_limits(validation_environment)
+    # Direct tests use an injected in-memory checkpointer and deliberately do
+    # not model the production environment.  Use the already validated test
+    # environment for capability admission so those tests exercise execution
+    # rather than being rejected because the developer .env selects a
+    # different checkpointer backend.
+    capability_profile = LangGraphDeploymentProfile.from_environment(
+        validation_environment if not require_auth else None
+    )
+
+    def effective_capabilities(definition: AgentDefinition | None) -> Any:
+        return langgraph_capabilities(definition, profile=capability_profile)
+
+    runtime_state: dict[str, Any] = {
+        "draining": False,
+        "started": False,
+        "active": {},
+        "readiness": {},
+    }
+    execution_store = execution_store or ExecutionStore(database_url="" if not require_auth else None)
+    dependency_monitor = DependencyMonitor()
+    # Serialize the durable-record check and task registration.  Without this
+    # small critical section, two subscribers can both observe no active task
+    # and start the same execution.
+    execution_start_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        runtime_state["draining"] = False
+        await execution_store.initialize()
+        if require_auth:
+            from langgraph_runtime.checkpointing import open_agent_checkpointer
+
+            async with open_agent_checkpointer():
+                pass
+        runtime_state["started"] = True
+        dependency_stop = asyncio.Event()
+        await dependency_monitor.refresh()
+        dependency_task = asyncio.create_task(dependency_monitor.run(dependency_stop), name="agent-runtime-dependency-monitor")
+        recovery_enabled = os.getenv("AGENT_RUNTIME_RECOVERY_LOOP_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        from langgraph_runtime.limits import required_positive_float, required_positive_int
+
+        recovery_interval = required_positive_float("AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS")
+        recovery_batch_size = required_positive_int("AGENT_RUNTIME_RECOVERY_BATCH_SIZE")
+
+        async def recover_once() -> None:
+            for record in await execution_store.list_terminal_reconciliation_candidates(recovery_batch_size):
+                outcome = await execution_store.reconcile_terminal_execution(record.run_id)
+                if outcome == "quarantined":
+                    logger.error(
+                        "Runtime terminal invariant violation; execution quarantined | run_id=%s",
+                        record.run_id,
+                    )
+            for record in await execution_store.list_recovery_candidates(recovery_batch_size):
+                if runtime_state["active"].get(record.run_id) is not None:
+                    continue
+                try:
+                    admission_failure = dependency_monitor.unavailable(langgraph_dependency_requirements(record.payload))
+                    if admission_failure:
+                        logger.info(
+                            "Runtime recovery deferred | run_id=%s dependency=%s reason=%s",
+                            record.run_id,
+                            admission_failure["dependency"],
+                            admission_failure["reason"],
+                        )
+                        continue
+                    recovered_request = request_from_dict(record.request)
+                    operation_id = str(record.last_operation_id or "").strip()
+                    if not operation_id:
+                        raise RuntimeError(
+                            "runtime_operation_id_required",
+                            "Recovery candidate has no durable operation identity",
+                            retryable=False,
+                        )
+                    fencing_token = await execution_store.claim(record.run_id)
+                    if fencing_token is None:
+                        # Another worker still owns a valid lease. The next
+                        # scan must reconsider this record after expiry.
+                        continue
+                    task = asyncio.create_task(
+                        _execute_operation(
+                            record.payload,
+                            record.operation,
+                            recovered_request,
+                            attempt=record.attempt,
+                            operation_id=operation_id,
+                            fencing_token=fencing_token,
+                        ),
+                        name=f"agent-runtime-recovery-{record.run_id}",
+                    )
+                    runtime_state["active"][record.run_id] = task
+                    task.add_done_callback(
+                        lambda done_task, run_id=record.run_id: runtime_state["active"].pop(run_id, None)
+                        if runtime_state["active"].get(run_id) is done_task else None
+                    )
+                except Exception:
+                    logger.exception("Unable to recover runtime execution | run_id=%s", record.run_id)
+
+        recovery_task: asyncio.Task[Any] | None = None
+        if recovery_enabled:
+            await recover_once()
+
+            async def recovery_loop() -> None:
+                while not runtime_state["draining"]:
+                    try:
+                        await asyncio.sleep(recovery_interval)
+                        if not runtime_state["draining"]:
+                            await recover_once()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("Runtime recovery scan failed")
+
+            recovery_task = asyncio.create_task(recovery_loop(), name="agent-runtime-recovery-loop")
+        yield
+        runtime_state["draining"] = True
+        dependency_stop.set()
+        dependency_task.cancel()
+        try:
+            await dependency_task
+        except asyncio.CancelledError:
+            pass
+        if recovery_task is not None:
+            recovery_task.cancel()
+            try:
+                await recovery_task
+            except asyncio.CancelledError:
+                pass
+        from langgraph_runtime.limits import required_positive_float
+
+        grace = required_positive_float("AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS")
+        deadline = time.monotonic() + grace
+        while runtime_state["active"] and time.monotonic() < deadline:
+            await asyncio.sleep(required_positive_float("AGENT_CANCELLATION_POLL_INTERVAL_SECONDS"))
+        for task in list(runtime_state["active"].values()):
+            task.cancel()
+        await execution_store.close()
+
+    app = FastAPI(
+        title="AskPDF LangGraph Runtime",
+        version=os.getenv("RUNTIME_PROVIDER_VERSION", "1"),
+        lifespan=lifespan,
+    )
+    adapter: Any = None
+
+    @app.middleware("http")
+    async def authenticate(request: Request, call_next: Any) -> Any:
+        if not require_auth or request.url.path in PUBLIC_OPERATIONAL_PATHS:
+            return await call_next(request)
+        expected = os.environ["LANGGRAPH_RUNTIME_TOKEN"]
+        if not valid_bearer_token(request.headers.get("authorization"), expected):
+            return JSONResponse(
+                status_code=401,
+                content=json_envelope(
+                    status="failed",
+                    request_id=request.headers.get("x-request-id"),
+                    error={"code": "runtime_unauthorized", "safe_message": "Runtime authentication failed", "retryable": False},
+                ),
+            )
+        return await call_next(request)
+
+    @app.exception_handler(DependencyUnavailable)
+    async def dependency_unavailable_handler(request: Request, exc: DependencyUnavailable) -> JSONResponse:
+        return JSONResponse(
+            json_envelope(
+                status="failed",
+                request_id=request.headers.get("x-request-id"),
+                error={
+                    "code": "runtime_dependency_unavailable",
+                    "safe_message": str(exc),
+                    "retryable": True,
+                    "details": exc.details,
+                },
+                runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+            ),
+            status_code=503,
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse | Any:
+        # Health/liveness endpoints intentionally remain ordinary operational
+        # endpoints.  Only the cross-service API requires a negotiated error
+        # envelope.
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+        return _cross_service_error_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse | Any:
+        # This also covers framework-generated 404/405 responses for unknown
+        # runtime routes, which must not fall back to an unversioned Starlette
+        # ``detail`` body.
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return _cross_service_error_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
+
+    @app.exception_handler(RuntimeError)
+    async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            raise exc
+        return _cross_service_error_response(
+            request,
+            status_code=503 if exc.retryable else 400,
+            detail=exc.to_dict(),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        return _cross_service_error_response(
+            request,
+            status_code=422,
+            detail={
+                "code": "runtime_request_invalid",
+                "safe_message": "Runtime request validation failed",
+                "retryable": False,
+                "details": {
+                    "issues": [
+                        {
+                            "location": list(issue.get("loc") or ()),
+                            "message": str(issue.get("msg") or "invalid request"),
+                            "type": str(issue.get("type") or "value_error"),
+                        }
+                        for issue in exc.errors()[:20]
+                    ]
+                },
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def cross_service_exception_handler(request: Request, exc: Exception) -> JSONResponse | Any:
+        if not request.url.path.startswith("/v1/"):
+            raise exc
+        logger.exception("Unhandled LangGraph runtime API error | path=%s", request.url.path)
+        return _cross_service_error_response(
+            request,
+            status_code=500,
+            detail={
+                "code": "runtime_internal_error",
+                "safe_message": "Agent runtime failed while handling the request",
+                "retryable": True,
+                "details": {},
+            },
+        )
+
+    def get_adapter() -> Any:
+        """Load the concrete execution implementation only when needed."""
+        nonlocal adapter
+        if adapter is None:
+            from langgraph_runtime.adapter import LangGraphRuntimeAdapter
+
+            adapter = LangGraphRuntimeAdapter()
+        return adapter
+
+    async def _preflight_operation(run_id: str, payload: Mapping[str, Any], operation: str) -> None:
+        """Return an HTTP conflict before opening an SSE response."""
+        operation_id = str(payload.get("operation_id") or "").strip()
+        if operation_id:
+            request = _request_from_payload(payload)
+            fingerprint = operation_fingerprint(operation, request.to_dict(), payload)
+            existing_operation = await execution_store.get_operation(run_id, operation_id)
+            if existing_operation is not None:
+                if fingerprint != existing_operation.get("fingerprint"):
+                    raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "operation_id was reused with different input", "retryable": False})
+                return
+        record = await execution_store.get(run_id)
+        if record is not None and isinstance(record.payload, Mapping):
+            cleanup = record.payload.get("cleanup")
+            if isinstance(cleanup, Mapping) and str(cleanup.get("phase") or "") == "in_progress":
+                raise HTTPException(status_code=409, detail={"code": "runtime_cleanup_in_progress", "safe_message": "The runtime execution is being cleaned up", "retryable": True})
+        if operation == "resume" and record is not None and record.status in {"awaiting_human", "paused"}:
+            supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
+            stored_result = record.result if isinstance(record.result, Mapping) else {}
+            current = stored_result.get("interruption")
+            # The pause event is the checkpoint contract delivered to the
+            # control plane and UI.  Prefer its interruption identity over
+            # the execution record's copied result because adapters may
+            # decorate that result with a framework-generated interrupt id
+            # after the durable pause event has already been emitted.
+            checkpoint_events = await execution_store.events_after(run_id, 0)
+            for checkpoint_event in reversed(checkpoint_events):
+                if str(checkpoint_event.get("kind") or "") not in {"run.paused", "interrupt.requested", "approval.requested"}:
+                    continue
+                event_result = checkpoint_event.get("result")
+                event_interruption = event_result.get("interruption") if isinstance(event_result, Mapping) else None
+                if not isinstance(event_interruption, Mapping):
+                    event_payload = checkpoint_event.get("payload")
+                    event_interruption = event_payload.get("pending_interrupt") if isinstance(event_payload, Mapping) else None
+                if isinstance(event_interruption, Mapping):
+                    current = event_interruption
+                    break
+            if not isinstance(current, Mapping) or not isinstance(supplied, Mapping):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The checkpoint has no matching pending interrupt", "retryable": False})
+            if str(supplied.get("interrupt_id") or "") != str(current.get("interrupt_id") or ""):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt does not match the checkpoint", "retryable": False})
+            if str(supplied.get("type") or "") != str(current.get("type") or ""):
+                raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The resume interrupt type does not match the checkpoint", "retryable": False})
+            if str(current.get("type") or "") == "task_pause":
+                decision = supplied.get("decision") if isinstance(supplied.get("decision"), Mapping) else {}
+                action = str(decision.get("action") or "")
+                if action not in {"approve", "resume"}:
+                    raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "A cooperative pause accepts only approve or resume", "retryable": False})
+        if record is None or record.status not in TERMINAL_STATUSES:
+            return
+        request = _request_from_payload(payload)
+        fingerprint = operation_fingerprint(operation, request.to_dict(), payload)
+        existing = record.request_fingerprint or request_fingerprint(record.operation, record.request)
+        if fingerprint != existing:
+            raise HTTPException(status_code=409, detail={"code": "runtime_operation_conflict", "safe_message": "terminal execution is immutable; use retry", "retryable": False})
+
+    def _admit_dependencies(payload: Mapping[str, Any]) -> None:
+        failure = dependency_monitor.unavailable(langgraph_dependency_requirements(payload))
+        if failure:
+            raise DependencyUnavailable(failure)
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok", "service": "langgraph-runtime"}
+
+    @app.get("/startupz")
+    async def startupz() -> JSONResponse:
+        started = bool(runtime_state["started"])
+        return JSONResponse({"status": "ok" if started else "starting"}, status_code=200 if started else 503)
+
+    @app.get("/readyz")
+    async def readyz() -> JSONResponse:
+        checks: dict[str, Any] = {
+            "startup": {"status": "ok" if runtime_state["started"] else "failed"},
+            "draining": {"status": "failed" if runtime_state["draining"] else "ok"},
+        }
+        try:
+            checks["execution_store"] = {"status": "ok" if await execution_store.health() else "failed"}
+        except Exception as exc:
+            checks["execution_store"] = {"status": "failed", "error": type(exc).__name__}
+        try:
+            if not require_auth:
+                from langgraph_runtime.checkpointing import _MEMORY_CHECKPOINTER
+
+                await _MEMORY_CHECKPOINTER.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
+            else:
+                from langgraph_runtime.checkpointing import open_agent_checkpointer
+
+                async with open_agent_checkpointer(setup=False) as checkpointer:
+                    await checkpointer.aget_tuple({"configurable": {"thread_id": "__runtime_readiness__", "checkpoint_ns": ""}})
+            checks["checkpoint_store"] = {
+                "status": "ok",
+                "backend": os.getenv("ASKPDF_AGENT_CHECKPOINTER", "").strip().lower(),
+            }
+        except Exception as exc:
+            checks["checkpoint_store"] = {"status": "failed", "error": type(exc).__name__}
+        dependency_failure = dependency_monitor.unavailable_configured()
+        checks["configured_dependencies"] = (
+            {"status": "failed", **dependency_failure}
+            if dependency_failure
+            else {"status": "ok"}
+        )
+        healthy = all(value.get("status") == "ok" for value in checks.values())
+        runtime_state["readiness"] = checks
+        return JSONResponse({"status": "ok" if healthy else "not_ready", "checks": checks}, status_code=200 if healthy else 503)
+
+    @app.get("/v1/dependencies")
+    async def dependencies(request: Request) -> dict[str, Any]:
+        return json_envelope(
+            status="ok",
+            request_id=request.headers.get("x-request-id"),
+            result={"dependencies": dependency_monitor.snapshot(), "counters": dict(dependency_monitor.counters)},
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        )
+
+    @app.post("/v1/capabilities")
+    async def capabilities(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        try:
+            definition = definition_from_dict(payload["definition"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail={"code": "invalid_definition", "message": "A valid definition is required"}) from exc
+        return json_envelope(
+            status="ok",
+            request_id=request.headers.get("x-request-id"),
+            result={"capabilities": effective_capabilities(definition).to_dict()},
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        )
+
+    @app.get("/v1/capabilities")
+    async def deployment_capabilities(request: Request) -> dict[str, Any]:
+        return json_envelope(
+            status="ok",
+            request_id=request.headers.get("x-request-id"),
+            result={"capabilities": langgraph_deployment_capabilities().to_dict()},
+            runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+        )
+
+    @app.post("/v1/validate")
+    async def validate(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        try:
+            definition = definition_from_dict(payload["definition"])
+            value = await get_adapter().validate(definition, payload.get("spec") or {}, options=payload.get("options") or {})
+            return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"validation": value.to_dict()})
+        except Exception as exc:
+            raise _definition_http_error(exc) from exc
+
+    @app.post("/v1/prompt-preview")
+    async def prompt_preview(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        try:
+            definition = definition_from_dict(payload["definition"])
+            spec = payload.get("spec") or {}
+            options = payload.get("options") or {}
+            from langgraph_runtime.workflows.prompting import build_agent_workflow_prompt_preview
+            runtime = spec.get("runtime") if isinstance(spec, Mapping) and isinstance(spec.get("runtime"), Mapping) else {}
+            prompt = build_agent_workflow_prompt_preview(
+                prompt_profile=str(runtime.get("prompt_preview") or "router"),
+                **dict(options),
+            )
+            return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"prompt": prompt})
+        except Exception as exc:
+            raise _definition_http_error(exc) from exc
+
+    @app.post("/v1/resolve")
+    async def resolve(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        """Resolve and materialize a LangGraph definition inside the runtime boundary."""
+
+        try:
+            definition = definition_from_dict(payload["definition"])
+            spec = payload.get("spec") or {}
+            if not isinstance(spec, Mapping):
+                raise ValueError("spec must be an object")
+            from langgraph_runtime.graph import normalize_hitl_policy_for_thread_settings
+
+            # Thread settings can enable runtime-owned gates that are not part
+            # of the authored graph. Apply them before validation so the
+            # validator checks the same effective definition that is later
+            # materialized and returned to the control plane.
+            thread_settings = dict(payload.get("thread_settings") or {})
+            effective_spec = dict(spec)
+            effective_config = dict(effective_spec.get("config") or {})
+            effective_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+                effective_config.get("hitl_policy"), thread_settings
+            )
+            effective_spec["config"] = effective_config
+            validation = await get_adapter().validate(
+                definition, effective_spec, options=payload.get("options") or {}
+            )
+            if not validation.valid:
+                raise ValueError("; ".join(issue.message for issue in validation.issues))
+            from langgraph_runtime.validator import WorkflowResolver
+            from langgraph_runtime.compiler import WorkflowCompiler
+
+            resolved = WorkflowResolver().resolve(
+                effective_spec,
+                thread_settings=thread_settings,
+                request_overrides=dict(payload.get("request_overrides") or {}),
+            )
+            config = dict(resolved.get("config") or {})
+            resolved["config"] = config
+            materialized = WorkflowCompiler().materialize_spec(resolved)
+            return json_envelope(
+                status="ok",
+                request_id=request.headers.get("x-request-id"),
+                result={"resolved_spec": materialized},
+                runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+            )
+        except Exception as exc:
+            raise _definition_http_error(exc) from exc
+
+    @app.post("/v1/catalog")
+    async def catalog(payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
+        """Return only framework-owned compiler and graph catalog metadata."""
+
+        try:
+            definition = definition_from_dict(payload["definition"])
+            from langgraph_runtime.workflows.corrective_contracts import corrective_policy_catalog
+            from langgraph_runtime.workflows.node_catalog import get_node_catalog
+            from langgraph_runtime.workflows.parallel_contracts import parallel_policy_catalog
+            from langgraph_runtime.workflows.route_registry import get_route_function_registry
+
+            nodes = get_node_catalog()
+            value = {
+                "schema_version": 1,
+                "spec_schema_version": 1,
+                "graph_spec": {
+                    "required_schema_version": 1,
+                    "requires_explicit_route_fn": True,
+                    "reserved_node_ids": ["START", "END"],
+                    "start_node": "START",
+                    "end_node": "END",
+                },
+                "node_catalog": {
+                    node_type: {
+                        **metadata,
+                        "authorable": metadata.get("builtin_only") is not True,
+                        "allowed_parent_types": list(metadata.get("allowed_parent_types", [])),
+                        "allowed_child_types": list(metadata.get("allowed_child_types", [])),
+                    }
+                    for node_type, metadata in nodes.items()
+                },
+                "route_functions": get_route_function_registry(),
+                "defaults": {
+                    "parallel_policy": parallel_policy_catalog(),
+                    "corrective_policy": corrective_policy_catalog(),
+                },
+                "runtime_capabilities": effective_capabilities(definition).to_dict(),
+            }
+            return json_envelope(
+                status="ok",
+                request_id=request.headers.get("x-request-id"),
+                result={"catalog": value},
+                runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
+            )
+        except Exception as exc:
+            raise _definition_http_error(exc) from exc
+
+    async def _execute_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        request: Any,
+        *,
+        attempt: int,
+        operation_id: str,
+        fencing_token: int,
+    ) -> None:
+        """Run independently of any HTTP subscriber and journal every event."""
+        run_id = request.run_id
+        attempt_id = f"{run_id}:attempt:{attempt}"
+        boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
+        cancellation_event = asyncio.Event()
+        owner_id = execution_store.owner_id
+
+        async def cancellation_probe() -> bool:
+            return cancellation_event.is_set() or await execution_store.is_cancel_requested(run_id)
+
+        async def pause_probe() -> bool:
+            return await execution_store.is_pause_requested(run_id)
+
+        async def pause_token_probe() -> str | None:
+            return await execution_store.pause_request_token(run_id)
+
+        async def pause_consumer(token: str | None) -> bool:
+            return await execution_store.consume_pause_request(run_id, token)
+
+        async def correction_reader() -> list[dict[str, Any]]:
+            return await execution_store.pending_course_corrections(run_id)
+
+        async def correction_acknowledger(
+            correction_ids: list[str], *, plan_revision: int
+        ) -> list[str]:
+            return await execution_store.mark_course_corrections_applied(
+                run_id, correction_ids, plan_revision=plan_revision
+            )
+
+        class DurableSink:
+            def __init__(self) -> None:
+                self.terminal_event_id: str | None = None
+                self.terminal_event: AgentRuntimeEvent | None = None
+
+            async def emit_runtime_event(self, source: AgentRuntimeEvent) -> None:
+                event = create_runtime_event(
+                    event_id=source.event_id,
+                    run_id=source.run_id,
+                    sequence=max(1, source.sequence),
+                    kind=source.kind,
+                    payload=source.payload,
+                    attempt=source.attempt,
+                    occurred_at=source.occurred_at,
+                    trace_id=source.trace_id,
+                    source_metadata=source.source_metadata,
+                    continuation=source.continuation,
+                )
+                if event.terminal:
+                    if self.terminal_event_id is not None and self.terminal_event_id != event.event_id:
+                        raise RuntimeError("runtime_protocol_error", "Runtime emitted more than one terminal event")
+                    self.terminal_event_id = event.event_id
+                    self.terminal_event = event
+                    return
+                await execution_store.append(run_id, event.to_dict(), attempt=attempt, owner_id=owner_id, fencing_token=fencing_token)
+
+        durable_sink = DurableSink()
+        claimed_pause_token: str | None = None
+
+        async def finalize(result: AgentRuntimeResult, *, error: Mapping[str, Any] | None = None) -> None:
+            if result.status in {"awaiting_human", "paused"}:
+                checkpoint = create_runtime_event(
+                    event_id=boundary_event_id,
+                    run_id=run_id,
+                    sequence=1,
+                    kind="run.paused",
+                    payload={"status": result.status, "pending_interrupt": result.interruption},
+                    continuation=result.continuation,
+                )
+                await execution_store.checkpoint_execution(
+                    run_id,
+                    checkpoint.to_dict(),
+                    result.to_dict(),
+                    status=result.status,
+                    continuation=result.continuation.to_dict() if result.continuation else None,
+                    attempt=attempt,
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+                if claimed_pause_token is not None:
+                    await execution_store.finalize_pause_request(run_id, claimed_pause_token)
+                return
+            terminal_kind = (
+                "run.cancelled"
+                if result.status == "cancelled"
+                else "run.failed"
+                if result.status == "failed"
+                else "run.clarification"
+                if result.status == "clarification_required"
+                else "run.completed"
+            )
+            if durable_sink.terminal_event_id is None:
+                terminal = create_runtime_event(
+                    event_id=boundary_event_id,
+                    run_id=run_id,
+                    sequence=1,
+                    kind=terminal_kind,
+                    payload={"status": result.status, **({"error": dict(error)} if error else {})},
+                    continuation=result.continuation,
+                )
+            else:
+                source_terminal = durable_sink.terminal_event
+                if source_terminal is None:
+                    raise RuntimeError("runtime_protocol_error", "Runtime terminal event was not found")
+                terminal = create_runtime_event(
+                    event_id=boundary_event_id,
+                    run_id=source_terminal.run_id,
+                    sequence=source_terminal.sequence,
+                    kind=source_terminal.kind,
+                    payload=source_terminal.payload,
+                    attempt=attempt,
+                    occurred_at=source_terminal.occurred_at,
+                    trace_id=source_terminal.trace_id,
+                    source_metadata=source_terminal.source_metadata,
+                    continuation=source_terminal.continuation,
+                )
+            stored_terminal = await execution_store.finalize_execution(
+                    run_id,
+                    terminal.to_dict(),
+                    result.to_dict(),
+                    status=result.status,
+                    error=dict(error) if error else None,
+                    attempt=attempt,
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+            durable_sink.terminal_event_id = str(stored_terminal["event_id"])
+            if claimed_pause_token is not None:
+                await execution_store.finalize_pause_request(run_id, claimed_pause_token)
+
+        await execution_store.set_status(run_id, "running", owner_id=owner_id, fencing_token=fencing_token)
+        heartbeat_stop = asyncio.Event()
+
+        async def heartbeat() -> None:
+            # Keep active graph calls fenced without waiting most of the lease
+            # interval. Local LLM calls can occupy the event loop for longer
+            # than the nominal lease, especially immediately after a resume.
+            interval = max(1.0, min(execution_store.lease_seconds / 3, 10.0))
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    if not await execution_store.heartbeat(run_id, owner_id=owner_id, fencing_token=fencing_token):
+                        cancellation_event.set()
+                        return
+
+        heartbeat_task = asyncio.create_task(heartbeat(), name=f"agent-runtime-heartbeat-{run_id}")
+        runtime_adapter = get_adapter()
+        context: RuntimeExecutionContext | None = None
+        try:
+            if operation == "resume":
+                execution_record = await execution_store.get(run_id)
+                resume_result = execution_record.result if execution_record is not None and isinstance(execution_record.result, Mapping) else None
+                if resume_result is None:
+                    checkpoint_events = await execution_store.events_after(run_id, 0)
+                    if checkpoint_events:
+                        candidate_result = checkpoint_events[-1].get("result")
+                        resume_result = candidate_result if isinstance(candidate_result, Mapping) else None
+                interruption = resume_result.get("interruption") if isinstance(resume_result, Mapping) else None
+                interruption = interruption if isinstance(interruption, Mapping) else {}
+                interrupt_type = str(interruption.get("type") or "")
+                if not interrupt_type:
+                    raise RuntimeError("runtime_interrupt_invalid", "A resume requires a typed pending interrupt")
+                if interrupt_type == "task_pause":
+                    decision = payload.get("interrupt", {}).get("decision", {}) if isinstance(payload.get("interrupt"), Mapping) else {}
+                    action = str(decision.get("action") or "") if isinstance(decision, Mapping) else ""
+                    if action not in {"approve", "resume"}:
+                        raise RuntimeError("runtime_interrupt_mismatch", "A cooperative pause accepts only approve or resume", retryable=False)
+                # Manual pause is a product-requested pause and is protected by
+                # the durable pause token. Framework-owned HITL interrupts
+                # already have their own persisted interrupt identity.
+                if interrupt_type == "task_pause":
+                    pending_token = await execution_store.pause_request_token(run_id)
+                    if pending_token is None:
+                        pending_token = await execution_store.handled_pause_request_token(run_id)
+                    if pending_token is None:
+                        raise RuntimeError("pause_request_missing", "A manual pause resume requires a pending pause request token")
+                    claimed_pause_token = await execution_store.claim_pause_request(run_id, pending_token)
+            context = await runtime_adapter.prepare_execution_context(
+                _context(
+                    payload,
+                    request,
+                    cancellation_checker=cancellation_probe,
+                    pause_checker=pause_probe,
+                    pause_token_reader=pause_token_probe,
+                    pause_consumer=pause_consumer,
+                    course_correction_reader=correction_reader,
+                    course_correction_acknowledger=correction_acknowledger,
+                    operation_id=operation_id,
+                    attempt_id=attempt_id,
+                    boundary_event_id=boundary_event_id,
+                )
+            )
+            framework = str(getattr(request, "framework", None) or "").strip()
+            if not framework:
+                raise RuntimeError("invalid_runtime_identity", "Runtime request is missing framework identity")
+            execution = getattr(runtime_adapter, operation)(
+                request,
+                **({"interrupt": payload.get("interrupt") or {}} if operation == "resume" else {}),
+                context=context,
+                event_sink=durable_sink,
+            )
+            # Task time is metered at atomic boundaries and produces the same
+            # durable budget review as token/call exhaustion. Do not cancel the
+            # graph (or its unmetered provisional synthesis) with a second clock.
+            if request.task_id:
+                result = await execution
+            else:
+                result = await asyncio.wait_for(
+                    execution, timeout=float(deep_agent_budgets(framework)["max_duration_seconds"]),
+                )
+            if result is None:
+                error = RuntimeError("runtime_continuation_missing", "The runtime did not return a continuation", retryable=False)
+                result = _terminal_result(
+                    request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                    attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+                )
+            result = result if isinstance(result, AgentRuntimeResult) else result_from_dict(result)
+            await finalize(result)
+        except LeaseLostError:
+            logger.warning("Runtime worker lost its lease; abandoning execution | run_id=%s", run_id)
+            return
+        except asyncio.TimeoutError:
+            error = RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True)
+            result = _terminal_result(
+                request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
+            await finalize(result, error=error.to_dict())
+        except asyncio.CancelledError:
+            if not await cancellation_probe():
+                raise
+            error = RuntimeError("run_cancelled", "Agent runtime execution was cancelled", retryable=False)
+            result = _terminal_result(
+                request, context, status="cancelled", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
+            await finalize(result, error=error.to_dict())
+        except RuntimeError as exc:
+            logger.exception("LangGraph runtime failed | run_id=%s", run_id)
+            result = _terminal_result(
+                request, context, status="failed", error=exc.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
+            await finalize(result, error=exc.to_dict())
+        except Exception as exc:
+            logger.exception("LangGraph runtime execution failed | run_id=%s", run_id)
+            error = RuntimeError.from_exception(exc, code="runtime_execution_failed", retryable=False, safe_message="Agent runtime execution failed")
+            result = _terminal_result(
+                request, context, status="failed", error=error.to_dict(), operation_id=operation_id,
+                attempt_id=attempt_id, boundary_event_id=boundary_event_id,
+            )
+            await finalize(result, error=error.to_dict())
+        finally:
+            heartbeat_stop.set()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _admit_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        expected_run_id: str | None = None,
+        *,
+        operation_id: str | None = None,
+        source_attempt: int | None = None,
+    ) -> tuple[Any, Any, int | None]:
+        """Admit and, when appropriate, launch an operation before SSE starts."""
+        request = _request_from_payload(payload)
+        operation_id_by_endpoint = {
+            "start": RuntimeOperationId.RUN_START,
+            "resume": RuntimeOperationId.RUN_RESUME,
+            "retry": RuntimeOperationId.RUN_START,
+        }
+        capability_id = operation_id_by_endpoint.get(operation)
+        if capability_id:
+            definition = definition_from_dict(payload["definition"])
+            descriptor = effective_capabilities(definition).operations.get(capability_id)
+            if descriptor is None or not descriptor.enabled:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "runtime_capability_unsupported", "operation": capability_id.value, "safe_message": "The requested runtime operation is unavailable", "retryable": False},
+                )
+        if expected_run_id and request.run_id != expected_run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        if runtime_state["draining"]:
+            raise HTTPException(status_code=503, detail="runtime is draining")
+        effective_operation_id = str(operation_id or payload.get("operation_id") or "").strip()
+        if not effective_operation_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "runtime_operation_id_required", "safe_message": "operation_id is required", "retryable": False},
+            )
+        async with execution_start_lock:
+            try:
+                record = await execution_store.create(
+                    request.run_id,
+                    operation,
+                    request.to_dict(),
+                    payload,
+                    operation_id=effective_operation_id,
+                    source_attempt=source_attempt,
+                )
+            except ExecutionConflictError as exc:
+                logger.warning(
+                    "Runtime operation conflict | run_id=%s operation=%s operation_id=%s reason=%s",
+                    request.run_id, operation, effective_operation_id, str(exc),
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "runtime_operation_conflict", "safe_message": str(exc), "retryable": False},
+                ) from exc
+            if operation == "start":
+                context_payload = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
+                task_context = context_payload.get("task_context") if isinstance(context_payload.get("task_context"), Mapping) else {}
+                task_metadata = task_context.get("metadata") if isinstance(task_context.get("metadata"), Mapping) else {}
+                for value in task_metadata.get("course_corrections") or []:
+                    if not isinstance(value, Mapping):
+                        continue
+                    correction = dict(value)
+                    correction["correction_id"] = str(correction.get("correction_id") or correction.get("id") or "")
+                    correction["operation_id"] = str(correction.get("operation_id") or correction.get("command_id") or correction["correction_id"])
+                    if correction["correction_id"] and correction["operation_id"]:
+                        await execution_store.request_course_correction(request.run_id, correction)
+
+            # Capture the checkpoint event boundary before the worker can
+            # append resumed events.  The initial resume stream must skip the
+            # event that caused the pause, but a later GET replay must honor
+            # its caller-provided cursor and must not use this boundary.
+            resume_boundary_sequence = (
+                int(record.next_sequence) - 1 if operation == "resume" else None
+            )
+
+            task = runtime_state["active"].get(request.run_id)
+            should_start = not record.replay_only and (
+                record.status == "queued"
+                or operation == "resume" and record.status in {"awaiting_human", "paused"}
+            )
+            if should_start and (task is None or task.done()):
+                fencing_token = await execution_store.claim(request.run_id)
+                if fencing_token is None:
+                    raise HTTPException(status_code=409, detail="runtime execution is owned by another worker")
+                task = asyncio.create_task(
+                    _execute_operation(
+                        payload,
+                        operation if operation == "resume" else record.operation,
+                        request_from_dict(record.request),
+                        attempt=record.attempt,
+                        operation_id=str(record.last_operation_id or effective_operation_id),
+                        fencing_token=fencing_token,
+                    ),
+                    name=f"agent-runtime-{request.run_id}",
+                )
+                runtime_state["active"][request.run_id] = task
+
+                def _remove_finished(done_task: asyncio.Task[Any]) -> None:
+                    if runtime_state["active"].get(request.run_id) is done_task:
+                        runtime_state["active"].pop(request.run_id, None)
+
+                task.add_done_callback(_remove_finished)
+        return request, record, resume_boundary_sequence
+
+    async def stream_operation(
+        payload: Mapping[str, Any],
+        operation: str,
+        expected_run_id: str | None = None,
+        after_sequence: int = 0,
+        *,
+        allow_start: bool = True,
+        record: Any | None = None,
+        resume_boundary_sequence: int | None = None,
+    ) -> AsyncIterator[str]:
+        request = _request_from_payload(payload)
+        if expected_run_id and request.run_id != expected_run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        if runtime_state["draining"]:
+            raise HTTPException(status_code=503, detail="runtime is draining")
+        if allow_start:
+            if record is None:
+                raise RuntimeError("runtime_internal_error", "An admitted execution record is required")
+        else:
+            record = await execution_store.get(request.run_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="runtime run not found")
+        attempt = record.attempt
+        last_sequence = after_sequence
+        # A resume continues the same attempt after the previously delivered
+        # checkpoint event. Do not replay that event as the result of the new
+        # resume request before the resumed graph has a chance to run.
+        if operation == "resume" and resume_boundary_sequence is not None:
+            last_sequence = max(last_sequence, resume_boundary_sequence)
+        terminal_seen = False
+        terminal_status_observed = False
+        while True:
+            events = await execution_store.events_after(request.run_id, last_sequence, attempt=attempt)
+            for item in events:
+                event = event_from_dict(item)
+                result = result_from_dict(item["result"]) if item.get("result") else None
+                if event.terminal:
+                    if terminal_seen:
+                        raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Multiple terminal events were persisted", "retryable": False})
+                    if result is None:
+                        raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Terminal events must include a result", "retryable": False})
+                    terminal_seen = True
+                elif result is not None and not (
+                    event.kind in {"approval.requested", "interrupt.requested", "run.paused"}
+                    and result.status in {"awaiting_human", "paused"}
+                ):
+                    raise HTTPException(status_code=502, detail={"code": "runtime_protocol_error", "safe_message": "Only terminal or resumable events may include results", "retryable": False})
+                yield sse_encode(event, result=result)
+                last_sequence = max(last_sequence, event.sequence)
+                if event.terminal:
+                    return
+                if event.kind in {"approval.requested", "interrupt.requested", "run.paused"} and result is not None and result.status in {"awaiting_human", "paused"}:
+                    return
+            record = await execution_store.get(request.run_id)
+            if record and record.status in TERMINAL_STATUSES:
+                # Finalization persists the terminal event and terminal status
+                # as one logical operation, but an in-memory store can expose
+                # the status to this subscriber one scheduler turn before the
+                # event becomes visible. Give the journal one immediate retry
+                # so the stream cannot end before delivering that event.
+                if not terminal_status_observed:
+                    terminal_status_observed = True
+                    await asyncio.sleep(0)
+                    continue
+                return
+            yield ": keep-alive\n\n"
+            from langgraph_runtime.limits import required_positive_float
+
+            await asyncio.sleep(required_positive_float("AGENT_EVENT_POLL_INTERVAL_SECONDS"))
+
+    @app.post("/v1/runs/start")
+    async def start(payload: Mapping[str, Any]) -> StreamingResponse:
+        request = _request_from_payload(payload)
+        await _preflight_operation(request.run_id, payload, "start")
+        _admit_dependencies(payload)
+        _, record, _ = await _admit_operation(payload, "start", operation_id=payload.get("operation_id"))
+        return StreamingResponse(stream_operation(payload, "start", record=record), media_type="text/event-stream")
+
+    @app.get("/v1/runs/{run_id}/events")
+    async def events(run_id: str, after_sequence: int = 0) -> StreamingResponse:
+        record = await execution_store.get(run_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="runtime run not found")
+        payload = json_payload({"request": record.request, "context": record.payload.get("context") or {}})
+        return StreamingResponse(
+            stream_operation(
+                payload,
+                record.operation,
+                run_id,
+                after_sequence,
+                allow_start=False,
+            ),
+            media_type="text/event-stream",
+        )
+
+    @app.post("/v1/runs/{run_id}/resume")
+    async def resume(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        await _preflight_operation(run_id, payload, "resume")
+        _admit_dependencies(payload)
+        _, record, resume_boundary_sequence = await _admit_operation(payload, "resume", run_id, operation_id=payload.get("operation_id"))
+        return StreamingResponse(
+            stream_operation(
+                payload,
+                "resume",
+                run_id,
+                record=record,
+                resume_boundary_sequence=resume_boundary_sequence,
+            ),
+            media_type="text/event-stream",
+        )
+
+    @app.post("/v1/runs/{run_id}/continue")
+    async def continue_run(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        await _preflight_operation(run_id, payload, "continue_run")
+        _admit_dependencies(payload)
+        _, record, _ = await _admit_operation(payload, "continue_run", run_id, operation_id=payload.get("operation_id"))
+        return StreamingResponse(stream_operation(payload, "continue_run", run_id, record=record), media_type="text/event-stream")
+
+    @app.post("/v1/runs/{run_id}/retry")
+    async def retry(run_id: str, payload: Mapping[str, Any]) -> StreamingResponse:
+        request_payload = dict(payload.get("request") or {})
+        if str(request_payload.get("run_id") or run_id) != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        attempt_id = str(payload.get("attempt_id") or "")
+        source_attempt = payload.get("source_attempt")
+        if not attempt_id or source_attempt is None:
+            raise HTTPException(status_code=400, detail={"code": "retry_metadata_required", "safe_message": "attempt_id and source_attempt are required", "retryable": False})
+        retry_payload = dict(payload)
+        retry_payload["request"] = {
+            **request_payload,
+            "retry_operation": str(payload.get("operation") or "start"),
+            "retry_request": request_payload,
+        }
+        _admit_dependencies(retry_payload)
+        _, record, _ = await _admit_operation(
+            retry_payload, "retry", run_id,
+            operation_id=attempt_id, source_attempt=int(source_attempt),
+        )
+        return StreamingResponse(
+            stream_operation(retry_payload, "retry", run_id, record=record),
+            media_type="text/event-stream",
+        )
+
+    @app.post("/v1/runs/{run_id}/cancel")
+    async def cancel(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
+        runtime_request = _request_from_payload(payload)
+        if runtime_request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        outcome = await execution_store.request_cancel(runtime_request.run_id)
+        if outcome.is_unknown:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "runtime_run_not_found",
+                    "safe_message": "Runtime run not found",
+                    "retryable": False,
+                },
+            )
+        if outcome.is_terminal:
+            result = {
+                "run_id": runtime_request.run_id,
+                "status": outcome.run_status,
+                "cancellation_requested": False,
+                "no_op": True,
+            }
+        else:
+            result = {
+                "run_id": runtime_request.run_id,
+                "status": "cancellation_requested",
+                "run_status": outcome.run_status,
+                "cancellation_requested": True,
+            }
+        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=result)
+
+    @app.post("/v1/runs/{run_id}/pause")
+    async def pause(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
+        runtime_request = _request_from_payload(payload)
+        if runtime_request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        outcome = await execution_store.request_pause(run_id)
+        if outcome["status"] == "unknown":
+            raise HTTPException(status_code=404, detail={"code": "runtime_run_not_found", "safe_message": "Runtime run not found", "retryable": False})
+        return json_envelope(
+            status="ok",
+            request_id=request_context.headers.get("x-request-id"),
+            result=outcome,
+        )
+
+    @app.post("/v1/runs/{run_id}/course-corrections")
+    async def submit_course_correction(
+        run_id: str,
+        payload: Mapping[str, Any],
+        request_context: Request,
+    ) -> dict[str, Any]:
+        runtime_request = _request_from_payload(payload)
+        if runtime_request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        correction = course_correction_from_dict(payload.get("correction") or {})
+        durable = await execution_store.get(run_id)
+        if durable is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "runtime_run_not_found",
+                    "safe_message": "Runtime run not found",
+                    "retryable": True,
+                },
+            )
+        expected_identity = {
+            "thread_id": durable.request.get("thread_id"),
+            "definition_id": durable.request.get("definition_id"),
+            "framework": durable.request.get("framework"),
+            "builder_id": durable.request.get("builder_id"),
+            "task_id": durable.request.get("task_id"),
+        }
+        supplied_identity = {
+            "thread_id": runtime_request.thread_id,
+            "definition_id": runtime_request.definition_id,
+            "framework": runtime_request.framework,
+            "builder_id": runtime_request.builder_id,
+            "task_id": runtime_request.task_id,
+        }
+        if supplied_identity != expected_identity:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_run_identity_mismatch",
+                    "safe_message": "Runtime run identity does not match the correction request",
+                    "retryable": False,
+                },
+            )
+        try:
+            outcome = await execution_store.request_course_correction(
+                run_id, correction.to_dict()
+            )
+        except ExecutionConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_operation_conflict",
+                    "safe_message": str(exc),
+                    "retryable": True,
+                },
+            ) from exc
+        return json_envelope(
+            status="ok",
+            request_id=request_context.headers.get("x-request-id"),
+            result=outcome,
+        )
+
+    @app.post("/v1/runs/{run_id}/inspect")
+    async def inspect(run_id: str, payload: Mapping[str, Any], request_context: Request) -> dict[str, Any]:
+        request = _request_from_payload(payload)
+        if request.run_id != run_id:
+            raise HTTPException(status_code=400, detail="run_id does not match request path")
+        durable = await execution_store.get(run_id)
+        # A terminal durable execution is authoritative and no longer needs a
+        # framework checkpoint binding. This is especially important during
+        # cancellation recovery of runs created before bindings were persisted.
+        runtime_inspection = (
+            {}
+            if durable is not None and durable.status in TERMINAL_STATUSES
+            else dict(await get_adapter().inspect_state(request))
+        )
+        if durable is not None:
+            runtime_inspection.update({
+                "run_id": run_id,
+                "status": durable.status,
+                "cancel_requested": durable.cancel_requested,
+                "last_sequence": durable.next_sequence - 1,
+                "durable": execution_store.durable,
+                "result": dict(durable.result) if isinstance(durable.result, Mapping) else None,
+                "error": dict(durable.error) if isinstance(durable.error, Mapping) else None,
+            })
+        return json_envelope(status="ok", request_id=request_context.headers.get("x-request-id"), result=runtime_inspection)
+
+    @app.delete("/v1/runs/{run_id}")
+    async def cleanup_run(run_id: str, request: Request) -> dict[str, Any]:
+        claim_result: Mapping[str, Any] | None = None
+        claim: str | None = None
+        try:
+            claim_result = await execution_store.begin_cleanup(run_id)
+            if str(claim_result.get("status") or "") == "already_cleaned":
+                cleanup_result = RuntimeCleanupResult(
+                    run_id=run_id,
+                    status="already_cleaned",
+                    checkpoint={"status": "already_cleaned"},
+                    execution_store=claim_result,
+                )
+                return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=cleanup_result.to_dict())
+            if str(claim_result.get("status") or "") != "cleanup_claimed":
+                raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup returned an invalid claim outcome")
+            claim = str(claim_result.get("claim") or "")
+            if not claim:
+                raise RuntimeError("runtime_cleanup_invalid_claim", "Runtime cleanup claim is missing")
+            checkpoint_result = (
+                {"status": "already_cleaned"}
+                if bool(claim_result.get("checkpoint_deleted"))
+                else await get_adapter().cleanup_run(run_id)
+            )
+            if not isinstance(checkpoint_result, Mapping) or str(checkpoint_result.get("status") or "") not in {"cleaned", "already_cleaned", "not_bound"}:
+                raise RuntimeError("runtime_cleanup_invalid_result", "Runtime checkpoint cleanup returned an invalid outcome")
+            await execution_store.mark_cleanup_checkpoint_complete(run_id, claim)
+            store_result = await execution_store.cleanup_run(run_id, claim=claim)
+            if not isinstance(store_result, Mapping) or str(store_result.get("status") or "") not in {"cleaned", "already_cleaned"}:
+                raise RuntimeError("runtime_cleanup_invalid_result", "Runtime execution-store cleanup returned an invalid outcome")
+            overall_status = "not_bound" if str(checkpoint_result.get("status") or "") == "not_bound" else "cleaned"
+            cleanup_result = RuntimeCleanupResult(
+                run_id=run_id,
+                status=overall_status,
+                checkpoint=checkpoint_result,
+                execution_store=store_result,
+            )
+        except CleanupClaimError as exc:
+            raise HTTPException(status_code=409, detail={"code": "runtime_active_execution", "safe_message": str(exc), "retryable": True}) from exc
+        except Exception as exc:
+            if claim:
+                await execution_store.mark_cleanup_retryable(run_id, claim, str(exc))
+            raise
+        return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result=cleanup_result.to_dict())
+
+    return app

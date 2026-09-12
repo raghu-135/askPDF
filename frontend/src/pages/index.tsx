@@ -21,7 +21,7 @@ import MemoryManagerPanel from "../components/MemoryManagerPanel";
 import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
-import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
+import { WorkbenchToolbar, WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
 import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
@@ -734,62 +734,72 @@ export default function Home() {
           onResizingChange={setIsResizing}
           secondaryLabel={isMemoryWorkspaceActive ? 'Memory curator' : 'Threads and chat'}
           primaryToolbar={
-            <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
-                <Tooltip title="Home">
-                  <IconButton
-                    color="default"
-                    size="small"
-                    aria-label="Home"
-                    onClick={handleOpenHome}
-                  >
-                    <HomeIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <PdfUploader
-                  target={activeThread
-                    ? { scope: 'thread', id: activeThread.id }
-                    : activeProject ? { scope: 'project', id: activeProject.id } : null}
-                  onUploaded={handlePdfUploaded}
-                  onIndexingComplete={handleIndexingComplete}
-                  onParsingComplete={handleParsingComplete}
-                  disabled={!activeThread && (!activeProject || projectModelReady !== true)}
-                  tooltipText={!activeThread && !activeProject
-                    ? 'Select a thread or project first'
-                    : activeProject && projectModelReady !== true ? 'Project embedding model is unavailable' : undefined}
+            <WorkbenchToolbar
+              sx={{
+                px: 1.5,
+                py: 0.75,
+                minHeight: 49,
+                borderBottom: 1,
+                borderColor: 'divider',
+                bgcolor: pdfDarkMode ? '#222' : 'background.paper',
+                color: pdfDarkMode ? '#eee' : 'inherit',
+              }}
+              trailing={(
+                <WorkbenchToolbarTrailingActions>
+                  <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+                    <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={toggleDarkMode} size="small">
+                      {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                  <DockMenuButton value={workbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setWorkbenchLayout} label="Threads and chat layout" />
+                </WorkbenchToolbarTrailingActions>
+              )}
+            >
+              <Tooltip title="Home">
+                <IconButton
+                  color="default"
+                  size="small"
+                  aria-label="Home"
+                  onClick={handleOpenHome}
+                >
+                  <HomeIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <PdfUploader
+                target={activeThread
+                  ? { scope: 'thread', id: activeThread.id }
+                  : activeProject ? { scope: 'project', id: activeProject.id } : null}
+                onUploaded={handlePdfUploaded}
+                onIndexingComplete={handleIndexingComplete}
+                onParsingComplete={handleParsingComplete}
+                disabled={!activeThread && (!activeProject || projectModelReady !== true)}
+                tooltipText={!activeThread && !activeProject
+                  ? 'Select a thread or project first'
+                  : activeProject && projectModelReady !== true ? 'Project embedding model is unavailable' : undefined}
+              />
+              <Tooltip title="Agent workflow builder">
+                <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
+                  <AutoAwesomeSharpIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              {activeThread && (
+                <PlayerControls
+                  sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
+                  sourceKey={activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey}
+                  currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
+                  onCurrentChange={(id) => {
+                    if (activeSource === 'pdf') setCurrentPdfId(id);
+                    else setCurrentChatId(id);
+                    setPlayRequestId(null);
+                  }}
+                  playRequestId={playRequestId}
+                  autoScroll={autoScroll}
+                  onAutoScrollChange={setAutoScroll}
+                  highlightEnabled={highlightEnabled}
+                  onHighlightEnabledChange={setHighlightEnabled}
                 />
-                <Tooltip title="Agent workflow builder">
-                  <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
-                    <AutoAwesomeSharpIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                {activeThread && (
-                  <PlayerControls
-                    sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
-                    sourceKey={activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey}
-                    currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
-                    onCurrentChange={(id) => {
-                      if (activeSource === 'pdf') setCurrentPdfId(id);
-                      else setCurrentChatId(id);
-                      setPlayRequestId(null);
-                    }}
-                    playRequestId={playRequestId}
-                    autoScroll={autoScroll}
-                    onAutoScrollChange={setAutoScroll}
-                    highlightEnabled={highlightEnabled}
-                    onHighlightEnabledChange={setHighlightEnabled}
-                  />
-                )}
-              </Box>
-              <WorkbenchToolbarTrailingActions>
-                <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
-                  <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={toggleDarkMode} size="small">
-                    {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-                  </IconButton>
-                </Tooltip>
-                <DockMenuButton value={workbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setWorkbenchLayout} label="Threads and chat layout" />
-              </WorkbenchToolbarTrailingActions>
-            </Box>
+              )}
+            </WorkbenchToolbar>
           }
           primaryTabs={
             <WorkspaceTabs

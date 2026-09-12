@@ -29,7 +29,7 @@ import {
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
 
-test('uses the backend canonical key to load a legacy built-in workflow row', () => {
+test('uses the backend canonical key to load a canonical built-in workflow row', () => {
   assert.equal(getAgentWorkflowSourceKey({
     id: 'legacy-database-uuid',
     builtin_key: 'router_rag_agent',
@@ -39,9 +39,9 @@ test('uses the backend canonical key to load a legacy built-in workflow row', ()
 });
 
 const seededStarterSpecs = {
-  router: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/router_rag_agent.json', import.meta.url))).spec_json,
-  plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
-  evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
+  router: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/router_rag_agent.json', import.meta.url))).spec_json,
+  plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
+  evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/workflow_catalog/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
 };
 
 test('parallel workflow assembly enables bounded parallel runtime metadata', () => {
@@ -105,9 +105,9 @@ const node = (overrides) => ({
 
 const catalog = {
   schema_version: 1,
-  spec_schema_version: 2,
+  spec_schema_version: 1,
   graph_spec: {
-    required_schema_version: 2,
+    required_schema_version: 1,
     requires_explicit_route_fn: true,
     reserved_node_ids: ['START', 'END'],
     start_node: 'START',
@@ -428,10 +428,10 @@ test('creates a router starter spec with canonical node ids and route function m
     'answer_reviser',
     'finalizer',
   ]);
-  assert.equal(spec.schema_version, 2);
+  assert.equal(spec.schema_version, 1);
   assert.equal(spec.workflow_id, 'router_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
-  assert.deepEqual(spec.config.allowed_tool_ids, ['document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
+  assert.deepEqual(spec.config.allowed_tool_ids, ['thread_shape', 'document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
     document: 'serial_dispatch',
@@ -488,7 +488,7 @@ test('loads a saved spec back into builder state and round-trips unchanged graph
 
 test('hydrates built-in node tool assignments from the global allowed tool list', () => {
   for (const starter of ['router', 'plan_execute', 'evaluator_replanner']) {
-    const expectedToolIds = seededStarterSpecs[starter].config.allowed_tool_ids;
+    const expectedToolIds = seededStarterSpecs[starter].config.allowed_tool_ids.filter((id) => catalog.tool_contracts[id]);
     const state = createInitialBuilderState(catalog, starter);
 
     assert.deepEqual([...state.allowed_tool_ids].sort(), [...expectedToolIds].sort());
@@ -628,7 +628,7 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
   assert.deepEqual(
     [...normalized.allowed_tool_ids].sort(),
-    [...seededStarterSpecs.router.config.allowed_tool_ids].sort(),
+    [...seededStarterSpecs.router.config.allowed_tool_ids].filter((id) => catalog.tool_contracts[id]).sort(),
   );
 });
 

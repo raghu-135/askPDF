@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from hermes_runtime.execution_store import (
+    HermesExecutionConflictError,
+    HermesExecutionStore,
+    HermesStoreLoadError,
+    request_fingerprint,
+)
+from hermes_test_helpers import runtime_payload
+
+
+def _gateway_frame(
+    run_id: str,
+    sequence: int,
+    kind: str,
+    *,
+    source_event_id: str | None = None,
+    terminal: bool = False,
+    result: dict | None = None,
+) -> str:
+    event = {
+        "event_id": f"{run_id}:{sequence}",
+        "run_id": run_id,
+        "sequence": sequence,
+        "kind": kind,
+        "payload": {"delta": "chunk"} if kind == "output.delta" else {},
+        "terminal": terminal,
+    }
+    if source_event_id is not None:
+        event["source_event_id"] = source_event_id
+    body = {"event": event}
+    if result is not None:
+        body["result"] = result
+    return f"id: {event['event_id']}\nevent: {kind}\ndata: {json.dumps(body)}\n\n"
+
+
+def test_missing_hermes_store_is_a_valid_empty_store(tmp_path: Path) -> None:
+    store = HermesExecutionStore(str(tmp_path / "missing.json"))
+    assert store.records == {}
+
+
+@pytest.mark.parametrize("frame", [
+    "data: not-json\n\n",
+    'id: run:1\nevent: tool.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"tool.started","payload":{},"terminal":false}}\n\n',
+    'id: wrong\nevent: run.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"run.started","payload":{},"terminal":false}}\n\n',
+])
+def test_malformed_canonical_frame_never_mutates_journal(tmp_path, frame):
+    path = tmp_path / "events.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run", runtime_payload("run"))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        store.append("run", frame)
+    assert path.read_bytes() == before
+    assert store.records["run"]["events"] == []
+
+
+@pytest.mark.parametrize("content", ["{not-json", "[]", '{"run-1": "invalid"}'])
+def test_existing_malformed_hermes_store_fails_closed(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "hermes.json"
+    path.write_text(content)
+    with pytest.raises(HermesStoreLoadError):
+        HermesExecutionStore(str(path))
+
+
+def test_existing_unreadable_hermes_store_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "hermes.json"
+    path.write_text("{}")
+    original = Path.read_text
+
+    def unreadable(candidate: Path, *args, **kwargs):
+        if candidate == path:
+            raise OSError("permission denied")
+        return original(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    with pytest.raises(HermesStoreLoadError, match="unreadable"):
+        HermesExecutionStore(str(path))
+
+
+def test_incomplete_record_is_rejected_without_rewriting_the_journal(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    payload = runtime_payload("legacy-run")
+    path.write_text(
+        json.dumps(
+            {
+                "legacy-run": {
+                    "run_id": "legacy-run",
+                    "status": "completed",
+                    "events": [],
+                    "payload": payload,
+                }
+            }
+        )
+    )
+
+    before = path.read_bytes()
+    with pytest.raises(HermesStoreLoadError):
+        HermesExecutionStore(str(path))
+    assert path.read_bytes() == before
+
+
+def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    original = runtime_payload("fingerprinted-run")
+    store = HermesExecutionStore(str(path))
+    created = store.create("fingerprinted-run", original)
+    assert "store_schema_version" not in created
+    assert "event_schema_version" not in created
+
+    reloaded = HermesExecutionStore(str(path))
+    assert (
+        reloaded.create("fingerprinted-run", original)["request_fingerprint"]
+        == created["request_fingerprint"]
+    )
+    conflicting = json.loads(json.dumps(original))
+    conflicting["request"]["options"]["llm_model"] = "different-model"
+    with pytest.raises(HermesExecutionConflictError):
+        reloaded.create("fingerprinted-run", conflicting)
+
+
+def test_refreshed_mcp_grant_is_not_a_semantic_start_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    original = runtime_payload("grant-run")
+    original["request"]["input"]["mcp_execution_context_token"] = "first.signed-grant"
+    store = HermesExecutionStore(str(path))
+    created = store.create("grant-run", original)
+    refreshed = json.loads(json.dumps(original))
+    refreshed["request"]["input"]["mcp_execution_context_token"] = "second.signed-grant"
+    assert store.create("grant-run", refreshed)["request_fingerprint"] == created["request_fingerprint"]
+
+
+def test_execution_grants_are_not_written_to_the_journal(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    payload = runtime_payload("redacted-run")
+    payload["request"]["input"] = {
+        "question": "hello",
+        "mcp_execution_context_token": "secret.signed-grant",
+        "nested": {"_askpdf_context_token": "another.signed-grant"},
+    }
+    HermesExecutionStore(str(path)).create("redacted-run", payload)
+    raw = path.read_text()
+    assert "secret.signed-grant" not in raw
+    assert "another.signed-grant" not in raw
+    persisted = json.loads(raw)["redacted-run"]["payload"]
+    assert persisted["request"]["input"] == {"question": "hello", "nested": {}}
+
+
+def test_hermes_journal_is_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("protected-run", runtime_payload("protected-run"))
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_hermes_store_preserves_sequence_and_terminal_result_across_reload(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run-sequence", {"request": {"run_id": "run-sequence"}})
+    store.append("run-sequence", _gateway_frame("run-sequence", 1, "output.delta", source_event_id="upstream-1"))
+    store.append("run-sequence", _gateway_frame("run-sequence", 2, "output.delta", source_event_id="upstream-2"))
+    store.append(
+        "run-sequence",
+        _gateway_frame(
+            "run-sequence",
+            3,
+            "run.completed",
+            source_event_id="upstream-3",
+            terminal=True,
+            result={"status": "completed", "output": "ok"},
+        ),
+    )
+
+    reloaded = HermesExecutionStore(str(path))
+    record = reloaded.records["run-sequence"]
+    assert record["next_sequence"] == 4
+    assert record["terminal_event_id"] == "run-sequence:3"
+    assert record["terminal_result"]["output"] == "ok"
+    assert (
+        reloaded.append(
+            "run-sequence",
+            _gateway_frame(
+                "run-sequence",
+                4,
+                "run.completed",
+                source_event_id="upstream-3",
+                terminal=True,
+                result={"status": "completed", "output": "ok"},
+            ),
+        )
+        is False
+    )
+
+
+def test_hermes_store_finalizes_terminal_frame_and_status_in_one_save(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run-terminal", {"request": {"run_id": "run-terminal"}})
+    store.update("run-terminal", status="running")
+    saves = 0
+    original_save = store._save
+
+    def counted_save() -> None:
+        nonlocal saves
+        saves += 1
+        original_save()
+
+    monkeypatch.setattr(store, "_save", counted_save)
+    frame = _gateway_frame("run-terminal", 1, "run.failed", terminal=True, result={"status": "failed"})
+    assert store.finalize("run-terminal", frame, status="failed") is True
+    assert saves == 1
+    reloaded = HermesExecutionStore(str(path))
+    assert reloaded.records["run-terminal"]["status"] == "failed"
+    assert reloaded.records["run-terminal"]["terminal_event_id"] == "run-terminal:1"
+
+
+def test_hermes_store_failed_finalize_rolls_back_to_nonterminal_record(tmp_path: Path, monkeypatch) -> None:
+    store = HermesExecutionStore(str(tmp_path / "hermes.json"))
+    store.create("run-write-failure", {"request": {"run_id": "run-write-failure"}})
+    store.update("run-write-failure", status="running")
+
+    def fail_save() -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    frame = _gateway_frame("run-write-failure", 1, "run.failed", terminal=True, result={"status": "failed"})
+    with pytest.raises(OSError, match="disk unavailable"):
+        store.finalize("run-write-failure", frame, status="failed")
+    assert store.records["run-write-failure"]["status"] == "running"
+    assert store.records["run-write-failure"].get("terminal_event_id") is None

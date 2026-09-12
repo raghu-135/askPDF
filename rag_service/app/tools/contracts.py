@@ -12,6 +12,11 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
 
 
+class InternetSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(default="Verify current external information", max_length=500)
+
+
 class DocumentSearchRequest(QueryRequest):
     max_results: int = Field(default=10, ge=1, le=30)
 
@@ -41,6 +46,6 @@ ToolHandler = Any
 
 __all__ = [
     "DocumentSearchRequest", "EmptyRequest", "FocusedDocumentSearchRequest",
-    "QueryRequest", "TimelineRequest", "ToolHandler", "ToolInvocationContext",
+    "QueryRequest", "TimelineRequest", "InternetSearchRequest", "ToolHandler", "ToolInvocationContext",
     "ToolResult", "ToolServices",
 ]

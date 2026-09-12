@@ -7,9 +7,11 @@ import subprocess
 import asyncio
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +41,7 @@ def _reset_test_schema(test_database_url: str) -> None:
         raise RuntimeError(f"Refusing to reset non-test database: {database}")
 
     async def reset() -> None:
-        engine = create_async_engine(test_database_url)
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
         try:
             async with engine.begin() as connection:
                 await connection.execute(text("drop schema public cascade"))
@@ -50,20 +52,92 @@ def _reset_test_schema(test_database_url: str) -> None:
     asyncio.run(reset())
 
 
-def test_historical_migrations_upgrade_and_latest_downgrade(test_database_url: str):
-    """Upgrade an empty database through history and smoke-test the head downgrade."""
+def test_application_migrations_upgrade_without_resetting_data(test_database_url: str):
+    """Upgrade the existing branch history without deleting application data."""
 
     # Other database fixtures create/drop SQLModel metadata but do not own
     # Alembic-managed functions or its version table. Use a guarded test-only
     # schema reset before treating the shared database as an empty target.
     _reset_test_schema(test_database_url)
+    _alembic(test_database_url, "upgrade", "a8d3f1c6e4b2")
+
+    async def seed_existing_data() -> None:
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        """
+                        insert into projects (id, name, description, embedding_model, settings_json)
+                        values ('migration-project', 'Migration test project', '', 'test-model', '{}'::jsonb)
+                        """
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "insert into threads (id, project_id, name, embedding_model) "
+                        "values ('migration-thread', 'migration-project', 'Migration test', 'test-model')"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        """
+                        insert into agent_workflows (id, name, description, visibility, is_builtin, spec_json, validation_result_json, metadata_json)
+                        values ('migration-workflow', 'Migration test workflow', '', 'builtin', false, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)
+                        """
+                    )
+                )
+                await connection.execute(
+                    text(
+                        """
+                        insert into agent_tasks (id, thread_id, workflow_id, objective, objective_hash, create_idempotency_key)
+                        values ('migration-task', 'migration-thread', 'migration-workflow', 'Keep this task', 'migration-task-hash', 'migration-task-key')
+                        """
+                    )
+                )
+                await connection.execute(
+                    text(
+                        """
+                        insert into agent_runs (id, thread_id, workflow_id, debug_trace_json)
+                        values ('migration-run', 'migration-thread', 'migration-workflow', '{"trace":"keep"}'::jsonb)
+                        """
+                    )
+                )
+                await connection.execute(
+                    text(
+                        """
+                        insert into agent_task_events (id, task_id, sequence, event_type, actor_type, payload_json)
+                        values ('migration-event', 'migration-task', 1, 'run.started', 'system', jsonb_build_object('keep', true))
+                        """
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed_existing_data())
     _alembic(test_database_url, "upgrade", "head")
     current = _alembic(test_database_url, "current")
-    assert "a8d3f1c6e4b2" in current.stdout
+    assert "d6f2a8c4e1b9" in current.stdout
 
-    try:
-        _alembic(test_database_url, "downgrade", "-1")
-        downgraded = _alembic(test_database_url, "current")
-        assert "e7c4a1b9d2f6" in downgraded.stdout
-    finally:
-        _alembic(test_database_url, "upgrade", "head")
+    async def verify_existing_data() -> tuple[int, int, int, int, dict]:
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as connection:
+                counts = await connection.execute(
+                    text(
+                        """
+                        select
+                          (select count(*) from agent_workflows where id = 'migration-workflow'),
+                          (select count(*) from agent_tasks where id = 'migration-task'),
+                          (select count(*) from agent_runs where id = 'migration-run'),
+                          (select count(*) from agent_task_events where id = 'migration-event'),
+                          (select debug_trace_json from agent_runs where id = 'migration-run')
+                        """
+                    )
+                )
+                row = counts.one()
+                return row[0], row[1], row[2], row[3], row[4]
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(verify_existing_data()) == (1, 1, 1, 1, {"trace": "keep"})

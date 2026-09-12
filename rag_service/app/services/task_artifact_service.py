@@ -8,7 +8,6 @@ from typing import Optional
 from app.db.models_sqlmodel import AgentTaskArtifact
 from app.services.agent_task_repository import (
     list_artifacts_for_threads,
-    list_task_checkpoint_ids_for_threads,
     mark_artifact_deleted,
     register_artifact,
 )
@@ -29,32 +28,30 @@ def artifact_ownership_key(*, todo_id: Optional[str], subagent_run_id: Optional[
 
 
 async def delete_task_resources_for_threads(thread_ids: list[str]) -> None:
-    """Delete task content and checkpoints before relational ownership rows cascade."""
-    from app.agent_workflows.checkpointing import delete_agent_checkpoints
-
+    """Delete task content before owning rows cascade."""
     artifacts = await list_artifacts_for_threads(thread_ids)
     store = get_content_store()
     for artifact in artifacts:
         await store.delete(artifact.object_key)
         await mark_artifact_deleted(artifact.task_id, artifact.id)
-    checkpoint_ids = await list_task_checkpoint_ids_for_threads(thread_ids)
-    if checkpoint_ids:
-        await delete_agent_checkpoints(checkpoint_ids)
 
 
 async def cleanup_deleted_task(task_id: str) -> None:
     """Idempotently remove content/checkpoints for one hidden terminal task."""
-    from app.agent_workflows.checkpointing import delete_agent_checkpoints
     from app.services import agent_task_repository as tasks
+    from app.runtime.cleanup import cleanup_run
 
     store = get_content_store()
     for artifact in await tasks.list_artifacts(task_id):
         await store.delete(artifact.object_key)
         await tasks.mark_artifact_deleted(task_id, artifact.id)
     runs = await tasks.list_task_runs(task_id)
-    checkpoint_ids = [str(run.checkpoint_thread_id or run.id) for run in runs]
-    if checkpoint_ids:
-        await delete_agent_checkpoints(checkpoint_ids)
+    for run in runs:
+        outcome = await cleanup_run(run)
+        if not outcome.owner_deletion_allowed:
+            raise RuntimeError(
+                f"Runtime continuation cleanup did not complete for run {run.id}: {outcome.status}"
+            )
     await tasks.mark_task_deletion_completed(task_id)
 
 

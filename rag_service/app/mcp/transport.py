@@ -11,7 +11,6 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from app.mcp.server import get_sdk_server
 
 
 def _timeout_seconds() -> float:
@@ -74,6 +73,8 @@ class InProcessMCPClient:
     descriptor_cache_key = "in_process"
 
     async def request(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        from app.mcp.server import get_sdk_server
+
         params = dict(params or {})
         unknown_tool: str | None = None
         try:
@@ -119,7 +120,7 @@ class LoopbackHTTPMCPClient:
     """SDK streamable HTTP ClientSession for the internal endpoint."""
 
     def __init__(self, url: str | None = None, http_client: Any = None):
-        self.url = url or os.getenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+        self.url = url or os.getenv("MCP_LOOPBACK_URL", "")
         self.http_client = http_client
 
     @property

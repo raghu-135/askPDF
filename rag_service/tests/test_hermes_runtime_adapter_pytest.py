@@ -1,0 +1,896 @@
+import builtins
+import json
+import os
+from pathlib import Path
+from unittest.mock import AsyncMock
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app.runtime.adapter import RuntimeInvocationContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
+from app.runtime.hermes_adapter import HermesRuntimeAdapter
+from app.runtime.catalog import definition_from_workflow
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
+from app.runtime.capability_resolver import capabilities_for_definition, discover_adapter_capabilities
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.protocol import json_payload
+from app.runtime.registry import RuntimeRegistry
+from hermes_runtime import api as hermes_api
+from runtime_protocol.hermes_contract import HERMES_REVISION
+from hermes_runtime.execution_store import HermesExecutionStore
+
+
+@pytest.fixture(autouse=True)
+def external_hermes_transport_environment(monkeypatch):
+    """Hermes runtime tests exercise the external service contract."""
+    # Keep these tests independent from a developer's repository .env.  The
+    # gateway forwards this upstream credential during profile-conflict and
+    # cancellation tests, so its expected value must be fixture-owned.
+    monkeypatch.setenv("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
+    monkeypatch.setenv("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://rag-service:8000/internal/mcp/")
+    monkeypatch.setenv("ASKPDF_MCP_HEALTH_URL", "http://rag-service:8000/health")
+    monkeypatch.setenv("ASKPDF_MCP_REQUIRED", "true")
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_has_independent_identity():
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    assert adapter.framework == "hermes"
+    assert adapter.builder_id == "hermes_agent"
+
+
+def test_hermes_adapter_does_not_advertise_unsupported_trace_projection():
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    assert RuntimeOperationId.TRACE_PROJECT not in adapter.implemented_operations
+
+
+def test_hermes_connector_does_not_fall_back_to_upstream_credentials(monkeypatch):
+    monkeypatch.delenv("HERMES_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setenv("HERMES_API_TOKEN", "upstream-only-token-32-characters")
+    monkeypatch.setenv("API_SERVER_KEY", "legacy-upstream-token-32-characters")
+    with pytest.raises(RuntimeError, match="HERMES_RUNTIME_TOKEN"):
+        HermesRuntimeAdapter(base_url="http://hermes.test")
+
+
+def test_hermes_connector_uses_only_runtime_boundary_credential(monkeypatch):
+    monkeypatch.setenv("HERMES_RUNTIME_TOKEN", "runtime-only-token-32-characters")
+    monkeypatch.setenv("HERMES_API_TOKEN", "upstream-only-token-32-characters")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    assert adapter.transport._headers()["authorization"] == "Bearer runtime-only-token-32-characters"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_validates_the_canonical_builtin_definition(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    builtin = next(item for item in load_builtin_workflows() if item["builtin_key"] == "hermes_rag_agent")
+    workflow = type("Workflow", (), {
+        "id": builtin["builtin_key"],
+        "name": builtin["name"],
+        "framework": builtin["framework"],
+        "builder_id": builtin["builder_id"],
+        "category": builtin["category"],
+        "metadata_json": {},
+        "spec_json": builtin["spec_json"],
+    })()
+    definition = definition_from_workflow(workflow)
+
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=hermes_api.create_app(require_auth=False)),
+        base_url="http://hermes.test",
+    )
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    result = await adapter.validate(definition, builtin["spec_json"])
+    assert result.valid is True
+    mismatch = dict(builtin["spec_json"])
+    mismatch["schema_version"] = 2
+    rejected = await adapter.validate(definition, mismatch)
+    assert rejected.valid is False
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter.transport._json = AsyncMock(return_value={
+        "capabilities": json_payload({
+            "operations": {
+                "run.start": {"support": "native", "owner": "runtime", "enabled": True},
+            },
+            "behavior": {
+                "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
+                "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
+                "supports_orchestration_delta": True, "required_input_fields": [],
+                "supports_pause_resume": False, "supports_course_correction": False,
+                "budget_boundary_owner": "product", "grounding_owner": "product",
+            },
+        }),
+    })
+
+    deployment = await adapter.deployment_capabilities()
+    agent_definition = AgentDefinition(
+        "hermes_rag_agent",
+        "hermes",
+        "hermes_agent",
+        capabilities={"supports_long_running_tasks": True},
+        definition_metadata={
+            "hermes_policy": {
+                "allowed_tool_ids": ["search_documents"],
+                "allow_persistent_memory": False,
+                "allow_subagents": False,
+                "skills": [],
+                "approval_enabled": True,
+            }
+        },
+    )
+    registry = RuntimeRegistry(adapters=[adapter])
+    definition = await capabilities_for_definition(agent_definition, registry=registry)
+
+    assert "task.pause" not in deployment.operations
+    assert definition.operations["task.pause"].enabled is False
+    assert definition.operations["task.pause"].support.value == "unsupported"
+    assert definition.operations["task.pause"].disabled_reason == "adapter_operation_unimplemented"
+    assert definition.operations["task.course_correction.submit"].enabled is False
+    assert definition.operations["task.course_correction.submit"].support.value == "unsupported"
+    assert definition.operations["task.course_correction.submit"].disabled_reason == "runtime_capability_unsupported"
+    assert definition.features[RuntimeFeatureId.TOOLS].details["allowed_tool_ids"] == ["search_documents"]
+    assert definition.features[RuntimeFeatureId.MEMORY].enabled is False
+    assert definition.features[RuntimeFeatureId.DELEGATION].enabled is False
+
+
+@pytest.mark.asyncio
+async def test_hermes_malformed_capabilities_are_structured(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter.transport._json = AsyncMock(return_value={"capabilities": {"operations": {"run.start": {"enabled": True}}}})
+
+    with pytest.raises(RuntimeError) as caught:
+        await adapter.deployment_capabilities()
+
+    assert caught.value.code == "runtime_protocol_error"
+
+
+@pytest.mark.asyncio
+async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypatch):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter.transport._json = AsyncMock()
+    definition = AgentDefinition("hermes_rag_agent", "hermes", "hermes_agent")
+
+    capabilities, error = await discover_adapter_capabilities(adapter)
+
+    assert capabilities is not None
+    assert capabilities.deployment["runtime_available"] is False
+    assert capabilities.operations[RuntimeOperationId.TASK_START].enabled is False
+    assert error["code"] == "runtime_disabled"
+    adapter.transport._json.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hermes_resume_is_explicitly_unsupported():
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    with pytest.raises(RuntimeError) as error:
+        await adapter.resume(request, interrupt={}, context=None)
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.resume"
+
+
+def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        capabilities = client.get("/v1/capabilities")
+        steer = client.post("/v1/runs/run-1/steer", json={})
+
+    assert capabilities.status_code == 200
+    descriptor = capabilities.json()["result"]["capabilities"]["operations"]["run.steer_live"]
+    assert descriptor == {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": False,
+        "disabled_reason": "runtime_capability_unsupported",
+    }
+    assert steer.status_code == 404
+
+
+def test_conflicting_start_stops_the_existing_upstream_execution(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    state_path = tmp_path / "state.json"
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
+    payload = json_payload({
+        "request": {
+            "run_id": "run-conflict",
+            "definition_id": "hermes_rag_agent",
+            "framework": "hermes",
+            "builder_id": "hermes_agent",
+            "input": {"question": "original"},
+            "options": {},
+        },
+        "context": {"resolved_spec": {"config": {}}},
+    })
+    store = HermesExecutionStore(str(state_path))
+    store.create("run-conflict", payload)
+    continuation = {
+        "binding_type": "hermes_session",
+        "payload": {
+            "session_id": "session-1",
+            "upstream_run_id": "upstream-1",
+            "runtime_profile": "profile-1",
+        },
+    }
+    store.update("run-conflict", status="running", continuation=continuation)
+    stop = AsyncMock(return_value={"confirmed": True, "status": "cancelled", "acknowledged_status": "stopping"})
+    monkeypatch.setattr(hermes_api, "_stop_and_confirm_upstream_run", stop)
+
+    client = TestClient(hermes_api.create_app(require_auth=False))
+    response = client.post(
+        "/v1/runs/start",
+        json={
+            **payload,
+            "request": {**payload["request"], "input": {"question": "replacement"}},
+        },
+    )
+
+    assert response.status_code == 409
+    stop.assert_awaited_once_with(
+        "http://hermes.test",
+        "profile-1",
+        "upstream-1",
+        {
+            "authorization": "Bearer test-hermes-api-token-32-characters",
+            "X-Hermes-Session-Id": "session-1",
+        },
+    )
+    result = HermesExecutionStore(str(state_path)).records["run-conflict"]
+    assert result["status"] == "cancelled"
+
+
+def test_hermes_continuation_binding_is_opaque():
+    binding = ContinuationBinding("hermes_session", {"session_id": "session-1"})
+    assert binding.to_dict()["payload"]["session_id"] == "session-1"
+
+
+def test_document_task_context_reinforces_progressive_tool_disclosure():
+    value = hermes_api._task_input_with_context(
+        "Summarize the acknowledgement.",
+        {
+            "objective": "Summarize the acknowledgement.",
+            "documents": [{"file_hash": "file-1", "name": "paper.pdf"}],
+        },
+    )
+
+    assert "already exposed directly in the model-facing MCP tool list" in value
+    assert "Do not route an already-listed AskPDF tool through" in value
+    assert "tool_search" in value
+    assert "`limit`" not in value
+    assert value.index("Hermes bridge requirement") < value.index("askPDF task context:")
+
+
+def test_task_context_without_documents_does_not_require_document_discovery():
+    value = hermes_api._task_input_with_context(
+        "Research a topic.",
+        {"objective": "Research a topic.", "documents": []},
+    )
+
+    assert "Hermes bridge requirement" not in value
+    assert "askPDF task context:" in value
+
+
+def test_initial_tool_requirement_is_enabled_only_for_document_backed_tasks():
+    assert hermes_api._requires_initial_tool({"documents": [{"file_hash": "file-1"}]}) is True
+    assert hermes_api._requires_initial_tool({"documents": []}) is False
+    assert hermes_api._requires_initial_tool(None) is False
+
+
+@pytest.mark.parametrize(
+    ("upstream", "neutral"),
+    [
+        ("message.delta", "output.delta"),
+        ("tool.started", "tool.started"),
+        ("tool.completed", "tool.completed"),
+        ("reasoning.available", "reasoning.available"),
+        ("approval.request", "approval.requested"),
+        ("run.completed", "run.completed"),
+        ("run.failed", "run.failed"),
+        ("run.cancelled", "run.cancelled"),
+        ("subagent.start", "subagent.started"),
+        ("subagent.complete", "subagent.completed"),
+    ],
+)
+def test_pinned_hermes_event_mapping(upstream, neutral):
+    assert hermes_api._hermes_event_kind("message", {"event": upstream}) == neutral
+
+
+def test_unknown_hermes_event_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported Hermes event"):
+        hermes_api._hermes_event_kind("future.event", {"event": "future.event"})
+
+
+def test_resume_recovers_open_tool_and_approval_identities():
+    events = []
+    for sequence, (kind, payload) in enumerate([
+        ("tool.started", {"tool_call_id": "tool-1", "tool_name": "search_documents"}),
+        ("approval.requested", {"approval_id": "approval-1", "response_operation": "run.approval.respond"}),
+    ], start=1):
+        events.append({"frame": hermes_api._sse({"event_id": f"run:{sequence}", "run_id": "run", "sequence": sequence, "kind": kind, "payload": payload, "terminal": False})})
+    assert hermes_api._event_correlations(events) == ({"search_documents": "tool-1"}, "approval-1")
+
+
+def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "hermes" / "run_events.json").read_text())
+    assert fixture["hermes_revision"] == HERMES_REVISION
+    upstream_events = {event["event"] for values in fixture.values() if isinstance(values, list) for event in values}
+    assert {"message.delta", "tool.started", "tool.completed", "reasoning.available", "approval.request", "run.completed", "run.failed", "run.cancelled", "subagent.start", "subagent.complete"} <= upstream_events
+
+
+def test_hermes_tool_events_are_normalized_and_argument_values_are_removed():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {
+            "tool": "search_document_by_id",
+            "request_id": "request-7",
+            "arguments": {"query": "secret query", "file_hash": "secret hash"},
+            "source_count": 55,
+            "duration": 0.25,
+            "error": False,
+        },
+    )
+
+    assert kind == "tool.completed"
+    assert payload["tool_name"] == "search_document_by_id"
+    assert payload["tool_call_id"] is None
+    assert payload["duration_ms"] == 250
+    assert "result_count" not in payload
+    assert payload["ok"] is True
+    assert "arguments" not in payload
+
+
+@pytest.mark.parametrize("field", ["tool_name", "name"])
+def test_hermes_tool_field_aliases_are_rejected(field):
+    with pytest.raises(ValueError, match="pinned tool field"):
+        hermes_api._normalized_tool_payload("tool.started", {field: "search_documents"})
+
+
+def test_hermes_tool_error_object_is_rejected():
+    with pytest.raises(ValueError, match="boolean error flag"):
+        hermes_api._normalized_tool_payload(
+            "tool.completed",
+            {"tool": "tool_call", "error": {"code": "invalid_arguments"}},
+        )
+
+
+def test_hermes_boolean_tool_error_is_projected_as_failure():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {"tool": "search_documents", "error": True, "duration": 0.1},
+    )
+
+    assert kind == "tool.failed"
+    assert payload["ok"] is False
+    assert payload["error"] is True
+    assert payload["event"] == "tool.failed"
+
+
+def test_hermes_tool_completion_does_not_invent_evidence_from_unknown_fields():
+    kind, payload = hermes_api._normalized_tool_payload(
+        "tool.completed",
+        {
+            "tool": "search_web",
+            "duration": 0,
+            "error": False,
+            "result": {
+                "content": "evidence " * 500,
+                "sources": [{"url": "https://example.test"}],
+                "warnings": [],
+            },
+        },
+    )
+
+    assert kind == "tool.completed"
+    assert "result_chars" not in payload
+    assert "source_count" not in payload
+    assert "result_preview" not in payload
+    assert payload["duration_ms"] == 0
+
+
+def test_hermes_task_input_makes_multiple_redirects_authoritative():
+    rendered = hermes_api._task_input_with_context("Original objective", {
+        "active_corrections": [
+            {"correction_id": "c-1", "operation_id": "o-1", "instruction": "Compare security."},
+            {"correction_id": "c-2", "operation_id": "o-2", "instruction": "Compare pricing."},
+        ],
+    })
+
+    assert "AUTHORITATIVE USER REDIRECTS" in rendered
+    assert "c-1" in rendered and "Compare security" in rendered
+    assert "c-2" in rendered and "Compare pricing" in rendered
+    assert "correction_outcomes" in rendered
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_uses_exact_profile_scoped_run(monkeypatch):
+    requested = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        requested.append((request.method, str(request.url), request.headers.get("x-hermes-session-id")))
+        return httpx.Response(200, json={"run_id": "upstream-run-7", "status": "stopping"}, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await hermes_api._request_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {"X-Hermes-Session-Id": "session-3"},
+    )
+
+    assert requested == [(
+        "POST",
+        "http://hermes.test/p/askpdf-run-profile-1/v1/runs/upstream-run-7/stop",
+        "session-3",
+    )]
+    assert result["status"] == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_is_not_confirmed_until_hermes_is_terminal(monkeypatch):
+    statuses = iter(("stopping", "running", "cancelled"))
+    async_client = httpx.AsyncClient
+    observed_headers = []
+
+    def handler(request):
+        observed_headers.append(dict(request.headers))
+        return httpx.Response(
+            200,
+            json={"run_id": "upstream-run-7", "status": next(statuses)},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await hermes_api._confirm_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {
+            "authorization": "Bearer test-hermes-token",
+            "X-Hermes-Session-Id": "session-3",
+        },
+        timeout_seconds=1,
+        poll_interval_seconds=0.01,
+    )
+
+    assert result == {
+        "confirmed": True,
+        "status": "cancelled",
+        "last_event": None,
+    }
+    assert all(headers["authorization"] == "Bearer test-hermes-token" for headers in observed_headers)
+    assert all("x-hermes-session-id" not in headers for headers in observed_headers)
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_reports_unconfirmed_while_executor_is_still_running(monkeypatch):
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"run_id": "upstream-run-7", "status": "stopping"},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await hermes_api._confirm_upstream_stop(
+        "http://hermes.test",
+        "askpdf-run-profile-1",
+        "upstream-run-7",
+        {},
+        timeout_seconds=0,
+    )
+
+    assert result == {"confirmed": False, "status": "stopping"}
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_rejects_a_malformed_acknowledgement(monkeypatch):
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(200, text="not-json", request=request)
+
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(httpx.DecodingError, match="not valid JSON"):
+        await hermes_api._request_upstream_stop(
+            "http://hermes.test",
+            "askpdf-run-profile-1",
+            "upstream-run-7",
+            {},
+        )
+
+
+def _cancel_payload():
+    return json_payload({
+        "continuation": {
+            "binding_type": "hermes_session",
+            "payload": {
+                "session_id": "session-3",
+                "upstream_run_id": "upstream-run-7",
+                "runtime_profile": "askpdf-run-profile-1",
+            },
+        },
+    })
+
+
+def test_cancel_retires_profile_only_after_confirmed_upstream_cancellation(monkeypatch, tmp_path):
+    retired = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        status = "stopping" if request.method == "POST" else "cancelled"
+        return httpx.Response(200, json={"status": status}, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(
+        hermes_api.RunProfileManager,
+        "retire",
+        lambda _self, profile: retired.append(profile),
+    )
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
+
+    assert response.json()["result"]["status"] == "cancelled"
+    assert retired == ["askpdf-run-profile-1"]
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_terminal_inspection_returns_durable_neutral_result_after_profile_retirement(monkeypatch, tmp_path, status):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    state_path = tmp_path / "state.json"
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(state_path))
+    store = HermesExecutionStore(str(state_path))
+    store.create("run-1", _cancel_payload())
+    result = {"status": status, "artifacts": [{"id": "artifact-1"}], "usage": {"total_tokens": 42}}
+    event = {"event_id": "terminal-1", "run_id": "run-1", "sequence": 1, "kind": f"run.{status}", "payload": {}, "terminal": True}
+    store.finalize("run-1", hermes_api._sse(event, result), status=status)
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        # No upstream binding or live profile is needed for a durable result.
+        response = client.post("/v1/runs/run-1/inspect", json={})
+    assert response.status_code == 200
+    assert response.json()["result"]["result"] == result
+    assert response.json()["result"]["terminal_event_id"] == "terminal-1"
+
+
+def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp_path):
+    retired = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        return httpx.Response(200, json={"status": "stopping"}, request=request)
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setattr(
+        hermes_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(
+        hermes_api.RunProfileManager,
+        "retire",
+        lambda _self, profile: retired.append(profile),
+    )
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        response = client.post("/v1/runs/run-1/cancel", json=_cancel_payload())
+
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "hermes_stop_unconfirmed"
+    assert retired == []
+
+
+@pytest.mark.asyncio
+async def test_hermes_controls_use_neutral_contracts(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    calls = []
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+
+    async def fake_json(method, path, **kwargs):
+        calls.append((method, path, kwargs["json"]))
+        return {"accepted": True}
+
+    monkeypatch.setattr(adapter.transport, "_json", fake_json)
+    binding = ContinuationBinding("hermes_session", {"session_id": "session-1", "upstream_run_id": "upstream-1"})
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent", continuation=binding)
+    await adapter.respond_to_approval(request, RuntimeApprovalResponse("approve", scope="session"))
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("Use the newer evidence"))
+    assert calls[0][1] == "/v1/runs/run-1/approval"
+    assert calls[0][2]["response"] == {"choice": "session", "resolve_all": True}
+    assert len(calls) == 1
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.steer_live"
+
+
+@pytest.mark.asyncio
+async def test_hermes_live_steering_makes_no_transport_request():
+    requested = []
+
+    def handler(request):
+        requested.append(request)
+        return httpx.Response(200, json={"accepted": True}, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("focus"))
+
+    assert error.value.code == "runtime_capability_unsupported"
+    assert error.value.details["operation_id"] == "run.steer_live"
+    assert requested == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    async def tool_capable(_model):
+        return True
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_capable)
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    progress = {
+        "event_id": "run-1:346",
+        "run_id": "run-1",
+        "sequence": 346,
+        "kind": "output.delta",
+        "payload": {"delta": "partial"},
+    }
+    terminal = {
+        "event_id": "run-1:347",
+        "run_id": "run-1",
+        "sequence": 347,
+        "kind": "run.completed",
+        "payload": {},
+        "terminal": True,
+    }
+    calls: list[str] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request.method)
+        if http_request.method == "POST":
+            body = f"id: run-1:346\nevent: output.delta\ndata: {json.dumps(json_payload({'event': json_payload(progress)}))}\n\n"
+        else:
+            assert http_request.url.params["after_event_id"] == "run-1:346"
+            assert "after_sequence" not in http_request.url.params
+            body = f"id: run-1:347\nevent: run.completed\ndata: {json.dumps(json_payload({'event': json_payload(terminal), 'result': json_payload({'status': 'completed', 'output': 'recovered'})}))}\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test", client=client)
+    result = await adapter.start(
+        request,
+        context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "tool-model"}}}),
+    )
+
+    assert result.output == "recovered"
+    assert calls == ["POST", "GET"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    async def tool_incapable(_model):
+        return False
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_incapable)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+
+    with pytest.raises(RuntimeError) as error:
+        await adapter.start(
+            request,
+            context=RuntimeInvocationContext(resolved_spec={"managed_profile": {"model_policy": {"model": "text-only"}}}),
+        )
+
+    assert error.value.code == "runtime_model_tool_calling_unsupported"
+    assert error.value.details == {"framework": "hermes", "model": "text-only"}
+
+
+def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_API_URL", raising=False)
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
+    with pytest.raises(builtins.RuntimeError, match="HERMES_API_URL is required"):
+        hermes_api.create_app(require_auth=False)
+
+
+def test_hermes_healthz_is_liveness_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://unavailable.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        response = client.get("/healthz")
+    assert response.status_code == 200
+
+
+def test_hermes_file_store_rejects_multiple_workers(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
+    monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "file")
+    monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "2")
+    with pytest.raises(builtins.RuntimeError, match="one worker only"):
+        hermes_api.create_app(require_auth=False)
+
+
+def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes.json"))
+    monkeypatch.setenv("HERMES_RUNTIME_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("HERMES_RUNTIME_WORKERS", "1")
+    with pytest.raises(builtins.RuntimeError, match="HERMES_RUNTIME_STORAGE_BACKEND must be 'file'"):
+        hermes_api.create_app(require_auth=False)
+
+
+@pytest.mark.asyncio
+async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    operations = (
+        lambda: adapter.cancel(request),
+        lambda: adapter.inspect_state(request),
+        lambda: adapter.respond_to_approval(request, RuntimeApprovalResponse("once")),
+    )
+    for operation in operations:
+        with pytest.raises(RuntimeError, match="binding"):
+            await operation()
+    with pytest.raises(RuntimeError) as error:
+        await adapter.steer_live(request, RuntimeSteeringInput("focus"))
+    assert error.value.code == "runtime_capability_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_rejects_missing_context_length(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.delenv("HERMES_MODEL_CONTEXT_LENGTH", raising=False)
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
+    with pytest.raises(RuntimeError, match="context length"):
+        await adapter.start(request, context=None)
+
+
+def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200, mcp_required=True, rendered_context=None):
+    requested_urls = []
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        requested_urls.append(str(request.url))
+        status = hermes_status if request.url.host == "hermes.test" else mcp_status
+        return httpx.Response(status, request=request)
+
+    def client_factory(*_args, **_kwargs):
+        return async_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes-readiness.json"))
+    context_length = os.environ["HERMES_MODEL_CONTEXT_LENGTH"]
+    rendered_config = tmp_path / "hermes-config.yaml"
+    rendered_config.write_text(f"model:\n  context_length: {rendered_context or context_length}\n")
+    monkeypatch.setenv("HERMES_RENDERED_CONFIG_PATH", str(rendered_config))
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("ASKPDF_MCP_HEALTH_URL", "http://mcp.test/healthz")
+    monkeypatch.setenv("ASKPDF_MCP_REQUIRED", "true" if mcp_required else "false")
+    monkeypatch.setattr(hermes_api.httpx, "AsyncClient", client_factory)
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        response = client.get("/readyz")
+    return response, requested_urls
+
+
+def test_hermes_readiness_accepts_healthy_hermes_and_mcp(monkeypatch, tmp_path):
+    response, requested_urls = _readiness_response(
+        monkeypatch, tmp_path, hermes_status=200, mcp_status=204
+    )
+    assert response.status_code == 200
+    assert response.json()["checks"]["hermes"]["status"] == "ok"
+    assert response.json()["checks"]["mcp"]["status"] == "ok"
+    assert requested_urls == ["http://hermes.test/health", "http://mcp.test/healthz"]
+
+
+def test_hermes_readiness_rejects_rendered_context_mismatch(monkeypatch, tmp_path):
+    configured = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
+    response, _ = _readiness_response(
+        monkeypatch,
+        tmp_path,
+        hermes_status=200,
+        mcp_status=204,
+        rendered_context=configured + 1,
+    )
+    assert response.status_code == 503
+    assert response.json()["checks"]["model_context"] == {
+        "status": "failed",
+        "configured_context_length": configured,
+        "rendered_context_length": configured + 1,
+        "provider": os.getenv("HERMES_MODEL_PROVIDER", "custom"),
+    }
+
+
+def test_hermes_readiness_does_not_invent_health_route_from_mcp_transport(monkeypatch, tmp_path):
+    monkeypatch.delenv("ASKPDF_MCP_HEALTH_URL", raising=False)
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
+    with pytest.raises(builtins.RuntimeError, match="ASKPDF_MCP_HEALTH_URL is required"):
+        hermes_api.create_app(require_auth=False)
+
+
+def test_hermes_readiness_rejects_unhealthy_required_mcp(monkeypatch, tmp_path):
+    response, requested_urls = _readiness_response(
+        monkeypatch, tmp_path, hermes_status=200, mcp_status=503
+    )
+    assert response.status_code == 503
+    assert response.json()["checks"]["hermes"]["status"] == "ok"
+    assert response.json()["checks"]["mcp"]["status"] == "failed"
+    assert requested_urls == ["http://hermes.test/health", "http://mcp.test/healthz"]
+
+
+def test_hermes_readiness_rejects_unhealthy_hermes_without_mcp_probe(monkeypatch, tmp_path):
+    response, requested_urls = _readiness_response(
+        monkeypatch, tmp_path, hermes_status=503, mcp_status=200
+    )
+    assert response.status_code == 503
+    assert response.json()["checks"]["hermes"]["status"] == "failed"
+    assert response.json()["checks"]["mcp"]["status"] == "not_checked"
+    assert requested_urls == ["http://hermes.test/health"]
+
+
+def test_hermes_readiness_skips_mcp_when_not_required(monkeypatch, tmp_path):
+    response, requested_urls = _readiness_response(
+        monkeypatch, tmp_path, hermes_status=200, mcp_status=503, mcp_required=False
+    )
+    assert response.status_code == 200
+    assert response.json()["checks"]["mcp"] == {"status": "ok", "required": False}
+    assert requested_urls == ["http://hermes.test/health"]

@@ -1,0 +1,58 @@
+{
+  "builtin_key": "hermes_rag_agent",
+  "description": "An opt-in durable Deep Research engine backed by the pinned Hermes runtime.",
+  "is_builtin": true,
+  "visibility": "builtin",
+  "name": "Hermes RAG Agent",
+  "framework": "hermes",
+  "builder_id": "hermes_agent",
+  "category": "deep",
+  "spec_json": {
+    "schema_version": 1,
+    "version": 1,
+    "runtime": {"kind": "hermes_agent", "features": {"supports_replans": false, "supports_long_running_tasks": true, "supports_artifacts": true}},
+    "config": {
+      "research_policy_id": "deep_research_v1",
+      "system_prompt": "Hermes MCP execution protocol: Before drafting an answer, inspect the askPDF task context and use the available tools when relevant. AskPDF MCP tools are exposed directly in the model-facing tool list under their exact namespaced names. Call the exact namespaced AskPDF retrieval tool directly with schema-valid arguments; do not route an already-listed AskPDF tool through tool_search, tool_describe, or tool_call. Those bridge APIs are only for genuinely deferred tools. For document-backed tasks, use search_documents or search_document_by_id with the exact file_hash from task context when appropriate. Tool-discovery results, thread shape, and conversation history are not document evidence; only a successful document-retrieval result is evidence. A failed or empty retrieval result means that attempt produced no evidence, not that the documents are absent. Do not use read_file for AskPDF-managed documents: they are retrieved through AskPDF MCP. If a relevant retrieval call fails or returns no evidence after valid attempts, report that specific limitation when it matters to the answer. Cite retrieved evidence when it is used.",
+      "model": "",
+      "mcp_server": "askpdf",
+      "allowed_tool_ids": ["get_thread_shape", "search_documents", "search_document_by_id", "search_thread_conversation_history", "search_thread_events", "search_durable_memory", "search_web", "wikipedia", "wikidata", "arxiv", "pubmed", "semantic_scholar", "stack_exchange", "yahoo_finance_news"],
+      "max_output_chars": 12000,
+      "max_duration_seconds": 3600,
+      "max_event_count": 200,
+      "allow_subagents": true,
+      "allow_persistent_memory": false,
+      "skills": [],
+      "cancellation_mode": "upstream_stop",
+      "task_policy": {
+        "builtin_only": true,
+        "evidence": "document_when_available",
+        "profiles": ["document_researcher", "memory_researcher", "evidence_critic"],
+        "orchestration": {
+          "planner": "runtime.native",
+          "executor": "runtime.native",
+          "aggregator": "runtime.native",
+          "result_schema": null,
+          "incomplete_result_policy": "review",
+          "max_incomplete_review_rounds": 3,
+          "tool_policy": {"role_tools": {}}
+        },
+        "limits": {
+          "max_todos": 50,
+          "max_plan_revisions": 8,
+          "max_replans": 5,
+          "max_concurrency": 2,
+          "max_fanout": 2,
+          "max_attempts_per_todo": 2,
+          "subagent_timeout_ms": 180000,
+          "max_active_runtime_ms": 3600000,
+          "max_tool_calls": 100,
+          "max_model_tokens": 500000,
+          "max_artifacts": 200,
+          "max_artifact_bytes": 104857600,
+          "max_single_artifact_bytes": 10485760
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1179 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+import logging
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, Optional
+
+from app.product_orchestration.chat_cancellation import chat_run_cancel_requested
+from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
+from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
+from app.product_orchestration.execution_stream import AgentExecutionEventSink
+from app.product_orchestration.metrics import build_run_metrics
+from app.product_orchestration.parallel_observability import project_parallel_events
+from app.product_orchestration.repository import AgentWorkflowRepository, InterruptResolutionResult
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys
+from app.product_orchestration.workflow_runtime import (
+    default_agent_workflow_key,
+    workflow_is_chat_eligible,
+)
+from app.runtime.adapter import RuntimeInvocationContext
+from app.runtime.catalog import (
+    continuation_from_run,
+    definition_from_run,
+    definition_from_workflow,
+    result_to_product_payload,
+)
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, RuntimeApprovalResponse, RuntimeCleanupResult, RuntimeCleanupStatus, RuntimeOperationId, RuntimeSteeringInput
+from app.runtime.capability_resolver import (
+    pending_interrupt_response_operation,
+    require_capability,
+    resolve_run_capability_resolution,
+)
+from runtime_protocol.errors import RuntimeError as RuntimeContractError
+from app.runtime.registry import adapter_for_definition, get_runtime_registry
+from app.runtime.operational_limits import validate_bounded_json
+from app.runtime.builder_registry import builder_for_definition
+from app.services.agent_runtime_projection import AgentRuntimeProjection
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
+from app.services.runtime_operation_repository import (
+    RuntimeOperationConflict,
+    claim_runtime_operation,
+    complete_runtime_operation,
+    fail_runtime_operation,
+)
+from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
+
+
+logger = logging.getLogger(__name__)
+CLARIFICATION_REQUIRED_STATUS = "clarification_required"
+
+
+async def _finish_human_review_boundary(
+    execution_event_sink: Any,
+    *,
+    run_id: str,
+    result: Dict[str, Any],
+) -> None:
+    """Publish the chat-facing response before closing a resumable stream."""
+    if execution_event_sink is None:
+        return
+    if hasattr(execution_event_sink, "emit"):
+        await execution_event_sink.emit(
+            "interrupt.requested",
+            {
+                "run_id": run_id,
+                "status": AgentRunStatus.AWAITING_HUMAN.value,
+                "response": result,
+            },
+        )
+    if hasattr(execution_event_sink, "finish_boundary"):
+        await execution_event_sink.finish_boundary()
+
+
+def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
+    proposed_tool = interrupt.get("proposed_tool")
+    return (
+        interrupt.get("type") in {"external_research_approval", "tool_approval"}
+        and isinstance(proposed_tool, dict)
+        and proposed_tool.get("name") == "search_web"
+    )
+
+
+def _question_for_run_result(
+    run: Any,
+    result: Optional[Dict[str, Any]] = None,
+    interrupt: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Recover the original user question when a run resumes from a checkpoint."""
+    metadata = getattr(run, "run_metadata_json", None)
+    metadata_question = metadata.get("question") if isinstance(metadata, dict) else None
+    input_summary = interrupt.get("input_summary") if isinstance(interrupt, dict) else None
+    interrupt_question = input_summary.get("question") if isinstance(input_summary, dict) else None
+    result_question = result.get("question") if isinstance(result, dict) else None
+    for candidate in (metadata_question, interrupt_question, result_question):
+        if candidate not in (None, ""):
+            return str(candidate)
+    return ""
+
+
+def _runtime_approval_response(
+    *,
+    action: str,
+    approval_scope: Optional[str],
+    approval_feedback: Optional[str],
+    approval_modifications: Optional[Dict[str, Any]],
+) -> RuntimeApprovalResponse:
+    return RuntimeApprovalResponse(
+        decision="reject" if action == AgentRunResumeAction.REJECT.value else "approve",
+        modifications=approval_modifications,
+        feedback=approval_feedback,
+        scope=approval_scope or "once",
+    )
+
+
+async def _submit_runtime_approval(
+    *,
+    repository: AgentWorkflowRepository,
+    adapter: Any,
+    request: AgentRuntimeRequest,
+    run_id: str,
+    interrupt_id: str,
+    action: str,
+    approval_scope: Optional[str],
+    approval_feedback: Optional[str],
+    approval_modifications: Optional[Dict[str, Any]],
+) -> None:
+    try:
+        await adapter.respond_to_approval(
+            request,
+            _runtime_approval_response(
+                action=action,
+                approval_scope=approval_scope,
+                approval_feedback=approval_feedback,
+                approval_modifications=approval_modifications,
+            ),
+        )
+    except Exception:
+        await repository.restore_pending_approval_after_runtime_failure(
+            run_id,
+            interrupt_id=interrupt_id,
+            action=action,
+        )
+        raise
+
+
+def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
+    if execution_event_sink is None or not hasattr(execution_event_sink, "parallel_events"):
+        return
+    projection = project_parallel_events(execution_event_sink.parallel_events())
+    result["parallel_attempts"] = projection["journal"]
+    if result.get("parallel_summary") or projection["summary"].get("dispatch_id"):
+        result["parallel_summary"] = {
+            **projection["summary"],
+            **(result.get("parallel_summary") or {}),
+        }
+
+
+def _workflow_version_info(workflow: Any) -> SimpleNamespace:
+    metadata = workflow.metadata_json if isinstance(getattr(workflow, "metadata_json", None), dict) else {}
+    try:
+        version = int(metadata.get("version") or getattr(workflow, "schema_version", 1) or 1)
+    except (TypeError, ValueError):
+        version = 1
+    return SimpleNamespace(
+        id=str(metadata.get("version_id") or f"{workflow.id}:v{version}"),
+        version=version,
+    )
+
+
+class AgentRunService:
+    """Runs the selected agent workflow, defaulting to the compiled Router graph."""
+
+    def __init__(
+        self,
+        repository: Optional[AgentWorkflowRepository] = None,
+        repository_factory: Optional[Callable[[], AgentWorkflowRepository]] = None,
+    ):
+        self.repository = repository or AgentWorkflowRepository()
+        self.repository_factory = repository_factory or AgentWorkflowRepository
+        self.projection = AgentRuntimeProjection()
+
+    async def _cleanup_run(self, adapter: Any, run_id: str) -> RuntimeCleanupResult:
+        result = await adapter.cleanup_run(run_id)
+        if not isinstance(result, RuntimeCleanupResult):
+            raise RuntimeContractError(
+                "runtime_cleanup_invalid_result",
+                "Agent runtime returned an invalid cleanup result",
+                retryable=True,
+            )
+        status = result.status.value if isinstance(result.status, RuntimeCleanupStatus) else str(result.status)
+        if status not in {"cleaned", "already_cleaned", "not_bound"}:
+            raise RuntimeContractError(
+                "runtime_cleanup_failed",
+                "Agent runtime did not confirm run cleanup",
+                retryable=True,
+                details={"status": status, "run_id": run_id},
+            )
+        if result.run_id != run_id:
+            raise RuntimeContractError(
+                "runtime_cleanup_invalid_result",
+                "Agent runtime returned cleanup for a different run",
+                retryable=False,
+            )
+        return result
+
+    async def cancel_agent_run(self, run_id: str, *, thread_id: str) -> Any:
+        run = await self.repository.get_run(run_id)
+        if run is None or run.thread_id != thread_id:
+            return None
+        definition = definition_from_run(run)
+        await require_capability(definition, RuntimeOperationId.RUN_CANCEL, registry=get_runtime_registry(), run=run)
+        adapter = adapter_for_definition(definition)
+        request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            continuation=continuation_from_run(run),
+        )
+        return await adapter.cancel(request)
+
+    async def inspect_agent_run(self, run: Any) -> Dict[str, Any]:
+        definition = definition_from_run(run)
+        await require_capability(definition, RuntimeOperationId.RUN_INSPECT_STATE, registry=get_runtime_registry(), run=run)
+        adapter = adapter_for_definition(definition)
+        request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            options={
+                "resolved_spec": dict(getattr(run, "resolved_spec_json", None) or {}),
+            },
+            continuation=continuation_from_run(run),
+        )
+        return dict(await adapter.inspect_state(request))
+
+    async def operate_agent_run(
+        self,
+        run: Any,
+        operation: RuntimeOperationId,
+        *,
+        input: Optional[Dict[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        definition = definition_from_run(run)
+        adapter = adapter_for_definition(definition)
+        if not idempotency_key:
+            raise RuntimeContractError(
+                "runtime_operation_idempotency_required",
+                "An Idempotency-Key is required for this runtime operation",
+            )
+        request_payload = {
+            "operation": operation.value,
+            "input": dict(input or {}),
+        }
+        try:
+            validate_bounded_json(request_payload["input"], field_name="input")
+        except ValueError as exc:
+            raise RuntimeContractError(
+                "runtime_payload_invalid",
+                str(exc),
+                retryable=False,
+            ) from exc
+        request_fingerprint = hashlib.sha256(
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        # Capability admission is side-effect free. Do it before claiming an
+        # idempotency record so unsupported operations never mutate storage.
+        await require_capability(
+            definition,
+            operation,
+            registry=get_runtime_registry(),
+            run=run,
+        )
+        try:
+            operation_record = await claim_runtime_operation(
+                run_id=run.id,
+                operation=operation.value,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        except RuntimeOperationConflict as exc:
+            details = {"operation_id": operation.value, "idempotency_key": idempotency_key}
+            if exc.operation is not None:
+                details["status"] = exc.operation.status
+            raise RuntimeContractError(exc.code, str(exc), details=details) from exc
+        if operation_record.status == "completed":
+            return dict(operation_record.result_json or {})
+        if operation_record.status == "failed":
+            stored_error = dict(operation_record.error_json or {})
+            raise RuntimeContractError(
+                str(stored_error.get("code") or "runtime_operation_failed"),
+                str(stored_error.get("safe_message") or "The runtime operation failed"),
+                retryable=bool(stored_error.get("retryable")),
+                details=dict(stored_error.get("details") or {}),
+            )
+        request = AgentRuntimeRequest(
+            run_id=run.id, thread_id=run.thread_id, definition_id=definition.definition_id,
+            framework=definition.framework, builder_id=definition.builder_id,
+            input=dict(input or {}),
+            options={
+                "resolved_spec": dict(run.resolved_spec_json or {})
+                if isinstance(getattr(run, "resolved_spec_json", None), dict) else {},
+                "idempotency_key": idempotency_key,
+            },
+            task_id=getattr(run, "task_id", None), continuation=continuation_from_run(run),
+        )
+        try:
+            if operation is RuntimeOperationId.RUN_SEND_FOLLOWUP:
+                result = dict(await adapter.send_followup(request, dict(input or {})))
+            elif operation is RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT:
+                result = dict(await adapter.interrupt_with_input(request, dict(input or {})))
+            elif operation is RuntimeOperationId.RUN_STEER_LIVE:
+                text = str((input or {}).get("text") or "").strip()
+                result = dict(await adapter.steer_live(request, RuntimeSteeringInput(text)))
+            elif operation is RuntimeOperationId.RUN_UPDATE_STATE:
+                result = dict(await adapter.update_state(request, dict(input or {})))
+            else:
+                raise ValueError(f"Unsupported runtime operation: {operation}")
+            await complete_runtime_operation(operation_record.id, result=result)
+            return result
+        except RuntimeContractError as exc:
+            await fail_runtime_operation(operation_record.id, error=exc.to_dict())
+            raise
+        except Exception as exc:
+            error = RuntimeContractError.from_exception(
+                exc,
+                code="runtime_operation_failed",
+                safe_message="The runtime operation failed",
+            )
+            await fail_runtime_operation(operation_record.id, error=error.to_dict())
+            raise error from exc
+
+    async def run_thread_chat(
+        self,
+        thread_id: str,
+        req: Any,
+        embedding_model: str,
+        *,
+        execution_event_sink: Any = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        thread_settings = await get_thread_settings(thread_id)
+        hitl_web_approval_override = getattr(req, "hitl_web_approval", None)
+        if hitl_web_approval_override is not None:
+            thread_settings = {
+                **(thread_settings if isinstance(thread_settings, dict) else {}),
+                "hitl_web_approval": bool(hitl_web_approval_override),
+            }
+        agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
+        agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
+        workflow_id = agent_settings.get("workflow_id") or default_agent_workflow_key()
+        include_custom_for_lookup = True
+        logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
+
+        # Built-in manifests are source-controlled service contracts. Refresh the
+        # persisted copy before resolving one so upgrades do not leave an older
+        # database spec incompatible with the running service.
+        if workflow_id in builtin_workflow_keys() and hasattr(self.repository, "seed_builtin_workflows"):
+            await self.repository.seed_builtin_workflows()
+        workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
+        if workflow is None:
+            await self.repository.seed_builtin_workflows()
+            workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
+        if workflow is None:
+            logger.error(
+                "Selected agent workflow unavailable; aborting run | thread_id=%s requested_workflow=%s",
+                thread_id,
+                workflow_id,
+            )
+            raise RuntimeError(f"Selected agent workflow is unavailable: {workflow_id}")
+        if not workflow_is_chat_eligible(workflow.spec_json):
+            logger.error(
+                "Selected agent workflow is not chat eligible; aborting run | thread_id=%s workflow=%s",
+                thread_id,
+                workflow.id,
+            )
+            raise RuntimeError(f"Selected agent workflow is not chat eligible: {workflow.id}")
+        logger.info(
+            "Selected agent workflow for thread %s | workflow=%s",
+            thread_id,
+            workflow.id,
+        )
+
+        request_overrides = {
+            "llm_model": getattr(req, "llm_model", None),
+            "use_web_search": getattr(req, "use_web_search", None),
+            "use_reranker": getattr(req, "use_reranker", None),
+            "replans": getattr(req, "replans", None),
+            "system_role": getattr(req, "system_role_override", None),
+            "tool_instructions": getattr(req, "tool_instructions_override", None),
+            "custom_instructions": getattr(req, "custom_instructions_override", None),
+        }
+        definition = definition_from_workflow(workflow)
+        try:
+            provider = builder_for_definition(definition)
+            resolved_spec = await provider.resolve(
+                definition,
+                workflow.spec_json,
+                thread_settings=thread_settings,
+                request_overrides=request_overrides,
+            )
+            stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
+        except ValueError as exc:
+            logger.exception(
+                "Selected agent workflow failed validation; aborting run | thread_id=%s requested_workflow=%s error=%s",
+                thread_id,
+                workflow.id,
+                exc,
+            )
+            raise RuntimeError(
+                f"Selected agent workflow is incompatible with this service version: {workflow.id}"
+            ) from exc
+        workflow_version = _workflow_version_info(workflow)
+
+        try:
+            await require_capability(
+                definition,
+                RuntimeOperationId.RUN_START,
+                registry=get_runtime_registry(),
+            )
+        except RuntimeError as exc:
+            logger.warning(
+                "Agent run start admission rejected | thread_id=%s workflow=%s code=%s details=%s",
+                thread_id,
+                workflow.id,
+                exc.code,
+                dict(exc.details or {}),
+            )
+            raise
+
+        run = await self.repository.create_run(
+            thread_id=thread_id,
+            workflow_id=workflow.id,
+            workflow_version_id=workflow_version.id if workflow_version is not None else None,
+            workflow_version=workflow_version.version if workflow_version is not None else None,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            definition_category=getattr(workflow, "category", None),
+            resolved_spec_json=stored_resolved_spec,
+            user_id=user_id,
+            run_metadata_json={
+                "executed_workflow_id": workflow.id,
+                "framework": definition.framework,
+                "builder_id": definition.builder_id,
+                "question": getattr(req, "question", ""),
+            },
+        )
+
+        started = time.perf_counter()
+        trace_recorder = AgentTraceRecorder(run)
+        if execution_event_sink is None and hasattr(self.repository, "append_run_event"):
+            # Non-streaming callers still need the same durable runtime event
+            # journal and retained trace projection as SSE callers.
+            execution_event_sink = AgentExecutionEventSink(include_details=False)
+            execution_event_sink.detach_delivery()
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
+            execution_event_sink.bind_trace_recorder(trace_recorder)
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
+            execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
+            execution_event_sink.bind_runtime_fact_persister(self.repository.update_run_metadata_fields)
+        if (
+            execution_event_sink is not None
+            and hasattr(execution_event_sink, "bind_runtime_event_persister")
+            and hasattr(self.repository, "append_run_event")
+        ):
+            execution_event_sink.bind_runtime_event_persister(
+                run.id,
+                self.repository.append_run_event,
+                initial_sequence=0,
+            )
+        context = {
+            "agent_run_id": run.id,
+            "agent_workflow_id": workflow.id,
+            "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+        }
+        if execution_event_sink is not None:
+            await execution_event_sink.emit(
+                "run.started",
+                {"run_id": run.id, "workflow_id": workflow.id, "status": run.status},
+            )
+
+        try:
+            logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
+            definition = definition_from_workflow(workflow)
+            adapter = adapter_for_definition(definition)
+            runtime_request = AgentRuntimeRequest(
+                run_id=run.id,
+                thread_id=thread_id,
+                definition_id=definition.definition_id,
+                framework=definition.framework,
+                builder_id=definition.builder_id,
+                input={"question": getattr(req, "question", "")},
+                options={
+                    "embedding_model": embedding_model,
+                    "llm_model": getattr(req, "llm_model", None),
+                    "use_web_search": getattr(req, "use_web_search", None),
+                    "use_reranker": getattr(req, "use_reranker", None),
+                    "replans": getattr(req, "replans", None),
+                    "system_role_override": getattr(req, "system_role_override", None),
+                    "tool_instructions_override": getattr(req, "tool_instructions_override", None),
+                    "custom_instructions_override": getattr(req, "custom_instructions_override", None),
+                    "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
+                    "hitl_web_approval": getattr(req, "hitl_web_approval", None),
+                },
+            )
+            runtime_context = RuntimeInvocationContext(
+                request_payload=req.model_dump(mode="json") if hasattr(req, "model_dump") else {},
+                embedding_model=embedding_model,
+                resolved_spec=stored_resolved_spec,
+                agent_run_context=context,
+            )
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+            runtime_result = await adapter.start(
+                runtime_request,
+                context=runtime_context,
+                event_sink=execution_event_sink,
+            )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
+                await execution_event_sink.flush()
+            if runtime_result.continuation is not None:
+                await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
+            if runtime_result.checkpoint_boundary_available is not None:
+                await self.repository.update_run_metadata_fields(run.id, {
+                    "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+                })
+            result = result_to_product_payload(runtime_result)
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            _attach_parallel_projection(result, execution_event_sink)
+            error_json = result.get("agent_error") if isinstance(result, dict) else None
+            status = result.get("status") if isinstance(result.get("status"), str) else None
+            if status is None:
+                status = (
+                    AgentRunStatus.FAILED.value
+                    if error_json
+                    else ChatTurnStatus.CLARIFICATION.value
+                    if result.get("clarification_options")
+                    else AgentRunStatus.COMPLETED.value
+                )
+            if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
+                result = await self.projection.project_chat_result(
+                    thread_id=thread_id,
+                    question=getattr(req, "question", ""),
+                    result=result,
+                    run_context=context,
+                    duration_ms=duration_ms,
+                )
+            metrics = build_run_metrics(result, duration_ms=duration_ms)
+            result.pop("_parallel_attempt_records", None)
+            result.pop("_corrective_wave_records", None)
+            result.pop("_corrective_metrics_state", None)
+            if status == AgentRunStatus.CANCELLED.value:
+                cancelled_run = await self.repository.complete_run(
+                    run.id,
+                    status=AgentRunStatus.CANCELLED.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                await self._cleanup_run(adapter, run.id)
+                result.update(
+                    {
+                        "agent_run_id": run.id,
+                        "user_message_id": None,
+                        "assistant_message_id": None,
+                        "agent_workflow_id": workflow.id,
+                        "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+                    }
+                )
+                if cancelled_run is not None:
+                    debug_payload = trace_recorder.finalize(
+                        run=cancelled_run,
+                        chat_turn_id=None,
+                        metrics=metrics,
+                        error=error_json,
+                        result=result,
+                    )
+                    await self.repository.set_run_debug_trace(run.id, debug_payload)
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                    await execution_event_sink.finish(
+                        "run.cancelled",
+                        {"run_id": run.id, "status": AgentRunStatus.CANCELLED.value, "response": result},
+                    )
+                return result
+            if status == CLARIFICATION_REQUIRED_STATUS:
+                await self.repository.complete_run(
+                    run.id,
+                    status=AgentRunStatus.CLARIFICATION.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                await self._cleanup_run(adapter, run.id)
+                deleted = await self.repository.delete_run(run.id)
+                if not deleted:
+                    raise RuntimeError(f"Clarification agent run {run.id} was not found during cleanup")
+                result.update(
+                    {
+                        "agent_run_id": None,
+                        "agent_trace_refs": None,
+                        "agent_workflow_id": workflow.id,
+                        "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+                        "node_events": [],
+                        "tool_events": [],
+                    }
+                )
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit(
+                        "interrupt.requested",
+                        {"run_id": None, "status": status, "response": result},
+                    )
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
+                    await execution_event_sink.finish_boundary()
+                return result
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
+                if hasattr(trace_recorder, "record_interrupted_snapshot"):
+                    trace_recorder.record_interrupted_snapshot(
+                        interrupt=result.get("pending_interrupt") or {},
+                        state=result,
+                    )
+                if hasattr(trace_recorder, "record_runtime_event"):
+                    trace_recorder.record_runtime_event(
+                        "checkpoint.created",
+                        attributes={
+                            "askpdf.run.id": run.id,
+                            "askpdf.thread.id": thread_id,
+                            "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
+                        },
+                        output_data={
+                            "interrupt_id": (result.get("pending_interrupt") or {}).get("interrupt_id"),
+                            "route": result.get("route"),
+                        },
+                    )
+                debug_payload = trace_recorder.finalize(
+                    run=run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                    result=result,
+                )
+                paused_run = await self.repository.mark_run_awaiting_human(
+                    run.id,
+                    result.get("pending_interrupt") or {},
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
+                )
+                if paused_run is not None:
+                    result["pending_interrupt"] = paused_run.pending_interrupt_json
+                result.update(context)
+                await _finish_human_review_boundary(
+                    execution_event_sink,
+                    run_id=run.id,
+                    result=result,
+                )
+                return result
+            completed_run = await self.repository.complete_run(
+                run.id,
+                status=status,
+                metrics_json=metrics,
+                error_json=error_json,
+            )
+            if completed_run is not None:
+                debug_payload = trace_recorder.finalize(
+                    run=completed_run,
+                    chat_turn_id=result.get("chat_turn_id"),
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                    result=result,
+                )
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
+            result.update(context)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                terminal_kind = (
+                    "run.failed" if status == AgentRunStatus.FAILED.value
+                    else "run.clarification" if status == AgentRunStatus.CLARIFICATION.value
+                    else "run.completed"
+                )
+                await execution_event_sink.finish(
+                    terminal_kind,
+                    {"run_id": run.id, "status": status, "response": result},
+                )
+            return result
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            error_json = {
+                "code": str(getattr(exc, "code", "agent_run_failed")),
+                "raw_message": str(exc),
+                "retryable": bool(getattr(exc, "retryable", True)),
+                **({"field_path": str(exc.field_path)} if getattr(exc, "field_path", None) else {}),
+                **({"correlation_id": str(exc.correlation_id)} if getattr(exc, "correlation_id", None) else {}),
+            }
+            metrics = build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms)
+            completed_run = await self.repository.complete_run(
+                run.id,
+                status=AgentRunStatus.FAILED.value,
+                metrics_json=metrics,
+                error_json=error_json,
+            )
+            if completed_run is not None:
+                debug_payload = trace_recorder.finalize(
+                    run=completed_run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    error=error_json,
+                    result={"agent_error": error_json},
+                )
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                await execution_event_sink.finish(
+                    "run.failed",
+                    {"run_id": run.id, "status": AgentRunStatus.FAILED.value, "error": error_json},
+                )
+            raise
+
+    async def resume_agent_run(
+        self,
+        run_id: str,
+        *,
+        interrupt_id: str,
+        action: str,
+        edited_payload: Optional[Dict[str, Any]] = None,
+        client_metadata: Optional[Dict[str, Any]] = None,
+        selected_option_ids: Optional[list[str]] = None,
+        resume_token: Optional[str] = None,
+        resume_version: Optional[int] = None,
+        expected_thread_id: Optional[str] = None,
+        execution_event_sink: Any = None,
+        approval_scope: Optional[str] = None,
+        approval_feedback: Optional[str] = None,
+        approval_modifications: Optional[Dict[str, Any]] = None,
+    ) -> Optional[InterruptResolutionResult]:
+        # A service invocation owns its transaction lifecycle. Repositories
+        # injected with a caller-managed session remain useful to tests and
+        # batch callers, but must not be reused across runtime I/O boundaries.
+        repository = (
+            self.repository_factory()
+            if getattr(self.repository, "_session", None) is not None
+            else self.repository
+        )
+        current_run = await repository.get_run(run_id)
+        if current_run is None or (
+            expected_thread_id is not None
+            and str(getattr(current_run, "thread_id", "")) != str(expected_thread_id)
+        ):
+            return None
+        if (getattr(current_run, "run_metadata_json", None) or {}).get("trace_invalidated_reason"):
+            raise AgentRunInterruptError(
+                "workflow_contract_invalidated",
+                "This run uses an invalidated workflow contract and cannot resume.",
+            )
+        pending_interrupt = getattr(current_run, "pending_interrupt_json", None)
+        pending_operation = pending_interrupt_response_operation(current_run)
+        if (
+            str(getattr(current_run, "status", "")) == "awaiting_human"
+            and isinstance(pending_interrupt, dict)
+            and pending_interrupt.get("status") == "pending"
+        ):
+            if pending_operation is None:
+                raise AgentRunInterruptError(
+                    "interrupt_response_operation_invalid",
+                    "The pending interrupt does not declare a supported response operation.",
+                )
+            await require_capability(
+                definition_from_run(current_run),
+                pending_operation,
+                registry=get_runtime_registry(),
+                run=current_run,
+            )
+        resolution = await repository.resolve_pending_interrupt(
+            run_id,
+            interrupt_id=interrupt_id,
+            action=action,
+            edited_payload=edited_payload,
+            client_metadata=client_metadata,
+            selected_option_ids=selected_option_ids,
+            resume_token=resume_token,
+            resume_version=resume_version,
+            expected_thread_id=expected_thread_id,
+        )
+        if resolution is None:
+            return None
+        if (
+            resolution.duplicate
+            or resolution.outcome != InterruptStatus.RESUMED.value
+            or not isinstance(resolution.interrupt, dict)
+            or resolution.interrupt.get("checkpoint_resume") is not True
+        ):
+            return resolution
+
+        # Long-running tasks are resumed by the leased task runner. The
+        # canonical interrupt resolver above still owns validation, audit,
+        # duplicate decisions, and resume guards; only execution is deferred.
+        if resolution.run.task_id:
+            from app.services.agent_task_repository import (
+                WEB_ACCESS_ALLOWED,
+                WEB_ACCESS_DENIED,
+                queue_task_after_interrupt,
+                set_task_web_access,
+            )
+
+            response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
+            if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+                definition = definition_from_run(resolution.run)
+                request = AgentRuntimeRequest(
+                    run_id=resolution.run.id, thread_id=resolution.run.thread_id,
+                    definition_id=definition.definition_id, framework=definition.framework,
+                    builder_id=definition.builder_id, task_id=resolution.run.task_id,
+                    continuation=continuation_from_run(resolution.run),
+                )
+                await _submit_runtime_approval(
+                    repository=repository,
+                    adapter=adapter_for_definition(definition),
+                    request=request,
+                    run_id=resolution.run.id,
+                    interrupt_id=interrupt_id,
+                    action=action,
+                    approval_scope=approval_scope,
+                    approval_feedback=approval_feedback,
+                    approval_modifications=approval_modifications,
+                )
+            if _is_web_approval_interrupt(resolution.interrupt):
+                if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
+                    await set_task_web_access(
+                        resolution.run.task_id,
+                        WEB_ACCESS_ALLOWED,
+                        agent_run_id=resolution.run.id,
+                        interrupt_id=interrupt_id,
+                    )
+                elif action in {
+                    AgentRunResumeAction.CONTINUE_WITHOUT.value,
+                    AgentRunResumeAction.REJECT.value,
+                }:
+                    await set_task_web_access(
+                        resolution.run.task_id,
+                        WEB_ACCESS_DENIED,
+                        agent_run_id=resolution.run.id,
+                        interrupt_id=interrupt_id,
+                    )
+
+            await queue_task_after_interrupt(
+                resolution.run.task_id,
+                reason=f"interrupt:{interrupt_id}:{action}",
+                interrupt_id=interrupt_id,
+                action=action,
+            )
+            return resolution
+
+        if execution_event_sink is None and hasattr(repository, "append_run_event"):
+            execution_event_sink = AgentExecutionEventSink(include_details=False)
+            execution_event_sink.detach_delivery()
+        if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_event_persister"):
+            # Event-journal reads use independent session ownership. An
+            # injected request repository may already own the transaction
+            # that resolved the interrupt.
+            event_repository = self.repository_factory()
+            existing_events = await event_repository.list_run_events(resolution.run.id)
+            initial_sequence = max(
+                (int(getattr(event, "sequence", 0) or 0) for event in existing_events),
+                default=0,
+            )
+            execution_event_sink.bind_runtime_event_persister(
+                resolution.run.id,
+                repository.append_run_event,
+                initial_sequence=initial_sequence,
+            )
+        if execution_event_sink is not None:
+            await execution_event_sink.emit(
+                "run.started",
+                {
+                    "run_id": resolution.run.id,
+                    "workflow_id": resolution.run.workflow_id,
+                    "status": resolution.run.status,
+                    "resumed": True,
+                },
+            )
+
+        definition = definition_from_run(resolution.run)
+        registry = get_runtime_registry()
+        adapter = adapter_for_definition(definition)
+        logger.info(
+            "Resolved agent-run resume handoff | run_id=%s response_operation=%s runtime_binding=%s",
+            resolution.run.id,
+            resolution.interrupt.get("response_operation"),
+            bool(getattr(resolution.run, "runtime_binding_json", None)),
+        )
+        capability_resolution = await resolve_run_capability_resolution(
+            definition,
+            registry=registry,
+            run=resolution.run,
+            adapter=adapter,
+        )
+        if capability_resolution.error is not None:
+            error = capability_resolution.error
+            raise RuntimeContractError(
+                str(error.get("code") or "runtime_capability_unavailable"),
+                str(error.get("safe_message") or "The runtime deployment is unavailable"),
+                retryable=bool(error.get("retryable")),
+                details=dict(error.get("details") or {}),
+            )
+        effective_capabilities = capability_resolution.capabilities
+        lifecycle_repository = self.repository_factory()
+        runtime_request = AgentRuntimeRequest(
+            run_id=resolution.run.id,
+            thread_id=resolution.run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            continuation=continuation_from_run(resolution.run),
+        )
+        response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
+        if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+            await _submit_runtime_approval(
+                repository=repository,
+                adapter=adapter,
+                request=runtime_request,
+                run_id=resolution.run.id,
+                interrupt_id=interrupt_id,
+                action=action,
+                approval_scope=approval_scope,
+                approval_feedback=approval_feedback,
+                approval_modifications=approval_modifications,
+            )
+
+        try:
+            embedding_model = None
+            behavior = effective_capabilities.behavior
+            required_input_fields = (
+                getattr(behavior, "required_input_fields", None)
+                if not isinstance(behavior, dict)
+                else behavior.get("required_input_fields")
+            ) or ()
+            if "embedding_model" in set(required_input_fields):
+                try:
+                    embedding_context = await require_thread_embedding_ready(resolution.run.thread_id)
+                    embedding_model = embedding_context.embedding_model
+                except (EmbeddingModelResolutionError, EmbeddingModelUnavailableError) as exc:
+                    raise RuntimeContractError(
+                        "embedding_model_unavailable",
+                        str(exc),
+                        retryable=True,
+                    ) from exc
+            resume_trace_recorder = AgentTraceRecorder(resolution.run)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_trace_recorder"):
+                execution_event_sink.bind_trace_recorder(resume_trace_recorder)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_binding_persister"):
+                execution_event_sink.bind_runtime_binding_persister(repository.update_runtime_binding)
+            if execution_event_sink is not None and hasattr(execution_event_sink, "bind_runtime_fact_persister"):
+                execution_event_sink.bind_runtime_fact_persister(repository.update_run_metadata_fields)
+            runtime_context = RuntimeInvocationContext(
+                resolved_spec=dict(resolution.run.resolved_spec_json or {}),
+                agent_run_context={
+                    "agent_run_id": resolution.run.id,
+                    "agent_workflow_id": resolution.run.workflow_id,
+                },
+                embedding_model=embedding_model,
+            )
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+            logger.info(
+                "Prepared agent-run resume request | run_id=%s adapter=%s response_operation=%s",
+                resolution.run.id,
+                type(adapter).__name__,
+                response_operation.value,
+            )
+            if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+                runtime_result = await adapter.continue_run(
+                    runtime_request,
+                    context=runtime_context,
+                    event_sink=execution_event_sink,
+                )
+            else:
+                runtime_result = await adapter.resume(
+                    runtime_request,
+                    interrupt=resolution.interrupt,
+                    context=runtime_context,
+                    event_sink=execution_event_sink,
+                )
+            logger.info(
+                "Completed agent-run resume handoff | run_id=%s status=%s",
+                resolution.run.id,
+                getattr(runtime_result, "status", None),
+            )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
+                await execution_event_sink.flush()
+            if runtime_result.continuation is not None:
+                await repository.update_runtime_binding(
+                    resolution.run.id,
+                    runtime_result.continuation,
+                )
+            if runtime_result.checkpoint_boundary_available is not None:
+                await repository.update_run_metadata_fields(
+                    resolution.run.id,
+                    {
+                        "checkpoint_boundary_available": (
+                            runtime_result.checkpoint_boundary_available
+                        ),
+                    },
+                )
+            result = result_to_product_payload(runtime_result)
+            _attach_parallel_projection(result, execution_event_sink)
+            prior_metrics = dict(resolution.run.metrics_json or {})
+            metrics = {
+                **prior_metrics,
+                **build_run_metrics(result, duration_ms=float(result.get("duration_ms") or 0)),
+            }
+            result.pop("_parallel_attempt_records", None)
+            result.pop("_corrective_wave_records", None)
+            result.pop("_corrective_metrics_state", None)
+            error_json = result.get("agent_error") if isinstance(result, dict) else None
+            status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
+            if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
+                result = await self.projection.project_chat_result(
+                    thread_id=resolution.run.thread_id,
+                    question=_question_for_run_result(
+                        resolution.run,
+                        result,
+                        resolution.interrupt,
+                    ),
+                    result=result,
+                    run_context={
+                        "agent_run_id": resolution.run.id,
+                        "agent_workflow_id": resolution.run.workflow_id,
+                    },
+                    duration_ms=float(result.get("duration_ms") or 0),
+                )
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
+                pending_interrupt = result.get("pending_interrupt") or {}
+                if hasattr(resume_trace_recorder, "record_interrupted_snapshot"):
+                    resume_trace_recorder.record_interrupted_snapshot(
+                        interrupt=pending_interrupt,
+                        state=result,
+                    )
+                if hasattr(resume_trace_recorder, "record_runtime_event"):
+                    resume_trace_recorder.record_runtime_event(
+                        "checkpoint.created",
+                        attributes={
+                            "askpdf.run.id": resolution.run.id,
+                            "askpdf.thread.id": resolution.run.thread_id,
+                            "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
+                        },
+                        output_data={
+                            "interrupt_id": pending_interrupt.get("interrupt_id"),
+                            "route": result.get("route"),
+                        },
+                    )
+                resume_debug_payload = resume_trace_recorder.finalize(
+                    run=resolution.run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                    result=result,
+                )
+                debug_payload = resume_debug_payload
+                if isinstance(resolution.run.debug_trace_json, dict):
+                    debug_payload = merge_debug_payloads(
+                        resolution.run.debug_trace_json,
+                        resume_debug_payload,
+                        resolved_spec=resolution.run.resolved_spec_json if isinstance(resolution.run.resolved_spec_json, dict) else {},
+                        run_status=status,
+                        completed_at=None,
+                        chat_turn_id=None,
+                        metrics=metrics,
+                    )
+                paused_run = await lifecycle_repository.mark_run_awaiting_human(
+                    resolution.run.id,
+                    pending_interrupt,
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
+                )
+                if paused_run is not None:
+                    await _finish_human_review_boundary(
+                        execution_event_sink,
+                        run_id=paused_run.id,
+                        result=result,
+                    )
+                    return InterruptResolutionResult(
+                        run=paused_run,
+                        outcome=resolution.outcome,
+                        interrupt=paused_run.pending_interrupt_json or resolution.interrupt,
+                        duplicate=False,
+                    )
+                await _finish_human_review_boundary(
+                    execution_event_sink,
+                    run_id=resolution.run.id,
+                    result=result,
+                )
+                return resolution
+
+            completed_run = await lifecycle_repository.complete_run(
+                resolution.run.id,
+                status=status,
+                metrics_json=metrics,
+                error_json=error_json,
+            )
+            if completed_run is None:
+                return resolution
+            resume_debug_payload = resume_trace_recorder.finalize(
+                run=completed_run,
+                chat_turn_id=result.get("chat_turn_id"),
+                metrics=metrics,
+                route=result.get("route"),
+                route_reason=result.get("route_reason"),
+                error=error_json,
+                result=result,
+            )
+            if isinstance(completed_run.debug_trace_json, dict):
+                debug_payload = merge_debug_payloads(
+                    completed_run.debug_trace_json,
+                    resume_debug_payload,
+                    resolved_spec=completed_run.resolved_spec_json if isinstance(completed_run.resolved_spec_json, dict) else {},
+                    run_status=status,
+                    completed_at=completed_run.completed_at,
+                    chat_turn_id=result.get("chat_turn_id"),
+                    metrics=metrics,
+                )
+                completed_run = await lifecycle_repository.set_run_debug_trace(completed_run.id, debug_payload) or completed_run
+            else:
+                completed_run = await lifecycle_repository.set_run_debug_trace(completed_run.id, resume_debug_payload) or completed_run
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                terminal_kind = (
+                    "run.failed" if status == AgentRunStatus.FAILED.value
+                    else "run.clarification" if status == AgentRunStatus.CLARIFICATION.value
+                    else "run.completed"
+                )
+                await execution_event_sink.finish(
+                    terminal_kind,
+                    {
+                        "run_id": completed_run.id,
+                        "status": status,
+                        "outcome": resolution.outcome,
+                        "response": result,
+                    },
+                )
+            return InterruptResolutionResult(
+                run=completed_run,
+                outcome=resolution.outcome,
+                interrupt=resolution.interrupt,
+                duplicate=False,
+            )
+        except Exception as exc:
+            prior_metrics = dict(resolution.run.metrics_json or {})
+            prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
+            await lifecycle_repository.complete_run(
+                resolution.run.id,
+                status=AgentRunStatus.FAILED.value,
+                metrics_json=prior_metrics,
+                error_json={
+                    "code": "agent_run_resume_failed",
+                    "raw_message": str(exc),
+                    "retryable": True,
+                },
+            )
+            if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                await execution_event_sink.finish(
+                    "run.failed",
+                    {
+                        "run_id": resolution.run.id,
+                        "status": AgentRunStatus.FAILED.value,
+                        "error": {
+                            "code": "agent_run_resume_failed",
+                            "raw_message": str(exc),
+                            "retryable": True,
+                        },
+                    },
+                )
+            raise

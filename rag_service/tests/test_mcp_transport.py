@@ -1,8 +1,26 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.mcp.transport import InProcessMCPClient
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def dispose_shared_database_engine():
+    """Own the process-global DB engine used by standalone MCP app tests.
+
+    These tests exercise the MCP ASGI application without starting the full
+    FastAPI lifespan.  A thread-shape call can therefore open the global
+    product engine while no application shutdown hook exists to dispose it.
+    Dispose both exported engines on the owning pytest loop after every test
+    so asyncpg cancellation tasks cannot survive into a later test or loop.
+    """
+    yield
+    from app.db import connection_sqlmodel
+
+    await connection_sqlmodel.engine.dispose()
+    await connection_sqlmodel.test_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -14,6 +32,57 @@ async def test_mcp_initialize_and_tools_list():
     listed = await client.request("tools/list")
     names = {item["name"] for item in listed["tools"]}
     assert {"wikipedia", "get_thread_shape"}.issubset(names)
+
+
+@pytest.mark.asyncio
+async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeypatch):
+    from app.mcp import server as server_module
+    from app.mcp.server import get_http_app
+    from app.mcp.transport import LoopbackHTTPMCPClient
+    from app.mcp.execution_context_token import TOKEN_HEADER, issue_execution_context_token
+    from app.tools.context import ToolInvocationContext
+    from app.agent.tool_contract import ToolResult
+
+    monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    definition = server_module.MCP_TOOL_DEFINITIONS["get_thread_shape"]
+
+    async def handler(request, context):
+        assert context.run_id == "run-1"
+        return ToolResult(content="thread shape", sources=[{"thread_id": context.thread_id}])
+
+    monkeypatch.setitem(
+        server_module.MCP_TOOL_DEFINITIONS,
+        "get_thread_shape",
+        definition.__class__(definition.name, definition.request_model, handler, definition.registry_contract_id, definition.contract_version, definition.server_name),
+    )
+
+    mcp_app = get_http_app(
+        allowed_tools=frozenset({"get_thread_shape", "search_documents"}),
+        require_execution_token=True,
+    )
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
+        task_id="task-1", allowed_tools=["get_thread_shape"],
+    )
+    async with mcp_app.router.lifespan_context(mcp_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=mcp_app),
+            base_url="http://localhost",
+            headers={TOKEN_HEADER: token},
+        ) as http_client:
+            client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
+            listed = await client.request("tools/list")
+            assert {tool["name"] for tool in listed["tools"]} == {"get_thread_shape"}
+            assert all("_askpdf_context_token" not in tool["inputSchema"].get("properties", {}) for tool in listed["tools"])
+            accepted = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
+            assert accepted["isError"] is False
+            assert len(accepted["structuredContent"]["sources"]) == 1
+        async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
+            client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)
+            rejected = await client.request("tools/call", {"name": "get_thread_shape", "arguments": {}})
+            assert rejected["isError"] is True
+            assert "execution context is required" in rejected["content"][0]["text"]
 
 
 @pytest.mark.asyncio
@@ -31,7 +100,7 @@ async def test_transports_reject_unsupported_methods_consistently():
     with pytest.raises(RuntimeError, match="Unsupported MCP method"):
         await InProcessMCPClient().request("resources/list")
 
-    mcp_app = get_http_app()
+    mcp_app = get_http_app(require_execution_token=False)
     async with mcp_app.router.lifespan_context(mcp_app):
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             with pytest.raises(RuntimeError, match="Unsupported MCP method"):
@@ -106,9 +175,43 @@ async def test_direct_mcp_call_does_not_require_framework_caller(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_internal_http_endpoint_preserves_mcp_protocol():
+async def test_mcp_cancellation_allows_ephemeral_correlation_ids(monkeypatch):
+    from app.mcp import server as server_module
+
+    async def missing_run(run_id):
+        raise ValueError(f"Agent run {run_id!r} does not exist")
+
+    monkeypatch.setattr(server_module, "run_cancel_requested", missing_run)
+
+    assert await server_module._mcp_run_cancel_requested("curator-correlation-id") is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancellation_preserves_real_run_errors(monkeypatch):
+    from app.mcp import server as server_module
+
+    async def orphaned_run(_run_id):
+        raise ValueError("Agent run 'run-1' has no owning task")
+
+    monkeypatch.setattr(server_module, "run_cancel_requested", orphaned_run)
+
+    with pytest.raises(ValueError, match="has no owning task"):
+        await server_module._mcp_run_cancel_requested("run-1")
+
+
+@pytest.mark.asyncio
+async def test_internal_http_endpoint_rejects_missing_execution_token():
     from main import app
     from main import MCP_HTTP_APP
+    from app.mcp.execution_context_token import TOKEN_HEADER, issue_execution_context_token
+    from app.tools.context import ToolInvocationContext
+
+    token = issue_execution_context_token(
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
+        task_id="task-1",
+        allowed_tools=["get_thread_shape"],
+        runtime="langgraph",
+    )
 
     async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
@@ -119,7 +222,51 @@ async def test_internal_http_endpoint_preserves_mcp_protocol():
             )
     assert response.status_code == 200
     assert response.json()["id"] == 9
-    assert {item["name"] for item in response.json()["result"]["tools"]} >= {"wikipedia", "get_thread_shape"}
+    assert isinstance(response.json().get("error"), dict)
+
+    async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+            response = await client.post(
+                "/internal/mcp/",
+                headers={"accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {"name": "get_thread_shape", "arguments": {}},
+                },
+            )
+    assert response.status_code == 200
+    assert response.json()["id"] == 10
+    assert response.json()["result"]["isError"] is True
+    assert "execution context is required" in response.json()["result"]["content"][0]["text"]
+
+    async with MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+            response = await client.post(
+                "/internal/mcp/",
+                headers={"accept": "application/json, text/event-stream", TOKEN_HEADER: token},
+                json={"jsonrpc": "2.0", "id": 11, "method": "tools/list", "params": {}},
+            )
+    assert response.status_code == 200
+    assert response.json()["id"] == 11
+    assert "get_thread_shape" in {item["name"] for item in response.json()["result"]["tools"]}
+
+
+@pytest.mark.asyncio
+async def test_internal_http_endpoint_can_restart_its_lifespan():
+    from app.mcp.server import get_http_app
+
+    mcp_app = get_http_app(require_execution_token=False)
+    for _ in range(2):
+        async with mcp_app.router.lifespan_context(mcp_app):
+            async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as client:
+                response = await client.post(
+                    "/",
+                    headers={"accept": "application/json, text/event-stream"},
+                    json={"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {}},
+                )
+                assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -128,7 +275,7 @@ async def test_loopback_client_initializes_lists_and_calls_over_streamable_http(
     from app.mcp.server import get_http_app
     from app.mcp.transport import LoopbackHTTPMCPClient
 
-    mcp_app = get_http_app()
+    mcp_app = get_http_app(require_execution_token=False)
     async with mcp_app.router.lifespan_context(mcp_app):
         async with AsyncClient(transport=ASGITransport(app=mcp_app), base_url="http://localhost") as http_client:
             client = LoopbackHTTPMCPClient("http://localhost/", http_client=http_client)

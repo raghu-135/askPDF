@@ -29,7 +29,7 @@ from app.rag.retrieval import (
     rerank_document_chunks,
 )
 from app.time_utils import maybe_iso_utc_z
-from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
+from app.product_orchestration.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
 
 logger = logging.getLogger(__name__)
 

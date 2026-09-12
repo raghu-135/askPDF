@@ -9,6 +9,7 @@ import {
     Tooltip,
     Chip,
     CircularProgress,
+    Alert,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -60,8 +61,11 @@ import {
     type Project,
     type ThreadChatResponse,
 } from '../lib/api';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
+import { useAgentRunCapabilities } from '../lib/use-agent-run-capabilities';
+import type { AgentRuntimeCapabilityResponse } from '../lib/api';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
 import {
@@ -79,7 +83,7 @@ import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTas
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
-import { buildLiveTraceView, buildRunTraceView } from './agent-debug/agent-trace-projection';
+import { buildLiveTraceView, buildRunTraceView, mergeLiveAndRetainedTraceViews } from './agent-debug/agent-trace-projection';
 import type { TraceRunView } from './agent-debug/agent-trace-projection';
 import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
 import {
@@ -248,6 +252,7 @@ const ChatComposer = React.memo(function ChatComposer({
     isEmbeddingModelValid,
     indexingStatus,
     liveExecution,
+    liveRunCapabilities,
     isTestRuntime,
     onSubmit,
     onStop,
@@ -264,6 +269,7 @@ const ChatComposer = React.memo(function ChatComposer({
     isEmbeddingModelValid: boolean | null;
     indexingStatus: ChatComposerIndexingStatusValue;
     liveExecution: LiveChatExecution | null;
+    liveRunCapabilities: AgentRuntimeCapabilityResponse | null;
     isTestRuntime: boolean;
     onSubmit: (text: string) => void;
     onStop: () => void;
@@ -300,12 +306,18 @@ const ChatComposer = React.memo(function ChatComposer({
             placeholder={composerState.placeholder}
             disabled={composerState.disabled}
             busy={composerState.busy}
-            showStop={loading && Boolean(liveExecution)}
-            canStop={Boolean(liveExecution?.runId && liveExecution.running)}
+            showStop={loading && Boolean(liveExecution) && runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').visible}
+            canStop={Boolean(
+                liveExecution?.runId
+                && liveExecution.running
+                && isRuntimeOperationEnabled(liveRunCapabilities, 'run.cancel')
+            )}
             stopping={Boolean(liveExecution?.canceling)}
             stopTooltip={
                 liveExecution?.canceling
-                    ? 'Stopping after the current LLM or tool call finishes'
+                        ? 'Stopping after the current LLM or tool call finishes'
+                        : runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').disabledReason
+                            ? `Cancellation unavailable: ${runtimeOperationAvailability(liveRunCapabilities, 'run.cancel').disabledReason}`
                     : liveExecution?.runId
                         ? 'Stop after the current step'
                         : 'Preparing the chat run'
@@ -633,6 +645,7 @@ export interface ChatInterfaceProps {
 
 export type ChatTraceDescriptor = {
     id: string;
+    threadId?: string;
     messageId: string;
     label: string;
     status?: string;
@@ -713,6 +726,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
+    const [canLlmInvokeTools, setCanLlmInvokeTools] = useState<boolean | null>(null);
     const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
@@ -728,12 +742,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const workspaceTraceMessageIdRef = useRef<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
+    const [liveCapabilityRevision, setLiveCapabilityRevision] = useState(0);
+    const { capabilities: liveRunCapabilities, refresh: refreshLiveRunCapabilities } = useAgentRunCapabilities(
+        liveExecution?.runId,
+        activeThread?.id,
+        `${liveExecution?.canceling}:${liveExecution?.running}:${testRuntime}:${liveCapabilityRevision}`,
+    );
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
+    const [humanReviewCapabilityRevision, setHumanReviewCapabilityRevision] = useState(0);
+    const { capabilities: humanReviewCapabilities, refresh: refreshHumanReviewCapabilities } = useAgentRunCapabilities(
+        pendingHumanReview?.runId,
+        activeThread?.id,
+        `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}:${humanReviewCapabilityRevision}`,
+    );
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -744,6 +770,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const manuallyToggledAgentRunsRef = useRef(new Set<string>());
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
+
     const messageVirtualizer = useVirtualizer({
         count: messages.length,
         getScrollElement: () => messageListRef.current,
@@ -816,6 +843,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setProjectAllowsGlobalMemory(false);
         }
     }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadProjectMemorySettings]);
+
+    const wasDeepResearchOpenRef = useRef(false);
+    useEffect(() => {
+        const wasOpen = wasDeepResearchOpenRef.current;
+        wasDeepResearchOpenRef.current = deepResearchOpen;
+        if (!activeThread || isTestRuntime || deepResearchOpen || !wasOpen) return;
+        void loadMessages();
+        void recoverPendingHumanReview(activeThread.id);
+    }, [deepResearchOpen, activeThread?.id, isTestRuntime]);
 
     useEffect(() => {
         if (activeThread) {
@@ -948,9 +984,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const recoverPendingHumanReview = async (threadId: string) => {
         try {
-            const response = await listThreadAgentRuns(threadId, { status: 'awaiting_human', limit: 1 });
+            // Only restore a review for the latest normal-chat run.  Looking
+            // exclusively at awaiting_human runs can resurrect an abandoned
+            // approval after a newer run has already completed.
+            const response = await listThreadAgentRuns(threadId, { limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
-            const latest = response.agent_runs?.[0];
+            const latest = (response.agent_runs || []).find((run) => !run.task_id);
+            if (latest?.status !== 'awaiting_human') {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
             if (!latest?.id || !latest.pending_interrupt) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
@@ -959,8 +1003,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             const run = await getAgentRun(latest.id, threadId);
             if (activeThreadIdRef.current !== threadId) return;
+            if (run.task_id) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
             if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            if (typeof interrupt.response_operation === 'string' && interrupt.response_operation.startsWith('task.')) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;
@@ -1187,9 +1241,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             const result = await checkLlmModelReady(model);
             setIsLlmModelValid(result.ready);
             setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
+            setCanLlmInvokeTools(result.ready ? result.canInvokeTools : null);
         } catch (err) {
             setIsLlmModelValid(false);
             setIsLlmToolsSupported(null);
+            setCanLlmInvokeTools(null);
         }
     }, []);
 
@@ -1198,6 +1254,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setLlmModel(model);
         setIsLlmModelValid(null);
         setIsLlmToolsSupported(null);
+        setCanLlmInvokeTools(null);
         if (model) {
             // Persist as last selected LLM in browser memory
             if (typeof window !== 'undefined') {
@@ -1433,6 +1490,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (event.event !== 'heartbeat') {
                     appendLiveExecutionEvent(event as AgentExecutionStreamEnvelope);
                 }
+                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                    setLiveCapabilityRevision((revision) => revision + 1);
+                    void refreshLiveRunCapabilities();
+                }
                 if (event.event === 'run.completed') {
                     finalAnswer = String(event.data?.answer || event.data?.final_output?.answer || '');
                 }
@@ -1507,6 +1568,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
+        const responseOperation = runtimeInterruptResponseOperation(interrupt);
+        if (!responseOperation) {
+            setHumanReviewError('This human-input request has an invalid runtime response contract.');
+            return false;
+        }
+        if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
@@ -1609,10 +1676,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 client_metadata: { source: 'chat_pending_review_panel' },
             }, (event) => {
                 if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (['run.completed', 'run.failed', 'interrupt.created'].includes(event.event)) {
-                    response = event.data?.response;
+                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                    setHumanReviewCapabilityRevision((revision) => revision + 1);
+                    void refreshHumanReviewCapabilities();
+                }
+                if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
+                    // Resume runtime terminal events may carry the raw
+                    // execution result. Only accept the product-level resume
+                    // envelope here; the final __result__ event provides it.
+                    if (event.data?.response?.agent_run) {
+                        response = event.data.response;
+                    }
                     const rawError = event.data?.error;
-                    terminalError = event.event === 'run.failed' && !response
+                    terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
                         ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
                         : undefined;
                     setLiveExecution((current) => current?.messageId === liveMessageId
@@ -1735,6 +1811,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (event.event !== 'heartbeat') {
                         appendLiveExecutionEvent(event);
                     }
+                    if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                        setLiveCapabilityRevision((revision) => revision + 1);
+                        void refreshLiveRunCapabilities();
+                    }
                     const snapshot = traceStream.append(event, terminalStreamError, response?.status);
                     if (event.event === 'run.started' && event.data?.run_id) {
                         setLiveExecution((current) => current?.messageId === tempAssistantMsg.id
@@ -1791,7 +1871,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         routeReason: response.agent_route_reason,
                         traceRefs: response.agent_trace_refs,
                         runDetails: run,
-                        liveTraceView: buildRunTraceView(run),
+                        liveTraceView: mergeLiveAndRetainedTraceViews(
+                            buildLiveTraceView(traceStream.snapshot('run.completed', terminalStreamError, response.status).events),
+                            buildRunTraceView(run),
+                        ),
                         running: false,
                     });
                 } catch (error: any) {
@@ -1905,7 +1988,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
                             runDetails: run,
-                            liveTraceView: buildRunTraceView(run),
+                            liveTraceView: mergeLiveAndRetainedTraceViews(
+                                buildLiveTraceView(traceStream.snapshot('interrupt.requested', terminalStreamError, response.status).events),
+                                buildRunTraceView(run),
+                            ),
                             running: false,
                         });
                     }
@@ -1924,7 +2010,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             status: 'review',
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
-                            liveTraceView: buildLiveTraceView(traceStream.snapshot('interrupt.created').events),
+                            liveTraceView: buildLiveTraceView(traceStream.snapshot('interrupt.requested').events),
                             running: false,
                             error: error?.message || 'Unable to load agent run.',
                         });
@@ -2045,7 +2131,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleStopChat = async () => {
         const execution = liveExecution;
-        if (!activeThread || !canRequestChatCancellation(execution)) return;
+        if (
+            !activeThread
+            || !canRequestChatCancellation(execution)
+            || !isRuntimeOperationEnabled(liveRunCapabilities, 'run.cancel')
+        ) return;
         setLiveExecution((current) => current?.runId === execution.runId
             ? { ...current, canceling: true, error: undefined }
             : current);
@@ -2055,6 +2145,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return;
             }
             const result = await cancelChatAgentRun(execution.runId, activeThread.id);
+            await refreshLiveRunCapabilities();
             if (result.status === 'already_terminal') {
                 setLiveExecution((current) => current?.runId === execution.runId
                     ? { ...current, canceling: false }
@@ -2288,6 +2379,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         const runId = msg.agent_run_id || liveForMessage?.runId || msg.id;
         onOpenTrace({
             id: runId,
+            threadId: activeThread.id,
             messageId: msg.id,
             label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
             status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
@@ -2371,6 +2463,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
+    const pendingReviewOperation = runtimeInterruptResponseOperation(pendingReviewInterrupt);
+    const pendingReviewAvailability = pendingReviewOperation
+        ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
+        : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2523,12 +2619,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                 customPlaceholder="Ask or explain it in your own words"
                             />
                     </ResizableDecisionPanel>
+            ) : pendingReviewInterrupt && !pendingReviewOperation ? (
+                <Alert severity="error">This human-input request has an invalid runtime response contract.</Alert>
             ) : pendingReviewInterrupt ? (
                 <HumanReviewDecisionPanel
                     interrupt={pendingReviewInterrupt}
                     submitting={humanReviewSubmitting}
                     error={humanReviewError}
                     editText={humanReviewEditText}
+                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
+                    disabledReason={pendingReviewAvailability.disabledReason}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
@@ -2565,10 +2665,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     loading={loading}
                     llmModel={llmModel}
                     isLlmModelValid={isLlmModelValid}
-                    isLlmToolsSupported={isLlmToolsSupported}
+                    isLlmToolsSupported={isLlmToolsSupported && canLlmInvokeTools}
                     isEmbeddingModelValid={isEmbeddingModelValid}
                     indexingStatus={indexingStatus}
                     liveExecution={liveExecution}
+                    liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
@@ -2613,11 +2714,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onGlobalMemoryChange={(checked) => setUseGlobalMemory(checked)}
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);
-                }}
-                onLongRunningWorkflowSelect={() => {
-                    setSettingsDialogOpen(false);
-                    setDeepResearchTaskId(null);
-                    setDeepResearchOpen(true);
                 }}
                 onAgentWorkflowMenuOpen={refreshAgentWorkflows}
                 onSystemRoleChange={(value) => setSystemRole(value)}

@@ -4,7 +4,7 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
-import { API_BASE } from "./api-config";
+import { API_BASE, buildAgentWorkflowCatalogUrl } from "./api-config";
 import { consumeAgentExecutionStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
 import {
   ProcessStatus as ProcessStatusEnum,
@@ -242,6 +242,11 @@ export interface ThreadSettings {
   agent_workflow?: {
     workflow_id: string;
   };
+  agent_workflow_validation?: {
+    valid: boolean;
+    code: string;
+    requested_workflow_id: string;
+  } | null;
   memory: {
     memory_enabled: boolean;
     thread_reads_thread_memory: boolean;
@@ -627,7 +632,7 @@ export interface AgentWorkflowGraphSpec {
 }
 
 export interface AgentWorkflowBuilderSpec {
-  schema_version: 2;
+  schema_version: 1;
   workflow_id: string;
   workflow_type: 'custom_rag_agent' | string;
   config: {
@@ -697,6 +702,7 @@ export interface AgentWorkflowRouteFunctionMetadata {
   name?: string;
   display_name?: string;
   description?: string;
+  route_kind?: 'conditional' | 'hitl' | 'parallel_dispatch' | 'serial_dispatch' | 'default';
   allowed_source_node_types?: string[];
   route_labels?: string[];
   routes?: string[];
@@ -723,9 +729,9 @@ export interface AgentWorkflowToolContract {
 
 export interface AgentWorkflowCatalogResponse {
   schema_version: number;
-  spec_schema_version: 2 | number;
+  spec_schema_version: 1 | number;
   graph_spec: {
-    required_schema_version: 2 | number;
+    required_schema_version: 1 | number;
     requires_explicit_route_fn: boolean;
     reserved_node_ids: string[];
     start_node: string;
@@ -776,6 +782,8 @@ export interface AgentWorkflow {
   visibility?: string;
   is_builtin?: boolean;
   is_default?: boolean;
+  framework?: string;
+  builder_id?: string;
   supports_replans?: boolean;
   supports_long_running_tasks?: boolean;
   created_at?: string | null;
@@ -832,6 +840,8 @@ export interface SaveInternalAgentWorkflowPayload {
   name: string;
   description?: string;
   spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
+  framework: string;
+  builder_id: string;
 }
 
 export interface ThreadAgentConfigValidationResponse {
@@ -1006,10 +1016,10 @@ export interface AgentDebugSummary {
   routeReason?: string;
   durationMs?: number | null;
   metrics?: Record<string, any>;
-  nodes?: Record<string, any>[];
+  operations?: Record<string, any>[];
   tools?: Record<string, any>[];
-  usedNodeCount?: number;
-  availableNodeCount?: number | null;
+  usedOperationCount?: number;
+  availableOperationCount?: number | null;
   usedToolCount?: number;
   availableToolCount?: number | null;
   warningCount?: number;
@@ -1020,29 +1030,221 @@ export interface AgentDebugSummary {
 
 export interface AgentRunDebug {
   version?: number;
+  unsupported?: boolean;
   trace?: AgentDebugTrace;
   summary?: AgentDebugSummary;
-  graph?: {
-    nodes?: Record<string, any>[];
-    edges?: Record<string, any>[];
-    executionPlan?: string[];
-    selectedRoute?: string;
-    [key: string]: any;
-  };
-  detail_manifest?: AgentRunNodeDetailManifest[];
+  events: AgentTraceTimelineEvent[];
+  operations: AgentTraceOperation[];
+  tools: AgentTraceTimelineEvent[];
+  models?: AgentTraceTimelineEvent[];
+  approvals: AgentTraceTimelineEvent[];
+  subagents: AgentTraceTimelineEvent[];
+  artifacts: AgentTraceTimelineEvent[];
+  diagnostics: AgentTraceDiagnostics;
+  parallel_groups: AgentTraceParallelGroup[];
+  visualizations: Record<string, AgentTraceVisualization>;
+  details: Record<string, any>[];
+  detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
+  topology?: {
+    available?: boolean;
+    kind?: string | null;
+    operation_refs?: boolean;
+  };
 }
 
-export interface AgentRunNodeDetailManifest {
-  node_id: string;
-  node_type?: string;
+export interface AgentTraceTimelineEvent {
+  event_id: string;
+  sequence: number;
+  attempt?: number;
+  kind: string;
+  occurred_at?: string | null;
+  operation_id?: string | null;
+  parent_operation_id?: string | null;
+  parallel_group_id?: string | null;
+  parallel_member_id?: string | null;
+  parallel_attempt?: number | null;
+  status?: string | null;
+  payload?: Record<string, any>;
+  framework_details?: Record<string, any>;
+}
+
+export interface AgentTraceParallelAttempt {
+  attempt: number;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  first_sequence: number;
+  last_sequence: number;
+  event_ids: string[];
+  failure_event_ids: string[];
+  caused_by_event_ids: string[];
+  related_event_ids: string[];
+}
+
+export interface AgentTraceParallelMember {
+  member_id: string;
+  work_id?: string;
+  operation_id?: string;
+  operation_label?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  subagent_id?: string;
+  ordinal?: number;
+  status: string;
+  first_sequence: number;
+  last_sequence: number;
+  event_ids: string[];
+  attempts: AgentTraceParallelAttempt[];
+}
+
+export interface AgentTraceParallelBarrier {
+  status: string;
+  event_id?: string;
+  sequence?: number;
+  occurred_at?: string | null;
+  result_count?: number;
+}
+
+export interface AgentTraceParallelAggregation {
+  status: string;
+  event_id?: string;
+  sequence?: number;
+  occurred_at?: string | null;
+  counts: Record<string, number>;
+}
+
+export interface AgentTraceParallelGroup {
+  group_id: string;
+  parent_operation_id?: string;
+  topology_ref?: Record<string, any>;
+  status: string;
+  planned: number;
+  first_sequence: number;
+  last_sequence: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  event_ids: string[];
+  members: AgentTraceParallelMember[];
+  barrier: AgentTraceParallelBarrier;
+  aggregation: AgentTraceParallelAggregation;
+}
+
+export interface AgentTraceModelInvocation {
+  event_id: string;
+  invocation_id?: string;
+  model_name?: string | null;
+  operation_id?: string | null;
+  operation_type?: string | null;
+  visit_index?: number;
+  subagent_id?: string | null;
+  parent_id?: string | null;
+  status?: string | null;
+  duration_ms?: number | null;
+  retry_count?: number;
+  response_chars?: number;
+  usage?: Record<string, number>;
+  error?: Record<string, any> | null;
+}
+
+export interface AgentTraceLocation {
+  operation_id?: string;
+  operation_label?: string;
+  parent_operation_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  subagent_id?: string;
+  approval_id?: string;
+  parallel_group_id?: string;
+  attempt?: number;
+  sequence?: number;
+  topology_ref?: Record<string, any>;
+}
+
+export interface AgentTraceFailure {
+  event_id: string;
+  kind: string;
+  classification: 'primary' | 'concurrent' | 'contributing' | 'downstream' | 'cancellation' | 'terminal_summary';
+  code: string;
+  message: string;
+  retryable: boolean;
+  occurred_at?: string | null;
+  location: AgentTraceLocation;
+  caused_by_event_id?: string | null;
+  related_event_ids?: string[];
+  details?: Record<string, any>;
+}
+
+export interface AgentTraceDiagnosticSummary {
+  code: string;
+  message: string;
+  retryable: boolean;
+  primary_failure_event_id?: string | null;
+  primary_basis?: 'explicit_cause' | 'earliest_observed' | null;
+  location: AgentTraceLocation;
+  failure_count: number;
+  cancellation_count: number;
+}
+
+export interface AgentTraceFailureGroup {
+  code: string;
+  location: AgentTraceLocation;
+  event_ids: string[];
+  occurrence_count: number;
+  classifications: AgentTraceFailure['classification'][];
+}
+
+export interface AgentTraceObservabilityGap {
+  code: string;
+  message: string;
+  terminal_event_id?: string;
+}
+
+export interface AgentTraceDiagnostics {
+  outcome: string;
+  summary: AgentTraceDiagnosticSummary;
+  failures: AgentTraceFailure[];
+  groups: AgentTraceFailureGroup[];
+  observability_gaps: AgentTraceObservabilityGap[];
+}
+
+export interface AgentTraceOperation {
+  operation_id: string;
+  operation_type?: string;
+  operation_label: string;
+  parent_operation_id?: string | null;
+  visit_index: number;
+  attempt?: number;
+  status?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  topology_ref?: Record<string, any> | null;
+  framework_details?: Record<string, any>;
+}
+
+export type AgentTraceVisualization =
+  | ({ id: 'generic.timeline' } & Record<string, any>)
+  | ({ id: 'generic.parallel'; group_ids: string[] } & Record<string, any>)
+  | ({ id: 'langgraph.graph'; nodes?: Record<string, any>[]; edges?: Record<string, any>[]; execution_plan?: string[]; selected_route?: string; visits?: Record<string, any>[] } & Record<string, any>)
+  | ({ id: 'hermes.session'; session_id?: string | null; upstream_run_id?: string | null; reasoning?: AgentTraceTimelineEvent[]; approvals?: AgentTraceTimelineEvent[]; tools?: AgentTraceTimelineEvent[]; subagents?: AgentTraceTimelineEvent[]; failures?: AgentTraceFailure[] } & Record<string, any>);
+
+export interface AgentRunOperationDetailManifest {
+  operation_id: string;
+  operation_type?: string;
   visit_index: number;
   status?: string;
   available: boolean;
   size_bytes?: number;
   truncated?: boolean;
 }
+
 
 export interface AgentRunFinalOutput {
   answer?: string;
@@ -1055,9 +1257,9 @@ export interface AgentRunFinalOutput {
   safety?: Record<string, any>;
 }
 
-export interface AgentRunNodeDetail {
-  node_id: string;
-  node_type?: string;
+export interface AgentRunOperationDetail {
+  operation_id: string;
+  operation_type?: string;
   visit_index: number;
   status?: string;
   checkpoint_before?: Record<string, any>;
@@ -1085,6 +1287,9 @@ export interface AgentRunPendingInterrupt {
   gate_id?: string | null;
   node_id?: string | null;
   type?: string | null;
+  kind?: 'approval' | 'interrupt' | string | null;
+  response_operation: 'run.resume' | 'run.approval.respond' | 'task.result_review.respond' | 'task.budget_review.respond';
+  response_schema?: Record<string, any>;
   status?: InterruptStatusValue | string;
   requested_at?: string | null;
   expires_at?: string | null;
@@ -1123,6 +1328,7 @@ export interface AgentRunDetails {
   parent_run_id?: string | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
+  runtime_binding_status?: string;
   metrics_json?: Record<string, any>;
   parallel_summary?: {
     dispatch_id?: string;
@@ -1151,14 +1357,14 @@ export interface AgentRunDetails {
   [key: string]: any;
 }
 
-export async function getAgentRunNodeDetails(
+export async function getAgentRunOperationDetails(
   runId: string,
   threadId: string,
-  nodeId: string,
+  operationId: string,
   visitIndex: number,
-): Promise<AgentRunNodeDetail> {
-  const params = new URLSearchParams({ thread_id: threadId, node_id: nodeId, visit_index: String(visitIndex) });
-  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/details?${params.toString()}`);
+): Promise<AgentRunOperationDetail> {
+  const params = new URLSearchParams({ thread_id: threadId, visit_index: String(visitIndex) });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/operations/${encodeURIComponent(operationId)}/details?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()).detail;
 }
@@ -1177,6 +1383,121 @@ export interface AgentRunSummary {
   metrics?: Record<string, any>;
   error?: Record<string, any> | null;
   [key: string]: any;
+}
+
+export type RuntimeSupportLevel = 'native' | 'emulated' | 'conditional' | 'unsupported';
+export type RuntimeCapabilityDisabledReason =
+  | 'runtime_capability_unsupported'
+  | 'runtime_capability_unavailable'
+  | 'runtime_configuration_invalid'
+  | 'runtime_disabled'
+  | 'runtime_unavailable'
+  | 'definition_capability_unavailable'
+  | 'definition_policy'
+  | 'definition_not_task_runtime'
+  | 'adapter_operation_unmapped'
+  | 'adapter_operation_unimplemented'
+  | 'checkpoint_store_unavailable'
+  | 'task_run_not_created'
+  | 'run_already_created'
+  | 'task_already_started'
+  | 'run_terminal'
+  | 'no_pending_interrupt'
+  | 'task_not_pauseable'
+  | 'task_not_resumable'
+  | 'task_not_retryable'
+  | 'task_terminal'
+  | 'runtime_binding_unavailable'
+  | 'cancellation_pending'
+  | 'run_not_checkpoint_boundary';
+
+export type RuntimeFeatureId =
+  | 'planning'
+  | 'parallel_dispatch'
+  | 'artifacts'
+  | 'subagent_orchestration'
+  | 'memory'
+  | 'tools'
+  | 'delegation'
+  | 'skills';
+
+export type RuntimeCapabilitySemantics =
+  | 'persisted_product_event_journal'
+  | 'product_run_inspection'
+  | 'product_run_listing'
+  | 'product_task_artifact_listing'
+  | 'product_task_start'
+  | 'product_task_pause'
+  | 'product_task_resume'
+  | 'product_task_cancel'
+  | 'product_task_retry'
+  | 'product_task_result_review'
+  | 'product_task_budget_review'
+  | 'product_task_course_correction'
+  | 'resume_from_interrupt'
+  | 'checkpoint_state_inspection'
+  | 'checkpoint_thread_cleanup'
+  | 'definition_planner_nodes'
+  | 'definition_parallel_dispatch'
+  | 'definition_artifact_policy'
+  | 'product_managed_subagents'
+  | 'definition_tool_policy';
+
+export type RuntimeCancellationMode = 'interrupt' | 'cooperative';
+export type RuntimeConfirmationMode = 'asynchronous' | 'bounded';
+export type RuntimeTerminalState = 'cancelled' | 'interrupted' | 'completed' | 'failed';
+
+export interface RuntimeOperationDescriptor {
+  support: RuntimeSupportLevel;
+  owner: 'product' | 'runtime';
+  enabled: boolean;
+  disabled_reason?: RuntimeCapabilityDisabledReason | null;
+  modes?: RuntimeCancellationMode[];
+  semantics?: RuntimeCapabilitySemantics | null;
+  confirmation?: RuntimeConfirmationMode | null;
+  terminal_states?: RuntimeTerminalState[];
+  preserves_run_id?: boolean | null;
+  preserves_session_id?: boolean | null;
+  requires_runtime_binding?: boolean;
+  requires_checkpoint_boundary?: boolean;
+}
+
+export interface RuntimeFeatureDescriptor {
+  support: RuntimeSupportLevel;
+  enabled: boolean;
+  disabled_reason?: RuntimeCapabilityDisabledReason | null;
+  semantics?: RuntimeCapabilitySemantics | null;
+  details?: Record<string, any>;
+}
+
+export interface RuntimeCapabilities {
+  operations: Record<string, RuntimeOperationDescriptor>;
+  features?: Partial<Record<RuntimeFeatureId, RuntimeFeatureDescriptor>>;
+  deployment?: {
+    runtime_mode?: string;
+    checkpointer_backend?: string;
+    checkpoint_available?: boolean;
+    durable_persistence?: boolean;
+    runtime_available?: boolean;
+    configuration_error?: string | null;
+  };
+}
+
+export interface AgentRuntimeCapabilityResponse {
+  resource: 'deployment' | 'definition' | 'run';
+  runtime_id: string;
+  framework: string;
+  builder_id: string;
+  runtime_available: boolean;
+  capabilities: RuntimeCapabilities | null;
+  definition_id?: string;
+  run_id?: string;
+  run_status?: string;
+  error?: Record<string, any>;
+}
+
+export interface AgentRuntimeListResponse {
+  agent_runtimes: AgentRuntimeCapabilityResponse[];
 }
 
 export async function listProjects(): Promise<{ projects: Project[] }> {
@@ -1537,8 +1858,11 @@ export async function getPromptPreview(payload: {
   return res.json();
 }
 
-export async function getInternalAgentWorkflowCatalog(): Promise<AgentWorkflowCatalogResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-workflows/catalog`);
+export async function getInternalAgentWorkflowCatalog(
+  framework: string,
+  builderId: string,
+): Promise<AgentWorkflowCatalogResponse> {
+  const res = await fetch(buildAgentWorkflowCatalogUrl(API_BASE, framework, builderId));
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
@@ -1549,10 +1873,32 @@ export async function listAgentWorkflows(): Promise<AgentWorkflowListResponse> {
   return res.json();
 }
 
+export async function listAgentRuntimes(): Promise<AgentRuntimeListResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-runtimes`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentRuntimeCapabilities(
+  runtimeId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-runtimes/${encodeURIComponent(runtimeId)}/capabilities`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function getAgentWorkflow(
   workflowId: string,
 ): Promise<AgentWorkflowResponse> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/${encodeURIComponent(workflowId)}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentWorkflowCapabilities(
+  workflowId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-workflows/${encodeURIComponent(workflowId)}/capabilities`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
@@ -1596,12 +1942,14 @@ export async function deleteInternalAgentWorkflow(
 }
 
 export async function validateAgentWorkflowSpec(
-  spec: AgentWorkflowBuilderSpec | Record<string, any>
+  spec: AgentWorkflowBuilderSpec | Record<string, any>,
+  framework: string,
+  builderId: string,
 ): Promise<AgentWorkflowValidationReport> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ spec }),
+    body: JSON.stringify({ spec, framework, builder_id: builderId }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
@@ -1906,6 +2254,38 @@ export async function getAgentRun(runId: string, threadId: string): Promise<Agen
   return data.agent_run;
 }
 
+export async function getAgentRunCapabilities(
+  runId: string,
+  threadId: string,
+): Promise<AgentRuntimeCapabilityResponse> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/capabilities?${params.toString()}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getAgentRunState(
+  runId: string,
+  threadId: string,
+): Promise<{ run_id: string; state: Record<string, any> }> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/state?${params.toString()}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export function agentRunEventsUrl(
+  runId: string,
+  threadId: string,
+  afterSequence = 0,
+): string {
+  const params = new URLSearchParams({
+    thread_id: threadId,
+    after_sequence: String(afterSequence),
+  });
+  return `${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/events?${params.toString()}`;
+}
+
 export async function cancelChatAgentRun(
   runId: string,
   threadId: string,
@@ -1928,6 +2308,9 @@ export interface AgentRunResumePayload {
   resume_token?: string;
   resume_version?: number;
   thread_id?: string;
+  approval_scope?: 'once' | 'session' | 'always';
+  approval_feedback?: string;
+  approval_modifications?: Record<string, any>;
 }
 
 export interface AgentRunResumeResponse {
@@ -1967,12 +2350,13 @@ export async function streamResumeAgentRun(
 
 // ============ Durable Deep Research Tasks ============
 
-export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'expired';
+export type AgentTaskStatus = 'created' | 'queued' | 'running' | 'pausing' | 'paused' | 'awaiting_approval' | 'cancelling' | 'recovery_required' | 'cancelled' | 'completed' | 'failed' | 'expired';
 
 export interface AgentTaskSummary {
   id: string;
   thread_id: string;
   objective: string;
+  workflow_id: string;
   status: AgentTaskStatus;
   version: number;
   active_run_id?: string | null;
@@ -1983,12 +2367,23 @@ export interface AgentTaskSummary {
   total_todos: number;
   current_phase: string;
   terminal_reason?: string | null;
-  budgets: Record<string, number>;
+  budgets: Record<string, unknown>;
   configuration: Record<string, any>;
   created_at: string;
   updated_at: string;
-  active_run?: { id: string; status: string; checkpoint_thread_id?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
+  active_run?: { id: string; status: string; runtime_binding_status?: string; pending_interrupt?: AgentRunPendingInterrupt | null } | null;
   plan?: { revision: number; reason: string; objective: string; completion_criteria: string[]; ordered_todo_ids: string[]; content_hash: string } | null;
+  course_corrections?: Array<{
+    command_id: string;
+    correction_id: string;
+    instruction: string;
+    status: string;
+    delivery_mode?: string | null;
+    delivery_state: string;
+    linked_run_id?: string | null;
+    runtime_outcome?: { explanation?: string | null; unresolved_reason?: string | null };
+    submitted_at?: string | null;
+  }>;
 }
 
 export interface AgentTaskTodo {
@@ -2020,6 +2415,7 @@ export interface AgentTaskArtifact {
   validity: string;
   sensitivity: string;
   created_at: string;
+  provenance?: Record<string, any>;
 }
 
 export interface AgentTaskRun {
@@ -2028,15 +2424,16 @@ export interface AgentTaskRun {
   attempt: number;
   parent_run_id?: string | null;
   status: string;
-  checkpoint_thread_id?: string | null;
+  runtime_binding_status?: string;
   pending_interrupt?: AgentRunPendingInterrupt | null;
   metrics: Record<string, any>;
   error?: Record<string, any> | null;
+  debug?: AgentRunDebug | null;
   started_at: string;
   completed_at?: string | null;
 }
 
-export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'approval' | 'replan' | 'final_report';
+export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'run_failure' | 'approval' | 'replan' | 'final_report';
 
 export interface AgentTaskTimelineSource {
   id: string;
@@ -2073,6 +2470,7 @@ export interface AgentTaskTimelineItem {
   sources?: AgentTaskTimelineSource[];
   evidence_manifest?: Array<Record<string, any>>;
   trace_anchor?: Record<string, any> | null;
+  published_chat_turn_id?: string | null;
 }
 
 export interface AgentTaskSubagentRun {
@@ -2089,14 +2487,42 @@ export interface AgentTaskSubagentRun {
 
 const taskQuery = (threadId: string) => new URLSearchParams({ thread_id: threadId }).toString();
 
-export async function getDeepResearchCapabilities(): Promise<{ enabled: boolean; web_enabled: boolean; limits: Record<string, number> }> {
-  const response = await fetch(`${API_BASE}/api/deep-research/capabilities`);
+export interface AgentDefinitionCatalogEntry {
+  definition_id: string;
+  runtime_deployment_id: string;
+  display_name: string;
+  category?: string | null;
+  available: boolean;
+  task_eligible: boolean;
+  task_start_available: boolean;
+  configuration: {
+    fields: Array<{
+      id: string;
+      label: string;
+      type: 'model' | 'integer' | 'enum' | 'string' | string;
+      required?: boolean;
+      default?: unknown;
+      minimum?: number;
+      maximum?: number;
+      options?: string[];
+      enabled?: boolean;
+      read_only?: boolean;
+    }>;
+  };
+  operations: Record<string, any>;
+  features?: Record<string, any>;
+  metadata: Record<string, any>;
+  error?: Record<string, any> | null;
+}
+
+export async function listAgentDefinitions(): Promise<AgentDefinitionCatalogEntry[]> {
+  const response = await fetch(`${API_BASE}/api/agent-definitions`);
   if (!response.ok) throw new Error(await readApiError(response));
-  return response.json();
+  return (await response.json()).definitions;
 }
 
 export async function createAgentTask(threadId: string, payload: {
-  objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
+  definition_id: string; objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',
@@ -2120,13 +2546,104 @@ export async function getAgentTask(taskId: string, threadId: string): Promise<Ag
 }
 
 export async function commandAgentTask(taskId: string, threadId: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry', version: number): Promise<AgentTaskSummary> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/${action}?${taskQuery(threadId)}`, {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/commands/${action}?${taskQuery(threadId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({ expected_version: version }),
   });
   if (!response.ok) throw new Error(await readApiError(response));
   return (await response.json()).task;
+}
+
+export async function respondToAgentTaskResultReview(
+  taskId: string,
+  threadId: string,
+  payload: {
+    run_id: string;
+    interrupt_id: string;
+    expected_version: number;
+    decision: 'accept' | 'retry_with_input';
+    followup_input?: string;
+  },
+): Promise<{ task: AgentTaskSummary; linked_run?: AgentTaskRun | null; duplicate: boolean }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/result-review/responses?${taskQuery(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function respondToAgentTaskBudgetReview(
+  taskId: string,
+  threadId: string,
+  payload: {
+    run_id: string;
+    interrupt_id: string;
+    expected_version: number;
+    decision: 'continue' | 'accept_partial' | 'steer';
+    guidance?: string;
+  },
+): Promise<{
+  task: AgentTaskSummary;
+  linked_run?: AgentTaskRun | null;
+  correction_delivery?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/budget-review/responses?${taskQuery(threadId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function submitAgentTaskCourseCorrection(
+  taskId: string,
+  threadId: string,
+  payload: { run_id: string; expected_version: number; instruction: string; scope?: 'remaining_work' },
+): Promise<{
+  task: AgentTaskSummary;
+  command_id: string;
+  correction_id: string;
+  correction: Record<string, unknown>;
+  delivery_mode: 'same_run_safe_boundary' | 'linked_run';
+  delivery_state: 'accepted' | 'delivered' | 'linked' | 'incorporated' | 'satisfied' | 'unresolved' | 'accepted_unresolved' | 'rejected';
+  runtime_receipt?: Record<string, unknown> | null;
+  duplicate: boolean;
+}> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/course-corrections?${taskQuery(threadId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ scope: 'remaining_work', ...payload }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+async function operateAgentRun(
+  runId: string,
+  threadId: string,
+  path: string,
+  body: Record<string, any>,
+): Promise<Record<string, any>> {
+  const response = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify({ thread_id: threadId, ...body }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
+}
+
+export async function sendAgentRunFollowup(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'followups', { input: { text } });
+}
+
+export async function interruptAgentRunWithInput(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'interrupt-with-input', { input: { text } });
+}
+
+export async function steerAgentRunLive(runId: string, threadId: string, text: string): Promise<Record<string, any>> {
+  return operateAgentRun(runId, threadId, 'steer-live', { input: { text } });
 }
 
 export async function getAgentTaskTodos(taskId: string, threadId: string): Promise<AgentTaskTodo[]> {
@@ -2153,6 +2670,20 @@ export async function getAgentTaskArtifacts(taskId: string, threadId: string, ru
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/artifacts?${query}`);
   if (!response.ok) throw new Error(await readApiError(response));
   return (await response.json()).artifacts;
+}
+
+export async function publishAgentTaskFinalToChat(
+  taskId: string,
+  threadId: string,
+  artifactId: string,
+): Promise<{ chat_turn_id: string; user_message_id: string; assistant_message_id: string; duplicate: boolean }> {
+  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/final-report/chat-turns?${taskQuery(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artifact_id: artifactId }),
+  });
+  if (!response.ok) throw new Error(await readApiError(response));
+  return response.json();
 }
 
 export async function deleteAgentTask(taskId: string, threadId: string, version: number): Promise<void> {

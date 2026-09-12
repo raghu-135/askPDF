@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.metadata
+import json
 import os
 import subprocess
 import sys
@@ -25,11 +26,37 @@ APP_DIR = Path("/app")
 REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
+    "test_agent_course_correction_reconciliation_pytest.py",
+    "test_agent_grounding_evaluator_pytest.py",
     "test_agent_prompt_behavior.py",
+    "test_agent_run_cancellation_pytest.py",
+    "test_agent_runtime_reconciliation_pytest.py",
+    "test_agent_task_budget_steer_delivery_pytest.py",
+    "test_agent_task_events_pytest.py",
+    "test_agent_task_routes_pytest.py",
+    "test_canonical_trace_projection_pytest.py",
+    "test_content_store_pytest.py",
+    "test_external_research_tools.py",
+    "test_memory_manager_budget_pytest.py",
+    "test_runtime_hardening_pytest.py",
+    "test_runtime_operation_repository_pytest.py",
+    "test_tool_registry_contracts.py",
+    "test_control_plane_import_boundary_pytest.py",
+    "test_runtime_protocol_package_pytest.py",
+    "test_hermes_builder_provider_pytest.py",
+    "test_hermes_compose_profile_pytest.py",
+    "test_hermes_profile_pytest.py",
     "test_agent_retry_behavior.py",
     "test_agent_tool_contract_pytest.py",
     "test_dimension_mismatch_scenarios.py",
-    "test_external_research_tools.py",
+    "test_runtime_http_adapter_pytest.py",
+    "test_runtime_configuration_pytest.py",
+    "test_control_plane_auth_pytest.py",
+    "test_hermes_mcp_url_pytest.py",
+    "test_runtime_events_pytest.py",
+    "test_runtime_capability_gate_pytest.py",
+    "test_runtime_capability_resolver_pytest.py",
+    "test_runtime_contracts_neutral_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
@@ -44,9 +71,16 @@ UNIT_TEST_FILES = [
     "test_production_edge_cases.py",
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
-    "test_tool_registry_contracts.py",
     "test_http_client_lifecycle.py",
-    "test_workflow_budget.py",
+]
+
+HERMES_TEST_FILES = [
+    "test_hermes_configuration_pytest.py",
+    "test_hermes_execution_store_pytest.py",
+    "test_hermes_grounding_policy_pytest.py",
+    "test_hermes_mcp_execution_context_pytest.py",
+    "test_hermes_profile_manager_pytest.py",
+    "test_hermes_runtime_adapter_pytest.py"
 ]
 
 MCP_TEST_FILES = [
@@ -54,11 +88,13 @@ MCP_TEST_FILES = [
     "test_mcp_transport.py",
     "test_mcp_contracts.py",
     "test_mcp_compatibility.py",
-    "test_mcp_langchain_adapter.py",
+    "test_mcp_tool_adapter.py",
     "test_mcp_framework_neutral.py",
 ]
 
 DB_TEST_FILES = [
+    "test_agent_task_course_correction_pytest.py",
+    "test_project_file_repository_pytest.py",
     "test_database_connection_pytest.py",
     "test_models_sqlmodel_pytest.py",
     "test_project_memory_repository_pytest.py",
@@ -70,6 +106,7 @@ DB_TEST_FILES = [
     "test_thread_file_repository_pytest.py",
     "test_stats_repository_pytest.py",
     "test_repository_transactions_pytest.py",
+    "test_agent_task_runtime_projection_pytest.py",
     "test_jsonb_operations_pytest.py",
     "test_thread_fork_service_pytest.py",
 ]
@@ -81,18 +118,12 @@ API_TEST_FILES = [
 ]
 
 INTEGRATION_TEST_FILES = [
-    "test_agent_workflows_pytest.py",
-    "test_api_integration_pytest.py",
     "test_model_aware_integration.py",
 ]
 
 SCHEMA_TEST_FILES = [
     "test_schema_guardrails.py",
     "test_migration_smoke_pytest.py",
-]
-
-AGENT_CHECKPOINT_TEST_TARGETS = [
-    "/app/tests/test_agent_workflows_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
 ]
 
 DIAGNOSTIC_PACKAGES = (
@@ -106,6 +137,68 @@ DIAGNOSTIC_PACKAGES = (
     "asyncpg",
     "httpx",
 )
+
+
+def _approved_test_exclusions() -> dict[str, str]:
+    """Return the explicit inventory for tests outside the control-plane gate.
+
+    The repository still contains historical mixed files while their retained
+    coverage is represented by the framework-owned runtime suites. Keeping
+    this list in the image makes omissions fail closed instead of silently
+    disappearing from the default backend run.
+    """
+    manifest_path = APP_DIR / "tests" / "test_inventory.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Unable to load test inventory manifest: {manifest_path}") from exc
+    excluded = manifest.get("excluded")
+    if not isinstance(excluded, dict) or not all(
+        isinstance(name, str) and isinstance(reason, str) and reason.strip()
+        for name, reason in excluded.items()
+    ):
+        raise SystemExit(f"Invalid test inventory exclusions: {manifest_path}")
+    return excluded
+
+
+def _declared_control_plane_test_names() -> set[str]:
+    return {
+        name
+        for group in (
+            UNIT_TEST_FILES,
+            HERMES_TEST_FILES,
+            MCP_TEST_FILES,
+            DB_TEST_FILES,
+            API_TEST_FILES,
+            INTEGRATION_TEST_FILES,
+            SCHEMA_TEST_FILES,
+        )
+        for name in group
+    }
+
+
+def _validate_test_inventory() -> None:
+    test_root = APP_DIR / "tests"
+    repository_tests = {path.name for path in test_root.glob("test_*.py")}
+    assigned = _declared_control_plane_test_names()
+    excluded = _approved_test_exclusions()
+    excluded_names = set(excluded)
+    overlap = sorted(assigned & excluded_names)
+    missing = sorted(repository_tests - assigned - excluded_names)
+    nonexistent = sorted((assigned | excluded_names) - repository_tests)
+    groups = [UNIT_TEST_FILES, HERMES_TEST_FILES, MCP_TEST_FILES, DB_TEST_FILES,
+              API_TEST_FILES, INTEGRATION_TEST_FILES, SCHEMA_TEST_FILES]
+    flattened = [name for group in groups for name in group]
+    duplicates = sorted({name for name in flattened if flattened.count(name) > 1})
+    if nonexistent or duplicates:
+        raise SystemExit(f"Invalid test ownership: nonexistent={nonexistent}; duplicates={duplicates}")
+    if overlap or missing:
+        details = []
+        if overlap:
+            details.append("assigned and excluded: " + ", ".join(overlap))
+        if missing:
+            details.append("unassigned: " + ", ".join(missing))
+        raise SystemExit("Test inventory is incomplete; " + "; ".join(details))
 
 
 def _print_dependency_versions() -> None:
@@ -161,13 +254,6 @@ async def _drop_database(admin_url: str, db_name: str) -> None:
         await conn.close()
 
 
-async def _setup_agent_checkpointer(database_url: str) -> None:
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-    async with AsyncPostgresSaver.from_conn_string(_postgres_driver_url(database_url)) as checkpointer:
-        await checkpointer.setup()
-
-
 def _run(command: list[str], env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, cwd=APP_DIR, env=env, check=True)
@@ -175,7 +261,9 @@ def _run(command: list[str], env: dict[str, str] | None = None) -> None:
 
 def _run_standalone(pdf_path: str | None = None) -> None:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(APP_DIR)
+    # Keep the backend import root and include the repository root for the
+    # root-level Hermes gateway used by the Hermes runtime integration proof.
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
 
     if pdf_path:
         candidate = Path(pdf_path)
@@ -208,6 +296,12 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         raise SystemExit("Error: --test requires --file to be specified")
 
     group = args.group
+    group = {
+        "control-plane-unit": "unit",
+        "control-plane-db": "db",
+        "control-plane-api": "api",
+        "control-plane-mcp": "mcp",
+    }.get(group, group)
     if args.standalone or args.pdf:
         group = "standalone"
     elif args.unit:
@@ -216,8 +310,6 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         group = "db"
     elif args.integration:
         group = "integration"
-    elif args.agent_checkpoint:
-        group = "agent-checkpoint"
     elif args.api:
         group = "api"
     elif args.schema:
@@ -227,6 +319,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
     elif args.all or args.all_tests:
         group = "all"
 
+    if group == "hermes":
+        return [_test_path(name) for name in HERMES_TEST_FILES]
     if group == "unit":
         return [_test_path(name) for name in UNIT_TEST_FILES]
     if group == "db":
@@ -235,8 +329,6 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         return [_test_path(name) for name in API_TEST_FILES]
     if group == "integration":
         return [_test_path(name) for name in INTEGRATION_TEST_FILES]
-    if group == "agent-checkpoint":
-        return AGENT_CHECKPOINT_TEST_TARGETS
     if group == "schema":
         return [_test_path(name) for name in SCHEMA_TEST_FILES]
     if group == "mcp":
@@ -244,7 +336,18 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
     if group == "standalone":
         return []
     if group == "all":
-        return [str(APP_DIR / "tests")]
+        return [
+            _test_path(name)
+            for name in dict.fromkeys(
+                UNIT_TEST_FILES
+                + HERMES_TEST_FILES
+                + DB_TEST_FILES
+                + API_TEST_FILES
+                + INTEGRATION_TEST_FILES
+                + SCHEMA_TEST_FILES
+                + MCP_TEST_FILES
+            )
+        ]
 
     raise SystemExit(f"Unknown test group: {group}")
 
@@ -254,18 +357,59 @@ def _should_run_standalone(args: argparse.Namespace) -> bool:
         return True
     if args.group == "standalone" or args.standalone:
         return True
+    if args.group.startswith("control-plane-"):
+        return False
     if args.file or args.test:
         return False
-    if args.unit or args.db or args.db_tests or args.db_only or args.integration or args.agent_checkpoint or args.api or args.schema or args.mcp:
+    if (
+        args.unit
+        or args.db
+        or args.db_tests
+        or args.db_only
+        or args.integration
+        or args.api
+        or args.schema
+        or args.mcp
+    ):
         return False
     return args.group == "all" or args.all or args.all_tests
+
+
+def _validate_test_targets(targets: list[str]) -> None:
+    # Pytest node selectors append ``::Class::test`` to a real file path.
+    # Validate the file portion so targeted diagnostics retain the same
+    # fail-fast image-boundary check as whole-file runs.
+    missing = [
+        target
+        for target in targets
+        if not Path(target.split("::", 1)[0]).is_file()
+    ]
+    if missing:
+        raise SystemExit(
+            "Requested control-plane test target is not present in the control-plane image: "
+            + ", ".join(missing)
+        )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run askPDF tests inside Docker.")
     parser.add_argument(
         "--group",
-        choices=["unit", "db", "api", "integration", "agent-checkpoint", "schema", "mcp", "standalone", "all"],
+        choices=[
+            "unit",
+            "hermes",
+            "control-plane-unit",
+            "db",
+            "control-plane-db",
+            "api",
+            "control-plane-api",
+            "integration",
+            "schema",
+            "mcp",
+            "control-plane-mcp",
+            "standalone",
+            "all",
+        ],
         default=os.environ.get("TEST_GROUP", "all"),
     )
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -280,7 +424,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--db-tests", action="store_true")
     parser.add_argument("--db-only", action="store_true")
     parser.add_argument("--integration", action="store_true")
-    parser.add_argument("--agent-checkpoint", action="store_true")
     parser.add_argument("--api", action="store_true")
     parser.add_argument("--schema", action="store_true")
     parser.add_argument("--mcp", action="store_true")
@@ -292,9 +435,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     _print_dependency_versions()
+    _validate_test_inventory()
     targets = _pytest_targets(args)
-    agent_checkpoint_run = args.agent_checkpoint or args.group == "agent-checkpoint"
-
+    _validate_test_targets(targets)
     base_database_url = os.environ.get("DATABASE_URL")
     if not base_database_url:
         raise SystemExit("DATABASE_URL environment variable is required")
@@ -310,25 +453,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Test data directory: {data_dir}", flush=True)
 
     asyncio.run(_create_database(admin_url, test_db_name))
-    if agent_checkpoint_run:
-        print("Preparing LangGraph Postgres checkpointer schema", flush=True)
-        asyncio.run(_setup_agent_checkpointer(test_db_url))
-
     env = os.environ.copy()
     env["DATABASE_URL"] = test_db_url
     env["TEST_DATABASE_URL"] = test_db_url
     env["DATA_DIR"] = data_dir
-    env["PYTHONPATH"] = str(APP_DIR)
-    if agent_checkpoint_run:
-        env["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
-        env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url
-        env["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
-        env["ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST"] = "1"
-    else:
-        env["ASKPDF_AGENT_CHECKPOINTER"] = "memory"
-        env.pop("AGENT_CHECKPOINT_DATABASE_URL", None)
-        env.pop("ASKPDF_AGENT_CHECKPOINTER_SETUP", None)
-        env.pop("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST", None)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_DIR), str(APP_DIR)]))
+    env.pop("ASKPDF_AGENT_CHECKPOINTER", None)
+    env.pop("AGENT_CHECKPOINT_DATABASE_URL", None)
+    env.pop("ASKPDF_AGENT_CHECKPOINTER_SETUP", None)
 
     try:
         if targets:

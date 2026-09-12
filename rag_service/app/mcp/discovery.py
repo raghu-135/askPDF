@@ -6,10 +6,9 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest, QueryRequest, TimelineRequest
+from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest, InternetSearchRequest, QueryRequest, TimelineRequest
 from app.tools.thread_shape import ThreadShapeRequest
 from app.tools.wikipedia import WikipediaRequest
-from app.tools.memory_manager import InternetSearchRequest
 from app.models.memory_tools import MemoryGetInput, MemoryPrepareChangeInput, MemorySearchInput
 
 

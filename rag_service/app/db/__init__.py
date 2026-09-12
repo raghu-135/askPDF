@@ -23,13 +23,16 @@ from app.db.models_sqlmodel import (
     ChatTurn,
     AgentWorkflow,
     AgentRun,
+    AgentRunEvent,
     AgentTask,
     AgentTaskPlanRevision,
     AgentTaskTodo,
     AgentTaskSubagentRun,
     AgentTaskArtifact,
     AgentTaskEvent,
+    AgentTaskRuntimeDelta,
     AgentTaskCommand,
+    AgentRuntimeOperation,
     Memory,
     MemoryEvent,
     MemoryOverride,
@@ -49,7 +52,6 @@ from app.db.enums import (
 
 # Connection management (SQLModel/PostgreSQL)
 from app.db.connection_sqlmodel import (
-    init_db,
     close_db,
     get_session,
     async_session_maker,
@@ -130,7 +132,7 @@ def get_agent_workflow_repo():
     """Get the agent workflow repository instance."""
     global _agent_workflow_repo
     if _agent_workflow_repo is None:
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.repository import AgentWorkflowRepository
         _agent_workflow_repo = AgentWorkflowRepository()
     return _agent_workflow_repo
 
@@ -612,11 +614,10 @@ __all__ = [
     "ChatTurn",
     "AgentWorkflow",
     "AgentRun",
+    "AgentRunEvent",
     "Memory",
     "MemoryEvent",
     "MemoryOverride",
-    # Config
-    "init_db",
     # Status
     "get_scoped_indexing_status",
     # Constants
