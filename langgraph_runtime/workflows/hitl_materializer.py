@@ -89,6 +89,39 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
     return gate
 
 
+def normalize_hitl_gate_policy_for_graph(
+    gate_id: str,
+    gate_policy: Any,
+    node_types: Dict[str, str],
+) -> Dict[str, Any]:
+    """Normalize runtime-owned gate targets against the authored graph."""
+
+    supplied = dict(gate_policy) if isinstance(gate_policy, dict) else {}
+    if gate_id == WEB_APPROVAL_GATE_ID:
+        supplied_target = supplied.get("target") if isinstance(supplied.get("target"), dict) else {}
+        if not supplied_target or supplied_target.get("node_id") == WorkflowNodeType.WEB_WORKER.value:
+            dispatch_target = next(
+                (
+                    node_id for node_id, node_type in node_types.items()
+                    if node_type in {
+                        WorkflowNodeType.SERIAL_DISPATCH.value,
+                        WorkflowNodeType.PARALLEL_DISPATCH.value,
+                    }
+                ),
+                None,
+            )
+            if dispatch_target:
+                supplied["target"] = {
+                    "node_id": dispatch_target,
+                    "node_type": node_types[dispatch_target],
+                }
+                supplied["routes"] = {
+                    AgentRunResumeAction.APPROVE.value: dispatch_target,
+                    AgentRunResumeAction.CONTINUE_WITHOUT.value: dispatch_target,
+                }
+    return _normalize_hitl_gate_policy(gate_id, supplied)
+
+
 def resolve_hitl_target_node_id(gate: Dict[str, Any], node_types: Dict[str, str]) -> Optional[str]:
     target = gate.get("target") if isinstance(gate.get("target"), dict) else {}
     node_id = target.get("node_id")
@@ -220,28 +253,7 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
     for gate_id, raw_gate in gates.items():
         if not isinstance(gate_id, str) or gate_id in existing_node_ids:
             continue
-        if gate_id == WEB_APPROVAL_GATE_ID:
-            supplied = dict(raw_gate) if isinstance(raw_gate, dict) else {}
-            supplied_target = supplied.get("target") if isinstance(supplied.get("target"), dict) else {}
-            if not supplied_target or supplied_target.get("node_id") == WorkflowNodeType.WEB_WORKER.value:
-                dispatch_target = next(
-                    (
-                        node_id for node_id, node_type in node_types.items()
-                        if node_type in {
-                            WorkflowNodeType.SERIAL_DISPATCH.value,
-                            WorkflowNodeType.PARALLEL_DISPATCH.value,
-                        }
-                    ),
-                    None,
-                )
-                if dispatch_target:
-                    supplied["target"] = {"node_id": dispatch_target, "node_type": node_types[dispatch_target]}
-                    supplied["routes"] = {
-                        AgentRunResumeAction.APPROVE.value: dispatch_target,
-                        AgentRunResumeAction.CONTINUE_WITHOUT.value: dispatch_target,
-                    }
-            raw_gate = supplied
-        gate = _normalize_hitl_gate_policy(gate_id, raw_gate)
+        gate = normalize_hitl_gate_policy_for_graph(gate_id, raw_gate, node_types)
         if gate.get("enabled", True) is False:
             continue
         phase = str(gate.get("phase") or HitlPhase.BEFORE.value)

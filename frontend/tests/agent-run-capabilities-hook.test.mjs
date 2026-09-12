@@ -64,3 +64,28 @@ test('actual hook hides obsolete controls and handles failures, malformed data, 
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+test('actual hook does not query capabilities for an optimistic chat message id', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const requests = [];
+  globalThis.capabilityRequest = (...args) => requests.push(args);
+  function Controls() {
+    useAgentRunCapabilities('temp-assistant-123', 'thread-1');
+    return null;
+  }
+  const root = createRoot(document.getElementById('root'));
+  try {
+    await act(async () => root.render(React.createElement(Controls)));
+    assert.deepEqual(requests, []);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    delete globalThis.capabilityRequest;
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

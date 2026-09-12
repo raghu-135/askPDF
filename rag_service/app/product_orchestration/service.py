@@ -55,6 +55,28 @@ logger = logging.getLogger(__name__)
 CLARIFICATION_REQUIRED_STATUS = "clarification_required"
 
 
+async def _finish_human_review_boundary(
+    execution_event_sink: Any,
+    *,
+    run_id: str,
+    result: Dict[str, Any],
+) -> None:
+    """Publish the chat-facing response before closing a resumable stream."""
+    if execution_event_sink is None:
+        return
+    if hasattr(execution_event_sink, "emit"):
+        await execution_event_sink.emit(
+            "interrupt.requested",
+            {
+                "run_id": run_id,
+                "status": AgentRunStatus.AWAITING_HUMAN.value,
+                "response": result,
+            },
+        )
+    if hasattr(execution_event_sink, "finish_boundary"):
+        await execution_event_sink.finish_boundary()
+
+
 def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
     proposed_tool = interrupt.get("proposed_tool")
     return (
@@ -617,8 +639,11 @@ class AgentRunService:
                 if paused_run is not None:
                     result["pending_interrupt"] = paused_run.pending_interrupt_json
                 result.update(context)
-                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
-                    await execution_event_sink.finish_boundary()
+                await _finish_human_review_boundary(
+                    execution_event_sink,
+                    run_id=run.id,
+                    result=result,
+                )
                 return result
             completed_run = await self.repository.complete_run(
                 run.id,
@@ -1011,16 +1036,22 @@ class AgentRunService:
                     debug_trace_json=debug_payload,
                 )
                 if paused_run is not None:
-                    if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
-                        await execution_event_sink.finish_boundary()
+                    await _finish_human_review_boundary(
+                        execution_event_sink,
+                        run_id=paused_run.id,
+                        result=result,
+                    )
                     return InterruptResolutionResult(
                         run=paused_run,
                         outcome=resolution.outcome,
                         interrupt=paused_run.pending_interrupt_json or resolution.interrupt,
                         duplicate=False,
                     )
-                if execution_event_sink is not None and hasattr(execution_event_sink, "finish_boundary"):
-                    await execution_event_sink.finish_boundary()
+                await _finish_human_review_boundary(
+                    execution_event_sink,
+                    run_id=resolution.run.id,
+                    result=result,
+                )
                 return resolution
 
             completed_run = await lifecycle_repository.complete_run(

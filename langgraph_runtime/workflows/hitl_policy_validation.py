@@ -12,6 +12,7 @@ from langgraph_runtime.workflows.enums import (
     HITL_PHASES,
     HITL_SELECTION_MODES,
 )
+from langgraph_runtime.workflows.hitl_materializer import normalize_hitl_gate_policy_for_graph
 HITL_GATE_KEYS = {
     "enabled",
     "title",
@@ -71,22 +72,23 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
             errors.append(f"hitl_policy.gates.{gate_id} must be an object")
             continue
 
+        effective_gate = normalize_hitl_gate_policy_for_graph(gate_id, gate, node_types)
         unknown_gate_keys = sorted(set(gate) - HITL_GATE_KEYS)
         if unknown_gate_keys:
             errors.append(f"hitl_policy.gates.{gate_id} has unknown keys: {', '.join(unknown_gate_keys)}")
         if "enabled" in gate and not isinstance(gate["enabled"], bool):
             errors.append(f"hitl_policy.gates.{gate_id}.enabled must be a boolean")
 
-        mode = str(gate.get("mode") or HitlMode.APPROVAL.value)
+        mode = str(effective_gate.get("mode") or HitlMode.APPROVAL.value)
         if mode not in HITL_MODES:
             errors.append(f"hitl_policy.gates.{gate_id}.mode must be one of: {', '.join(sorted(HITL_MODES))}")
-        phase = str(gate.get("phase") or HitlPhase.BEFORE.value)
+        phase = str(effective_gate.get("phase") or HitlPhase.BEFORE.value)
         if phase not in HITL_PHASES:
             errors.append(f"hitl_policy.gates.{gate_id}.phase must be one of: {', '.join(sorted(HITL_PHASES))}")
         if phase == HitlPhase.INSIDE_TOOL.value:
             errors.append(f"hitl_policy.gates.{gate_id}.phase inside_tool is reserved for tool wrappers")
 
-        target = gate.get("target")
+        target = effective_gate.get("target")
         if not isinstance(target, dict):
             errors.append(f"hitl_policy.gates.{gate_id}.target must be an object")
         else:
@@ -132,7 +134,7 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
         if isinstance(default_action, str) and allowed_actions and default_action not in allowed_actions:
             errors.append(f"hitl_policy.gates.{gate_id}.default_action must be in allowed_actions")
 
-        routes = gate.get("routes", {})
+        routes = effective_gate.get("routes", {})
         if routes is not None and not isinstance(routes, dict):
             errors.append(f"hitl_policy.gates.{gate_id}.routes must be an object")
         elif isinstance(routes, dict):
@@ -142,7 +144,7 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
                 elif route_target not in node_types and route_target != GraphSentinel.END.value:
                     errors.append(f"hitl_policy.gates.{gate_id}.routes.{route_name} target is unknown: {route_target}")
 
-        options = gate.get("options", [])
+        options = effective_gate.get("options", [])
         if mode == HitlMode.CHOICE.value:
             if not isinstance(options, list) or not options:
                 errors.append(f"hitl_policy.gates.{gate_id}.options must be a non-empty list for choice gates")

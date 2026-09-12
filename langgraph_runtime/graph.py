@@ -4,10 +4,10 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Mapping
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.errors import NodeError, NodeTimeoutError
+from langgraph.errors import GraphBubbleUp, NodeError, NodeTimeoutError
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
@@ -172,6 +172,27 @@ search_thread_events = None
 search_web = None
 
 
+def web_prefetch_allowed(state: Mapping[str, Any]) -> bool:
+    """Return whether context loading may issue web search before routing.
+
+    In ask mode, the first web request must happen only after the graph's
+    approval gate.  Otherwise context_loader can fetch web evidence before
+    the planner has a chance to pause the run.
+    """
+
+    if not bool(state.get("use_web_search")):
+        return False
+    mode = str(state.get("web_search_mode") or "on")
+    access = str(state.get("task_web_access") or "undecided")
+    policy = state.get("hitl_policy")
+    gates = policy.get("gates") if isinstance(policy, Mapping) else None
+    web_gate = gates.get("web_approval_gate") if isinstance(gates, Mapping) else None
+    approval_gate_enabled = isinstance(web_gate, Mapping) and web_gate.get("enabled", True) is not False
+    if approval_gate_enabled and access != "allowed_for_task":
+        return False
+    return not (mode == "ask" and access != "allowed_for_task")
+
+
 async def _emit_corrective_event(config: RunnableConfig, event: str, data: Dict[str, Any]) -> None:
     sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
     studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
@@ -304,6 +325,12 @@ class NodeRegistry:
             except asyncio.CancelledError:
                 raise
             except ChatRunCancellationRequested:
+                raise
+            except GraphBubbleUp:
+                # LangGraph uses GraphInterrupt (a GraphBubbleUp) to suspend
+                # checkpointed runs. It must reach the graph executor so the
+                # interrupt is returned as __interrupt__, not recorded as a
+                # failed node.
                 raise
             except WorkflowBudgetExceeded as exc:
                 exc.agent_workflow_state = {
@@ -496,7 +523,7 @@ class NodeRegistry:
                 conversation = await retrieve(ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value, {"query": question, "max_results": 10})
                 memory = await retrieve(ToolName.SEARCH_DURABLE_MEMORY.value, {"query": question, "max_results": 10})
                 web = {}
-                if state.get("use_web_search"):
+                if web_prefetch_allowed(state):
                     web = await retrieve(ToolName.SEARCH_WEB.value, {"query": question})
                 bundle = {
                     "recent_history_text": "",
@@ -516,7 +543,7 @@ class NodeRegistry:
                     raw_question=state["question"],
                     embedding_model=state["embedding_model"],
                     context_window=state.get("context_window", runtime_limits().default_token_budget),
-                    use_web_search=state.get("use_web_search", False),
+                    use_web_search=web_prefetch_allowed(state),
                     use_reranker=state.get("use_reranker", True),
                     prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),
                 )

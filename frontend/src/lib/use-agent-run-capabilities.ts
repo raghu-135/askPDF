@@ -20,7 +20,10 @@ export function useAgentRunCapabilities(
   } | null>(null);
 
   const refresh = useCallback(async (): Promise<boolean> => {
-    if (!runId || !threadId) return false;
+    // Normal chat uses an optimistic assistant message id until the runtime
+    // returns the durable agent run id. That placeholder is not addressable by
+    // the runtime capabilities endpoint.
+    if (!runId || runId.startsWith('temp-assistant-') || !threadId) return false;
     const currentRequest = ++requestId.current;
     const isCurrent = () => currentRequest === requestId.current && identity === currentIdentity.current;
     try {

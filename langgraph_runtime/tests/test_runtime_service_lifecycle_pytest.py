@@ -6,6 +6,7 @@ import time
 import pytest
 from runtime_protocol.contracts import AgentRuntimeResult
 from langgraph_runtime.execution_store import ExecutionStore
+from langgraph_runtime.workflows.hitl_policy_validation import collect_hitl_policy_errors
 
 from langgraph_runtime.api import create_app
 from langgraph_runtime.dependencies import probe_mcp, probe_provider
@@ -222,6 +223,116 @@ def test_runtime_definition_errors_fail_closed_for_control_plane_parsing(monkeyp
     payload = response.json()
     assert payload["error"]["code"] == "runtime_definition_invalid"
     assert "detail" not in payload
+
+
+def test_runtime_resolve_materializes_web_approval_before_validation(monkeypatch):
+    monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+    monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")
+    monkeypatch.setenv("MCP_LOOPBACK_URL", "http://mcp.internal/mcp/")
+    monkeypatch.setenv("LLM_API_URL", "")
+    spec = {
+        "schema_version": 1,
+        "workflow_id": "router_rag_agent",
+        "config": {
+            "allowed_tool_ids": [
+                "live_web_recon", "wikipedia_reference", "wikidata_reference",
+                "arxiv_research", "pubmed_research", "semantic_scholar_research",
+                "stackexchange_reference", "yahoo_finance_news", "clarify_intent",
+            ],
+            "graph": {
+                "nodes": [
+                    {"id": "context_loader", "type": "context_loader"},
+                    {"id": "planner", "type": "planner"},
+                    {"id": "web_worker", "type": "web_worker"},
+                    {"id": "synthesizer", "type": "synthesizer"},
+                    {"id": "finalizer", "type": "finalizer"},
+                ],
+                "edges": [
+                    {"from": "START", "to": "context_loader"},
+                    {"from": "context_loader", "to": "planner"},
+                    {
+                            "from": "planner", "conditional": True,
+                            "route_fn": "planner_route",
+                            "routes": {
+                            "clarify": "finalizer", "direct": "finalizer",
+                            "execute": "web_worker",
+                        },
+                    },
+                    {"from": "web_worker", "to": "synthesizer"},
+                    {"from": "synthesizer", "to": "finalizer"},
+                    {"from": "finalizer", "to": "END"},
+                ],
+            },
+            "hitl_policy": {"enabled": False, "gates": {}},
+            "loop_policy": {
+                "default_max_node_visits": 1,
+                "max_total_visits": 10,
+                "node_visit_limits": {},
+            },
+            "prefetch_policy": {"enabled": True, "mode": "routing"},
+            "system_role": "",
+            "tool_instructions": {},
+            "use_reranker": True,
+            "use_web_search": False,
+        },
+        "runtime": {
+            "kind": "compiled_rag",
+            "label": "Test router",
+            "failure_code": "test_failed",
+            "failure_reason_prefix": "Test failed",
+            "success_context": "Test succeeded",
+            "failure_context": "Test failed",
+            "features": {"supports_replans": False},
+        },
+    }
+
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post(
+            "/v1/resolve",
+            json={
+                "definition": {
+                    "definition_id": "router_rag_agent",
+                    "framework": "langgraph",
+                    "builder_id": "langgraph_graph",
+                },
+                "spec": spec,
+                "thread_settings": {"hitl_web_approval": True},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    resolved = response.json()["result"]["resolved_spec"]
+    graph = resolved["config"]["graph"]
+    nodes = {node["id"]: node["type"] for node in graph["nodes"]}
+    assert nodes["web_approval_gate"] == "hitl_gate"
+    assert graph["hitl_compiled"] is True
+
+
+def test_web_approval_policy_validation_uses_materialized_dispatch_target():
+    errors = collect_hitl_policy_errors(
+        {
+            "enabled": True,
+            "gates": {
+                "web_approval_gate": {
+                    "target": {"node_id": "web_worker", "node_type": "web_worker"},
+                    "allowed_actions": ["approve", "continue_without"],
+                    "routes": {
+                        "approve": "web_worker",
+                        "continue_without": "synthesizer",
+                    },
+                },
+            },
+        },
+        "router_rag_agent",
+        {
+            "nodes": [
+                {"id": "serial_dispatch", "type": "serial_dispatch"},
+                {"id": "synthesizer", "type": "synthesizer"},
+            ],
+        },
+    )
+
+    assert errors == []
 
 
 def test_runtime_prompt_preview_resolves_runtime_owned_prompts(monkeypatch):

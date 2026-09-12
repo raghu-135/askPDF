@@ -28,7 +28,7 @@ function AgentRunDebugPanel({
   running = false,
   onResumeAction,
 }: {
-  runId: string;
+  runId?: string;
   threadId?: string;
   routeReason?: string;
   traceRefs?: AgentTraceRefs | null;
@@ -41,6 +41,9 @@ function AgentRunDebugPanel({
   running?: boolean;
   onResumeAction?: (action: AgentRunResumeAction, selectedOptionIds?: string[]) => Promise<boolean>;
 }) {
+  const normalizedRunId = typeof runId === 'string' && !runId.startsWith('temp-assistant-')
+    ? runId.trim()
+    : '';
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -50,9 +53,9 @@ function AgentRunDebugPanel({
   const traceRefreshAttemptedRef = useRef(new Map<string, number>());
   const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
   const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
-  const runDetails = refreshedRunDetails?.id === runId ? refreshedRunDetails : providedRunDetails;
+  const runDetails = refreshedRunDetails?.id === normalizedRunId ? refreshedRunDetails : providedRunDetails;
   const runCapabilities = useAgentRunCapabilities(
-    runId,
+    normalizedRunId || null,
     runDetails?.thread_id || threadId,
     `${runDetails?.status}:${runDetails?.runtime_binding_status}:${runDetails?.pending_interrupt?.interrupt_id}:${runDetails?.pending_interrupt?.status}:${runDetails?.pending_interrupt?.resume_version}`,
   ).capabilities;
@@ -104,13 +107,13 @@ function AgentRunDebugPanel({
   useEffect(() => {
     setRefreshedRunDetails(undefined);
     setTraceRefreshExhausted(false);
-  }, [runId, providedRunDetails]);
+  }, [normalizedRunId, providedRunDetails]);
 
   useEffect(() => {
     const metadataThreadId = threadId || runDetails?.thread_id;
-    if (runDetails || !metadataThreadId) return undefined;
+    if (runDetails || !metadataThreadId || !normalizedRunId) return undefined;
     let active = true;
-    void getAgentRun(runId, metadataThreadId)
+    void getAgentRun(normalizedRunId, metadataThreadId)
       .then((details) => {
         if (!active) return;
         setRefreshedRunDetails(details);
@@ -124,22 +127,22 @@ function AgentRunDebugPanel({
     return () => {
       active = false;
     };
-  }, [onRunDetailsChange, runDetails, runId, threadId]);
+  }, [normalizedRunId, onRunDetailsChange, runDetails, threadId]);
 
   useEffect(() => {
-    if (!runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
+    if (!normalizedRunId || !runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
     const live = String(runDetails.status) === 'running' || String(runDetails.status) === 'awaiting_human';
     if (!live) {
-      const attempts = traceRefreshAttemptedRef.current.get(runId) || 0;
+      const attempts = traceRefreshAttemptedRef.current.get(normalizedRunId) || 0;
       if (attempts >= 5) {
         setTraceRefreshExhausted(true);
         return;
       }
-      traceRefreshAttemptedRef.current.set(runId, attempts + 1);
+      traceRefreshAttemptedRef.current.set(normalizedRunId, attempts + 1);
     }
-    const attempts = traceRefreshAttemptedRef.current.get(runId) || 1;
+    const attempts = traceRefreshAttemptedRef.current.get(normalizedRunId) || 1;
     const timer = window.setTimeout(() => {
-      void getAgentRun(runId, executionThreadId)
+      void getAgentRun(normalizedRunId, executionThreadId)
         .then((refreshed) => {
           setRefreshedRunDetails(refreshed);
           onRunDetailsChange?.(refreshed);
@@ -147,7 +150,7 @@ function AgentRunDebugPanel({
         .catch(() => undefined);
     }, live ? 1000 : 500 * attempts);
     return () => window.clearTimeout(timer);
-  }, [executionThreadId, onRunDetailsChange, runDetails, runId]);
+  }, [executionThreadId, normalizedRunId, onRunDetailsChange, runDetails]);
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -179,7 +182,7 @@ function AgentRunDebugPanel({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `agent-trace-${runId}.json`;
+    link.download = `agent-trace-${normalizedRunId || 'pending'}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -190,7 +193,7 @@ function AgentRunDebugPanel({
       setResumeError('This human-input request has an invalid runtime response contract.');
       return;
     }
-    const submissionKey = `${runId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
+    const submissionKey = `${normalizedRunId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
     if (resumeSubmissionKeyRef.current) return;
     resumeSubmissionKeyRef.current = submissionKey;
     setResumeSubmitting(action);
@@ -206,7 +209,7 @@ function AgentRunDebugPanel({
       if (!executionThreadId) {
         throw new Error('Cannot submit human review because the run thread is unavailable.');
       }
-      const response = await resumeAgentRun(runId, {
+      const response = await resumeAgentRun(normalizedRunId, {
         action,
         interrupt_id: pendingInterrupt.interrupt_id,
         resume_token: pendingInterrupt.resume_token || undefined,
@@ -272,9 +275,9 @@ function AgentRunDebugPanel({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
       <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
-        <Tooltip title={runId} arrow>
+        <Tooltip title={normalizedRunId || 'Run ID pending'} arrow>
           <Typography variant="caption" color="text.secondary">
-            Run …{runId.slice(-8)}
+            {normalizedRunId ? `Run …${normalizedRunId.slice(-8)}` : 'Run pending'}
           </Typography>
         </Tooltip>
         {traceJson && (
@@ -502,13 +505,13 @@ function AgentRunDebugPanel({
         <Box sx={{ px: 1, py: 0.75 }}>
           <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{liveParseError}</Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {liveTraceView?.parseCorrelationId || `trace:${runId}`}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {liveTraceView?.parseCorrelationId || `trace:${normalizedRunId || 'pending'}`}</Typography>
         </Box>
       )}
       {executionTraceView && !liveParseError && (
         <>
       <AgentExecutionView
-            runId={runId}
+            runId={normalizedRunId}
             threadId={executionThreadId}
             resolvedSpec={executionResolvedSpec}
         workflowId={executionWorkflowId}

@@ -11,7 +11,7 @@ import app.runtime.cleanup as runtime_cleanup
 import app.services.agent_task_repository as task_repository
 import app.services.task_artifact_service as task_artifact_service
 from app.product_orchestration.interrupts import InterruptResolutionResult
-from app.product_orchestration.service import AgentRunService
+from app.product_orchestration.service import AgentRunService, _finish_human_review_boundary
 from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeResult,
@@ -133,11 +133,18 @@ class FakeRepository:
 
 
 class Sink:
+    def __init__(self):
+        self.events = []
+        self.finished_boundary = 0
+
     async def emit(self, *args, **kwargs):
-        return None
+        self.events.append((args, kwargs))
 
     async def emit_runtime_event(self, *args, **kwargs):
         return None
+
+    async def finish_boundary(self):
+        self.finished_boundary += 1
 
 
 def _run(*, status="running", pending=None):
@@ -172,6 +179,27 @@ def _patch_runtime(monkeypatch, adapter, repository):
     monkeypatch.setattr(service_module, "complete_runtime_operation", AsyncMock())
     monkeypatch.setattr(service_module, "fail_runtime_operation", AsyncMock())
     return AgentRunService(repository=repository, repository_factory=lambda: repository)
+
+
+@pytest.mark.asyncio
+async def test_human_review_boundary_emits_chat_response_before_closing_stream():
+    sink = Sink()
+    result = {
+        "status": "awaiting_human",
+        "pending_interrupt": {"interrupt_id": "interrupt-1"},
+    }
+
+    await _finish_human_review_boundary(sink, run_id="run-1", result=result)
+
+    assert sink.events == [(
+        ("interrupt.requested", {
+            "run_id": "run-1",
+            "status": "awaiting_human",
+            "response": result,
+        }),
+        {},
+    )]
+    assert sink.finished_boundary == 1
 
 
 @pytest.mark.asyncio

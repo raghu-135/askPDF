@@ -4,8 +4,9 @@ from typing import TypedDict
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command, Interrupt, interrupt
 
 from langgraph_runtime.graph import NodeRegistry
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
@@ -13,6 +14,35 @@ from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 class _PauseState(TypedDict, total=False):
     answer: str
+
+
+@pytest.mark.asyncio
+async def test_hitl_gate_graph_interrupt_bypasses_node_failure_reporting(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate = NodeRegistry().get_for_spec({
+        "id": "web_approval_gate",
+        "type": "hitl_gate",
+    })
+    interrupt = GraphInterrupt([Interrupt(value={"gate_id": "web_approval_gate"}, id="interrupt-1")])
+    monkeypatch.setattr("langgraph_runtime.graph.interrupt", lambda _payload: (_ for _ in ()).throw(interrupt))
+
+    with pytest.raises(GraphInterrupt) as raised:
+        await gate({
+        "hitl_policy": {
+            "enabled": True,
+            "gates": {
+                "web_approval_gate": {
+                    "mode": "approval",
+                    "phase": "before",
+                    "allowed_actions": ["approve", "approve_for_scope", "continue_without"],
+                    "default_action": "continue_without",
+                },
+            },
+        },
+        "available_worker_nodes": [{"id": "web_worker", "type": "web_worker"}],
+        "work_item_proposals": [{"worker_node_id": "web_worker", "worker_type": "web_worker"}],
+        }, {"configurable": {"thread_id": "hitl-gate-bubble"}})
+
+    assert raised.value is interrupt
 
 
 @pytest.mark.asyncio

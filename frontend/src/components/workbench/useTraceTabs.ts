@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatTraceDescriptor } from '../ChatInterface';
-import { closeTraceTab, upsertTraceTab } from '../../lib/trace-tabs';
+import { closeTraceTab, isValidTraceId, upsertTraceTab } from '../../lib/trace-tabs';
 import type { TraceRunTab } from './TraceWorkspace';
 
 export default function useTraceTabs() {
@@ -23,6 +23,9 @@ export default function useTraceTabs() {
   }, [flushPendingTraceUpdates]);
 
   const openTrace = useCallback((trace: ChatTraceDescriptor) => {
+    // A live chat can emit trace metadata before the runtime assigns its run ID.
+    // Do not activate a tab that cannot be addressed by the debug panel/API.
+    if (!isValidTraceId(trace?.id)) return;
     setActiveTraceId(trace.id);
     if (trace.running) {
       pendingTraceUpdatesRef.current.set(trace.id, trace);

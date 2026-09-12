@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { closeTraceTab, upsertTraceTab } from '../src/lib/trace-tabs.ts';
+import { closeTraceTab, isValidTraceId, upsertTraceTab } from '../src/lib/trace-tabs.ts';
+
+test('invalid trace IDs cannot create or activate a trace tab', () => {
+  assert.equal(isValidTraceId(undefined), false);
+  assert.equal(isValidTraceId(''), false);
+  assert.deepEqual(upsertTraceTab([{ id: 'run-1' }], { id: undefined }), [{ id: 'run-1' }]);
+});
 
 test('opening an existing trace updates it without duplication', () => {
   const tabs = [{ id: 'run-1', label: 'Old', status: 'running' }];

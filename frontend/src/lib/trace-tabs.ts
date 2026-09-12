@@ -1,5 +1,9 @@
 export type IdentifiedTraceTab = { id: string; liveTraceView?: unknown };
 
+export const isValidTraceId = (value: unknown): value is string => (
+  typeof value === 'string' && value.trim().length > 0
+);
+
 export const mergeTraceTab = <T extends IdentifiedTraceTab>(tab: T | undefined, nextTab: T): T => {
   if (!tab) return nextTab;
   const liveTraceView = nextTab.liveTraceView ?? tab.liveTraceView;
@@ -11,6 +15,7 @@ export const mergeTraceTab = <T extends IdentifiedTraceTab>(tab: T | undefined, 
 };
 
 export const upsertTraceTab = <T extends IdentifiedTraceTab>(tabs: T[], nextTab: T): T[] => {
+  if (!isValidTraceId(nextTab?.id)) return tabs;
   const index = tabs.findIndex((tab) => tab.id === nextTab.id);
   if (index < 0) return [...tabs, nextTab];
   return tabs.map((tab, currentIndex) => currentIndex === index ? mergeTraceTab(tab, nextTab) : tab);

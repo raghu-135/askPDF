@@ -1246,8 +1246,14 @@ class ExecutionStore:
                     raise ExecutionConflictError("multiple terminal events were persisted")
                 if terminals:
                     stored = terminals[0]
-                    if stored.get("result") not in (None, safe_result):
-                        raise ExecutionConflictError("terminal event already has a conflicting result")
+                    # A recovery worker may observe a terminal event that was
+                    # committed by a previous worker with a different error
+                    # payload. The terminal journal is authoritative; replay
+                    # the existing result instead of turning recovery into a
+                    # second failure.
+                    existing_result = stored.get("result")
+                    if existing_result is not None:
+                        safe_result = dict(existing_result)
                     stored["result"] = safe_result
                 else:
                     item["attempt"] = effective_attempt
@@ -1300,8 +1306,8 @@ class ExecutionStore:
                     raise ExecutionConflictError("multiple terminal events were persisted")
                 if terminals:
                     existing_result = _json_object(terminals[0]["result"])
-                    if existing_result not in (None, safe_result):
-                        raise ExecutionConflictError("terminal event already has a conflicting result")
+                    if existing_result is not None:
+                        safe_result = existing_result
                     stored = await connection.fetchrow(
                         "update runtime_events set result=$3::jsonb where run_id=$1 and event_id=$2 returning *",
                         run_id, terminals[0]["event_id"], json.dumps(safe_result),
@@ -1319,18 +1325,34 @@ class ExecutionStore:
                         # that event is already occupying the next slot.
                         sequence = int(existing_sequence["sequence"]) + 1
                     event_id = _event_id(run_id, effective_attempt, str(item["event_id"]))
-                    stored = await connection.fetchrow(
-                        """insert into runtime_events(
-                               run_id, sequence, attempt, event_id, kind, payload, occurred_at,
-                               trace_id, continuation, terminal, result
-                           ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb,true,$10::jsonb)
-                           returning *""",
-                        run_id, sequence, effective_attempt, event_id,
-                        item.get("kind", "run.completed"), json.dumps(_json_safe(item.get("payload") or {})),
-                        item.get("occurred_at"), item.get("trace_id"),
-                        json.dumps(_json_safe(item.get("continuation"))) if item.get("continuation") is not None else None,
-                        json.dumps(safe_result),
+                    existing_event = await connection.fetchrow(
+                        "select * from runtime_events where run_id=$1 and event_id=$2 for update",
+                        run_id, event_id,
                     )
+                    if existing_event is not None:
+                        existing_result = _json_object(existing_event["result"])
+                        if existing_result is not None:
+                            safe_result = existing_result
+                        stored = await connection.fetchrow(
+                            """update runtime_events
+                               set terminal=true, result=$3::jsonb
+                               where run_id=$1 and event_id=$2
+                               returning *""",
+                            run_id, event_id, json.dumps(safe_result),
+                        )
+                    else:
+                        stored = await connection.fetchrow(
+                            """insert into runtime_events(
+                                   run_id, sequence, attempt, event_id, kind, payload, occurred_at,
+                                   trace_id, continuation, terminal, result
+                               ) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb,true,$10::jsonb)
+                               returning *""",
+                            run_id, sequence, effective_attempt, event_id,
+                            item.get("kind", "run.completed"), json.dumps(_json_safe(item.get("payload") or {})),
+                            item.get("occurred_at"), item.get("trace_id"),
+                            json.dumps(_json_safe(item.get("continuation"))) if item.get("continuation") is not None else None,
+                            json.dumps(safe_result),
+                        )
                     await connection.execute(
                         "update runtime_executions set next_sequence=greatest(next_sequence, $2) where run_id=$1",
                         run_id, sequence + 1,

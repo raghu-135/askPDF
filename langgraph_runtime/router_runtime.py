@@ -672,6 +672,13 @@ async def _handle_compiled_rag_chat(
                 duration_ms,
             )
             return {
+                # Preserve the task projection when the initial graph run
+                # pauses.  The adapter needs agent_task_id and the durable
+                # task fields to build the orchestration delta that records
+                # the pending interrupt.  The previous hand-built response
+                # dropped those fields, turning a valid HITL pause into
+                # runtime_task_delta_missing at the product boundary.
+                **partial,
                 "answer": partial.get("final_answer"),
                 "rewritten_query": question,
                 "used_chat_ids": partial.get("used_chat_ids") or [],

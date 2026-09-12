@@ -704,24 +704,33 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             spec = payload.get("spec") or {}
             if not isinstance(spec, Mapping):
                 raise ValueError("spec must be an object")
+            from langgraph_runtime.graph import normalize_hitl_policy_for_thread_settings
+
+            # Thread settings can enable runtime-owned gates that are not part
+            # of the authored graph. Apply them before validation so the
+            # validator checks the same effective definition that is later
+            # materialized and returned to the control plane.
+            thread_settings = dict(payload.get("thread_settings") or {})
+            effective_spec = dict(spec)
+            effective_config = dict(effective_spec.get("config") or {})
+            effective_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+                effective_config.get("hitl_policy"), thread_settings
+            )
+            effective_spec["config"] = effective_config
             validation = await get_adapter().validate(
-                definition, spec, options=payload.get("options") or {}
+                definition, effective_spec, options=payload.get("options") or {}
             )
             if not validation.valid:
                 raise ValueError("; ".join(issue.message for issue in validation.issues))
             from langgraph_runtime.validator import WorkflowResolver
             from langgraph_runtime.compiler import WorkflowCompiler
-            from langgraph_runtime.graph import normalize_hitl_policy_for_thread_settings
 
             resolved = WorkflowResolver().resolve(
-                dict(spec),
-                thread_settings=dict(payload.get("thread_settings") or {}),
+                effective_spec,
+                thread_settings=thread_settings,
                 request_overrides=dict(payload.get("request_overrides") or {}),
             )
             config = dict(resolved.get("config") or {})
-            config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-                config.get("hitl_policy"), dict(payload.get("thread_settings") or {})
-            )
             resolved["config"] = config
             materialized = WorkflowCompiler().materialize_spec(resolved)
             return json_envelope(
