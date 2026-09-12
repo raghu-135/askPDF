@@ -86,6 +86,23 @@ def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
     )
 
 
+def _question_for_run_result(
+    run: Any,
+    result: Optional[Dict[str, Any]] = None,
+    interrupt: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Recover the original user question when a run resumes from a checkpoint."""
+    metadata = getattr(run, "run_metadata_json", None)
+    metadata_question = metadata.get("question") if isinstance(metadata, dict) else None
+    input_summary = interrupt.get("input_summary") if isinstance(interrupt, dict) else None
+    interrupt_question = input_summary.get("question") if isinstance(input_summary, dict) else None
+    result_question = result.get("question") if isinstance(result, dict) else None
+    for candidate in (metadata_question, interrupt_question, result_question):
+        if candidate not in (None, ""):
+            return str(candidate)
+    return ""
+
+
 def _runtime_approval_response(
     *,
     action: str,
@@ -435,6 +452,7 @@ class AgentRunService:
                 "executed_workflow_id": workflow.id,
                 "framework": definition.framework,
                 "builder_id": definition.builder_id,
+                "question": getattr(req, "question", ""),
             },
         )
 
@@ -871,6 +889,12 @@ class AgentRunService:
         definition = definition_from_run(resolution.run)
         registry = get_runtime_registry()
         adapter = adapter_for_definition(definition)
+        logger.info(
+            "Resolved agent-run resume handoff | run_id=%s response_operation=%s runtime_binding=%s",
+            resolution.run.id,
+            resolution.interrupt.get("response_operation"),
+            bool(getattr(resolution.run, "runtime_binding_json", None)),
+        )
         capability_resolution = await resolve_run_capability_resolution(
             definition,
             registry=registry,
@@ -911,7 +935,13 @@ class AgentRunService:
 
         try:
             embedding_model = None
-            if "embedding_model" in set(effective_capabilities.behavior.get("required_input_fields", ())):
+            behavior = effective_capabilities.behavior
+            required_input_fields = (
+                getattr(behavior, "required_input_fields", None)
+                if not isinstance(behavior, dict)
+                else behavior.get("required_input_fields")
+            ) or ()
+            if "embedding_model" in set(required_input_fields):
                 try:
                     embedding_context = await require_thread_embedding_ready(resolution.run.thread_id)
                     embedding_model = embedding_context.embedding_model
@@ -937,6 +967,12 @@ class AgentRunService:
                 embedding_model=embedding_model,
             )
             runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+            logger.info(
+                "Prepared agent-run resume request | run_id=%s adapter=%s response_operation=%s",
+                resolution.run.id,
+                type(adapter).__name__,
+                response_operation.value,
+            )
             if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
                 runtime_result = await adapter.continue_run(
                     runtime_request,
@@ -950,6 +986,11 @@ class AgentRunService:
                     context=runtime_context,
                     event_sink=execution_event_sink,
                 )
+            logger.info(
+                "Completed agent-run resume handoff | run_id=%s status=%s",
+                resolution.run.id,
+                getattr(runtime_result, "status", None),
+            )
             if execution_event_sink is not None and hasattr(execution_event_sink, "flush"):
                 await execution_event_sink.flush()
             if runtime_result.continuation is not None:
@@ -981,7 +1022,11 @@ class AgentRunService:
             if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
                 result = await self.projection.project_chat_result(
                     thread_id=resolution.run.thread_id,
-                    question=str(result.get("question") or ""),
+                    question=_question_for_run_result(
+                        resolution.run,
+                        result,
+                        resolution.interrupt,
+                    ),
                     result=result,
                     run_context={
                         "agent_run_id": resolution.run.id,

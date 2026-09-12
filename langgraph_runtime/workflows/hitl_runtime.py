@@ -264,10 +264,11 @@ async def hitl_gate_node(
             }
         grant = (state.get("hitl_approval_grants") or {}).get(node_id)
         grant_status = str(grant.get("status") or "") if isinstance(grant, dict) else ""
-        if grant_status in {"allowed", "denied"}:
+        task_web_access = str(state.get("task_web_access") or "undecided")
+        if grant_status in {"allowed", "denied"} or task_web_access in {"allowed_for_task", "denied_for_task"}:
             route = (
                 AgentRunResumeAction.APPROVE.value
-                if grant_status == "allowed"
+                if grant_status == "allowed" or task_web_access == "allowed_for_task"
                 else AgentRunResumeAction.CONTINUE_WITHOUT.value
             )
             routes = dict(state.get("hitl_gate_routes") or {})
@@ -445,15 +446,20 @@ async def hitl_gate_node(
         ],
     }
     approval_grants = dict(state.get("hitl_approval_grants") or {})
-    if node_id == WEB_APPROVAL_GATE_ID and action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
+    if node_id == WEB_APPROVAL_GATE_ID and action in {
+        AgentRunResumeAction.APPROVE.value,
+        AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
+    }:
         approval_grants[node_id] = {"status": "allowed", "scope": "run"}
         update["hitl_approval_grants"] = approval_grants
+        update["task_web_access"] = "allowed_for_task"
     elif node_id == WEB_APPROVAL_GATE_ID and action in {
         AgentRunResumeAction.CONTINUE_WITHOUT.value,
         AgentRunResumeAction.REJECT.value,
     }:
         approval_grants[node_id] = {"status": "denied", "scope": "run"}
         update["hitl_approval_grants"] = approval_grants
+        update["task_web_access"] = "denied_for_task"
     if execution_plan_update is not None:
         update["execution_plan"] = execution_plan_update
     elif isinstance(execution_plan, list):

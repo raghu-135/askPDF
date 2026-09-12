@@ -46,6 +46,12 @@ def _public_value(value: Any) -> Any:
 
 def _is_private_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
+    if normalized == "checkpoint_resume":
+        # This is a control-plane-safe capability flag.  The actual
+        # checkpoint reference must remain private, but the product service
+        # needs this bit to distinguish a resumable LangGraph interrupt from
+        # a display-only human review.
+        return False
     return (
         "checkpoint" in normalized
         or "mcp_execution_context_token" in normalized

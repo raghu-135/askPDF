@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 from langgraph.types import Command
 
@@ -20,6 +20,7 @@ from langgraph_runtime.workflows.state import merge_parallel_deltas, merge_task_
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
+from runtime_protocol.errors import RuntimeError as RuntimeExecutionError
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ def _public_value(value: Any) -> Any:
         return {
             str(key): _public_value(item)
             for key, item in value.items()
-            if "checkpoint" not in str(key).lower()
+            if str(key).lower() == "checkpoint_resume"
+            or "checkpoint" not in str(key).lower()
             and "mcp_execution_context_token" not in str(key).lower()
             and str(key).lower() not in {"authorization", "api_key", "apikey", "access_token", "credentials"}
         }
@@ -106,6 +108,35 @@ async def _invoke_graph_with_partial_state(app: Any, graph_input: Any, config: D
         raise
     await _attach_budget_snapshot(latest_state, config)
     return latest_state
+
+
+def _require_resume_checkpoint(snapshot: Any, *, run_id: str) -> None:
+    """Reject a resume that would otherwise restart the graph from START."""
+
+    interrupts = [
+        interrupt
+        for task in (getattr(snapshot, "tasks", None) or ())
+        for interrupt in (getattr(task, "interrupts", None) or ())
+    ]
+    if interrupts:
+        return
+    metadata = getattr(snapshot, "metadata", None)
+    if (
+        (getattr(snapshot, "next", None) or ())
+        and isinstance(metadata, Mapping)
+        and str(metadata.get("source") or "") == "loop"
+        and int(metadata.get("step") or 0) > 0
+    ):
+        return
+    raise RuntimeExecutionError(
+        "runtime_resume_checkpoint_invalid",
+        "The LangGraph checkpoint has no pending interrupt to resume",
+        retryable=False,
+        details={
+            "next_nodes": [str(node) for node in (getattr(snapshot, "next", None) or ())],
+            "run_id": str(run_id),
+        },
+    )
 
 
 def _install_budget_meter(
@@ -1046,6 +1077,7 @@ async def resume_compiled_rag_chat(
     )
     snapshot = await app.aget_state(config)
     snapshot_values = dict(getattr(snapshot, "values", None) or {})
+    _require_resume_checkpoint(snapshot, run_id=str(run.id))
     config = _runtime_config(
         app_thread_id=run.thread_id,
         checkpoint_thread_id=checkpoint_thread_id,

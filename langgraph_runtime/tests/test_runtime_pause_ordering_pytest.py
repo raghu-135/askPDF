@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Interrupt, interrupt
 
 from langgraph_runtime.graph import NodeRegistry
+from langgraph_runtime.workflows.hitl_runtime import hitl_gate_node
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
@@ -43,6 +44,32 @@ async def test_hitl_gate_graph_interrupt_bypasses_node_failure_reporting(monkeyp
         }, {"configurable": {"thread_id": "hitl-gate-bubble"}})
 
     assert raised.value is interrupt
+
+
+@pytest.mark.asyncio
+async def test_web_approval_once_persists_run_access_and_bypasses_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("langgraph_runtime.workflows.hitl_runtime._interrupt", lambda _payload: {"action": "approve"})
+    state = {
+        "hitl_policy": {
+            "enabled": True,
+            "gates": {"web_approval_gate": {"enabled": True}},
+        },
+        "available_worker_nodes": [{"id": "web_worker", "type": "web_worker"}],
+        "work_item_proposals": [{"worker_node_id": "web_worker", "worker_type": "web_worker"}],
+        "task_web_access": "undecided",
+    }
+
+    update = await hitl_gate_node(state, {"configurable": {"thread_id": "hitl-once"}})
+
+    assert update["task_web_access"] == "allowed_for_task"
+    assert update["hitl_approval_grants"]["web_approval_gate"]["status"] == "allowed"
+
+    bypass = await hitl_gate_node(
+        {**state, **update},
+        {"configurable": {"thread_id": "hitl-once"}},
+    )
+    assert bypass["hitl_gate_route"] == "approve"
+    assert bypass["hitl_approval_grants"] == update["hitl_approval_grants"]
 
 
 @pytest.mark.asyncio

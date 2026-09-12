@@ -984,9 +984,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const recoverPendingHumanReview = async (threadId: string) => {
         try {
-            const response = await listThreadAgentRuns(threadId, { status: 'awaiting_human', limit: 20 });
+            // Only restore a review for the latest normal-chat run.  Looking
+            // exclusively at awaiting_human runs can resurrect an abandoned
+            // approval after a newer run has already completed.
+            const response = await listThreadAgentRuns(threadId, { limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
             const latest = (response.agent_runs || []).find((run) => !run.task_id);
+            if (latest?.status !== 'awaiting_human') {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
             if (!latest?.id || !latest.pending_interrupt) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
@@ -1672,10 +1680,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setHumanReviewCapabilityRevision((revision) => revision + 1);
                     void refreshHumanReviewCapabilities();
                 }
-                if (['run.completed', 'run.failed', 'interrupt.requested'].includes(event.event)) {
-                    response = event.data?.response;
+                if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
+                    // Resume runtime terminal events may carry the raw
+                    // execution result. Only accept the product-level resume
+                    // envelope here; the final __result__ event provides it.
+                    if (event.data?.response?.agent_run) {
+                        response = event.data.response;
+                    }
                     const rawError = event.data?.error;
-                    terminalError = event.event === 'run.failed' && !response
+                    terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
                         ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
                         : undefined;
                     setLiveExecution((current) => current?.messageId === liveMessageId

@@ -212,7 +212,11 @@ class AgentRuntimeProjection:
             return result
         projected = await self.project_chat_result(
             thread_id=run.thread_id,
-            question=str(result.get("question") or ""),
+            question=str(
+                result.get("question")
+                or (getattr(run, "run_metadata_json", None) or {}).get("question")
+                or ""
+            ),
             result=result,
             run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
             duration_ms=float(result.get("duration_ms") or 0),

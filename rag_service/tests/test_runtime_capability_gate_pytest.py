@@ -19,6 +19,7 @@ from runtime_protocol.contracts import (
     RuntimeOperationDescriptor,
     RuntimeOperationId,
     RuntimeOperationOwner,
+    RuntimeBehaviorDescriptor,
     RuntimeSupportLevel,
     conditional,
     native,
@@ -471,6 +472,7 @@ async def test_non_task_resume_resolves_embedding_requirement_from_effective_cap
         status="running",
         pending={**pending, "status": "resumed"},
     )
+    resolved_run.run_metadata_json = {"question": "what is the current price?"}
     resolution = InterruptResolutionResult(
         run=resolved_run,
         outcome="resumed",
@@ -484,14 +486,24 @@ async def test_non_task_resume_resolves_embedding_requirement_from_effective_cap
     service.projection.project_chat_result = AsyncMock(
         return_value={"status": "completed", "answer": "done"}
     )
+    behavior = RuntimeBehaviorDescriptor.from_mapping({
+        "continuation_semantics": "same_run_safe_boundary",
+        "usage_accounting_owner": "runtime",
+        "preserves_run_id": True,
+        "artifact_inheritance": "valid_artifacts",
+        "supports_orchestration_delta": True,
+        "required_input_fields": ["embedding_model"] if requires_embedding else [],
+        "supports_pause_resume": True,
+        "supports_course_correction": True,
+        "budget_boundary_owner": "runtime",
+        "grounding_owner": "runtime",
+    })
     capabilities = RuntimeCapabilities(
         operations={
             RuntimeOperationId.RUN_RESUME: conditional(enabled=True),
             RuntimeOperationId.RUN_APPROVAL_RESPOND: native(),
         },
-        behavior={
-            "required_input_fields": ["embedding_model"] if requires_embedding else [],
-        },
+        behavior=behavior,
     )
     monkeypatch.setattr(
         service_module,
@@ -519,6 +531,8 @@ async def test_non_task_resume_resolves_embedding_requirement_from_effective_cap
     )
 
     assert result.run.status == "completed"
+    service.projection.project_chat_result.assert_awaited_once()
+    assert service.projection.project_chat_result.await_args.kwargs["question"] == "what is the current price?"
     if requires_embedding:
         embedding_ready.assert_awaited_once_with(current.thread_id)
     else:
@@ -705,6 +719,44 @@ async def test_resume_http_boundary_returns_structured_capability_rejection(monk
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "runtime_capability_unsupported"
     assert caught.value.detail["details"]["operation_id"] == RuntimeOperationId.RUN_RESUME.value
+
+
+@pytest.mark.asyncio
+async def test_resume_sse_emits_result_when_service_returns_without_terminal_event(monkeypatch):
+    async def ready_thread(thread_id):
+        return SimpleNamespace(id=thread_id)
+
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        status="completed",
+        pending_interrupt_json=None,
+    )
+
+    class CompletingService:
+        async def resume_agent_run(self, *args, **kwargs):
+            return SimpleNamespace(
+                run=run,
+                interrupt=None,
+                outcome="completed",
+                duplicate=False,
+            )
+
+    monkeypatch.setattr(agent_workflows_api, "get_thread", ready_thread)
+    monkeypatch.setattr(agent_workflows_api, "AgentRunService", CompletingService)
+    request = agent_workflows_api.AgentRunResumeRequest(
+        thread_id="thread-1",
+        interrupt_id="interrupt-1",
+        action="approve",
+    )
+
+    response = await agent_workflows_api.resume_agent_run("run-1", request, accept="text/event-stream")
+    body = "".join([chunk async for chunk in response.body_iterator])
+
+    assert "event: run.completed" in body
+    assert '"agent_run": {"id": "run-1"' in body
+    assert '"response": {"agent_run": {"id": "run-1"' in body
 
 
 @pytest.mark.asyncio

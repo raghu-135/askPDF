@@ -724,6 +724,15 @@ async def test_atomic_finalization_commits_terminal_result_status_and_lease_rele
 
 
 @pytest.mark.asyncio
+async def test_human_waiting_execution_is_not_recovered() -> None:
+    store = ExecutionStore()
+    await store.create("human-wait", "start", {"run_id": "human-wait"}, {"request": {"run_id": "human-wait"}})
+    await store.set_status("human-wait", "awaiting_human")
+
+    assert await store.list_recovery_candidates() == []
+
+
+@pytest.mark.asyncio
 async def test_clarification_result_is_terminal_and_replayable() -> None:
     store = ExecutionStore()
     await store.create("clarification", "start", {"run_id": "clarification"}, {"request": {"run_id": "clarification"}})

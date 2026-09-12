@@ -238,6 +238,53 @@ async def test_resume_rejects_malformed_pending_interrupt_without_calling_adapte
 
 
 @pytest.mark.asyncio
+async def test_resume_uses_pause_event_interrupt_when_record_result_has_different_framework_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class FakeAdapter(_FakeAdapter):
+        async def resume(self, request, *, interrupt, context, event_sink=None):
+            calls.append(str(interrupt.get("interrupt_id")))
+            return AgentRuntimeResult(status="completed")
+
+    monkeypatch.setattr("langgraph_runtime.adapter.LangGraphRuntimeAdapter", FakeAdapter)
+    store = ExecutionStore()
+    run_id = "run-pause-event-is-authoritative"
+    await store.create(run_id, "start", _request(run_id), _payload(run_id), operation_id="start")
+    fencing_token = await store.claim(run_id)
+    await store.checkpoint_execution(
+        run_id,
+        AgentRuntimeEvent(
+            event_id=f"{run_id}:paused",
+            run_id=run_id,
+            sequence=1,
+            kind="run.paused",
+            payload={"pending_interrupt": {"interrupt_id": "ui-interrupt", "type": "approval"}},
+        ).to_dict(),
+        {
+            "status": "awaiting_human",
+            "interruption": {"interrupt_id": "framework-interrupt", "type": "approval"},
+        },
+        status="awaiting_human",
+        continuation={"binding_type": "checkpoint", "payload": {"binding_id": "binding-event-authoritative"}},
+        owner_id=store.owner_id,
+        fencing_token=fencing_token,
+    )
+    app = create_app(execution_store=store, require_auth=False)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://runtime") as client:
+        response = await client.post(
+            f"/v1/runs/{run_id}/resume",
+            json={
+                **_payload(run_id),
+                "operation_id": "resume-event-authoritative",
+                "interrupt": {"interrupt_id": "ui-interrupt", "type": "approval", "decision": "approve"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls == ["ui-interrupt"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_endpoint_returns_explicit_overall_status_and_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeAdapter(_FakeAdapter):
         async def cleanup_run(self, run_id):

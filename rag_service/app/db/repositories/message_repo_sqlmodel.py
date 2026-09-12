@@ -112,11 +112,11 @@ def _is_unpublished_task_turn(turn: ChatTurn, task_run_ids: set[str]) -> bool:
     return metadata.get("published_from_task") is not True
 
 
-def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
+def _expand_turn(turn: ChatTurn, question_override: Optional[str] = None) -> List[ExpandedMessage]:
     payload = _normalize_payload(turn.payload)
     messages: List[ExpandedMessage] = []
 
-    question = payload.get("question")
+    question = payload.get("question") or question_override
     if question not in (None, ""):
         messages.append(
             ExpandedMessage(
@@ -255,6 +255,31 @@ class MessageRepository:
             )
             return set(result.scalars().all())
 
+    async def _run_question_overrides(self, turns: List[ChatTurn]) -> Dict[str, str]:
+        """Recover questions for legacy resumed turns that stored an empty question."""
+        run_ids = {str(turn.agent_run_id) for turn in turns if turn.agent_run_id}
+        if not run_ids:
+            return {}
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(
+                    AgentRun.id,
+                    AgentRun.run_metadata_json,
+                    AgentRun.pending_interrupt_json,
+                ).where(AgentRun.id.in_(run_ids))
+            )
+            overrides: Dict[str, str] = {}
+            for run_id, metadata, pending_interrupt in result.all():
+                metadata = metadata if isinstance(metadata, dict) else {}
+                pending_interrupt = pending_interrupt if isinstance(pending_interrupt, dict) else {}
+                input_summary = pending_interrupt.get("input_summary")
+                input_summary = input_summary if isinstance(input_summary, dict) else {}
+                question = metadata.get("question") or input_summary.get("question")
+                if question not in (None, ""):
+                    overrides[str(run_id)] = str(question)
+            return overrides
+
     async def create(
         self,
         thread_id: str,
@@ -340,11 +365,12 @@ class MessageRepository:
     ) -> List[ExpandedMessage]:
         turns = await self.get_thread_turns(thread_id, limit=10000, offset=0)
         task_run_ids = await self._task_backed_run_ids(thread_id)
+        question_overrides = await self._run_question_overrides(turns)
         messages: List[ExpandedMessage] = []
         for turn in turns:
             if _is_unpublished_task_turn(turn, task_run_ids):
                 continue
-            messages.extend(_expand_turn(turn))
+            messages.extend(_expand_turn(turn, question_overrides.get(str(turn.agent_run_id))))
         return messages[offset : offset + limit]
 
     async def get_recent_messages(
@@ -363,11 +389,12 @@ class MessageRepository:
             turns = list(reversed(result.scalars().all()))
 
         task_run_ids = await self._task_backed_run_ids(thread_id)
+        question_overrides = await self._run_question_overrides(turns)
         messages: List[ExpandedMessage] = []
         for turn in turns:
             if _is_unpublished_task_turn(turn, task_run_ids):
                 continue
-            messages.extend(_expand_turn(turn))
+            messages.extend(_expand_turn(turn, question_overrides.get(str(turn.agent_run_id))))
         return messages[-limit:]
 
     async def update_context_compact(self, message_id: str, context_compact: str) -> bool:

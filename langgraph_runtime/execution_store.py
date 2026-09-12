@@ -321,7 +321,8 @@ class ExecutionStore:
                         return existing
                     raise ExecutionConflictError("terminal execution is immutable; use retry")
                 if operation == "resume":
-                    if existing.status not in {"awaiting_human", "paused"}:
+                    persisted_result = existing.result if isinstance(existing.result, Mapping) else {}
+                    if existing.status not in {"awaiting_human", "paused"} and str(persisted_result.get("status") or "") not in {"awaiting_human", "paused"}:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
                     existing.operation = operation
                     existing.request = dict(request)
@@ -370,7 +371,7 @@ class ExecutionStore:
                             raise ExecutionConflictError("operation_id was reused with different input")
                         replay_attempt = int(prior["attempt"])
                 existing = await connection.fetchrow(
-                    "select operation, request, payload, status, attempt, continuation, request_fingerprint from runtime_executions where run_id=$1 for update",
+                    "select operation, request, payload, status, attempt, continuation, result, request_fingerprint from runtime_executions where run_id=$1 for update",
                     run_id,
                 )
                 if existing is not None and replay_attempt is None:
@@ -406,7 +407,8 @@ class ExecutionStore:
                     if existing_fingerprint != fingerprint:
                         raise ExecutionConflictError("terminal execution is immutable; use retry")
                 elif existing is not None and operation == "resume":
-                    if existing["status"] not in {"awaiting_human", "paused"}:
+                    persisted_result = _json_object(existing["result"]) or {}
+                    if existing["status"] not in {"awaiting_human", "paused"} and str(persisted_result.get("status") or "") not in {"awaiting_human", "paused"}:
                         raise ExecutionConflictError("only checkpointed executions can be resumed")
                     payload_expression = "payload || $4::jsonb"
                     await connection.execute(
@@ -1519,7 +1521,13 @@ class ExecutionStore:
         limit = max(1, min(int(limit), 1000))
         if self._pool is None:
             terminal_run_ids = {run_id for run_id, events in self._events.items() if any(item.get("terminal") for item in events)}
-            records = [record for record in self._records.values() if record.status not in TERMINAL_STATUSES and record.run_id not in terminal_run_ids]
+            records = [
+                record
+                for record in self._records.values()
+                if record.status not in TERMINAL_STATUSES
+                and record.status not in {"awaiting_human", "paused"}
+                and record.run_id not in terminal_run_ids
+            ]
             now = datetime.now(timezone.utc)
             def recovery_key(record: ExecutionRecord) -> tuple[int, str, str]:
                 expired = 0
@@ -1529,7 +1537,7 @@ class ExecutionStore:
             return sorted(records, key=recovery_key)[:limit]
         rows = await self._pool.fetch(
             """select executions.run_id from runtime_executions executions
-               where executions.status not in ('completed','clarification_required','failed','cancelled','no_continuation')
+               where executions.status not in ('completed','clarification_required','failed','cancelled','no_continuation','awaiting_human','paused')
                  and not exists (select 1 from runtime_events events where events.run_id=executions.run_id and events.terminal=true)
                order by case when lease_expires_at is not null and lease_expires_at < now() then 0 else 1 end,
                         executions.updated_at, executions.run_id

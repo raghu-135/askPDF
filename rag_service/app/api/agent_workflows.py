@@ -1460,9 +1460,21 @@ async def resume_agent_run(
                     "status": result.run.status,
                     "pending_interrupt": _pending_interrupt_payload(result.run),
                 }
+                # Resume clients consume the same envelope as the non-stream
+                # endpoint.  The runtime terminal event may carry its raw
+                # execution result, but the final resume result must expose
+                # the product-level `agent_run` object so clients do not read
+                # `response.agent_run.status` from an incompatible payload.
+                resume_response = {
+                    "agent_run": compact_run,
+                    "interrupt": result.interrupt,
+                    "outcome": result.outcome,
+                    "duplicate": result.duplicate,
+                }
                 await sink.queue.put({
                     "event": "__result__",
                     "data": {
+                        "response": resume_response,
                         "agent_run": compact_run,
                         "interrupt": result.interrupt,
                         "outcome": result.outcome,
@@ -1502,11 +1514,34 @@ async def resume_agent_run(
                         yield _sse({"event": "stream.error", "data": {"run_id": run_id, **data}}, sequence)
                         break
                     if event == "__result__":
+                        # `run_resume` publishes the result separately from the
+                        # runtime event stream.  A provider may return a result
+                        # without emitting its own terminal event (notably after
+                        # a checkpoint resume), so closing here would leave the
+                        # client with a successful HTTP response but no result.
+                        # The chat client treats that as a failed resume and
+                        # retries the approval, which can make one decision look
+                        # like repeated approvals.
+                        result_status = str((data.get("agent_run") or {}).get("status") or "")
+                        terminal_event = (
+                            "interrupt.requested"
+                            if result_status == AgentRunStatus.AWAITING_HUMAN.value
+                            else "run.failed"
+                            if result_status == AgentRunStatus.FAILED.value
+                            else "run.cancelled"
+                            if result_status == AgentRunStatus.CANCELLED.value
+                            else "run.completed"
+                        )
+                        sequence += 1
+                        yield _sse({"event": terminal_event, "data": data}, sequence)
                         break
                     sequence += 1
                     yield _sse(item, sequence)
-                    if event in {"run.completed", "run.failed", "run.cancelled"}:
-                        break
+                    # A resume can emit its terminal runtime event before the
+                    # service publishes __result__. Keep consuming until the
+                    # product-level envelope arrives; otherwise the client
+                    # receives the raw runtime result and treats the resume as
+                    # missing, leaving the approval panel stuck.
             finally:
                 sink.detach_delivery()
 

@@ -570,6 +570,23 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             supplied = payload.get("interrupt") if isinstance(payload.get("interrupt"), Mapping) else {}
             stored_result = record.result if isinstance(record.result, Mapping) else {}
             current = stored_result.get("interruption")
+            # The pause event is the checkpoint contract delivered to the
+            # control plane and UI.  Prefer its interruption identity over
+            # the execution record's copied result because adapters may
+            # decorate that result with a framework-generated interrupt id
+            # after the durable pause event has already been emitted.
+            checkpoint_events = await execution_store.events_after(run_id, 0)
+            for checkpoint_event in reversed(checkpoint_events):
+                if str(checkpoint_event.get("kind") or "") not in {"run.paused", "interrupt.requested", "approval.requested"}:
+                    continue
+                event_result = checkpoint_event.get("result")
+                event_interruption = event_result.get("interruption") if isinstance(event_result, Mapping) else None
+                if not isinstance(event_interruption, Mapping):
+                    event_payload = checkpoint_event.get("payload")
+                    event_interruption = event_payload.get("pending_interrupt") if isinstance(event_payload, Mapping) else None
+                if isinstance(event_interruption, Mapping):
+                    current = event_interruption
+                    break
             if not isinstance(current, Mapping) or not isinstance(supplied, Mapping):
                 raise HTTPException(status_code=409, detail={"code": "runtime_interrupt_mismatch", "safe_message": "The checkpoint has no matching pending interrupt", "retryable": False})
             if str(supplied.get("interrupt_id") or "") != str(current.get("interrupt_id") or ""):
@@ -931,7 +948,10 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
         heartbeat_stop = asyncio.Event()
 
         async def heartbeat() -> None:
-            interval = max(1.0, execution_store.lease_seconds / 3)
+            # Keep active graph calls fenced without waiting most of the lease
+            # interval. Local LLM calls can occupy the event loop for longer
+            # than the nominal lease, especially immediately after a resume.
+            interval = max(1.0, min(execution_store.lease_seconds / 3, 10.0))
             while not heartbeat_stop.is_set():
                 try:
                     await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
