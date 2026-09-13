@@ -5,9 +5,8 @@ summary. GET /api/agent-runs/{id} also returns an API-derived graph view model.
 The UI should render normalized fields and use span.raw only for escape-hatch
 inspection.
 
-The machine-readable schema remains at:
-
-    rag_service/docs/agent_debug_trace_v1.schema.json
+The machine-readable schema is
+[agent_debug_trace_v1.schema.json](agent_debug_trace_v1.schema.json).
 
 The trace is inspired by OpenTelemetry and OpenInference conventions but is not
 an OTLP export format.

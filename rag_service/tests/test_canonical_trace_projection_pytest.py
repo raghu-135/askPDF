@@ -1,7 +1,11 @@
+import json
+import os
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from app.product_orchestration.canonical_trace import (
     TraceProjectionError,
@@ -12,6 +16,25 @@ from app.product_orchestration.canonical_trace import (
 from app.product_orchestration.debug_trace import build_debug_payload_from_journal
 from app.product_orchestration.trace_recorder import AgentTraceRecorder
 from runtime_protocol.contracts import AgentRuntimeEvent
+
+
+def _debug_trace_schema() -> dict:
+    candidates = []
+    repo_dir = os.environ.get("ASKPDF_REPO_DIR")
+    if repo_dir:
+        candidates.append(Path(repo_dir) / "docs" / "contracts" / "agent_debug_trace_v1.schema.json")
+    candidates.append(
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "contracts"
+        / "agent_debug_trace_v1.schema.json"
+    )
+    for path in candidates:
+        if path.is_file():
+            return json.loads(path.read_text())
+    raise AssertionError(
+        "Unable to locate docs/contracts/agent_debug_trace_v1.schema.json"
+    )
 
 
 def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:
@@ -297,6 +320,48 @@ def test_trace_recorder_emits_version_one_from_canonical_events() -> None:
     assert payload["diagnostics"]["outcome"] == "completed"
     assert payload["parallel_groups"] == []
     assert "graph" not in payload
+
+
+def test_trace_recorder_output_matches_published_debug_trace_schema() -> None:
+    run = SimpleNamespace(
+        id="run-schema-1",
+        thread_id="thread-schema-1",
+        workflow_id="workflow-schema-1",
+        user_id="user-schema-1",
+        framework="future",
+        status="completed",
+        started_at=None,
+        completed_at=None,
+        resolved_spec_json={},
+    )
+    recorder = AgentTraceRecorder(run)
+    recorder.record_agent_runtime_event(_event(
+        1,
+        "operation.completed",
+        {
+            "operation_id": "step-1",
+            "operation_type": "agent_step",
+            "operation_label": "Inspect",
+            "visit_index": 1,
+        },
+        "future",
+    ))
+
+    payload = recorder.finalize(
+        run=run,
+        chat_turn_id=None,
+        metrics={},
+    )
+    schema = _debug_trace_schema()
+    Draft202012Validator.check_schema(schema)
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload["trace"]),
+        key=lambda error: list(error.absolute_path),
+    )
+
+    assert not errors, "\n".join(
+        f"{list(error.absolute_path)}: {error.message}" for error in errors
+    )
 
 
 def test_parallel_projection_preserves_groups_members_retries_and_zero_wave_id() -> None:
