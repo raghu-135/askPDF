@@ -304,11 +304,11 @@ def test_runtime_resolve_materializes_web_approval_before_validation(monkeypatch
     resolved = response.json()["result"]["resolved_spec"]
     graph = resolved["config"]["graph"]
     nodes = {node["id"]: node["type"] for node in graph["nodes"]}
-    assert nodes["web_approval_gate"] == "hitl_gate"
+    assert "web_approval_gate" not in nodes
     assert graph["hitl_compiled"] is True
 
 
-def test_web_approval_policy_validation_uses_materialized_dispatch_target():
+def test_authored_gate_does_not_rewrite_missing_targets():
     errors = collect_hitl_policy_errors(
         {
             "enabled": True,
@@ -332,27 +332,7 @@ def test_web_approval_policy_validation_uses_materialized_dispatch_target():
         },
     )
 
-    assert errors == []
-
-
-def test_thread_web_approval_does_not_inject_generic_gate_into_deep_graph():
-    from langgraph_runtime.workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
-
-    deep_graph = {
-        "nodes": [
-            {"id": "deep_task_scheduler", "type": "deep_task_scheduler"},
-            {"id": "deep_research_subagent", "type": "deep_research_subagent"},
-        ]
-    }
-    policy = {"enabled": False, "gates": {}}
-
-    resolved = normalize_hitl_policy_for_thread_settings(
-        policy,
-        {"hitl_web_approval": True},
-        deep_graph,
-    )
-
-    assert "web_approval_gate" not in resolved["gates"]
+    assert any("target" in error for error in errors)
 
 
 def test_runtime_prompt_preview_resolves_runtime_owned_prompts(monkeypatch):

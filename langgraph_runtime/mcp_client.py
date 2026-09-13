@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +15,9 @@ from langchain_core.tools import BaseTool, StructuredTool
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field
+from langgraph.types import interrupt
+from langgraph.func import task
+from langgraph.config import get_config
 
 from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 from runtime_protocol.tool_contract import normalize_tool_result
@@ -151,7 +155,7 @@ def _arguments(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
-async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | None) -> str:
+async def _call_transport(name: str, arguments: dict[str, Any], config: RunnableConfig | None) -> str:
     url = os.getenv("MCP_LOOPBACK_URL", "").strip()
     if not url:
         raise MCPUnavailableError(name, cause=RuntimeError("MCP_LOOPBACK_URL is required"))
@@ -190,13 +194,58 @@ async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | N
     return json.dumps(payload, ensure_ascii=False)
 
 
-def create_mcp_langchain_tool(tool_name: str, request_model: type[Any] | None = None) -> BaseTool:
+async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | None) -> str:
+    """Pause outside MCP's task groups, then retry the exact authorized call."""
+    configurable = dict((config or {}).get("configurable") or {})
+    metadata = dict((config or {}).get("metadata") or {})
+    identity = {
+        "run": configurable.get("agent_run_id"),
+        "checkpoint": configurable.get("checkpoint_ns") or metadata.get("langgraph_checkpoint_ns"),
+        "node": configurable.get("caller_node") or metadata.get("langgraph_node"),
+        "visit": metadata.get("langgraph_step"),
+        # Native checkpoint namespaces already distinguish parallel workers.
+        # Telemetry subagent IDs may be regenerated when a node is replayed.
+        "ordinal": configurable.get("tool_invocation_index", 0),
+        "tool": name,
+        "arguments": arguments,
+    }
+    invocation_id = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    gated_arguments = {**arguments, "_askpdf_invocation_id": invocation_id}
+    raw = await _call_transport(name, gated_arguments, config)
+    payload = json.loads(raw)
+    approval_request = (payload.get("artifacts") or {}).get("approval_request")
+    if not isinstance(approval_request, dict):
+        return raw
+    approval_request["node_id"] = str(configurable.get("caller_node") or metadata.get("langgraph_node") or "agent")
+    approval_request["proposed_tool"]["caller_node"] = approval_request["node_id"]
+    # Product decision persistence is authoritative; the resume value alone
+    # cannot grant permission. MCP rechecks the durable decision below.
+    interrupt(approval_request)
+    raw = await _call_transport(name, gated_arguments, config)
+    if (json.loads(raw).get("artifacts") or {}).get("approval_request"):
+        raise MCPProtocolError(name, cause=ValueError("The resumed tool invocation has no durable human decision"))
+    return raw
+
+
+@task
+async def _checkpointed_call(name: str, arguments: dict[str, Any], parent_config: RunnableConfig | None) -> str:
+    native = get_config()
+    return await _call(name, arguments, {
+        **dict(parent_config or {}),
+        "configurable": {**dict((parent_config or {}).get("configurable") or {}), **dict(native.get("configurable") or {})},
+        "metadata": {**dict((parent_config or {}).get("metadata") or {}), **dict(native.get("metadata") or {})},
+    })
+
+
+def create_mcp_langchain_tool(tool_name: str, request_model: type[Any] | None = None, *, checkpointed: bool = False) -> BaseTool:
     request_model = request_model or _ARGUMENT_MODELS.get(tool_name, _OpenArguments)
 
     async def invoke(*args: Any, config: RunnableConfig = None, **kwargs: Any) -> str:
         arguments = dict(kwargs)
         if args:
             arguments.update(_arguments(args[0]))
+        if checkpointed:
+            return await _checkpointed_call(tool_name, arguments, config)
         return await _call(tool_name, arguments, config)
 
     metadata = TOOL_FRIENDLY_CONFIG.get(tool_name) or {}

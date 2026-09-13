@@ -83,6 +83,10 @@ def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at
     normalized = compact_interrupt_value(dict(payload))
     if not isinstance(normalized, dict):
         normalized = {}
+    if payload.get("type") == "tool_approval":
+        # Authorization must display exact arguments, including whitespace and
+        # nested values. The total byte limit below rejects oversized requests.
+        normalized["proposed_tool"] = json.loads(json.dumps(payload.get("proposed_tool"), allow_nan=False))
 
     interrupt_id = str(normalized.get("interrupt_id") or uuid.uuid4())
     normalized["interrupt_id"] = interrupt_id

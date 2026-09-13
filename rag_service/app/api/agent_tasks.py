@@ -342,7 +342,6 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
     run = await AgentWorkflowRepository().get_run(task.active_run_id) if task.active_run_id else None
     plan = await repository.get_latest_plan(task.id, agent_run_id=task.active_run_id)
     payload = _task_payload(task)
-    payload["web_access"] = await repository.get_task_web_access(task.id)
     payload["active_run"] = None if run is None else {
         "id": run.id, "status": run.status,
         "runtime_binding_status": run.runtime_binding_status,
@@ -943,7 +942,6 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         })
     items.sort(key=lambda item: (item.get("timestamp") or "", item["id"]))
     task_payload = _task_payload(task)
-    task_payload["web_access"] = await repository.get_task_web_access(task.id)
     return {"task": task_payload, "run": _run_payload(run), "items": items}
 
 

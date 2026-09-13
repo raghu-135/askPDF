@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 import pytest
+from datetime import timedelta
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, START, StateGraph
@@ -15,6 +16,43 @@ from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 class _PauseState(TypedDict, total=False):
     answer: str
+
+
+@pytest.mark.asyncio
+async def test_dispatched_tool_interrupt_is_not_a_worker_failure(monkeypatch):
+    registry = NodeRegistry()
+    pending = GraphInterrupt([Interrupt(value={"type": "tool_approval"}, id="tool-interrupt")])
+
+    async def gated_tool(*args, **kwargs):
+        raise pending
+
+    monkeypatch.setattr(registry, "_run_sequential_tool_worker", gated_tool)
+    with pytest.raises(GraphInterrupt) as raised:
+        await registry.web_worker({"work_item": {"worker_node_id": "web_worker", "worker_type": "web_worker"}}, {})
+    assert raised.value is pending
+
+
+@pytest.mark.asyncio
+async def test_human_wait_does_not_expire_a_dispatched_tool(monkeypatch):
+    from langgraph_runtime import router_runtime
+    from langgraph_runtime.time_utils import utc_now, iso_utc_z
+
+    now = utc_now()
+    monkeypatch.setattr(router_runtime, "utc_now", lambda: now)
+    state = {"dispatch_id": "dispatch", "dispatch_deadline_epoch_ms": int((now - timedelta(minutes=9)).timestamp() * 1000),
+             "work_item": {"dispatch_id": "dispatch", "worker_node_id": "web_worker", "worker_type": "web_worker"}}
+    config = {}
+    command = router_runtime._resume_command({"interrupt_id": "approval", "requested_at": iso_utc_z(now - timedelta(minutes=10)), "decision": {"action": "approve"}}, state, config)
+    assert command.update["dispatch_deadline_epoch_ms"] > int(now.timestamp() * 1000)
+    pending = GraphInterrupt([Interrupt(value={"type": "tool_approval"}, id="next-approval")])
+
+    async def gated_tool(*args, **kwargs):
+        raise pending
+
+    registry = NodeRegistry()
+    monkeypatch.setattr(registry, "_run_sequential_tool_worker", gated_tool)
+    with pytest.raises(GraphInterrupt):
+        await registry.web_worker(state, config)
 
 
 @pytest.mark.asyncio
@@ -44,32 +82,6 @@ async def test_hitl_gate_graph_interrupt_bypasses_node_failure_reporting(monkeyp
         }, {"configurable": {"thread_id": "hitl-gate-bubble"}})
 
     assert raised.value is interrupt
-
-
-@pytest.mark.asyncio
-async def test_web_approval_once_persists_run_access_and_bypasses_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("langgraph_runtime.workflows.hitl_runtime._interrupt", lambda _payload: {"action": "approve"})
-    state = {
-        "hitl_policy": {
-            "enabled": True,
-            "gates": {"web_approval_gate": {"enabled": True}},
-        },
-        "available_worker_nodes": [{"id": "web_worker", "type": "web_worker"}],
-        "work_item_proposals": [{"worker_node_id": "web_worker", "worker_type": "web_worker"}],
-        "task_web_access": "undecided",
-    }
-
-    update = await hitl_gate_node(state, {"configurable": {"thread_id": "hitl-once"}})
-
-    assert update["task_web_access"] == "allowed_for_task"
-    assert update["hitl_approval_grants"]["web_approval_gate"]["status"] == "allowed"
-
-    bypass = await hitl_gate_node(
-        {**state, **update},
-        {"configurable": {"thread_id": "hitl-once"}},
-    )
-    assert bypass["hitl_gate_route"] == "approve"
-    assert bypass["hitl_approval_grants"] == update["hitl_approval_grants"]
 
 
 @pytest.mark.asyncio

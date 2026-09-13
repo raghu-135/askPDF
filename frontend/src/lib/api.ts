@@ -2362,7 +2362,6 @@ export interface AgentTaskSummary {
   active_run_id?: string | null;
   run_attempt?: number;
   progress: number;
-  web_access?: 'undecided' | 'allowed_for_task' | 'denied_for_task';
   completed_todos: number;
   total_todos: number;
   current_phase: string;

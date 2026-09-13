@@ -77,15 +77,6 @@ async def _finish_human_review_boundary(
         await execution_event_sink.finish_boundary()
 
 
-def _is_web_approval_interrupt(interrupt: Dict[str, Any]) -> bool:
-    proposed_tool = interrupt.get("proposed_tool")
-    return (
-        interrupt.get("type") in {"external_research_approval", "tool_approval"}
-        and isinstance(proposed_tool, dict)
-        and proposed_tool.get("name") == "search_web"
-    )
-
-
 def _question_for_run_result(
     run: Any,
     result: Optional[Dict[str, Any]] = None,
@@ -111,7 +102,7 @@ def _runtime_approval_response(
     approval_modifications: Optional[Dict[str, Any]],
 ) -> RuntimeApprovalResponse:
     return RuntimeApprovalResponse(
-        decision="reject" if action == AgentRunResumeAction.REJECT.value else "approve",
+        decision="reject" if action in {AgentRunResumeAction.REJECT.value, AgentRunResumeAction.CONTINUE_WITHOUT.value} else "approve",
         modifications=approval_modifications,
         feedback=approval_feedback,
         scope=approval_scope or "once",
@@ -804,10 +795,7 @@ class AgentRunService:
         # duplicate decisions, and resume guards; only execution is deferred.
         if resolution.run.task_id:
             from app.services.agent_task_repository import (
-                WEB_ACCESS_ALLOWED,
-                WEB_ACCESS_DENIED,
                 queue_task_after_interrupt,
-                set_task_web_access,
             )
 
             response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
@@ -830,30 +818,6 @@ class AgentRunService:
                     approval_feedback=approval_feedback,
                     approval_modifications=approval_modifications,
                 )
-            if _is_web_approval_interrupt(resolution.interrupt):
-                hermes_preflight = bool(
-                    (resolution.interrupt.get("runtime_payload") or {}).get("hermes_preflight")
-                )
-                if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value or (
-                    hermes_preflight and action == AgentRunResumeAction.APPROVE.value
-                ):
-                    await set_task_web_access(
-                        resolution.run.task_id,
-                        WEB_ACCESS_ALLOWED,
-                        agent_run_id=resolution.run.id,
-                        interrupt_id=interrupt_id,
-                    )
-                elif action in {
-                    AgentRunResumeAction.CONTINUE_WITHOUT.value,
-                    AgentRunResumeAction.REJECT.value,
-                }:
-                    await set_task_web_access(
-                        resolution.run.task_id,
-                        WEB_ACCESS_DENIED,
-                        agent_run_id=resolution.run.id,
-                        interrupt_id=interrupt_id,
-                    )
-
             await queue_task_after_interrupt(
                 resolution.run.task_id,
                 reason=f"interrupt:{interrupt_id}:{action}",

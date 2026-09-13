@@ -13,45 +13,14 @@ from langgraph_runtime.workflows.enums import (
 
 
 FINAL_REVIEW_GATE_ID = "human_review_gate"
-WEB_APPROVAL_GATE_ID = "web_approval_gate"
 
 
 def _hitl_gates_from_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
     return policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
 
 
-def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]:
+def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]:
     gate = dict(gate_policy) if isinstance(gate_policy, dict) else {}
-    if gate_id == WEB_APPROVAL_GATE_ID:
-        gate.setdefault("mode", HitlMode.APPROVAL.value)
-        gate.setdefault("phase", HitlPhase.BEFORE.value)
-        gate.setdefault(
-            "target",
-            {
-                "node_id": WorkflowNodeType.WEB_WORKER.value,
-                "node_type": WorkflowNodeType.WEB_WORKER.value,
-            },
-        )
-        gate.setdefault("interrupt_type", "tool_approval")
-        gate.setdefault("title", "Approve web search?")
-        gate.setdefault(
-            "prompt",
-            "This answer needs live web research. Approve web search or continue without it.",
-        )
-        gate.setdefault("allowed_actions", [
-            AgentRunResumeAction.APPROVE.value,
-            AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
-            AgentRunResumeAction.CONTINUE_WITHOUT.value,
-        ])
-        gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
-        gate.setdefault(
-            "routes",
-            {
-                AgentRunResumeAction.APPROVE.value: WorkflowNodeType.WEB_WORKER.value,
-                AgentRunResumeAction.APPROVE_FOR_SCOPE.value: WorkflowNodeType.WEB_WORKER.value,
-                AgentRunResumeAction.CONTINUE_WITHOUT.value: WorkflowNodeType.SYNTHESIZER.value,
-            },
-        )
     if gate_id == FINAL_REVIEW_GATE_ID:
         gate.setdefault("mode", HitlMode.REVIEW.value)
         gate.setdefault("phase", HitlPhase.AFTER.value)
@@ -87,39 +56,6 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
     if not isinstance(gate.get("default_action"), str):
         gate["default_action"] = AgentRunResumeAction.APPROVE_SELECTED.value if gate.get("mode") == HitlMode.CHOICE.value else AgentRunResumeAction.APPROVE.value
     return gate
-
-
-def normalize_hitl_gate_policy_for_graph(
-    gate_id: str,
-    gate_policy: Any,
-    node_types: Dict[str, str],
-) -> Dict[str, Any]:
-    """Normalize runtime-owned gate targets against the authored graph."""
-
-    supplied = dict(gate_policy) if isinstance(gate_policy, dict) else {}
-    if gate_id == WEB_APPROVAL_GATE_ID:
-        supplied_target = supplied.get("target") if isinstance(supplied.get("target"), dict) else {}
-        if not supplied_target or supplied_target.get("node_id") == WorkflowNodeType.WEB_WORKER.value:
-            dispatch_target = next(
-                (
-                    node_id for node_id, node_type in node_types.items()
-                    if node_type in {
-                        WorkflowNodeType.SERIAL_DISPATCH.value,
-                        WorkflowNodeType.PARALLEL_DISPATCH.value,
-                    }
-                ),
-                None,
-            )
-            if dispatch_target:
-                supplied["target"] = {
-                    "node_id": dispatch_target,
-                    "node_type": node_types[dispatch_target],
-                }
-                supplied["routes"] = {
-                    AgentRunResumeAction.APPROVE.value: dispatch_target,
-                    AgentRunResumeAction.CONTINUE_WITHOUT.value: dispatch_target,
-                }
-    return _normalize_hitl_gate_policy(gate_id, supplied)
 
 
 def resolve_hitl_target_node_id(gate: Dict[str, Any], node_types: Dict[str, str]) -> Optional[str]:
@@ -253,7 +189,7 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
     for gate_id, raw_gate in gates.items():
         if not isinstance(gate_id, str) or gate_id in existing_node_ids:
             continue
-        gate = normalize_hitl_gate_policy_for_graph(gate_id, raw_gate, node_types)
+        gate = normalize_hitl_gate_policy(gate_id, raw_gate)
         if gate.get("enabled", True) is False:
             continue
         phase = str(gate.get("phase") or HitlPhase.BEFORE.value)

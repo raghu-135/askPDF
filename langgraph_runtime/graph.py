@@ -64,9 +64,7 @@ from langgraph_runtime.workflows.corrective_contracts import (
     stable_corrective_identity,
 )
 from langgraph_runtime.workflows.hitl_runtime import (
-    WEB_APPROVAL_GATE_ID,
     hitl_gate_node,
-    normalize_hitl_policy_for_thread_settings,
 )
 from langgraph_runtime.workflows.planning import (
     WORKER_NODE_ORDER,
@@ -175,22 +173,19 @@ search_web = None
 def web_prefetch_allowed(state: Mapping[str, Any]) -> bool:
     """Return whether context loading may issue web search before routing.
 
-    In ask mode, the first web request must happen only after the graph's
-    approval gate.  Otherwise context_loader can fetch web evidence before
-    the planner has a chance to pause the run.
+    Avoid speculative web work in ask mode. The MCP wrapper independently
+    enforces human permission for every actual tool invocation.
     """
 
     if not bool(state.get("use_web_search")):
         return False
     mode = str(state.get("web_search_mode") or "on")
-    access = str(state.get("task_web_access") or "undecided")
     policy = state.get("hitl_policy")
-    gates = policy.get("gates") if isinstance(policy, Mapping) else None
-    web_gate = gates.get("web_approval_gate") if isinstance(gates, Mapping) else None
-    approval_gate_enabled = isinstance(web_gate, Mapping) and web_gate.get("enabled", True) is not False
-    if approval_gate_enabled and access != "allowed_for_task":
+    tools = policy.get("tools") if isinstance(policy, Mapping) else None
+    web_policy = tools.get(ToolName.SEARCH_WEB.value) if isinstance(tools, Mapping) else None
+    if isinstance(web_policy, Mapping) and web_policy.get("mode") in {"ask", "deny"}:
         return False
-    return not (mode == "ask" and access != "allowed_for_task")
+    return mode == "on"
 
 
 async def _emit_corrective_event(config: RunnableConfig, event: str, data: Dict[str, Any]) -> None:
@@ -596,6 +591,8 @@ class NodeRegistry:
                     tool_input={},
                     config=shape_config,
                 )
+        except GraphBubbleUp:
+            raise
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
@@ -1026,6 +1023,9 @@ class NodeRegistry:
         }
         try:
             deadline_ms = int(state.get("dispatch_deadline_epoch_ms") or 0)
+            resumed_deadline = ((config or {}).get("configurable") or {}).get("resumed_dispatch_deadline") or {}
+            if resumed_deadline.get("dispatch_id") == item.get("dispatch_id") and resumed_deadline.get("deadline_epoch_ms"):
+                deadline_ms = int(resumed_deadline["deadline_epoch_ms"])
             remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000 if deadline_ms else None
             deadline_owns_timeout = False
             if remaining_seconds is not None and remaining_seconds <= 0:
@@ -1039,6 +1039,8 @@ class NodeRegistry:
             )
             worker_call = self._run_sequential_tool_worker(node_name, branch_state, config)
             output = await asyncio.wait_for(worker_call, timeout=attempt_timeout_seconds)
+        except GraphBubbleUp:
+            raise
         except ChatRunCancellationRequested:
             await emit(ParallelEventName.WORKER_CANCELLED, {"attempt": attempt, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)})
             raise
@@ -1851,7 +1853,7 @@ class NodeRegistry:
         state: RouterRagState,
         config: RunnableConfig,
         *,
-        node_id: str = WEB_APPROVAL_GATE_ID,
+        node_id: str,
     ) -> Dict[str, Any]:
         return await hitl_gate_node(state, config, node_id=node_id)
 

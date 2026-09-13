@@ -89,6 +89,10 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             or definition.registry_contract_id in configured_tool_ids
         )
         task_context = context.task_context
+        from app.services.tool_approval import invocation_policies
+        approval_policy = invocation_policies(
+            config, permissions=task_context.permissions if task_context is not None else None,
+        )
         task_id = str(request.task_id or request.run_id)
         limits = dict(task_context.limits or {}) if task_context is not None else {}
         ttl_seconds = execution_context_ttl_seconds(limits)
@@ -100,7 +104,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 context_window=int(config.get("context_window") or 32_768),
                 use_web_search=bool(config.get("use_web_search")),
                 use_reranker=use_reranker,
-                extensions={"task_id": task_id, "llm_model": config.get("llm_model")},
+                extensions={"task_id": task_id, "llm_model": config.get("llm_model"), "tool_approval_policy": approval_policy},
             ),
             task_id=task_id,
             allowed_tools=allowed_tools,

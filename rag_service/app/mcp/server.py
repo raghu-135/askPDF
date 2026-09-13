@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from uuid import uuid4
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -38,6 +39,7 @@ from app.mcp.tool_audit import persist_tool_audit
 from app.runtime.cancellation import race_with_cancellation
 from app.services.agent_task_repository import run_cancel_requested
 from runtime_protocol.tool_contract import ToolError, ToolResult, ToolTrace, ToolMetrics
+from runtime_protocol.tool_approval import ApprovalMode
 
 logger = logging.getLogger(__name__)
 _transport_execution_token: ContextVar[str | None] = ContextVar(
@@ -123,6 +125,7 @@ class MCPServer:
             ):
                 raise ValueError(f"Unknown tool: {name}")
             arguments = dict(arguments or {})
+            invocation_id = str(arguments.pop("_askpdf_invocation_id", "") or uuid4())
             argument_token = arguments.pop(TOKEN_ARGUMENT, None)
             execution_token = _transport_execution_token.get() if self.require_execution_token else argument_token
             if self.require_execution_token and not execution_token:
@@ -156,9 +159,33 @@ class MCPServer:
                     raise ValueError("Invalid MCP execution context") from exc
             if not context.mcp_request_id:
                 context = context.__class__.from_mapping({
-                    **context.as_dict(), "mcp_request_id": str(request_context.request_id),
+                    **context.as_dict(), "mcp_request_id": invocation_id,
                 })
             validate_mcp_invocation(name, context)
+            from app.services.tool_approval import check_tool_approval, execute_tool_once
+            approval_mode, approval_request = await check_tool_approval(
+                name, arguments, context, invocation_id=invocation_id,
+            )
+            if approval_mode is not ApprovalMode.ALLOW:
+                result = ToolResult(
+                    ok=True,
+                    content="Human approval is required before this tool can run." if approval_request else "The tool was skipped because human permission was denied. Do not claim it was executed.",
+                    sources=[],
+                    artifacts={"approval_request": approval_request} if approval_request else {"approval_denied": True},
+                    warnings=["tool_approval_required" if approval_request else "tool_approval_denied"],
+                    metrics=ToolMetrics(warning_count=1),
+                    trace=ToolTrace(tool_name=name, agent_run_id=context.run_id, thread_id=context.thread_id),
+                )
+                await persist_tool_audit(
+                    run_id=str(context.run_id or ""), request_id=invocation_id,
+                    phase="progress" if approval_request else "completed",
+                    tool_name=name, result=result,
+                    payload={"status": "awaiting_approval" if approval_request else "skipped", "executed": False},
+                )
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=result.content)],
+                    structuredContent=result.to_payload(), isError=False,
+                )
             config = TOOL_FRIENDLY_CONFIG[name]
             logger.info(
                 "MCP tool call start tool=%s thread_id=%s run_id=%s tool_call_id=%s mcp_request_id=%s",
@@ -179,13 +206,18 @@ class MCPServer:
                         request_model = definition.request_model
                         request = request_model.model_validate(arguments)
                         run_id = str(context.run_id or "").strip()
+                        async def invoke_handler():
+                            return await execute_tool_once(
+                                name, arguments, context, invocation_id=invocation_id,
+                                invoke=lambda: definition.handler(request, context),
+                            )
                         if run_id:
                             result = await race_with_cancellation(
-                                definition.handler(request, context),
+                                invoke_handler(),
                                 lambda: _mcp_run_cancel_requested(run_id),
                             )
                         else:
-                            result = await definition.handler(request, context)
+                            result = await invoke_handler()
                     except asyncio.CancelledError:
                         await persist_tool_audit(
                             run_id=str(context.run_id or ""), request_id=audit_request_id,
@@ -269,6 +301,7 @@ class MCPServer:
     def _input_schema(self, model: type[Any]) -> dict[str, Any]:
         schema = dict(_schema(model))
         properties = dict(schema.get("properties") or {})
+        properties["_askpdf_invocation_id"] = {"type": "string", "description": "Runtime-owned invocation identity."}
         if not self.require_execution_token:
             properties[TOKEN_ARGUMENT] = {
                 "type": "string",

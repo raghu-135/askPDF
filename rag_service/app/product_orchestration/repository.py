@@ -584,6 +584,10 @@ class AgentWorkflowRepository:
                 run.completed_at = None
                 outcome = INTERRUPT_STATUS_RESUMED
 
+            if outcome == INTERRUPT_STATUS_RESUMED:
+                from app.services.tool_approval import record_tool_decision
+                await record_tool_decision(session, run, interrupt, action)
+
             metrics = dict(run.metrics_json or {})
             metrics["interrupt_resolution_count"] = int(metrics.get("interrupt_resolution_count") or 0) + 1
             metrics["last_interrupt_action"] = interrupt["decision"].get("action")

@@ -115,9 +115,45 @@ def test_application_migrations_upgrade_without_resetting_data(test_database_url
             await engine.dispose()
 
     asyncio.run(seed_existing_data())
+    _alembic(test_database_url, "upgrade", "e4a7c2d9b6f1")
+
+    async def seed_web_decisions() -> None:
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text("UPDATE agent_runs SET task_id = 'migration-task' WHERE id = 'migration-run'"))
+                await connection.execute(text("""
+                    INSERT INTO agent_task_events
+                        (id, task_id, agent_run_id, sequence, event_type, actor_type, payload_json)
+                    VALUES
+                        ('web-allow', 'migration-task', 'migration-run', 2, 'approval.responded', 'user',
+                         '{"status":"allowed_for_task","interrupt_id":"allow"}'::jsonb),
+                        ('web-deny', 'migration-task', 'migration-run', 3, 'approval.responded', 'user',
+                         '{"status":"denied_for_task","interrupt_id":"deny"}'::jsonb)
+                """))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed_web_decisions())
     _alembic(test_database_url, "upgrade", "head")
+    async def verify_migrated_permissions() -> None:
+        engine = create_async_engine(test_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as connection:
+                rows = (await connection.execute(text("""
+                    SELECT tool_name, decision, scope, scope_id
+                    FROM tool_approval_decisions WHERE run_id = 'migration-run'
+                """))).all()
+                assert len(rows) == 10
+                for tool in {row.tool_name for row in rows}:
+                    assert {row.decision for row in rows if row.tool_name == tool} == {"denied"}
+                assert all(row.scope == "task" and row.scope_id == "migration-task" for row in rows)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(verify_migrated_permissions())
     current = _alembic(test_database_url, "current")
-    assert "d6f2a8c4e1b9" in current.stdout
+    assert "f5b8d3e0c7a2" in current.stdout
 
     async def verify_existing_data() -> tuple[int, int, int, int, dict]:
         engine = create_async_engine(test_database_url, poolclass=NullPool)

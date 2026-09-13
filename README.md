@@ -170,7 +170,7 @@ strictly validated but does not negotiate protocol versions.
 
 ### Multi-Agent Architecture
 - **Agent Workflow Runtime**: External LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with product-projected run metadata
-- **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
+- **Human-in-the-Loop Tools**: Shared approval around any registered tool, with native LangGraph interrupts and Hermes approvals
 - **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
 - **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
 
@@ -350,7 +350,7 @@ Environment variables are now managed using a `.env` file for better security an
 - Local development runs the control plane and `langgraph-runtime` together through Compose, or points `LANGGRAPH_RUNTIME_URL` at a separately launched runtime. The control plane has no in-process LangGraph mode.
 - Checkpoint configuration and credentials belong only to `langgraph-runtime`; the runtime fails closed when durable checkpoint storage is unavailable.
 - Built-in workflow JSON files are loaded and seeded automatically at startup. Their runtime features, limits, and profiles are authoritative; no workflow feature flags are required.
-- The visible web-search approval toggle is a UI/thread-settings convenience shim. New agent runs normalize it into `config.hitl_policy.gates.web_approval_gate`, and the reusable backend contract is `hitl_policy.gates`, where gates can target any actionable graph node by `node_id` or `node_type` and run before or after that node.
+- The web-search Ask setting uses the shared MCP tool approval boundary in normal chat, LangGraph Deep Research, and Hermes. It asks only when a tool is actually called. Any registered tool can use `config.hitl_policy.tools`; graph review and choice gates remain separate in `hitl_policy.gates`. See [tool approval](docs/tool-approval.md).
 - Agent debug traces redact secret-like keys such as tokens, API keys, cookies, and authorization headers, and bound long preview/raw values before persisting.
 - Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
 - Runtime checkpoint administration is performed from the `langgraph-runtime` image and never from the control plane.

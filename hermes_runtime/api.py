@@ -786,6 +786,22 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
         operation_id = str(options.get("idempotency_key") or f"hermes:{run_id}:execute")
         system_prompt = str(managed_profile.get("instructions") or "").strip()
         task_context = input_data.get("task_context")
+        task_metadata = task_context.get("metadata") if isinstance(task_context, Mapping) else {}
+        task_metadata = task_metadata if isinstance(task_metadata, Mapping) else {}
+        attempt_id = str(task_metadata.get("attempt_id") or f"{run_id}:attempt:1")
+        boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
+        boundary_delta = {
+            "event_id": boundary_event_id,
+            "attempt_id": attempt_id,
+            "operation_id": operation_id,
+            "idempotency_key": f"task-delta:{boundary_event_id}",
+            "observed_task_version": int(task_metadata.get("task_version") or 0),
+            "observed_plan_revision": int(task_metadata.get("plan_revision") or 0),
+            "plan_changes": [],
+            "todo_changes": [],
+            "subagent_changes": [],
+            "web_access": None,
+        }
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
             question = _task_input_with_context(question, task_context)
@@ -928,11 +944,13 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             result = None
             if kind == "approval.requested":
                 interrupt_id = str(event_payload.get("approval_id") or event_payload.get("id") or f"hermes-approval-{sequence}")
+                from hermes_runtime.hermes_pinned_patch.approval_bridge import decode_approval_request
+                tool_request = decode_approval_request(dict(event_payload))
                 scopes = [choice for choice in event_payload["choices"] if choice != "deny"]
                 actions = (["approve"] if scopes else []) + (["reject"] if "deny" in event_payload["choices"] else [])
                 result = {
                     "status": "awaiting_human",
-                    "pending_interrupt": {
+                    "interruption": {
                         "interrupt_id": interrupt_id,
                         "type": "hermes_approval",
                         "kind": "approval",
@@ -946,6 +964,28 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "runtime_payload": dict(event_payload),
                     },
                     "continuation": continuation,
+                }
+                if tool_request is not None:
+                    result["interruption"] = {
+                        **tool_request,
+                        "interrupt_id": interrupt_id,
+                        "response_operation": "run.approval.respond",
+                        "runtime_approval_choices": ["once", "deny"],
+                    }
+                usage = _runtime_usage_snapshot(
+                    event_payload.get("usage"),
+                    operation_id=operation_id,
+                    started_tool_calls=started_tool_calls,
+                    active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
+                )
+                result["usage"] = usage
+                result["orchestration_delta"] = {
+                    **boundary_delta,
+                    "budget_usage": usage,
+                    "artifacts": [],
+                    "pending_interrupt": {"operation": "set", "value": result["interruption"]},
+                    "result": {"status": "awaiting_human"},
+                    "correction_outcomes": [],
                 }
             if terminal:
                 terminal_seen = True
@@ -1012,22 +1052,9 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     "framework_details": {"framework": "hermes", "native_output": output_mapping},
                     "correction_outcomes": correction_outcomes,
                 }
-                task_metadata = task_context.get("metadata") if isinstance(task_context, Mapping) else {}
-                task_metadata = task_metadata if isinstance(task_metadata, Mapping) else {}
-                attempt_id = str(task_metadata.get("attempt_id") or f"{run_id}:attempt:1")
-                boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
                 orchestration_delta = {
-                    "event_id": boundary_event_id,
-                    "attempt_id": attempt_id,
-                    "operation_id": operation_id,
-                    "idempotency_key": f"task-delta:{boundary_event_id}",
-                    "observed_task_version": int(task_metadata.get("task_version") or 0),
-                    "observed_plan_revision": int(task_metadata.get("plan_revision") or 0),
-                    "plan_changes": [],
-                    "todo_changes": [],
-                    "subagent_changes": [],
+                    **boundary_delta,
                     "budget_usage": usage,
-                    "web_access": None,
                     "artifacts": list(neutral_task_result["artifacts"]),
                     "pending_interrupt": {"operation": "clear"},
                     "result": {
@@ -1399,6 +1426,8 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 "phase": phase,
                 "error_type": type(exc).__name__,
             }
+            if isinstance(exc, httpx.HTTPStatusError):
+                details["http_status"] = exc.response.status_code
             if is_timeout and upstream_run_id and execution_profile:
                 try:
                     stop_result = await _stop_and_confirm_upstream_run(

@@ -96,12 +96,27 @@ def _install() -> None:
     from gateway.platforms.api_server import APIServerAdapter
     from hermes_cli.config import load_config
     from tools.mcp_tool import _load_mcp_config, register_mcp_servers
+    from tools import mcp_tool
+    from tools.approval import request_tool_approval
+    from approval_bridge import wrap_mcp_handler
     from agent import chat_completion_helpers
 
     original_toolsets = APIServerAdapter._handle_toolsets
-    original_events = APIServerAdapter._handle_run_events
+    original_sweep = APIServerAdapter._sweep_orphaned_runs_once
     original_create_agent = APIServerAdapter._create_agent
     original_build_api_kwargs = chat_completion_helpers.build_api_kwargs
+    original_make_tool_handler = mcp_tool._make_tool_handler
+
+    def make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+        handler = original_make_tool_handler(server_name, tool_name, tool_timeout)
+        if not server_name.startswith("askpdf_"):
+            return handler
+        return wrap_mcp_handler(
+            handler,
+            request_tool_approval,
+        )
+
+    mcp_tool._make_tool_handler = make_tool_handler
 
     def create_agent(self: Any, *args: Any, **kwargs: Any) -> Any:
         model_options = kwargs.get("model_options")
@@ -147,16 +162,26 @@ def _install() -> None:
         return web.json_response(payload, status=response.status)
 
     async def handle_run_events(self: Any, request: Any) -> Any:
+        from event_stream import serve_run_events
+        from gateway.platforms.api_server import _sse_frame
         config = load_config()
         server_names = sorted(str(name) for name in (config.get("mcp_servers") or {}))
-        try:
-            return await original_events(self, request)
-        finally:
+
+        async def retire_after_terminal() -> None:
             if server_names:
                 await asyncio.to_thread(_retire_servers, server_names)
 
+        return await serve_run_events(
+            self, request, web=web, encode_frame=_sse_frame, on_terminal=retire_after_terminal,
+        )
+
+    def sweep_orphaned_runs(self: Any, now: float | None = None) -> None:
+        from event_stream import sweep_run_events
+        sweep_run_events(self, original_sweep, now)
+
     APIServerAdapter._handle_toolsets = handle_toolsets
     APIServerAdapter._handle_run_events = handle_run_events
+    APIServerAdapter._sweep_orphaned_runs_once = sweep_orphaned_runs
     APIServerAdapter._create_agent = create_agent
     chat_completion_helpers.build_api_kwargs = build_api_kwargs
     logger.info("Installed askPDF pinned Hermes patch for %s", PINNED_REVISION)

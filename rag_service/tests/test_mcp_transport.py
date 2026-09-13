@@ -1,9 +1,19 @@
 import pytest
 import pytest_asyncio
 import asyncio
+from unittest.mock import AsyncMock
 from httpx import ASGITransport, AsyncClient
 
 from app.mcp.transport import InProcessMCPClient
+
+
+@pytest.fixture(autouse=True)
+def isolate_transport_database_dependencies(monkeypatch):
+    """Transport tests use synthetic run IDs; persistence has separate DB tests."""
+    from app.mcp import server
+
+    monkeypatch.setattr(server, "persist_tool_audit", AsyncMock())
+    monkeypatch.setattr(server, "run_cancel_requested", AsyncMock(return_value=False))
 
 
 @pytest_asyncio.fixture(autouse=True)

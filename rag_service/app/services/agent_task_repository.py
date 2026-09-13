@@ -74,9 +74,6 @@ TERMINAL_TASK_RUN_STATUSES = {
     AgentRunStatus.CANCELLED.value,
     AgentRunStatus.REJECTED.value,
 }
-WEB_ACCESS_EVENT_PREFIX = "web_access."
-WEB_ACCESS_ALLOWED = "allowed_for_task"
-WEB_ACCESS_DENIED = "denied_for_task"
 COURSE_CORRECTION_DELIVERY_ACCEPTED = "accepted"
 COURSE_CORRECTION_DELIVERY_LINKED = "linked"
 COURSE_CORRECTION_DELIVERY_DELIVERED = "delivered"
@@ -93,20 +90,6 @@ COURSE_CORRECTION_DELIVERY_STATES = {
     COURSE_CORRECTION_DELIVERY_UNRESOLVED,
     COURSE_CORRECTION_DELIVERY_REJECTED,
 }
-
-
-def _web_access_from_approval_events(events: Iterable[Any]) -> str:
-    """Return the latest durable web-access decision from approval audit events.
-
-    A single approval can emit both a scoped web-access event and a generic
-    approval-resolved event. The latter is intentionally metadata-only, so it
-    must not mask the scoped decision when it is the newest event.
-    """
-    for event in events:
-        status = str((getattr(event, "payload_json", None) or {}).get("status") or "")
-        if status in {WEB_ACCESS_ALLOWED, WEB_ACCESS_DENIED}:
-            return status
-    return "undecided"
 
 
 class AgentTaskConflict(ValueError):
@@ -654,7 +637,7 @@ async def _append_event(
         canonical_payload["artifact_id"] = artifact_id
     if subagent_run_id is not None:
         canonical_payload["subagent_id"] = subagent_run_id
-    if event_type == "task.approval_resolved" or event_type.startswith("web_access."):
+    if event_type == "task.approval_resolved":
         canonical_payload["approval_id"] = canonical_payload["interrupt_id"]
     canonical = create_runtime_event(
         event_id=f"{task.id}:{event_sequence}", run_id=agent_run_id or task.id,
@@ -692,65 +675,6 @@ async def append_event(task_id: str, event_type: str, **kwargs) -> AgentTaskEven
             event = await _append_event(session, task, event_type, **kwargs)
         await session.refresh(event)
         return event
-
-
-async def get_task_web_access(task_id: str) -> str:
-    async with async_session_maker() as session:
-        approval_events = (await session.execute(
-            select(AgentTaskEvent)
-            .where(
-                AgentTaskEvent.task_id == task_id,
-                AgentTaskEvent.event_type == "approval.responded",
-            )
-            .order_by(AgentTaskEvent.sequence.desc())
-            .limit(100)
-        )).scalars().all()
-        return _web_access_from_approval_events(approval_events)
-
-
-async def set_task_web_access(
-    task_id: str,
-    status: str,
-    *,
-    agent_run_id: str,
-    interrupt_id: str,
-    actor_id: Optional[str] = None,
-) -> AgentTask:
-    if status not in {WEB_ACCESS_ALLOWED, WEB_ACCESS_DENIED}:
-        raise ValueError("unknown task web-access status")
-    async with async_session_maker() as session:
-        async with session.begin():
-            task = (await session.execute(
-                select(AgentTask).where(AgentTask.id == task_id).with_for_update()
-            )).scalar_one()
-            prior_events = list((await session.execute(
-                select(AgentTaskEvent)
-                .where(
-                    AgentTaskEvent.task_id == task_id,
-                    AgentTaskEvent.event_type == "approval.responded",
-                )
-                .order_by(AgentTaskEvent.sequence.desc())
-                .limit(100)
-            )).scalars().all())
-            if any(
-                str((event.payload_json or {}).get("interrupt_id") or "") == interrupt_id
-                and str((event.payload_json or {}).get("status") or "") == status
-                for event in prior_events
-            ):
-                return task
-            task.version += 1
-            task.updated_at = utc_now()
-            await _append_event(
-                session,
-                task,
-                f"{WEB_ACCESS_EVENT_PREFIX}{status}",
-                actor_type="user",
-                actor_id=actor_id,
-                agent_run_id=agent_run_id,
-                payload={"interrupt_id": interrupt_id, "scope": "task", "status": status, "version": task.version},
-            )
-        await session.refresh(task)
-        return task
 
 
 COMMAND_TRANSITIONS = {

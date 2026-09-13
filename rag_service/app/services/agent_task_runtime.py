@@ -101,6 +101,22 @@ def _task_runtime_operation_id(task: Any, run: Any) -> str:
     return f"task:{task.id}:run:{run.id}:continue:{getattr(run, 'task_attempt', None) or run.id}"
 
 
+def _task_result_with_usage(task_result: Mapping[str, Any], runtime_usage: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge measured usage without inventing a terminal result at a pause."""
+    result = dict(task_result)
+    if result and runtime_usage:
+        task_usage = dict(result.get("usage") or {})
+        result["usage"] = {
+            **runtime_usage,
+            **task_usage,
+            "measured_dimensions": list(dict.fromkeys([
+                *[str(value) for value in task_usage.get("measured_dimensions") or []],
+                *[str(value) for value in runtime_usage.get("measured_dimensions") or []],
+            ])),
+        }
+    return result
+
+
 async def _invoke_task_runtime(
     *,
     adapter: Any,
@@ -118,6 +134,9 @@ async def _invoke_task_runtime(
     persisted_result = projection.get("runtime_result")
     if isinstance(persisted_result, dict):
         persisted_wire_result = dict(persisted_result)
+        # Projection recovery stores the product payload, whose interruption
+        # field is named pending_interrupt. Restore the neutral wire contract.
+        persisted_wire_result["interruption"] = persisted_result.get("pending_interrupt")
         persisted_task_result = persisted_result.get("runtime_task_result")
         if isinstance(persisted_task_result, Mapping) and not isinstance(
             persisted_wire_result.get("task_result"), Mapping
@@ -622,7 +641,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
     todos = await tasks.list_todos(task.id)
     latest_plan = await tasks.get_latest_plan(task.id)
     acknowledged_runtime_plan_revision = await tasks.latest_applied_runtime_plan_revision(task.id)
-    task_web_access = await tasks.get_task_web_access(task.id)
     repository = AgentWorkflowRepository()
     trace = AgentTraceRecorder(run)
     context = {
@@ -714,7 +732,6 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             permissions={
                 "use_web_search": bool(config.get("use_web_search")),
                 "web_search_mode": str(config.get("web_search_mode") or "off"),
-                "web_access": task_web_access,
             },
             metadata={
                 "llm_model": config.get("llm_model"),
@@ -838,17 +855,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         # older/native bridges only put it on task_result.  Product budget
         # accounting must see the same measured counters in either shape.
         runtime_usage = dict(runtime_result.usage or {})
-        task_usage = dict(canonical_task_result.get("usage") or {})
-        if runtime_usage:
-            measured = list(dict.fromkeys([
-                *[str(value) for value in task_usage.get("measured_dimensions") or []],
-                *[str(value) for value in runtime_usage.get("measured_dimensions") or []],
-            ]))
-            canonical_task_result["usage"] = {
-                **runtime_usage,
-                **task_usage,
-                "measured_dimensions": measured,
-            }
+        canonical_task_result = _task_result_with_usage(canonical_task_result, runtime_usage)
         evidence_policy = dict((resolved_spec.get("config") or {}).get("task_policy") or {}).get("evidence")
         if (
             canonical_task_result

@@ -744,33 +744,20 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_hermes_deep_task_gates_external_research_before_starting_upstream(monkeypatch):
+async def test_hermes_deep_task_defers_approval_to_actual_tool_invocation(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", AsyncMock(return_value=True))
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    adapter.transport._stream = AsyncMock(return_value="started")
     request = AgentRuntimeRequest("run-approval", "thread-approval", "hermes_rag_agent", "hermes", "hermes_agent")
-    result = await adapter.start(
-        request,
-        context=RuntimeInvocationContext(
-            resolved_spec={"managed_profile": {"mcp": {"runtime_profile": "askpdf-deep-external"}}},
-            task_context=RuntimeTaskContext(
-                task_id="task-approval",
-                permissions={"web_search_mode": "ask", "web_access": "undecided"},
-            ),
-        ),
-    )
-
-    assert result.status == "awaiting_human"
-    assert result.interruption["type"] == "external_research_approval"
-    assert result.interruption["response_operation"] == "run.approval.respond"
-    assert result.continuation.payload["hermes_preflight"] is True
-    assert result.orchestration_delta is not None
-    assert result.orchestration_delta.pending_interrupt == {
-        "operation": "set",
-        "value": result.interruption,
-    }
-    assert result.orchestration_delta.result == {"status": "awaiting_human"}
+    result = await adapter.start(request, context=RuntimeInvocationContext(
+        resolved_spec={"managed_profile": {"mcp": {"runtime_profile": "askpdf-deep-external"}, "model_policy": {"model": "test-model"}}},
+        task_context=RuntimeTaskContext(task_id="task-approval", permissions={"web_search_mode": "ask"}),
+    ))
+    assert result == "started"
+    adapter.transport._stream.assert_awaited_once()
 
 
 def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):
@@ -924,3 +911,73 @@ def test_hermes_readiness_skips_mcp_when_not_required(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json()["checks"]["mcp"] == {"status": "ok", "required": False}
     assert requested_urls == ["http://hermes.test/health"]
+
+
+@pytest.mark.parametrize("bridged_tool", [False, True])
+def test_native_approval_pause_publishes_task_delta_and_resumes(monkeypatch, tmp_path, bridged_tool):
+    """A real gateway stream must keep the product task alive at human boundaries."""
+    import base64
+    from runtime_protocol.tool_approval import ToolApprovalPolicy, ApprovalMode, ApprovalScope, tool_approval_request
+    from runtime_protocol.protocol import decode_event_frame
+    from runtime_protocol.transport import result_from_dict
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "approval-state.json"))
+    monkeypatch.setattr(hermes_api.RunProfileManager, "is_reusable", lambda *_: True)
+    monkeypatch.setattr(hermes_api.RunProfileManager, "retire", lambda *_: None)
+    pending = tool_approval_request(
+        "search_web", {"query": "official Python release"},
+        policy=ToolApprovalPolicy(ApprovalMode.ASK, ApprovalScope.TASK),
+        caller="invocation-1", response_operation="run.approval.respond",
+    )
+    approval = {"event": "approval.request", "id": "native-approval-1", "command": "search_web", "choices": ["once", "deny"]}
+    if bridged_tool:
+        encoded = base64.urlsafe_b64encode(json.dumps(pending).encode()).decode()
+        approval["pattern_key"] = "plugin_rule:askpdf_tool:" + encoded
+    streams = [approval, {"event": "run.completed", "id": "native-completion-1", "output": "verified"}]
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/upstream-run-7"):
+            return httpx.Response(200, json={"status": "completed"}, request=request)
+        assert request.method == "GET" and request.url.path.endswith("/events")
+        event = streams.pop(0)
+        return httpx.Response(200, text="data: " + json.dumps(event) + "\n\n", request=request)
+
+    monkeypatch.setattr(hermes_api.httpx, "AsyncClient", lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)))
+    payload = {
+        "request": {
+            "run_id": "run-1", "thread_id": "thread-1", "task_id": "task-1",
+            "input": {"question": "Verify release", "task_context": {"metadata": {"attempt_id": "attempt-1", "task_version": 4, "plan_revision": 2}}},
+            "options": {"idempotency_key": "start-operation"},
+            "continuation": _cancel_payload()["continuation"],
+        },
+        "context": {"resolved_spec": {"managed_profile": {"limits": {"max_duration_seconds": 60}}}},
+    }
+
+    def results(response):
+        assert response.status_code == 200, response.text
+        frames = [decode_event_frame(block + "\n\n") for block in response.text.split("\n\n") if "data:" in block]
+        return [frame["result"] for frame in frames if frame.get("result")]
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        paused = results(client.post("/v1/runs/start", json=payload))[-1]
+        assert paused["status"] == "awaiting_human"
+        delta = paused["orchestration_delta"]
+        assert delta["result"]["status"] == "awaiting_human"
+        neutral = result_from_dict(paused)
+        assert neutral.interruption is not None
+        assert delta["pending_interrupt"] == {"operation": "set", "value": neutral.interruption}
+        assert delta["observed_task_version"] == 4
+        assert delta["observed_plan_revision"] == 2
+        assert delta["budget_usage"]["active_runtime_ms"] >= 0
+        if bridged_tool:
+            assert neutral.interruption["proposed_tool"] == pending["proposed_tool"]
+        payload["request"]["options"]["idempotency_key"] = "approval-operation"
+        payload["request"]["continuation"] = paused["continuation"]
+        completed = results(client.post("/v1/runs/run-1/continue", json=payload))[-1]
+        assert completed["status"] == "completed"
+        assert completed["orchestration_delta"]["pending_interrupt"] == {"operation": "clear"}
+        assert completed["orchestration_delta"]["event_id"] != delta["event_id"]
+        assert completed["task_result"]["text"] == "verified"
+    assert not streams

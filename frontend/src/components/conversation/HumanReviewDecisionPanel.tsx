@@ -56,10 +56,10 @@ export function HumanReviewDecisionPanel({
   const selectionMode = String(interrupt.selection_mode || HitlSelectionMode.Single);
   const multiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti || scopeOptions.length > 0;
   const editingScope = actions.has(ResumeAction.Edit) && scopeOptions.length > 0;
-  const isWebApproval = interrupt.type === 'external_research_approval'
-    || interrupt.node_id === 'web_approval_gate'
-    || (typeof interrupt.proposed_tool === 'object' && interrupt.proposed_tool !== null && interrupt.proposed_tool.name === 'search_web');
-  const approvalScopeKind = String(interrupt.approval_scope_kind || (interrupt.type === 'external_research_approval' ? 'task' : 'run'));
+  const proposedTool = typeof interrupt.proposed_tool === 'object' && interrupt.proposed_tool !== null
+    ? interrupt.proposed_tool : null;
+  const isToolApproval = interrupt.type === 'tool_approval';
+  const approvalScopeKind = String(interrupt.approval_scope_kind || 'run');
 
   useEffect(() => {
     setSelectedIds(selectableOptions.map((option) => option.id));
@@ -93,6 +93,11 @@ export function HumanReviewDecisionPanel({
           {interrupt.prompt || interrupt.body}
         </Typography>
       )}
+      {isToolApproval && proposedTool?.arguments && (
+        <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
+          {JSON.stringify(proposedTool.arguments, null, 2)}
+        </Box>
+      )}
       {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
           {editingScope && <Typography variant="caption" color="text.secondary">Select the approved research scope.</Typography>}
@@ -121,12 +126,12 @@ export function HumanReviewDecisionPanel({
         />
       )}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isWebApproval ? 'Approve once' : 'Approve'}</Button>}
+        {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}</Button>}
         {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
         {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
         {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
-        {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isWebApproval ? 'Continue without web research' : 'Continue'}</Button>}
-        {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : isWebApproval ? 'Continue without web research' : 'Reject'}</Button>}
+        {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue'}</Button>}
+        {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}</Button>}
       </Box>
       {disabled && disabledReason && <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>}
       {error && <Typography variant="caption" color="error">{error}</Typography>}

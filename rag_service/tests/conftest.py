@@ -255,6 +255,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import (
+        agent_task_chat_publish,
         agent_task_repository,
         agent_task_runtime_projection,
         embedding_materialization_service,
@@ -267,6 +268,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         memory_workspace_service,
         project_lifecycle_service,
         thread_management_service,
+        tool_approval,
     )
     from app.product_orchestration import (
         chat_cancellation,
@@ -297,6 +299,8 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         chat_cancellation,
         agent_task_repository,
         agent_task_runtime_projection,
+        agent_task_chat_publish,
+        tool_approval,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 

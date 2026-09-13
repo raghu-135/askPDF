@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 import sys
-from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
@@ -22,8 +21,6 @@ from langgraph_runtime.workflows.enums import (
     HitlSelectionMode,
     HITL_ACTIONS,
     NodeEventStatus,
-    ToolName,
-    WorkflowNodeType,
 )
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER, available_worker_node_ids
 from langgraph_runtime.workflows.runtime_invocation import (
@@ -35,8 +32,9 @@ from langgraph_runtime.workflows.state import RouterRagState, runtime_visit_inde
 from langgraph_runtime.workflows.trace import compact_preview
 
 
-FINAL_REVIEW_GATE_ID = "human_review_gate"
-WEB_APPROVAL_GATE_ID = "web_approval_gate"
+from langgraph_runtime.workflows.hitl_materializer import (
+    FINAL_REVIEW_GATE_ID, normalize_hitl_gate_policy,
+)
 
 
 def _interrupt(payload: Dict[str, Any]) -> Any:
@@ -88,74 +86,6 @@ def hitl_gates_from_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
     return policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
 
 
-def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]:
-    gate = dict(gate_policy) if isinstance(gate_policy, dict) else {}
-    if gate_id == WEB_APPROVAL_GATE_ID:
-        gate.setdefault("mode", HitlMode.APPROVAL.value)
-        gate.setdefault("phase", HitlPhase.BEFORE.value)
-        gate.setdefault(
-            "target",
-            {
-                "node_id": WorkflowNodeType.WEB_WORKER.value,
-                "node_type": WorkflowNodeType.WEB_WORKER.value,
-            },
-        )
-        gate.setdefault("interrupt_type", "tool_approval")
-        gate.setdefault("title", "Approve web search?")
-        gate.setdefault(
-            "prompt",
-            "This answer needs live web research. Approve web search or continue without it.",
-        )
-        gate.setdefault("allowed_actions", [
-            AgentRunResumeAction.APPROVE.value,
-            AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
-            AgentRunResumeAction.CONTINUE_WITHOUT.value,
-        ])
-        gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
-        gate.setdefault(
-            "routes",
-            {
-                AgentRunResumeAction.APPROVE.value: WorkflowNodeType.WEB_WORKER.value,
-                AgentRunResumeAction.CONTINUE_WITHOUT.value: WorkflowNodeType.SYNTHESIZER.value,
-            },
-        )
-    if gate_id == FINAL_REVIEW_GATE_ID:
-        gate.setdefault("mode", HitlMode.REVIEW.value)
-        gate.setdefault("phase", HitlPhase.AFTER.value)
-        gate.setdefault(
-            "target",
-            {
-                "node_id": WorkflowNodeType.FINALIZER.value,
-                "node_type": WorkflowNodeType.FINALIZER.value,
-            },
-        )
-        gate.setdefault("interrupt_type", "final_answer_review")
-        gate.setdefault("title", "Review final answer")
-        gate.setdefault("prompt", "Approve this answer before it is saved to the thread.")
-        gate.setdefault("allowed_actions", [
-            AgentRunResumeAction.APPROVE.value,
-            AgentRunResumeAction.EDIT.value,
-            AgentRunResumeAction.CONTINUE_WITHOUT.value,
-            AgentRunResumeAction.REJECT.value,
-        ])
-        gate.setdefault("default_action", AgentRunResumeAction.APPROVE.value)
-        gate.setdefault("routes", {
-            AgentRunResumeAction.APPROVE.value: GraphSentinel.END.value,
-            AgentRunResumeAction.EDIT.value: GraphSentinel.END.value,
-            AgentRunResumeAction.CONTINUE_WITHOUT.value: GraphSentinel.END.value,
-        })
-        gate.setdefault("editable_fields", ["final_answer"])
-    gate.setdefault("mode", HitlMode.APPROVAL.value)
-    gate.setdefault("phase", HitlPhase.BEFORE.value)
-    if not isinstance(gate.get("routes"), dict):
-        gate["routes"] = {}
-    if not isinstance(gate.get("allowed_actions"), list):
-        gate["allowed_actions"] = [AgentRunResumeAction.APPROVE_SELECTED.value, AgentRunResumeAction.CONTINUE_WITHOUT.value] if gate.get("mode") == HitlMode.CHOICE.value else [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value]
-    if not isinstance(gate.get("default_action"), str):
-        gate["default_action"] = AgentRunResumeAction.APPROVE_SELECTED.value if gate.get("mode") == HitlMode.CHOICE.value else AgentRunResumeAction.APPROVE.value
-    return gate
-
-
 def normalize_hitl_actions(gate: Dict[str, Any]) -> List[str]:
     allowed = gate.get("allowed_actions")
     if not isinstance(allowed, list) or not all(isinstance(action, str) for action in allowed):
@@ -200,49 +130,11 @@ def hitl_option_targets(gate: Dict[str, Any], selected_option_ids: List[str]) ->
     return targets
 
 
-def with_web_approval_hitl_policy(policy: Any) -> Dict[str, Any]:
-    """Return a policy with the reusable before-web approval gate enabled."""
-
-    normalized = deepcopy(policy) if isinstance(policy, dict) else {}
-    normalized["enabled"] = True
-    gates = dict(normalized.get("gates") or {})
-    gates[WEB_APPROVAL_GATE_ID] = normalize_hitl_gate_policy(
-        WEB_APPROVAL_GATE_ID,
-        gates.get(WEB_APPROVAL_GATE_ID),
-    )
-    normalized["gates"] = gates
-    return normalized
-
-
-def normalize_hitl_policy_for_thread_settings(
-    policy: Any,
-    thread_settings: Any = None,
-    graph: Any = None,
-) -> Dict[str, Any]:
-    """Normalize thread-level HITL toggles into the reusable policy contract."""
-
-    normalized = deepcopy(policy) if isinstance(policy, dict) else {}
-    if isinstance(thread_settings, dict) and bool(thread_settings.get("hitl_web_approval")):
-        graph_nodes = graph.get("nodes") if isinstance(graph, dict) else []
-        node_types = {
-            str(node.get("type"))
-            for node in graph_nodes
-            if isinstance(node, dict) and isinstance(node.get("type"), str)
-        }
-        # Deep research has its own checkpointed approval in
-        # deep_task_scheduler for web_researcher todos. Injecting the generic
-        # web_worker/synthesizer gate into that graph creates invalid targets.
-        if WorkflowNodeType.DEEP_TASK_SCHEDULER.value in node_types:
-            return normalized
-        return with_web_approval_hitl_policy(normalized)
-    return normalized
-
-
 async def hitl_gate_node(
     state: RouterRagState,
     config: RunnableConfig,
     *,
-    node_id: str = WEB_APPROVAL_GATE_ID,
+    node_id: str,
 ) -> Dict[str, Any]:
     """Pause at a reusable human-in-the-loop gate declared by hitl_policy."""
 
@@ -258,56 +150,6 @@ async def hitl_gate_node(
             "hitl_gate_route": AgentRunResumeAction.APPROVE.value,
             "hitl_gate_routes": routes,
         }
-
-    if node_id == WEB_APPROVAL_GATE_ID:
-        web_worker_ids = {
-            str(item.get("id")) for item in state.get("available_worker_nodes") or []
-            if isinstance(item, dict) and item.get("type") == WorkflowNodeType.WEB_WORKER.value
-        }
-        proposals = [item for item in state.get("work_item_proposals") or [] if isinstance(item, dict)]
-        web_planned = any(
-            item.get("worker_node_id") in web_worker_ids
-            or item.get("worker_type") == WorkflowNodeType.WEB_WORKER.value
-            for item in proposals
-        )
-        if proposals and not web_planned:
-            routes = dict(state.get("hitl_gate_routes") or {})
-            routes[node_id] = AgentRunResumeAction.APPROVE.value
-            return skipped_worker_update(state, config, node_id, started, "web_not_planned") | {
-                "hitl_gate_route": AgentRunResumeAction.APPROVE.value,
-                "hitl_gate_routes": routes,
-            }
-        grant = (state.get("hitl_approval_grants") or {}).get(node_id)
-        grant_status = str(grant.get("status") or "") if isinstance(grant, dict) else ""
-        task_web_access = str(state.get("task_web_access") or "undecided")
-        if grant_status in {"allowed", "denied"} or task_web_access in {"allowed_for_task", "denied_for_task"}:
-            route = (
-                AgentRunResumeAction.APPROVE.value
-                if grant_status == "allowed" or task_web_access == "allowed_for_task"
-                else AgentRunResumeAction.CONTINUE_WITHOUT.value
-            )
-            routes = dict(state.get("hitl_gate_routes") or {})
-            routes[node_id] = route
-            update = {
-                "hitl_gate_route": route,
-                "hitl_gate_routes": routes,
-            }
-            if grant_status == "denied":
-                update["work_item_proposals"] = [
-                    item for item in proposals
-                    if item.get("worker_node_id") not in web_worker_ids
-                ]
-                update["execution_plan"] = [
-                    item for item in state.get("execution_plan") or []
-                    if item not in web_worker_ids
-                ]
-            return skipped_worker_update(
-                state,
-                config,
-                node_id,
-                started,
-                f"web_{grant_status}_for_run",
-            ) | update
 
     mode = str(gate_policy.get("mode") or HitlMode.APPROVAL.value)
     phase = str(gate_policy.get("phase") or HitlPhase.BEFORE.value)
@@ -362,14 +204,6 @@ async def hitl_gate_node(
         "used_chat_id_count": len(state.get("used_chat_ids") or []),
         "evidence": compact_preview(state.get("evidence")),
     }
-    proposed_tool = None
-    if target_node_id == WorkflowNodeType.WEB_WORKER.value or node_id == WEB_APPROVAL_GATE_ID:
-        proposed_tool = {
-            "name": ToolName.SEARCH_WEB.value,
-            "caller_node": WorkflowNodeType.WEB_WORKER.value,
-            "input": compact_preview(state.get("question"), limit=1000),
-        }
-
     decision = _interrupt(
         {
             "gate_id": node_id,
@@ -395,7 +229,6 @@ async def hitl_gate_node(
             "checkpoint_resume": True,
             "reject_behavior": HitlRejectBehavior.RESUME.value if AgentRunResumeAction.REJECT.value in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
             "input_summary": input_summary,
-            "proposed_tool": proposed_tool,
             "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000) if mode == HitlMode.REVIEW.value else None,
             "editable_fields": gate_policy.get("editable_fields") if mode == HitlMode.REVIEW.value else None,
         }
@@ -460,38 +293,10 @@ async def hitl_gate_node(
             },
         ],
     }
-    approval_grants = dict(state.get("hitl_approval_grants") or {})
-    if node_id == WEB_APPROVAL_GATE_ID and action in {
-        AgentRunResumeAction.APPROVE.value,
-        AgentRunResumeAction.APPROVE_FOR_SCOPE.value,
-    }:
-        approval_grants[node_id] = {"status": "allowed", "scope": "run"}
-        update["hitl_approval_grants"] = approval_grants
-        update["task_web_access"] = "allowed_for_task"
-    elif node_id == WEB_APPROVAL_GATE_ID and action in {
-        AgentRunResumeAction.CONTINUE_WITHOUT.value,
-        AgentRunResumeAction.REJECT.value,
-    }:
-        approval_grants[node_id] = {"status": "denied", "scope": "run"}
-        update["hitl_approval_grants"] = approval_grants
-        update["task_web_access"] = "denied_for_task"
     if execution_plan_update is not None:
         update["execution_plan"] = execution_plan_update
     elif isinstance(execution_plan, list):
         update["execution_plan"] = execution_plan
-
-    if node_id == WEB_APPROVAL_GATE_ID and action == AgentRunResumeAction.CONTINUE_WITHOUT.value:
-        web_worker_ids = {
-            str(item.get("id")) for item in state.get("available_worker_nodes") or []
-            if isinstance(item, dict) and item.get("type") == WorkflowNodeType.WEB_WORKER.value
-        }
-        update["work_item_proposals"] = [
-            item for item in state.get("work_item_proposals") or []
-            if isinstance(item, dict) and item.get("worker_node_id") not in web_worker_ids
-        ]
-        update["execution_plan"] = [
-            item for item in state.get("execution_plan") or [] if item not in web_worker_ids
-        ]
 
     if mode == HitlMode.REVIEW.value:
         update["human_review_decision"] = {

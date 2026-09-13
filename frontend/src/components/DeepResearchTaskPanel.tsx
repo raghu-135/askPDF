@@ -584,11 +584,6 @@ export default function DeepResearchTaskPanel({
     ? Number(task?.configuration?.context_window || contextWindow)
     : contextWindow;
   const configuredWebMode = String(task?.configuration?.web_search_mode || 'off') as 'off' | 'ask' | 'on';
-  const frozenWebMode = task?.web_access === 'allowed_for_task'
-    ? 'on'
-    : task?.web_access === 'denied_for_task'
-      ? 'off'
-      : configuredWebMode;
   const selectedDefinition = definitions.find((entry) => entry.definition_id === definitionId);
   const selectedAgentId = frozen ? String(task?.workflow_id || definitionId) : definitionId;
   const agentSelectOptions = useMemo(() => {
@@ -700,7 +695,7 @@ export default function DeepResearchTaskPanel({
       onContextWindowChange={onContextWindowChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
       beforeModelControls={webSearchField ? renderWebControl(
-        frozen ? frozenWebMode : webSearchMode,
+        frozen ? configuredWebMode : webSearchMode,
         frozen || webSearchField.enabled === false,
       ) : null}
       afterModelControls={agentSelectValue ? (

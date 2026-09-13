@@ -305,7 +305,6 @@ class _DeepWaveState(TypedDict, total=False):
     task_result_packets: Annotated[list[dict], merge_task_result_packets]
     task_result_warnings: list[dict]
     task_result_gaps: list[str]
-    task_web_access_decision: dict
     task_limits: dict
     task_run_plan_count: int
     task_controller_route: str
@@ -352,9 +351,6 @@ class _CoordinatorServices:
 
     async def pending_course_corrections(self):
         return []
-
-    async def persist_web_access(self, *_args, **_kwargs):
-        return None
 
 
 @pytest.mark.asyncio

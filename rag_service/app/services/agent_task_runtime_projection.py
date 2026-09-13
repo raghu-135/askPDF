@@ -904,12 +904,6 @@ async def apply_runtime_task_delta(
                         artifact_id=final_artifact.id,
                         payload={"kind": "final_report", "byte_size": final_artifact.byte_size, "sha256": final_artifact.sha256},
                     )
-            if delta.web_access is not None:
-                status, interrupt_id = str(delta.web_access.get("status") or ""), str(delta.web_access.get("interrupt_id") or "")
-                pending, decision = dict(run.pending_interrupt_json or {}), dict((run.pending_interrupt_json or {}).get("decision") or {})
-                if status not in {tasks.WEB_ACCESS_ALLOWED, tasks.WEB_ACCESS_DENIED} or not interrupt_id or pending.get("interrupt_id") != interrupt_id or not decision:
-                    raise RuntimeTaskProjectionConflict("runtime web-access change is not backed by a product decision")
-                await tasks._append_event(session, task, f"web_access.{status}", agent_run_id=agent_run_id, payload={"interrupt_id": interrupt_id, "status": status})
             if delta.pending_interrupt is not None:
                 operation = str(delta.pending_interrupt.get("operation") or "")
                 if operation == "set" and isinstance(delta.pending_interrupt.get("value"), Mapping):

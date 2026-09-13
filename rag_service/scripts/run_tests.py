@@ -75,6 +75,7 @@ UNIT_TEST_FILES = [
 ]
 
 HERMES_TEST_FILES = [
+    "test_tool_approval_bridge_pytest.py",
     "test_hermes_configuration_pytest.py",
     "test_hermes_execution_store_pytest.py",
     "test_hermes_grounding_policy_pytest.py",
@@ -93,6 +94,7 @@ MCP_TEST_FILES = [
 ]
 
 DB_TEST_FILES = [
+    "test_tool_approval_pytest.py",
     "test_agent_task_course_correction_pytest.py",
     "test_project_file_repository_pytest.py",
     "test_database_connection_pytest.py",

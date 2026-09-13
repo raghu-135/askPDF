@@ -98,22 +98,13 @@ def test_ask_web_mode_blocks_context_prefetch_until_approval():
     from langgraph_runtime.graph import web_prefetch_allowed
 
     assert not web_prefetch_allowed({"use_web_search": True, "web_search_mode": "ask"})
-    assert not web_prefetch_allowed({
-        "use_web_search": True,
-        "web_search_mode": "ask",
-        "task_web_access": "undecided",
-    })
-    assert web_prefetch_allowed({
-        "use_web_search": True,
-        "web_search_mode": "ask",
-        "task_web_access": "allowed_for_task",
-    })
+    assert web_prefetch_allowed({"use_web_search": True, "web_search_mode": "on"})
     assert not web_prefetch_allowed({
         "use_web_search": True,
         "web_search_mode": "on",
         "hitl_policy": {
             "enabled": True,
-            "gates": {"web_approval_gate": {"enabled": True}},
+            "tools": {"search_web": {"mode": "ask", "scope": "run"}},
         },
     })
     assert web_prefetch_allowed({"use_web_search": True, "web_search_mode": "on"})

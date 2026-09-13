@@ -579,11 +579,11 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             for checkpoint_event in reversed(checkpoint_events):
                 if str(checkpoint_event.get("kind") or "") not in {"run.paused", "interrupt.requested", "approval.requested"}:
                     continue
-                event_result = checkpoint_event.get("result")
-                event_interruption = event_result.get("interruption") if isinstance(event_result, Mapping) else None
+                event_payload = checkpoint_event.get("payload")
+                event_interruption = event_payload.get("pending_interrupt") if isinstance(event_payload, Mapping) else None
                 if not isinstance(event_interruption, Mapping):
-                    event_payload = checkpoint_event.get("payload")
-                    event_interruption = event_payload.get("pending_interrupt") if isinstance(event_payload, Mapping) else None
+                    event_result = checkpoint_event.get("result")
+                    event_interruption = event_result.get("interruption") if isinstance(event_result, Mapping) else None
                 if isinstance(event_interruption, Mapping):
                     current = event_interruption
                     break
@@ -721,21 +721,8 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             spec = payload.get("spec") or {}
             if not isinstance(spec, Mapping):
                 raise ValueError("spec must be an object")
-            from langgraph_runtime.graph import normalize_hitl_policy_for_thread_settings
-
-            # Thread settings can enable runtime-owned gates that are not part
-            # of the authored graph. Apply them before validation so the
-            # validator checks the same effective definition that is later
-            # materialized and returned to the control plane.
             thread_settings = dict(payload.get("thread_settings") or {})
             effective_spec = dict(spec)
-            effective_config = dict(effective_spec.get("config") or {})
-            effective_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-                effective_config.get("hitl_policy"),
-                thread_settings,
-                effective_config.get("graph"),
-            )
-            effective_spec["config"] = effective_config
             validation = await get_adapter().validate(
                 definition, effective_spec, options=payload.get("options") or {}
             )

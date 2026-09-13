@@ -348,6 +348,7 @@ def _pending_interrupt_payload(run) -> Dict[str, Any] | None:
 def _run_payload(run, turns=None) -> Dict[str, Any]:
     turns = turns or []
     payload = {
+        "id": run.id,
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,

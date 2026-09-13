@@ -83,8 +83,6 @@ def normalize_product_event_kind(kind: str, *, source_metadata: Mapping[str, Any
         "task.cancelled": "run.cancelled",
         "artifact.deleted": "artifact.updated",
         "artifact.invalidated": "artifact.updated",
-        "web_access.allowed_for_task": "approval.responded",
-        "web_access.denied_for_task": "approval.responded",
         "task.course_correction_submitted": "course_correction.accepted",
         "task.course_correction_incorporated": "course_correction.incorporated",
         "task.course_correction_accepted_unresolved": "course_correction.unresolved",

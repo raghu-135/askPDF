@@ -12,7 +12,8 @@ from langgraph_runtime.workflows.enums import (
     HITL_PHASES,
     HITL_SELECTION_MODES,
 )
-from langgraph_runtime.workflows.hitl_materializer import normalize_hitl_gate_policy_for_graph
+from langgraph_runtime.workflows.hitl_materializer import normalize_hitl_gate_policy
+from runtime_protocol.tool_approval import ToolApprovalPolicy
 HITL_GATE_KEYS = {
     "enabled",
     "title",
@@ -41,9 +42,20 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
     errors: list[str] = []
     if not isinstance(hitl_policy, dict):
         return ["hitl_policy must be an object"]
-    unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates", "max_interrupts_per_run"})
+    unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates", "tools", "max_interrupts_per_run"})
     if unknown_policy_keys:
-        errors.append(f"hitl_policy only supports keys: enabled, gates, max_interrupts_per_run; unknown: {', '.join(unknown_policy_keys)}")
+        errors.append(f"hitl_policy only supports keys: enabled, gates, tools, max_interrupts_per_run; unknown: {', '.join(unknown_policy_keys)}")
+    tools = hitl_policy.get("tools", {})
+    if not isinstance(tools, dict):
+        errors.append("hitl_policy.tools must be an object")
+    else:
+        for name, policy in tools.items():
+            try:
+                if not isinstance(name, str) or not name or not isinstance(policy, dict):
+                    raise ValueError("tool names and policies must be nonempty names and objects")
+                ToolApprovalPolicy.from_mapping(policy)
+            except (KeyError, TypeError, ValueError) as exc:
+                errors.append(f"hitl_policy.tools.{name}: {exc}")
     if "enabled" in hitl_policy and not isinstance(hitl_policy["enabled"], bool):
         errors.append("hitl_policy.enabled must be a boolean")
     if "max_interrupts_per_run" in hitl_policy:
@@ -72,7 +84,7 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
             errors.append(f"hitl_policy.gates.{gate_id} must be an object")
             continue
 
-        effective_gate = normalize_hitl_gate_policy_for_graph(gate_id, gate, node_types)
+        effective_gate = normalize_hitl_gate_policy(gate_id, gate)
         unknown_gate_keys = sorted(set(gate) - HITL_GATE_KEYS)
         if unknown_gate_keys:
             errors.append(f"hitl_policy.gates.{gate_id} has unknown keys: {', '.join(unknown_gate_keys)}")

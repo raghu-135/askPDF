@@ -223,7 +223,6 @@ def result_from_dict(value: Mapping[str, Any]) -> AgentRuntimeResult:
         todo_changes=_object_list(delta_value.get("todo_changes"), field="orchestration_delta.todo_changes"),
         subagent_changes=_object_list(delta_value.get("subagent_changes"), field="orchestration_delta.subagent_changes"),
         budget_usage=dict(delta_value.get("budget_usage") or {}),
-        web_access=_optional_object(delta_value.get("web_access"), field="orchestration_delta.web_access"),
         artifacts=_object_list(delta_value.get("artifacts"), field="orchestration_delta.artifacts"),
         pending_interrupt=_optional_object(delta_value.get("pending_interrupt"), field="orchestration_delta.pending_interrupt"),
         result=_optional_object(delta_value.get("result"), field="orchestration_delta.result"),

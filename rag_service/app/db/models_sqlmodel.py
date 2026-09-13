@@ -462,6 +462,42 @@ class AgentRun(SQLModel, table=True):
         self.run_metadata_json = metadata
 
 
+class ToolInvocation(SQLModel, table=True):
+    """Fence one runtime-owned tool invocation and retain its replay result."""
+    __tablename__ = "tool_invocations"
+    __table_args__ = (UniqueConstraint("run_id", "invocation_id", name="uq_tool_invocation"),)
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False))
+    invocation_id: str
+    tool_name: str
+    argument_hash: str
+    status: str
+    result_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    started_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class ToolApprovalDecision(SQLModel, table=True):
+    """Durable human permission, bound to a tool and an explicit scope."""
+    __tablename__ = "tool_approval_decisions"
+    __table_args__ = (
+        UniqueConstraint("run_id", "interrupt_id", name="uq_tool_approval_interrupt"),
+        Index("ix_tool_approval_scope", "scope", "scope_id", "tool_name", "created_at"),
+    )
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False))
+    interrupt_id: str
+    tool_name: str
+    invocation_id: str
+    argument_hash: str
+    scope: str
+    scope_id: str
+    decision: str
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
 class AgentRunEvent(SQLModel, table=True):
     """Canonical, framework-neutral observability event for an agent run."""
     __tablename__ = "agent_run_events"

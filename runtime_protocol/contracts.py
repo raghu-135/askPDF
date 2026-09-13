@@ -1114,7 +1114,6 @@ class TaskOrchestrationDelta:
     todo_changes: tuple[Mapping[str, Any], ...] = ()
     subagent_changes: tuple[Mapping[str, Any], ...] = ()
     budget_usage: Mapping[str, Any] = field(default_factory=dict)
-    web_access: Optional[Mapping[str, Any]] = None
     artifacts: tuple[Mapping[str, Any], ...] = ()
     pending_interrupt: Optional[Mapping[str, Any]] = None
     result: Optional[Mapping[str, Any]] = None
@@ -1143,7 +1142,6 @@ class TaskOrchestrationDelta:
             "todo_changes": [dict(value) for value in self.todo_changes],
             "subagent_changes": [dict(value) for value in self.subagent_changes],
             "budget_usage": dict(self.budget_usage),
-            "web_access": dict(self.web_access) if self.web_access is not None else None,
             "artifacts": [dict(value) for value in self.artifacts],
             "pending_interrupt": dict(self.pending_interrupt) if self.pending_interrupt is not None else None,
             "result": dict(self.result) if self.result is not None else None,

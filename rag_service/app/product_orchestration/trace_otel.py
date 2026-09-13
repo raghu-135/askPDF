@@ -111,8 +111,6 @@ def _node_kind(node: str, node_type: Optional[str] = None) -> str:
 
 
 def _node_display_name(node: str) -> str:
-    if node == "web_approval_gate":
-        return "Web Approval"
     return _catalog_display_name(node)
 
 

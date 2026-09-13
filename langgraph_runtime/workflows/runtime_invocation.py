@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 
 from langgraph_runtime.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
@@ -197,7 +198,7 @@ async def invoke_llm_for_node(
             "retry_count": len(retry_attempts),
         })
         return response
-    except ChatRunCancellationRequested:
+    except (ChatRunCancellationRequested, GraphBubbleUp):
         raise
     except Exception as exc:
         await _emit_progress_event(config, "llm.failed", {
@@ -271,7 +272,7 @@ async def invoke_tool_for_node(
             **evidence_event_fields(normalized_result),
         })
         return normalized_result
-    except ChatRunCancellationRequested:
+    except (ChatRunCancellationRequested, GraphBubbleUp):
         raise
     except Exception as exc:
         await _emit_progress_event(config, "tool.failed", {
@@ -302,7 +303,7 @@ def resolve_tool_executor(
     del caller_node, config
     if not tool_name:
         raise ValueError("MCP tool name is required")
-    return create_mcp_langchain_tool(tool_name)
+    return create_mcp_langchain_tool(tool_name, checkpointed=True)
 
 
 def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:

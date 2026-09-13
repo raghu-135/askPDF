@@ -326,8 +326,6 @@ class RouterRagState(TypedDict, total=False):
     task_course_corrections: List[Dict[str, Any]]
     task_correction_outcomes: List[Dict[str, Any]]
     web_search_mode: str
-    task_web_access: str
-    task_web_access_decision: Dict[str, Any]
     runtime_execution_mode: bool
     runtime_artifact_manifest: List[Dict[str, Any]]
     runtime_artifact_contents: Dict[str, str]

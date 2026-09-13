@@ -861,3 +861,30 @@ async def test_http_adapter_preserves_plain_runtime_rejection_detail():
     assert caught.value.retryable is False
     assert caught.value.details == {"status_code": 400}
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_saved_ask_policy_without_original_request(monkeypatch):
+    from app.mcp.execution_context_token import decode_execution_context_token
+
+    monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+    saved_spec = {"config": {
+        "use_reranker": False, "use_web_search": True,
+        "hitl_web_approval": True, "allowed_tool_ids": ["live_web_recon"],
+    }}
+    policies = []
+    try:
+        for request_payload in ({"hitl_web_approval": True}, {}):
+            prepared = await adapter.prepare_request(_request(), context=RuntimeInvocationContext(
+                resolved_spec=saved_spec, request_payload=request_payload,
+            ))
+            granted = decode_execution_context_token(
+                prepared.input["mcp_execution_context_token"], tool_name="search_web",
+            )
+            policies.append(granted.extensions["tool_approval_policy"])
+        assert policies[0] == policies[1]
+        assert policies[1]["search_web"]["mode"] == "ask"
+        assert policies[1]["arxiv"]["mode"] == "ask"
+    finally:
+        await adapter.aclose()

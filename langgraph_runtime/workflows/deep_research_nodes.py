@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, Mapping
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Send, interrupt
+from langgraph.errors import GraphBubbleUp
+from langgraph.func import task
 
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.workflows.runtime_invocation import (
@@ -294,6 +296,13 @@ def _response_text(response: Any) -> str:
     if isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=True) if content else ""
+
+
+@task
+async def _checkpointed_model_call(state, parent_config, node, messages, **kwargs):
+    # LangGraph injects an argument named `config`; keep the caller's config
+    # explicit without triggering a second injected value.
+    return await _call_model(state, parent_config, node, messages, **kwargs)
 
 
 async def _call_model(
@@ -842,59 +851,11 @@ async def deep_task_scheduler(state: Dict[str, Any], config: RunnableConfig) -> 
         str(state.get("agent_task_id") or ""),
         limit=min(int(limits.get("max_concurrency", 4)), int(limits.get("max_fanout", 4))),
     )
-    approval_ref: Dict[str, Any] | None = None
     web_todos = [todo for todo in ready if todo.profile_id == "web_researcher"]
     web_search_mode = str(state.get("web_search_mode") or "off")
-    web_access = str(state.get("task_web_access") or "undecided")
-    web_access_decision: Dict[str, Any] = {}
-    if web_todos and (web_search_mode == "off" or web_access == "denied_for_task"):
+    if web_todos and web_search_mode == "off":
         await services.block_todos(str(state.get("agent_task_id") or ""), [todo.id for todo in web_todos], reason="external_research_disabled_for_task")
         ready = [todo for todo in ready if todo.profile_id != "web_researcher"]
-    elif web_todos and web_search_mode == "ask" and web_access != "allowed_for_task":
-        decision = interrupt({
-            "gate_id": "deep_research_web_approval",
-            "node_id": DEEP_NODE_SCHEDULER,
-            "target_node_id": DEEP_NODE_SUBAGENT,
-            "target_node_type": DEEP_NODE_SUBAGENT,
-            "phase": "before",
-            "mode": "approval",
-            "type": "external_research_approval",
-            "kind": "approval",
-            "response_operation": "run.resume",
-            "response_schema": {},
-            "title": "Approve external research",
-            "prompt": "Approve the listed web research todos before any external request begins.",
-            "allowed_actions": ["approve", "approve_for_scope", "continue_without"],
-            "default_action": "continue_without",
-            "approval_scope_kind": "task",
-            "reject_behavior": "resume",
-            "approval_scope": {
-                "task_id": state.get("agent_task_id"),
-                "plan_revision": int(state.get("task_plan_revision") or 1),
-                "todo_ids": [todo.id for todo in web_todos],
-                "tool_contract_ids": ["live_web_recon"],
-            },
-            "proposed_tool": {
-                "name": "search_web",
-                "caller_node": DEEP_NODE_SUBAGENT,
-                "input_hashes": [canonical_hash(todo.description) for todo in web_todos],
-            },
-        })
-        action = str((decision or {}).get("action") if isinstance(decision, dict) else decision or "reject")
-        interrupt_id = str((decision or {}).get("interrupt_id") or "") if isinstance(decision, dict) else ""
-        approval_ref = {
-            "interrupt_id": (decision or {}).get("interrupt_id") if isinstance(decision, dict) else None,
-            "action": action,
-            "todo_ids": [todo.id for todo in web_todos],
-        }
-        if action not in {"approve", "approve_for_scope"}:
-            await services.block_todos(str(state.get("agent_task_id") or ""), [todo.id for todo in web_todos], reason="external_research_rejected")
-            ready = [todo for todo in ready if todo.profile_id != "web_researcher"]
-            web_access = "denied_for_task"
-            web_access_decision = {"status": web_access, "interrupt_id": interrupt_id}
-        elif action == "approve_for_scope":
-            web_access = "allowed_for_task"
-            web_access_decision = {"status": web_access, "interrupt_id": interrupt_id}
     todos = await services.list_todos(str(state.get("agent_task_id") or ""))
     all_todo_ids = sorted(str(todo.id) for todo in todos)
     todo_positions = {todo_id: index + 1 for index, todo_id in enumerate(all_todo_ids)}
@@ -919,7 +880,6 @@ async def deep_task_scheduler(state: Dict[str, Any], config: RunnableConfig) -> 
         "todo": _todo_payload(todo),
         "plan_revision": plan_revision,
         "timeout_ms": int(limits.get("subagent_timeout_ms", 180_000)),
-        "approval_ref": approval_ref if todo.profile_id == "web_researcher" else None,
         "dispatch_id": dispatch_id,
         "ordinal": ordinal,
         "execution_key": executions[ordinal],
@@ -956,8 +916,6 @@ async def deep_task_scheduler(state: Dict[str, Any], config: RunnableConfig) -> 
         "task_todos": [_todo_payload(todo) for todo in todos],
         "task_work_items": work_items,
         "task_controller_route": "dispatch" if work_items else "control",
-        "task_web_access": web_access,
-        "task_web_access_decision": web_access_decision,
         "task_budget_usage": dict(await services.budget_snapshot()),
     }
 
@@ -1038,7 +996,7 @@ Bounded observations: {json.dumps(observations, ensure_ascii=True)}
 Premature finish previously rejected: {json.dumps(finish_rejected)}
 Return JSON only as either {{"action":"tool","tool":string,"query":string}} or {{"action":"finish"}}.
 Select only a permitted tool and finish as soon as enough evidence is available."""
-        selection_text, _ = await _call_model(
+        selection_text, _ = await _checkpointed_model_call(
             state,
             config,
             DEEP_NODE_SUBAGENT,
@@ -1304,6 +1262,8 @@ Use status "completed_with_warnings" and populate gaps when evidence is missing 
             "warnings": result_warnings,
             "result_outcome": "completed_with_warnings" if result_warnings or result.uncovered_gaps else result.status,
         }
+    except GraphBubbleUp:
+        raise
     except asyncio.TimeoutError:
         packet = {"task_id": item.get("task_id"), "todo_id": todo.get("id"), "subagent_run_id": subagent.id, "status": "timed_out", "summary": "", "artifact_ids": [], "usage": {}, "retryable": True, "error": {"code": "subagent_timeout", "retryable": True}}
     except (asyncio.CancelledError, ChatRunCancellationRequested):
@@ -1416,13 +1376,6 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
             "completed": sum(1 for packet in packets if packet.get("status") == "completed"),
             "failed": failed,
         })
-    web_access_decision = state.get("task_web_access_decision") if isinstance(state.get("task_web_access_decision"), dict) else {}
-    if web_access_decision.get("status") in {"allowed_for_task", "denied_for_task"} and web_access_decision.get("interrupt_id"):
-        await services.persist_web_access(
-            str(web_access_decision["status"]),
-            run_id=str(state.get("agent_run_id") or ""),
-            interrupt_id=str(web_access_decision["interrupt_id"]),
-        )
     todos = await _record_result_packets(state, config)
     context_update = await assemble_artifact_context({**state, "task_todos": todos}, config)
     cancel_requested = await services.cancellation.requested()
@@ -1465,7 +1418,6 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
         "task_result_gaps": list(dict.fromkeys(result_gaps)),
         "task_controller_route": route,
         "task_controller_reason": reason,
-        "task_web_access_decision": {},
         "task_budget_usage": budget_snapshot,
         "task_budget_boundary": budget_boundary or {},
         "task_course_corrections": course_corrections,

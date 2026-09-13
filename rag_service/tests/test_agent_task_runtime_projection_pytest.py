@@ -26,18 +26,21 @@ from app.services.agent_task_runtime_projection import (
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
-from app.services.agent_task_runtime import _task_runtime_operation_id
+from app.services.agent_task_runtime import _task_runtime_operation_id, _task_result_with_usage
 from runtime_protocol.contracts import RuntimeCourseCorrectionOutcome, RuntimePlanChange, TaskOrchestrationDelta
 from runtime_protocol.events import create_runtime_event
 
 
-def test_web_access_ignores_metadata_only_approval_event():
-    events = [
-        SimpleNamespace(payload_json={"action": "approve"}),
-        SimpleNamespace(payload_json={"status": repository.WEB_ACCESS_ALLOWED}),
-    ]
-
-    assert repository._web_access_from_approval_events(events) == repository.WEB_ACCESS_ALLOWED
+def test_human_pause_usage_does_not_fabricate_a_terminal_task_result():
+    usage = {"tool_calls": 1, "active_runtime_ms": 100, "measured_dimensions": ["tool_calls", "active_runtime_ms"]}
+    assert _task_result_with_usage({}, usage) == {}
+    task_result = {"status": "completed", "usage": {"model_tokens": 25, "measured_dimensions": ["model_tokens"]}}
+    merged = _task_result_with_usage(task_result, usage)
+    assert merged["status"] == "completed"
+    assert merged["usage"]["tool_calls"] == 1
+    assert merged["usage"]["model_tokens"] == 25
+    assert merged["usage"]["measured_dimensions"] == ["model_tokens", "tool_calls", "active_runtime_ms"]
+    assert "tool_calls" not in task_result["usage"]
 
 
 def test_task_runtime_operation_id_changes_for_each_resumed_interrupt():
@@ -700,3 +703,26 @@ async def test_unpublished_task_turns_stay_out_of_chat_until_final_report_is_pub
     messages = await get_thread_messages(sample_thread.id)
     assert [message.content for message in messages] == [task.objective, "Hermes completed answer."]
     assert all(message.metadata.get("published_from_task") is True for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_projection_recovery_preserves_native_tool_interruption():
+    from app.runtime.catalog import result_to_product_payload
+    from app.services.agent_task_runtime import _invoke_task_runtime
+    from runtime_protocol.contracts import AgentRuntimeResult
+
+    pending = {"interrupt_id": "tool-1", "type": "tool_approval", "response_operation": "run.approval.respond"}
+    delta = TaskOrchestrationDelta(
+        event_id="pause-1", attempt_id="attempt-1", operation_id="start-1", idempotency_key="pause-1",
+        observed_task_version=1, observed_plan_revision=0,
+        pending_interrupt={"operation": "set", "value": pending}, result={"status": "awaiting_human"},
+    )
+    wire = AgentRuntimeResult(status="awaiting_human", interruption=pending, orchestration_delta=delta)
+    run = SimpleNamespace(run_metadata_json={"projection": {"runtime_result": result_to_product_payload(wire)}})
+    recovered = await _invoke_task_runtime(
+        adapter=None, definition=None, run=run, runtime_request=None, runtime_context=None,
+        runtime_event_sink=None, repository=None, registry=None,
+    )
+    assert recovered.interruption == pending
+    assert recovered.orchestration_delta.pending_interrupt["value"] == recovered.interruption
+    assert recovered.task_result is None

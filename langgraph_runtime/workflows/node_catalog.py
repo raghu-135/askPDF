@@ -761,8 +761,8 @@ _DEEP_NODE_FLOW_METADATA = {
         SPAN_CONTROL,
     ),
     NODE_DEEP_TASK_SCHEDULER: (
-        ["agent_task_id", "task_todos", "task_limits", "task_plan_revision", "web_search_mode", "task_web_access", "task_budget_usage"],
-        ["task_todos", "task_work_items", "task_controller_route", "task_web_access", "task_web_access_decision", "task_budget_usage", "task_budget_boundary"],
+        ["agent_task_id", "task_todos", "task_limits", "task_plan_revision", "web_search_mode", "task_budget_usage"],
+        ["task_todos", "task_work_items", "task_controller_route", "task_budget_usage", "task_budget_boundary"],
         SPAN_CONTROL,
     ),
     NODE_DEEP_RESEARCH_SUBAGENT: (
@@ -771,8 +771,8 @@ _DEEP_NODE_FLOW_METADATA = {
         SPAN_TOOL_WORKER,
     ),
     NODE_DEEP_COORDINATOR: (
-        ["agent_task_id", "task_result_packets", "task_todos", "task_plan_revision", "task_limits", "task_pause_requested", "task_cancel_requested", "context_window", "task_web_access_decision", "task_budget_boundary", "task_course_corrections"],
-        ["task_todos", "task_work_items", "task_result_packets", "task_artifact_manifest", "task_context_summary", "task_controller_route", "task_controller_reason", "task_web_access_decision", "task_budget_usage", "task_budget_boundary", "task_course_corrections"],
+        ["agent_task_id", "task_result_packets", "task_todos", "task_plan_revision", "task_limits", "task_pause_requested", "task_cancel_requested", "context_window", "task_budget_boundary", "task_course_corrections"],
+        ["task_todos", "task_work_items", "task_result_packets", "task_artifact_manifest", "task_context_summary", "task_controller_route", "task_controller_reason", "task_budget_usage", "task_budget_boundary", "task_course_corrections"],
         SPAN_CONTROL,
     ),
     NODE_DEEP_TASK_SYNTHESIZER: (

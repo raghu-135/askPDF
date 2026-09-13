@@ -70,7 +70,7 @@ _PUBLIC_RESULT_KEYS = frozenset({
     "_parallel_attempt_records", "_corrective_wave_records", "_corrective_metrics_state",
     "structured_output", "usage", "metrics", "errors", "workflow_budget", "agent_error",
     "task_result_warnings", "task_result_gaps", "task_incomplete_reasons", "task_result_packets",
-    "task_todos", "task_budget_usage", "task_web_access_decision", "runtime_artifacts",
+    "task_todos", "task_budget_usage", "runtime_artifacts",
     "final_artifact_id", "runtime_artifact_manifest", "task_artifact_manifest",
     "task_evidence_manifest", "result_outcome", "checkpoint_boundary_available",
 })
@@ -201,7 +201,6 @@ def _result_from_graph(
             ],
         })
     if task_id:
-        web_access_decision = result.get("task_web_access_decision") if isinstance(result.get("task_web_access_decision"), Mapping) else None
         # A planner result carries plan changes that are applied against the
         # product revision observed before that planner visit. Subsequent
         # checkpoint resumes may still contain the initial state's
@@ -238,7 +237,6 @@ def _result_from_graph(
             "todo_changes": [_public_value(dict(value)) for value in result.get("task_todos") or [] if isinstance(value, Mapping)],
             "subagent_changes": [_public_value(dict(value)) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
             "budget_usage": _public_value(dict(result.get("task_budget_usage") or {})),
-            "web_access": _public_value(dict(web_access_decision)) if web_access_decision and web_access_decision.get("interrupt_id") else None,
             "artifacts": [_public_value(dict(value)) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
             "pending_interrupt": (
                 {"operation": "set", "value": dict(public_interruption)}
@@ -283,7 +281,6 @@ def _result_from_graph(
             todo_changes=tuple(changes["todo_changes"]),
             subagent_changes=tuple(changes["subagent_changes"]),
             budget_usage=changes["budget_usage"],
-            web_access=changes["web_access"],
             artifacts=tuple(changes["artifacts"]),
             pending_interrupt=changes["pending_interrupt"],
             result=changes["result"],
@@ -450,7 +447,6 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             context_window=metadata.get("context_window"),
             use_web_search=bool(permissions.get("use_web_search")),
             web_search_mode=str(permissions.get("web_search_mode") or "off"),
-            task_web_access=permissions.get("web_access"),
             use_reranker=bool(metadata.get("use_reranker", True)),
             bypass_clarification=True,
             system_role_override="",

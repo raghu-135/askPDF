@@ -147,9 +147,6 @@ class DeepResearchExecutionServices:
     async def record_result_packets(self, packets: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    async def persist_web_access(self, status: str, *, run_id: str, interrupt_id: str) -> None:
-        raise NotImplementedError
-
     async def pause_requested(self) -> bool:
         if bool(self.state.get("task_pause_requested")):
             return True
@@ -594,9 +591,6 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
             todo["progress"] = 100 if todo["status"] == "completed" else todo.get("progress", 0)
         self._write_task_todos(todos)
         return todos
-
-    async def persist_web_access(self, status: str, *, run_id: str, interrupt_id: str) -> None:
-        return None
 
     async def assemble_artifact_context(self, compact: Compactor) -> dict[str, Any]:
         current_run_id = str(self.state.get("agent_run_id") or "")

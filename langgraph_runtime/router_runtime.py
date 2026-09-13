@@ -21,6 +21,7 @@ from langgraph_runtime.workflows.workflow_runtime import runtime_execution_optio
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
 from runtime_protocol.errors import RuntimeError as RuntimeExecutionError
+from langgraph_runtime.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -260,7 +261,25 @@ def _pending_interrupt_from_result(
         payload["interrupt_id"] = str(interrupt_id)
     payload["checkpoint_resume"] = True
     payload["checkpoint_thread_id"] = checkpoint_thread_id
+    payload["requested_at"] = iso_utc_z()
+    payload.setdefault("input_summary", {"question": result.get("question", "")})
     return payload
+
+
+def _resume_command(interrupt: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any]) -> Command:
+    """Exclude the durable human pause from an active dispatch deadline."""
+    update = {}
+    requested_at = parse_datetime_utc(interrupt.get("requested_at"))
+    deadline = int(state.get("dispatch_deadline_epoch_ms") or 0)
+    if requested_at is not None and deadline:
+        paused_ms = max(0, int((utc_now() - requested_at).total_seconds() * 1000))
+        update["dispatch_deadline_epoch_ms"] = deadline + paused_ms
+        # Send branches retain their original input. Pass the same adjusted
+        # deadline to those branches while updating the parent checkpoint.
+        config.setdefault("configurable", {})["resumed_dispatch_deadline"] = {
+            "dispatch_id": state.get("dispatch_id"), "deadline_epoch_ms": deadline + paused_ms,
+        }
+    return Command(resume={str(interrupt["interrupt_id"]): interrupt.get("decision") or {}}, update=update or None)
 
 def _without_runtime_keys(result: Dict[str, Any]) -> Dict[str, Any]:
     cleaned = dict(result)
@@ -631,8 +650,6 @@ async def _handle_compiled_rag_chat(
         # them, which keeps the established chat execution contract unchanged.
         "agent_task_id": getattr(req, "agent_task_id", None),
         "web_search_mode": str(getattr(req, "web_search_mode", "on" if use_web_search else "off")),
-        "task_web_access": str(getattr(req, "task_web_access", "undecided")),
-        "task_web_access_decision": {},
         "task_version": getattr(req, "agent_task_version", None),
         "task_observed_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_enabled_profiles": list(getattr(req, "task_enabled_profiles", None) or []),
@@ -1103,7 +1120,6 @@ async def resume_compiled_rag_chat(
         snapshot_values,
         authoritative_budget=getattr(run, "task_budget_usage", None),
     )
-    decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {
         "agent_run_id": run.id,
         "agent_workflow_id": run.workflow_id,
@@ -1123,7 +1139,9 @@ async def resume_compiled_rag_chat(
             },
         )
     try:
-        result = await _invoke_graph_with_partial_state(app, Command(resume=decision), config)
+        result = await _invoke_graph_with_partial_state(
+            app, _resume_command(interrupt, snapshot_values, config), config,
+        )
         await raise_if_chat_run_cancelled(cancellation_checker, result)
     except ChatRunCancellationRequested as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
