@@ -731,7 +731,9 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             effective_spec = dict(spec)
             effective_config = dict(effective_spec.get("config") or {})
             effective_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-                effective_config.get("hitl_policy"), thread_settings
+                effective_config.get("hitl_policy"),
+                thread_settings,
+                effective_config.get("graph"),
             )
             effective_spec["config"] = effective_config
             validation = await get_adapter().validate(

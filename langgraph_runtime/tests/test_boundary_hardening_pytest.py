@@ -72,6 +72,28 @@ def test_graph_result_projection_does_not_expose_invocation_credentials():
     assert result.artifacts[0]["content"] == "safe"
 
 
+def test_resumed_task_delta_uses_authoritative_plan_revision_after_planner_boundary():
+    from langgraph_runtime.adapter import _result_from_graph
+
+    result = _result_from_graph(
+        {
+            "status": "completed",
+            "agent_task_id": "task-1",
+            "agent_run_id": "run-1",
+            "task_version": 2,
+            # This value belongs to the original checkpoint and is stale after
+            # the planner boundary was projected by the product service.
+            "task_observed_plan_revision": 0,
+            "task_plan_changes": [],
+            "task_todos": [],
+        },
+        observed_plan_revision=1,
+    )
+
+    assert result.orchestration_delta is not None
+    assert result.orchestration_delta.observed_plan_revision == 1
+
+
 def test_ask_web_mode_blocks_context_prefetch_until_approval():
     from langgraph_runtime.graph import web_prefetch_allowed
 

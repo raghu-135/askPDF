@@ -335,6 +335,26 @@ def test_web_approval_policy_validation_uses_materialized_dispatch_target():
     assert errors == []
 
 
+def test_thread_web_approval_does_not_inject_generic_gate_into_deep_graph():
+    from langgraph_runtime.workflows.hitl_runtime import normalize_hitl_policy_for_thread_settings
+
+    deep_graph = {
+        "nodes": [
+            {"id": "deep_task_scheduler", "type": "deep_task_scheduler"},
+            {"id": "deep_research_subagent", "type": "deep_research_subagent"},
+        ]
+    }
+    policy = {"enabled": False, "gates": {}}
+
+    resolved = normalize_hitl_policy_for_thread_settings(
+        policy,
+        {"hitl_web_approval": True},
+        deep_graph,
+    )
+
+    assert "web_approval_gate" not in resolved["gates"]
+
+
 def test_runtime_prompt_preview_resolves_runtime_owned_prompts(monkeypatch):
     monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
     monkeypatch.setenv("MCP_TRANSPORT", "loopback_http")

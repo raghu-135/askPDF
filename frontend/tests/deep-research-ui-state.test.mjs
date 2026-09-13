@@ -6,10 +6,24 @@ import {
   isTaskOwnedAgentRun,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
+  selectAgentTaskRunIndex,
   shouldPollAgentTask,
   shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
 } from '../src/lib/deep-research-ui-state.ts';
+
+test('new retry attempts select the active run so its approval is visible', () => {
+  const runs = [{ id: 'failed-run' }, { id: 'active-run' }];
+  assert.equal(
+    selectAgentTaskRunIndex(
+      { active_run_id: 'active-run', active_run: { id: 'active-run' } },
+      runs,
+      0,
+      'failed-run',
+    ),
+    1,
+  );
+});
 
 test('authoritative active-run state and binding replace a stale task run projection', () => {
   const interrupt = { interrupt_id: 'interrupt-1', status: 'pending', allowed_actions: ['approve', 'reject'] };

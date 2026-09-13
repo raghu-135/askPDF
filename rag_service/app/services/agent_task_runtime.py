@@ -38,6 +38,7 @@ from app.runtime.capability_resolver import (
     resolve_definition_capability_resolution,
 )
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.transport import result_from_dict
 from app.runtime.catalog import (
     continuation_from_run,
     definition_from_run,
@@ -82,10 +83,14 @@ def _task_runtime_operation_id(task: Any, run: Any) -> str:
     if pending.get("status") in {"resumed", "resolved"}:
         decision = dict(pending.get("decision") or {})
         discriminator = (
-            pending.get("resume_version")
-            or decision.get("action_version")
-            or pending.get("interrupt_id")
+            # Each checkpoint interrupt is a distinct resume boundary.  The
+            # resume version is scoped to that checkpoint and commonly starts
+            # at 1 again for the next web todo, so it cannot be the primary
+            # transport idempotency discriminator.
+            pending.get("interrupt_id")
             or decision.get("idempotency_key")
+            or decision.get("action_version")
+            or pending.get("resume_version")
             or getattr(run, "task_attempt", None)
             or run.id
         )
@@ -112,19 +117,13 @@ async def _invoke_task_runtime(
     projection = dict((getattr(run, "run_metadata_json", None) or {}).get("projection") or {})
     persisted_result = projection.get("runtime_result")
     if isinstance(persisted_result, dict):
+        persisted_wire_result = dict(persisted_result)
         persisted_task_result = persisted_result.get("runtime_task_result")
-        return AgentRuntimeResult(
-            status=str(persisted_result.get("status") or AgentRunStatus.FAILED.value),
-            output=(dict(persisted_result) if isinstance(persisted_task_result, Mapping) else persisted_result.get("answer")),
-            task_result=(
-                normalize_runtime_task_result(persisted_task_result)
-                if isinstance(persisted_task_result, Mapping)
-                else None
-            ),
-            interruption=persisted_result.get("pending_interrupt"),
-            runtime_metadata=dict(persisted_result.get("runtime_metadata") or {}),
-            error=dict(persisted_result.get("agent_error") or {}),
-        )
+        if isinstance(persisted_task_result, Mapping) and not isinstance(
+            persisted_wire_result.get("task_result"), Mapping
+        ):
+            persisted_wire_result["task_result"] = dict(persisted_task_result)
+        return result_from_dict(persisted_wire_result)
 
     pending = dict(run.pending_interrupt_json or {})
     if getattr(run, "_fresh_runtime_run", False):
@@ -1215,6 +1214,22 @@ async def run_task_worker(
                     or not framework
                     or not builder_id
                 ):
+                    # The start command queues the task and attaches its run
+                    # in separate transactions.  A fast worker can claim the
+                    # queued row in that small window.  This is a transient
+                    # admission race, not a malformed runtime identity; let
+                    # the start command finish and retry the claim.
+                    if run is None and not str(getattr(task, "active_run_id", "") or ""):
+                        logger.warning(
+                            "Claimed task before runtime identity was attached; deferring claim | task_id=%s",
+                            task.id,
+                        )
+                        await tasks.defer_task_lease(
+                            task.id,
+                            worker_id,
+                            retry_seconds=0.5,
+                        )
+                        continue
                     logger.error(
                         "Claimed task has invalid executable runtime identity; failing claim | task_id=%s active_run_id=%s",
                         task.id,

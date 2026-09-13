@@ -831,7 +831,12 @@ class AgentRunService:
                     approval_modifications=approval_modifications,
                 )
             if _is_web_approval_interrupt(resolution.interrupt):
-                if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value:
+                hermes_preflight = bool(
+                    (resolution.interrupt.get("runtime_payload") or {}).get("hermes_preflight")
+                )
+                if action == AgentRunResumeAction.APPROVE_FOR_SCOPE.value or (
+                    hermes_preflight and action == AgentRunResumeAction.APPROVE.value
+                ):
                     await set_task_web_access(
                         resolution.run.task_id,
                         WEB_ACCESS_ALLOWED,

@@ -17,6 +17,21 @@ export function mergeActiveAgentTaskRun(task: AgentTaskSummary, runs: AgentTaskR
   } : run);
 }
 
+export function selectAgentTaskRunIndex(
+  task: AgentTaskSummary,
+  runs: AgentTaskRun[],
+  currentIndex: number,
+  previousActiveRunId?: string | null,
+): number {
+  if (runs.length === 0) return -1;
+  const activeRunId = String(task.active_run_id || task.active_run?.id || '');
+  const activeIndex = activeRunId ? runs.findIndex((run) => run.id === activeRunId) : -1;
+  if (currentIndex < 0 || previousActiveRunId !== activeRunId) {
+    return activeIndex >= 0 ? activeIndex : runs.length - 1;
+  }
+  return currentIndex < runs.length ? currentIndex : runs.length - 1;
+}
+
 export function shouldPollAgentTask(task: AgentTaskSummary | null): boolean {
   return Boolean(task && !QUIESCENT_TASK_STATUSES.has(task.status));
 }

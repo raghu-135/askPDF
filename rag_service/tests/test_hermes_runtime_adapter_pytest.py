@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput, RuntimeTaskContext
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
@@ -741,6 +741,36 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
 
     assert error.value.code == "runtime_model_tool_calling_unsupported"
     assert error.value.details == {"framework": "hermes", "model": "text-only"}
+
+
+@pytest.mark.asyncio
+async def test_hermes_deep_task_gates_external_research_before_starting_upstream(monkeypatch):
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    request = AgentRuntimeRequest("run-approval", "thread-approval", "hermes_rag_agent", "hermes", "hermes_agent")
+    result = await adapter.start(
+        request,
+        context=RuntimeInvocationContext(
+            resolved_spec={"managed_profile": {"mcp": {"runtime_profile": "askpdf-deep-external"}}},
+            task_context=RuntimeTaskContext(
+                task_id="task-approval",
+                permissions={"web_search_mode": "ask", "web_access": "undecided"},
+            ),
+        ),
+    )
+
+    assert result.status == "awaiting_human"
+    assert result.interruption["type"] == "external_research_approval"
+    assert result.interruption["response_operation"] == "run.approval.respond"
+    assert result.continuation.payload["hermes_preflight"] is True
+    assert result.orchestration_delta is not None
+    assert result.orchestration_delta.pending_interrupt == {
+        "operation": "set",
+        "value": result.interruption,
+    }
+    assert result.orchestration_delta.result == {"status": "awaiting_human"}
 
 
 def test_hermes_runtime_requires_explicit_upstream(monkeypatch, tmp_path):

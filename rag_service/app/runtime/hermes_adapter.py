@@ -12,6 +12,7 @@ from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
+    ContinuationBinding,
     RuntimeApprovalResponse,
     RuntimeCapabilities,
     RuntimeCapabilityDisabledReason,
@@ -20,6 +21,7 @@ from runtime_protocol.contracts import (
     RuntimeFeatureDescriptor,
     RuntimeOperationId,
     RuntimeSupportLevel,
+    TaskOrchestrationDelta,
     RuntimeValidationResult,
 )
 from runtime_protocol.errors import RuntimeError
@@ -129,6 +131,52 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
     async def start(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult:
         self._ensure_enabled()
         resolved_spec = dict(getattr(context, "resolved_spec", None) or {})
+        task_context = getattr(context, "task_context", None)
+        permissions = dict(getattr(task_context, "permissions", {}) or {})
+        if (
+            task_context is not None
+            and str(permissions.get("web_search_mode") or "off") == "ask"
+            and str(permissions.get("web_access") or "undecided") not in {"allowed_for_task", "denied_for_task"}
+            and str(((resolved_spec.get("managed_profile") or {}).get("mcp") or {}).get("runtime_profile") or "") == "askpdf-deep-external"
+        ):
+            interruption = {
+                "status": "pending",
+                "interrupt_id": f"{request.run_id}:hermes-web-approval",
+                "type": "external_research_approval",
+                "kind": "approval",
+                "response_operation": "run.approval.respond",
+                "response_schema": {},
+                "title": "Approve external research",
+                "prompt": "Approve web research before Hermes makes an external request.",
+                "allowed_actions": ["approve", "approve_for_scope", "continue_without"],
+                "default_action": "continue_without",
+                "approval_scope_kind": "task",
+                "checkpoint_resume": True,
+                "runtime_payload": {"hermes_preflight": True, "proposed_tool": {"name": "search_web"}},
+                "proposed_tool": {"name": "search_web", "caller_node": "hermes_agent"},
+            }
+            task_metadata = dict(getattr(task_context, "metadata", {}) or {})
+            attempt_id = f"{request.run_id}:attempt:1"
+            operation_id = str((request.options or {}).get("idempotency_key") or "")
+            boundary_event_id = f"{attempt_id}:operation:{operation_id}:result"
+            return AgentRuntimeResult(
+                status="awaiting_human",
+                interruption=interruption,
+                continuation=ContinuationBinding(
+                    binding_type="hermes_session",
+                    payload={"hermes_preflight": True, "runtime_profile": "askpdf-deep-external"},
+                ),
+                orchestration_delta=TaskOrchestrationDelta(
+                    event_id=boundary_event_id,
+                    attempt_id=attempt_id,
+                    operation_id=operation_id or boundary_event_id,
+                    idempotency_key=f"task-delta:{boundary_event_id}",
+                    observed_task_version=int(task_metadata.get("task_version") or 0),
+                    observed_plan_revision=int(task_metadata.get("plan_revision") or 0),
+                    pending_interrupt={"operation": "set", "value": interruption},
+                    result={"status": "awaiting_human"},
+                ),
+            )
         model = str(((resolved_spec.get("managed_profile") or {}).get("model_policy") or {}).get("model") or "").strip()
         if not model or not await check_model_can_invoke_tools(model):
             raise RuntimeError(
@@ -233,6 +281,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
         self._ensure_enabled()
+        if request.continuation is not None and request.continuation.payload.get("hermes_preflight"):
+            return await self.start(request, context=context, event_sink=event_sink)
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
             raise RuntimeError("runtime_binding_missing", "Hermes continuation requires an upstream run binding")
         result = await self.transport._stream(f"/v1/runs/{request.run_id}/continue", request, context=context, payload=None, event_sink=event_sink)
@@ -258,6 +308,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Mapping[str, Any]:
         self._ensure_enabled()
+        if request.continuation is not None and request.continuation.payload.get("hermes_preflight"):
+            return {"run_id": request.run_id, "status": "accepted"}
         if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
             raise RuntimeError("runtime_binding_missing", "Hermes approval requires an upstream run binding")
         if response.decision not in {"approve", "reject"}:

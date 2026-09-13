@@ -214,11 +214,26 @@ def with_web_approval_hitl_policy(policy: Any) -> Dict[str, Any]:
     return normalized
 
 
-def normalize_hitl_policy_for_thread_settings(policy: Any, thread_settings: Any = None) -> Dict[str, Any]:
+def normalize_hitl_policy_for_thread_settings(
+    policy: Any,
+    thread_settings: Any = None,
+    graph: Any = None,
+) -> Dict[str, Any]:
     """Normalize thread-level HITL toggles into the reusable policy contract."""
 
     normalized = deepcopy(policy) if isinstance(policy, dict) else {}
     if isinstance(thread_settings, dict) and bool(thread_settings.get("hitl_web_approval")):
+        graph_nodes = graph.get("nodes") if isinstance(graph, dict) else []
+        node_types = {
+            str(node.get("type"))
+            for node in graph_nodes
+            if isinstance(node, dict) and isinstance(node.get("type"), str)
+        }
+        # Deep research has its own checkpointed approval in
+        # deep_task_scheduler for web_researcher todos. Injecting the generic
+        # web_worker/synthesizer gate into that graph creates invalid targets.
+        if WorkflowNodeType.DEEP_TASK_SCHEDULER.value in node_types:
+            return normalized
         return with_web_approval_hitl_policy(normalized)
     return normalized
 

@@ -202,6 +202,23 @@ def _result_from_graph(
         })
     if task_id:
         web_access_decision = result.get("task_web_access_decision") if isinstance(result.get("task_web_access_decision"), Mapping) else None
+        # A planner result carries plan changes that are applied against the
+        # product revision observed before that planner visit. Subsequent
+        # checkpoint resumes may still contain the initial state's
+        # task_observed_plan_revision, so prefer the authoritative invocation
+        # context for boundary deltas that do not introduce a new plan.
+        result_plan_changes = [
+            value for value in result.get("task_plan_changes") or []
+            if isinstance(value, Mapping)
+        ]
+        delta_observed_plan_revision = (
+            int(observed_plan_revision or 0)
+            if result_plan_changes
+            else max(
+                int(result.get("task_observed_plan_revision") or 0),
+                int(observed_plan_revision or 0),
+            )
+        )
         plan_changes = [
             RuntimePlanChange(
                 runtime_revision=int(value.get("runtime_revision") or 0),
@@ -260,9 +277,7 @@ def _result_from_graph(
             idempotency_key=f"task-delta:{digest}",
             observed_task_version=int(result.get("task_version") or 0),
             observed_plan_revision=int(
-                result.get("task_observed_plan_revision")
-                if result.get("task_observed_plan_revision") is not None
-                else observed_plan_revision or 0
+                delta_observed_plan_revision
             ),
             plan_changes=tuple(plan_changes),
             todo_changes=tuple(changes["todo_changes"]),

@@ -95,6 +95,20 @@ COURSE_CORRECTION_DELIVERY_STATES = {
 }
 
 
+def _web_access_from_approval_events(events: Iterable[Any]) -> str:
+    """Return the latest durable web-access decision from approval audit events.
+
+    A single approval can emit both a scoped web-access event and a generic
+    approval-resolved event. The latter is intentionally metadata-only, so it
+    must not mask the scoped decision when it is the newest event.
+    """
+    for event in events:
+        status = str((getattr(event, "payload_json", None) or {}).get("status") or "")
+        if status in {WEB_ACCESS_ALLOWED, WEB_ACCESS_DENIED}:
+            return status
+    return "undecided"
+
+
 class AgentTaskConflict(ValueError):
     def __init__(self, code: str, message: str, *, current_version: Optional[int] = None):
         super().__init__(message)
@@ -682,16 +696,16 @@ async def append_event(task_id: str, event_type: str, **kwargs) -> AgentTaskEven
 
 async def get_task_web_access(task_id: str) -> str:
     async with async_session_maker() as session:
-        event = (await session.execute(
+        approval_events = (await session.execute(
             select(AgentTaskEvent)
             .where(
                 AgentTaskEvent.task_id == task_id,
                 AgentTaskEvent.event_type == "approval.responded",
             )
             .order_by(AgentTaskEvent.sequence.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        return str((event.payload_json or {}).get("status") or "undecided") if event else "undecided"
+            .limit(100)
+        )).scalars().all()
+        return _web_access_from_approval_events(approval_events)
 
 
 async def set_task_web_access(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
+from types import SimpleNamespace
 
 from unittest.mock import AsyncMock
 
@@ -25,8 +26,41 @@ from app.services.agent_task_runtime_projection import (
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
+from app.services.agent_task_runtime import _task_runtime_operation_id
 from runtime_protocol.contracts import RuntimeCourseCorrectionOutcome, RuntimePlanChange, TaskOrchestrationDelta
 from runtime_protocol.events import create_runtime_event
+
+
+def test_web_access_ignores_metadata_only_approval_event():
+    events = [
+        SimpleNamespace(payload_json={"action": "approve"}),
+        SimpleNamespace(payload_json={"status": repository.WEB_ACCESS_ALLOWED}),
+    ]
+
+    assert repository._web_access_from_approval_events(events) == repository.WEB_ACCESS_ALLOWED
+
+
+def test_task_runtime_operation_id_changes_for_each_resumed_interrupt():
+    task = SimpleNamespace(id="task-1")
+    run = SimpleNamespace(
+        id="run-1",
+        task_attempt=1,
+        _fresh_runtime_run=False,
+        pending_interrupt_json={
+            "status": "resumed",
+            "resume_version": 1,
+            "interrupt_id": "interrupt-1",
+        },
+    )
+
+    first = _task_runtime_operation_id(task, run)
+    run.pending_interrupt_json = {
+        "status": "resumed",
+        "resume_version": 1,
+        "interrupt_id": "interrupt-2",
+    }
+
+    assert first != _task_runtime_operation_id(task, run)
 
 
 async def _task_and_run(test_session_maker, sample_thread):

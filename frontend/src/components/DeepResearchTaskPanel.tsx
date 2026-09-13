@@ -42,6 +42,7 @@ import {
   isRunOwnedBySelectedTask,
   isTerminalAgentTaskEvent,
   mergeActiveAgentTaskRun,
+  selectAgentTaskRunIndex,
   shouldPollAgentTask,
   shouldRefreshAgentTaskTimeline,
   shouldSubscribeToAgentTaskEvents,
@@ -361,7 +362,12 @@ export default function DeepResearchTaskPanel({
     setTask(nextTask);
     setRuns(nextRuns);
     setTodos(nextTodos);
-    setRunIndex((current) => current >= 0 && current < nextRuns.length ? current : nextRuns.length - 1);
+    setRunIndex((current) => selectAgentTaskRunIndex(
+      nextTask,
+      nextRuns,
+      current,
+      task?.active_run_id || task?.active_run?.id,
+    ));
   }, [selectedTaskId, threadId]);
 
   const refreshTimeline = useCallback(async (taskId: string, runId: string) => {
@@ -604,7 +610,6 @@ export default function DeepResearchTaskPanel({
   const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
-  const isApprovalInterrupt = pendingInterrupt?.kind === 'approval';
   const isTaskPauseInterrupt = pendingInterrupt?.type === 'task_pause' || pendingInterrupt?.node_id === 'task_pause_gate';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
@@ -775,15 +780,7 @@ export default function DeepResearchTaskPanel({
         <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
       </Box>
       {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
-    </ResizableDecisionPanel> : pendingInterrupt && isApprovalInterrupt && responseOperation ? <Box sx={{ p: 2 }}>
-      <Typography variant="subtitle2">{pendingInterrupt.title || 'Approval required'}</Typography>
-      <Typography variant="body2" sx={{ my: 1 }}>{pendingInterrupt.description || pendingInterrupt.body}</Typography>
-      <Stack direction="row" spacing={1} flexWrap="wrap">
-        {(['once', 'session', 'always'] as const).filter((choice) => pendingInterrupt.response_schema?.scope?.includes(choice) && pendingInterrupt.allowed_actions?.includes('approve')).map((choice) => <Button key={choice} size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('approve', { approvalScope: choice })}>Approve {choice}</Button>)}
-        {pendingInterrupt.allowed_actions?.includes('reject') && <Button size="small" color="error" disabled={Boolean(decisionSubmitting) || !isRuntimeOperationEnabled(effectiveSelectedRunCapabilities, responseOperation)} onClick={() => void decide('reject', { approvalScope: 'deny' })}>Deny</Button>}
-      </Stack>
-      {decisionError ? <Alert severity="error" sx={{ mt: 1 }}>{decisionError}</Alert> : null}
-    </Box> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
+    </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}
