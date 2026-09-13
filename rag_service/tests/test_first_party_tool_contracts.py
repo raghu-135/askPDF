@@ -7,10 +7,9 @@ from pydantic import ValidationError
 from app.agent import external_research_tools
 from app.agent.tool_contract import ToolWarningCode, normalize_tool_result
 from app.tools.context import ToolInvocationContext
-from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest, TimelineRequest
+from app.tools.contracts import DocumentSearchRequest, ReadContextRequest, SearchKnowledgeRequest, TimelineRequest
 from app.tools.retrieval_conversation import search_thread_conversation_history as neutral_history
-from app.tools.retrieval_documents import search_document_by_id as neutral_document_by_id
-from app.tools.retrieval_documents import search_documents as neutral_documents
+from app.tools.retrieval_knowledge import read_context, search_knowledge as neutral_knowledge
 from app.tools.retrieval_timeline import search_thread_events as neutral_events
 from app.tools.thread_shape import invoke_thread_shape
 from app.tools.thread_shape import ThreadShapeRequest
@@ -52,6 +51,23 @@ def _context(**overrides):
     return ToolInvocationContext.from_mapping(values)
 
 
+def _patch_ready_manifest(monkeypatch):
+    async def ready(file_hash, _embedding_model):
+        return {
+            "ready": True,
+            "manifest": SimpleNamespace(
+                file_hash=file_hash,
+                manifest_id=f"manifest-{file_hash}",
+                generation="generation-1",
+            ),
+        }
+
+    monkeypatch.setattr(
+        "app.services.document_projection_service.evaluate_retrieval_readiness",
+        ready,
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_thread_shape_returns_tool_contract(monkeypatch):
     import app.db as db_module
@@ -86,29 +102,12 @@ async def test_get_thread_shape_returns_tool_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_documents_returns_sources_and_artifacts_contract(monkeypatch):
+async def test_search_knowledge_returns_sources_and_artifacts_contract(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
     fake_db = SimpleNamespace(
         search_knowledge_sources=AsyncMock(
             return_value=[{"file_hash": "file-1", "chunk_id": 1, "score": 0.9, "text": "seed"}]
         ),
-        get_knowledge_source_chunks_by_ids=AsyncMock(
-            return_value=[
-                {
-                    "file_hash": "file-1",
-                    "chunk_id": 1,
-                    "text": "Document evidence",
-                    "score": 0.9,
-                    "metadata": {"pages": "2", "page_start": 2, "page_end": 2},
-                }
-            ]
-        ),
-        search_web_chunks=AsyncMock(return_value=[{
-            "url": "https://example.com/cached",
-            "title": "Cached result",
-            "text": "Previously fetched web evidence",
-            "score": 0.8,
-            "web_search_performed_at": "2026-08-01T12:00:00Z",
-        }]),
     )
     class Services:
         async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
@@ -116,42 +115,61 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
         async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf", "source_type": "pdf"}}
         async def rerank(self, _query, chunks): return chunks
 
-    raw = await neutral_documents(
-        DocumentSearchRequest(query="diffusion", max_results=5),
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="diffusion", max_results=5),
         _context(caller_node="retrieval_worker"), services=Services(),
     )
-    payload = normalize_tool_result(raw.to_json(), tool_name="search_documents")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
 
     assert payload["ok"] is True
     _assert_contract(
         payload,
-        tool_name="search_documents",
+        tool_name="search_knowledge",
         caller_node="retrieval_worker",
-        artifact_keys=("document_sources", "web_sources", "evidence_segments"),
+        artifact_keys=("document_sources", "matches"),
     )
-    assert payload["sources"] == [
-        *payload["artifacts"]["document_sources"],
-        *payload["artifacts"]["web_sources"],
-    ]
     assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
-    assert fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["embedding_model"] == "embed-1"
-    assert fake_db.search_web_chunks.call_args.kwargs["embedding_model"] == "embed-1"
-    assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "doc:file-1:1"
-    assert payload["artifacts"]["evidence_segments"][0]["content"] == "Document evidence"
-    cached = payload["artifacts"]["evidence_segments"][1]
-    assert cached["source_id"] == "web:https://example.com/cached"
-    assert cached["content"] == "Previously fetched web evidence"
-    assert payload["artifacts"]["web_sources"][0]["web_search_performed_at"] == "2026-08-01T12:00:00Z"
+    assert fake_db.search_knowledge_sources.call_args.kwargs["filters"]["manifest_ids"] == ["manifest-file-1"]
+    assert payload["artifacts"]["matches"][0]["source_id"] == "1"
 
 
 @pytest.mark.asyncio
-async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sources(monkeypatch):
+async def test_search_knowledge_chunk_level_returns_body_text_over_structural_context(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
+    fake_db = SimpleNamespace(
+        search_knowledge_sources=AsyncMock(
+            return_value=[{
+                "file_hash": "file-1",
+                "chunk_id": 1,
+                "score": 0.9,
+                "text": "Document section: Introduction\\nstructural context",
+                "metadata": {"body_text": "The paper evaluates evidence-grounded research artifacts.", "pages": [3]},
+            }]
+        ),
+    )
+
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+        async def rerank(self, _query, chunks): return chunks
+
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="evidence", level="chunk", max_results=1),
+        _context(caller_node="retrieval_worker"), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
+
+    assert payload["ok"] is True
+    assert "The paper evaluates evidence-grounded research artifacts." in payload["content"]
+    assert "Document section: Introduction" not in payload["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_enforces_document_ownership(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
     fake_db = SimpleNamespace(
         search_knowledge_sources=AsyncMock(return_value=[{"file_hash": "owned", "chunk_id": 0, "text": "seed"}]),
-        get_knowledge_source_chunks_by_ids=AsyncMock(return_value=[{
-            "file_hash": "owned", "chunk_id": 0, "text": "Focused evidence",
-            "metadata": {"page_start": 1, "page_end": 1},
-        }]),
     )
     class Services:
         async def embed(self, _model, _query): return [0.1, 0.2]
@@ -159,28 +177,99 @@ async def test_search_document_by_id_enforces_ownership_and_returns_bounded_sour
         async def document_lookup(self, _thread_id): return {"owned": {"file_name": "paper.pdf", "source_type": "pdf"}}
         async def rerank(self, _query, chunks): return chunks
 
-    raw = await neutral_document_by_id(
-        FocusedDocumentSearchRequest(query="focused", file_hash="owned", max_results=5),
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="focused", document_id="owned", max_results=5),
         _context(caller_node="retrieval_worker"), services=Services(),
     )
-    payload = normalize_tool_result(raw.to_json(), tool_name="search_document_by_id")
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
     assert payload["ok"] is True
-    _assert_contract(payload, tool_name="search_document_by_id", caller_node="retrieval_worker", artifact_keys=("document_sources",))
-    assert fake_db.search_knowledge_sources.call_args.kwargs["file_hashes"] == ["owned"]
-    assert len(fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["chunk_ids"]) <= 21
+    _assert_contract(payload, tool_name="search_knowledge", caller_node="retrieval_worker", artifact_keys=("document_sources",))
+    assert fake_db.search_knowledge_sources.call_args.kwargs["file_hash"] == "owned"
 
-    unowned = await neutral_document_by_id(
-        FocusedDocumentSearchRequest(query="focused", file_hash="not-owned"),
+    unowned = await neutral_knowledge(
+        SearchKnowledgeRequest(query="focused", document_id="not-owned"),
         _context(caller_node="retrieval_worker"), services=Services(),
     )
-    unowned_payload = normalize_tool_result(unowned.to_json(), tool_name="search_document_by_id")
-    assert ToolWarningCode.NO_THREAD_DOCUMENTS in unowned_payload["warnings"]
+    unowned_payload = normalize_tool_result(unowned.to_json(), tool_name="search_knowledge")
+    assert unowned_payload["ok"] is False
+    assert unowned_payload["error"]["code"] == "document_scope_forbidden"
 
 
-def test_search_document_by_id_rejects_path_and_url_identifiers():
+@pytest.mark.asyncio
+async def test_search_knowledge_does_not_query_unpublished_materialization(monkeypatch):
+    readiness = AsyncMock(return_value={"ready": False, "reason": "manifest_incomplete"})
+    monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
+    embed = AsyncMock(return_value=[0.1, 0.2])
+    search = AsyncMock(return_value=[])
+
+    class Services:
+        async def embed(self, model, query): return await embed(model, query)
+        def vector_db(self): return SimpleNamespace(search_knowledge_sources=search)
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="unpublished", max_results=1),
+        _context(caller_node="retrieval_worker"), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
+
+    assert payload["ok"] is True
+    assert "missing_document_vectors" in payload["warnings"]
+    embed.assert_not_awaited()
+    search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_context_expands_descendant_sections_and_uses_large_budget(monkeypatch):
+    body = " ".join(f"word-{index}" for index in range(700))
+    chunk = SimpleNamespace(
+        source_id="src-chunk",
+        chunk_id="chunk-1",
+        file_hash="file-1",
+        embedding_model="embed-1",
+        generation="generation-1",
+        section_id="child",
+        table_id=None,
+        body_text=body,
+        contextualized_text=body,
+        page_start=1,
+        page_end=1,
+        sentence_ids=["sentence-1"],
+        source_element_ids=["element-1"],
+        metadata_json={"pages": [1], "generation": "generation-1"},
+    )
+    canonical = SimpleNamespace(status="completed", generation="generation-1")
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=canonical),
+        get_chunks=AsyncMock(side_effect=[[chunk], [chunk]]),
+        get_chunks_by_source_id=AsyncMock(return_value=[]),
+        get_sections=AsyncMock(return_value=[
+            SimpleNamespace(section_id="root", parent_section_id=None),
+            SimpleNamespace(section_id="child", parent_section_id="root"),
+        ]),
+        get_descendant_section_ids=AsyncMock(return_value=["root", "child"]),
+    )
+    monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
+
+    class Services:
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+
+    raw = await read_context(
+        ReadContextRequest(source_id="root", expansion="section", token_budget=800),
+        _context(), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="read_context")
+
+    assert payload["ok"] is True
+    assert payload["artifacts"]["token_count"] == 700
+    assert payload["artifacts"]["truncated"] is False
+    assert repo.get_chunks.await_args.kwargs["section_ids"] == {"root", "child"}
+
+
+def test_search_knowledge_rejects_path_and_url_identifiers():
     for value in ("../secret.pdf", "/tmp/file", "https://example.com/file"):
         with pytest.raises(ValidationError):
-            FocusedDocumentSearchRequest(query="q", file_hash=value)
+            SearchKnowledgeRequest(query="q", document_id=value)
 
 
 @pytest.mark.asyncio

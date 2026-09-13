@@ -117,12 +117,12 @@ async def test_denial_is_authoritative_for_future_tool_calls(test_session_maker,
     })
     assert response["structuredContent"]["artifacts"]["approval_denied"]
     handler.assert_not_awaited()
-    context.extensions["tool_approval_policy"]["search_documents"] = {"mode": "ask", "scope": "run"}
+    context.extensions["tool_approval_policy"]["search_knowledge"] = {"mode": "ask", "scope": "run"}
     response = await InProcessMCPClient().request("tools/call", {
-        "name": "search_documents", "arguments": {"query": "requires approval", "_askpdf_invocation_id": "call-3"},
+        "name": "search_knowledge", "arguments": {"query": "requires approval", "_askpdf_invocation_id": "call-3"},
         "_meta": {"com.askpdf/runtime-context": context.as_dict()},
     })
-    assert response["structuredContent"]["artifacts"]["approval_request"]["proposed_tool"]["name"] == "search_documents"
+    assert response["structuredContent"]["artifacts"]["approval_request"]["proposed_tool"]["name"] == "search_knowledge"
 
 
 def test_disabled_web_setting_denies_all_external_tools():
@@ -160,9 +160,9 @@ async def test_explicit_task_grant_survives_new_run_without_leaking_to_other_tas
 
 def test_any_registered_tool_can_be_configured_for_human_approval():
     policies = tool_approval.invocation_policies({"hitl_policy": {"enabled": True, "tools": {
-        "search_documents": {"mode": "ask", "scope": "run"},
+        "search_knowledge": {"mode": "ask", "scope": "run"},
     }}})
-    assert policies["search_documents"] == {"mode": "ask", "scope": "run"}
+    assert policies["search_knowledge"] == {"mode": "ask", "scope": "run"}
     with pytest.raises(ValueError, match="Unknown tools"):
         tool_approval.invocation_policies({"hitl_policy": {"enabled": True, "tools": {
             "misspelled_tool": {"mode": "ask"},

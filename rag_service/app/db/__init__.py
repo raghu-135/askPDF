@@ -36,11 +36,17 @@ from app.db.models_sqlmodel import (
     Memory,
     MemoryEvent,
     MemoryOverride,
+    EmbeddingJob,
+    DocumentProcessingJob,
+    CanonicalDocument,
+    DocumentSection,
+    DocumentElement,
+    DocumentChunkManifest,
+    DocumentChunk,
     GlobalMemoryRepresentation,
     MemoryScopeActivity,
     MemoryReviewState,
     MemoryManagerIdempotency,
-    EmbeddingJob,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
@@ -618,6 +624,13 @@ __all__ = [
     "Memory",
     "MemoryEvent",
     "MemoryOverride",
+    "EmbeddingJob",
+    "DocumentProcessingJob",
+    "CanonicalDocument",
+    "DocumentSection",
+    "DocumentElement",
+    "DocumentChunkManifest",
+    "DocumentChunk",
     # Status
     "get_scoped_indexing_status",
     # Constants

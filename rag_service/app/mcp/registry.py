@@ -7,10 +7,9 @@ from pydantic import BaseModel
 
 from app.agent.tool_contract import ToolResult
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG, get_tool_contract_id
-from app.tools.contracts import DocumentSearchRequest, EmptyRequest, FocusedDocumentSearchRequest, QueryRequest, TimelineRequest
+from app.tools.contracts import DocumentSearchRequest, EmptyRequest, InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest, QueryRequest, TimelineRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.retrieval_conversation import search_thread_conversation_history
-from app.tools.retrieval_documents import search_document_by_id, search_documents
 from app.tools.retrieval_memory import search_durable_memory
 from app.tools.retrieval_timeline import search_thread_events
 from app.tools.web_search import search_web
@@ -19,6 +18,7 @@ from app.tools.memory_manager import InternetSearchRequest, memory_get, memory_p
 from app.models.memory_tools import MemoryGetInput, MemoryPrepareChangeInput, MemorySearchInput
 from app.tools.external_research import search_external
 from app.tools.thread_shape import ThreadShapeRequest, invoke_thread_shape
+from app.tools.retrieval_knowledge import inspect_document, read_context, search_knowledge
 
 ToolHandler = Callable[..., Awaitable[ToolResult]]
 
@@ -85,8 +85,9 @@ def _neutral(name: str, model: type[BaseModel], handler: ToolHandler) -> MCPTool
 
 _NEUTRAL: dict[str, MCPToolDefinition] = {
     "get_thread_shape": _neutral("get_thread_shape", ThreadShapeRequest, invoke_thread_shape),
-    "search_documents": _neutral("search_documents", DocumentSearchRequest, search_documents),
-    "search_document_by_id": _neutral("search_document_by_id", FocusedDocumentSearchRequest, search_document_by_id),
+    "search_knowledge": _neutral("search_knowledge", SearchKnowledgeRequest, search_knowledge),
+    "inspect_document": _neutral("inspect_document", InspectDocumentRequest, inspect_document),
+    "read_context": _neutral("read_context", ReadContextRequest, read_context),
     "search_thread_conversation_history": _neutral("search_thread_conversation_history", DocumentSearchRequest, search_thread_conversation_history),
     "search_durable_memory": _neutral("search_durable_memory", DocumentSearchRequest, search_durable_memory),
     "search_thread_events": _neutral("search_thread_events", TimelineRequest, search_thread_events),

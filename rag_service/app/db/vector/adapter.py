@@ -13,7 +13,7 @@ import asyncio
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Mapping
 from urllib.parse import urlparse
 
 import weaviate
@@ -146,7 +146,14 @@ class WeaviateAdapter:
                 ("embedding_model", wvc.config.DataType.TEXT),
                 ("source_kind", wvc.config.DataType.TEXT),
                 ("file_hash", wvc.config.DataType.TEXT),
+                ("manifest_id", wvc.config.DataType.TEXT),
+                ("generation", wvc.config.DataType.TEXT),
                 ("chunk_id", wvc.config.DataType.INT),
+                ("chunk_identity", wvc.config.DataType.TEXT),
+                ("source_id", wvc.config.DataType.TEXT),
+                ("tags", wvc.config.DataType.TEXT_ARRAY),
+                ("section_id", wvc.config.DataType.TEXT),
+                ("table_id", wvc.config.DataType.TEXT),
                 ("text", wvc.config.DataType.TEXT),
                 ("url", wvc.config.DataType.TEXT),
                 ("title", wvc.config.DataType.TEXT),
@@ -396,6 +403,7 @@ class WeaviateAdapter:
         texts: List[str],
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
+        chunk_ids: Optional[List[str]] = None,
     ) -> int:
         """Index PDF chunks into DocumentChunk with embedding-model/file identifiers.
         
@@ -426,6 +434,8 @@ class WeaviateAdapter:
         logger.info(f"Indexing {len(texts)} PDF chunks for thread '{thread_id}', file '{file_hash}'")
         
         points: List[Dict[str, Any]] = []
+        if chunk_ids is not None and len(chunk_ids) != len(texts):
+            raise ValueError("chunk_ids must have the same length as texts")
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
             md_for_storage = {
@@ -442,7 +452,14 @@ class WeaviateAdapter:
                 "embedding_model": embedding_model,
                 "source_kind": source_kind,
                 "file_hash": file_hash,
+                "manifest_id": str(md.get("manifest_id") or ""),
+                "generation": str(md.get("generation") or ""),
                 "chunk_id": i,
+                "chunk_identity": str(md.get("source_id") or (chunk_ids[i] if chunk_ids is not None else i)),
+                "source_id": str(md.get("source_id") or (chunk_ids[i] if chunk_ids is not None else i)),
+                "tags": [str(tag) for tag in (md.get("tags") or [])],
+                "section_id": md.get("section_id") or "",
+                "table_id": md.get("table_id") or "",
                 "text": text,
                 "url": url,
                 "title": title,
@@ -457,6 +474,7 @@ class WeaviateAdapter:
                 {
                     "vector": vector,
                     "properties": properties,
+                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:document:{embedding_model}:{file_hash}:{md.get('manifest_id') or 'legacy'}:{md.get('source_id') or (chunk_ids[i] if chunk_ids is not None else i)}")),
                 }
             )
         # Use model-aware collection manager
@@ -781,6 +799,8 @@ class WeaviateAdapter:
         file_hash: Optional[str] = None,
         file_hashes: Optional[List[str]] = None,
         query_text: Optional[str] = None,
+        pages: Optional[List[int]] = None,
+        filters: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Search document chunks using vector or hybrid retrieval with file/model filters.
         
@@ -820,6 +840,60 @@ class WeaviateAdapter:
             base_filter = wvc.query.Filter.by_property("file_hash").equal(file_hash)
         elif file_hashes:
             base_filter = wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+        if pages:
+            page_filter = None
+            for page in sorted({int(value) for value in pages if int(value) > 0}):
+                current = (
+                    wvc.query.Filter.by_property("page_start").less_or_equal(page)
+                    & wvc.query.Filter.by_property("page_end").greater_or_equal(page)
+                )
+                page_filter = current if page_filter is None else page_filter | current
+            if page_filter is not None:
+                base_filter = base_filter & page_filter
+        filter_values = dict(filters or {})
+        source_types = [str(value) for value in filter_values.get("source_types") or [] if str(value)]
+        if source_types:
+            source_filter = None
+            for source_type in source_types:
+                current = wvc.query.Filter.by_property("source_kind").equal(source_type)
+                source_filter = current if source_filter is None else source_filter | current
+            if source_filter is not None:
+                base_filter = base_filter & source_filter
+        section_id = str(filter_values.get("section_id") or "")
+        if section_id:
+            base_filter = base_filter & wvc.query.Filter.by_property("section_id").equal(section_id)
+        section_ids = [str(value) for value in filter_values.get("section_ids") or [] if str(value)]
+        if section_ids:
+            section_filter = None
+            for section_value in section_ids:
+                current = wvc.query.Filter.by_property("section_id").equal(section_value)
+                section_filter = current if section_filter is None else section_filter | current
+            if section_filter is not None:
+                base_filter = base_filter & section_filter
+        generations = [str(value) for value in filter_values.get("generations") or [] if str(value)]
+        if generations:
+            generation_filter = None
+            for generation in generations:
+                current = wvc.query.Filter.by_property("generation").equal(generation)
+                generation_filter = current if generation_filter is None else generation_filter | current
+            if generation_filter is not None:
+                base_filter = base_filter & generation_filter
+        manifest_ids = [str(value) for value in filter_values.get("manifest_ids") or [] if str(value)]
+        if manifest_ids:
+            manifest_filter = None
+            for manifest_id in manifest_ids:
+                current = wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+                manifest_filter = current if manifest_filter is None else manifest_filter | current
+            if manifest_filter is not None:
+                base_filter = base_filter & manifest_filter
+        requested_tags = [str(value) for value in filter_values.get("tags") or [] if str(value)]
+        if requested_tags:
+            tag_filter = None
+            for tag in requested_tags:
+                current = wvc.query.Filter.by_property("tags").contains_any([tag])
+                tag_filter = current if tag_filter is None else tag_filter | current
+            if tag_filter is not None:
+                base_filter = base_filter & tag_filter
         kwargs = {
             "filters": base_filter,
             "limit": limit,
@@ -853,6 +927,12 @@ class WeaviateAdapter:
                 "text": p.get("text", ""),
                 "file_hash": p.get("file_hash"),
                 "chunk_id": p.get("chunk_id"),
+                "chunk_identity": p.get("chunk_identity"),
+                "source_id": p.get("source_id") or p.get("chunk_identity"),
+                "manifest_id": p.get("manifest_id"),
+                "generation": p.get("generation"),
+                "section_id": p.get("section_id") or metadata.get("section_id"),
+                "table_id": p.get("table_id") or metadata.get("table_id"),
                 "type": p.get("type", "knowledge_source"),
                 "source_kind": p.get("source_kind", "pdf"),
                 "url": p.get("url"),
@@ -1191,6 +1271,18 @@ class WeaviateAdapter:
             description=f"document vectors for file '{file_hash}', model '{embedding_model}'",
         )
 
+    async def delete_document_vectors_by_manifest(self, manifest_id: str, embedding_model: str) -> bool:
+        """Delete only staged vectors belonging to one materialization attempt."""
+        _validate_not_empty(manifest_id, "manifest_id")
+        _validate_not_empty(embedding_model, "embedding_model")
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+        filt = wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+        return await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"document vectors for manifest '{manifest_id}'",
+        )
+
     async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model: str) -> bool:
         """Return whether document chunks exist for a file hash + embedding model.
         
@@ -1224,6 +1316,52 @@ class WeaviateAdapter:
         except Exception as e:
             logger.error(f"Failed to check if file indexed: {e}")
             raise VectorDBQueryError("Could not check if file is indexed") from e
+
+    async def has_file_indexed_chunks(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        expected_chunk_ids: List[str],
+        manifest_id: Optional[str] = None,
+    ) -> bool:
+        """Verify the exact deterministic chunk identity set is materialized."""
+        _validate_not_empty(file_hash, "file_hash")
+        _validate_not_empty(embedding_model, "embedding_model")
+        expected = {str(value) for value in expected_chunk_ids}
+        if not expected:
+            return False
+        try:
+            col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+            filt = (
+                wvc.query.Filter.by_property("embedding_model").equal(embedding_model)
+                & wvc.query.Filter.by_property("file_hash").equal(file_hash)
+            )
+            if manifest_id:
+                filt = filt & wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+            identities: set[str] = set()
+            after = None
+            page_size = min(1000, max(100, len(expected)))
+            while True:
+                kwargs = {"filters": filt, "limit": page_size}
+                if after is not None:
+                    kwargs["after"] = after
+                response = await asyncio.to_thread(col.query.fetch_objects, **kwargs)
+                objects = list(getattr(response, "objects", []) or [])
+                identities.update(
+                    str(obj.properties.get("chunk_identity"))
+                    for obj in objects
+                    if obj.properties.get("chunk_identity") is not None
+                )
+                if len(identities) >= len(expected) or not objects:
+                    break
+                next_after = getattr(objects[-1], "uuid", None)
+                if next_after is None or next_after == after:
+                    break
+                after = next_after
+            return len(identities) == len(expected) and identities == expected
+        except Exception as e:
+            logger.error("Failed to verify indexed chunk identities: %s", e)
+            raise VectorDBQueryError("Could not verify indexed chunk identities") from e
 
     async def has_chat_memory_indexed(self, thread_id: str, message_id: str) -> bool:
         """Return whether at least one chat-memory chunk exists for a message in a thread.

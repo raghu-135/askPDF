@@ -1081,6 +1081,246 @@ class EmbeddingJob(SQLModel, table=True):
     )
 
 
+class DocumentProcessingJob(SQLModel, table=True):
+    """Durable claim record for conversion and model-specific projection work."""
+
+    __tablename__ = "document_processing_jobs"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True, nullable=False)
+    )
+    job_kind: str = Field(index=True)
+    embedding_model: str = Field(default="", index=True)
+    generation: str
+    extraction_fingerprint: str
+    chunking_fingerprint: str = ""
+    status: str = Field(default="pending", index=True)
+    attempts: int = Field(default=0)
+    error: Optional[str] = None
+    available_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    claimed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("job_kind in ('conversion', 'projection')", name="ck_document_processing_job_kind"),
+        CheckConstraint("status in ('pending', 'running', 'completed', 'failed')", name="ck_document_processing_job_status"),
+        CheckConstraint("attempts >= 0", name="ck_document_processing_job_attempts"),
+        CheckConstraint("length(btrim(file_hash)) > 0", name="ck_document_processing_job_file_hash"),
+        CheckConstraint("length(btrim(generation)) > 0", name="ck_document_processing_job_generation"),
+        UniqueConstraint(
+            "file_hash", "job_kind", "embedding_model", "generation", "extraction_fingerprint", "chunking_fingerprint",
+            name="uq_document_processing_job_target",
+        ),
+        Index("idx_document_processing_job_claim", "status", "available_at"),
+    )
+
+
+class CanonicalDocument(SQLModel, table=True):
+    """The durable, shared Docling representation for one source PDF."""
+
+    __tablename__ = "canonical_documents"
+
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
+    )
+    generation: str = Field(index=True)
+    extraction_fingerprint: str = Field(index=True)
+    docling_version: str = Field(default="unknown")
+    status: str = Field(default="pending", index=True)
+    document_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    failure_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB),
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True)),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'running', 'completed', 'failed')",
+            name="ck_canonical_documents_status",
+        ),
+        CheckConstraint("length(btrim(generation)) > 0", name="ck_canonical_documents_generation"),
+        CheckConstraint(
+            "length(btrim(extraction_fingerprint)) > 0",
+            name="ck_canonical_documents_fingerprint",
+        ),
+        Index("idx_canonical_documents_status", "status"),
+    )
+
+
+class DocumentSection(SQLModel, table=True):
+    """Heading hierarchy derived from the canonical document."""
+
+    __tablename__ = "document_sections"
+
+    section_id: str = Field(primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    generation: str = Field(index=True)
+    parent_section_id: Optional[str] = Field(default=None, index=True)
+    section_order: int = Field(default=0)
+    level: int = Field(default=0)
+    title: str = Field(default="")
+    heading_path: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    element_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+
+    __table_args__ = (
+        UniqueConstraint("file_hash", "generation", "section_order", name="uq_document_sections_order"),
+        Index("idx_document_sections_parent", "file_hash", "generation", "parent_section_id"),
+    )
+
+
+class DocumentElement(SQLModel, table=True):
+    """A structural Docling element with source provenance."""
+
+    __tablename__ = "document_elements"
+
+    element_id: str = Field(primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    generation: str = Field(index=True)
+    element_order: int = Field(default=0)
+    element_type: str = Field(index=True)
+    label: Optional[str] = None
+    text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    section_id: Optional[str] = Field(default=None, index=True)
+    parent_element_id: Optional[str] = Field(default=None, index=True)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    provenance_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    structure_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+
+    __table_args__ = (
+        Index("idx_document_elements_generation_order", "file_hash", "generation", "element_order"),
+        Index("idx_document_elements_section_order", "section_id", "element_order"),
+    )
+
+
+class DocumentChunkManifest(SQLModel, table=True):
+    """Atomic publication marker for one model-specific chunk projection."""
+
+    __tablename__ = "document_chunk_manifests"
+
+    manifest_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    embedding_model: str = Field(index=True)
+    generation: str = Field(index=True)
+    chunking_fingerprint: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    vector_status: str = Field(default="missing", index=True)
+    vector_count: int = Field(default=0)
+    expected_chunk_count: int = Field(default=0)
+    expected_chunk_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    expected_source_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    failure_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    published_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    superseded_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "file_hash", "embedding_model", "generation", "chunking_fingerprint",
+            name="uq_document_chunk_manifests_target",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'running', 'completed', 'failed')",
+            name="ck_document_chunk_manifests_status",
+        ),
+        CheckConstraint(
+            "vector_status in ('missing', 'running', 'completed', 'failed')",
+            name="ck_document_chunk_manifests_vector_status",
+        ),
+        CheckConstraint("expected_chunk_count >= 0", name="ck_document_chunk_manifests_count"),
+        Index("idx_document_chunk_manifests_ready", "file_hash", "embedding_model", "status"),
+        Index("idx_document_chunk_manifests_published", "file_hash", "embedding_model", "published_at"),
+    )
+
+
+class DocumentChunk(SQLModel, table=True):
+    """Retrieval passage with original body text kept separate from context."""
+
+    __tablename__ = "document_chunks"
+
+    chunk_id: str = Field(sa_column=Column(String, primary_key=True, index=True))
+    manifest_id: str = Field(
+        sa_column=Column(String, ForeignKey("document_chunk_manifests.manifest_id", ondelete="CASCADE"), primary_key=True, index=True)
+    )
+    source_id: str = Field(index=True)
+    file_hash: str = Field(index=True)
+    embedding_model: str = Field(index=True)
+    chunk_order: int = Field(default=0)
+    body_text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    contextualized_text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    sentence_ids: List[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    source_element_ids: List[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    section_id: Optional[str] = Field(default=None, index=True)
+    table_id: Optional[str] = Field(default=None, index=True)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    metadata_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+
+    __table_args__ = (
+        UniqueConstraint("manifest_id", "chunk_order", name="uq_document_chunks_order"),
+        UniqueConstraint("manifest_id", "source_id", name="uq_document_chunks_source"),
+        Index("idx_document_chunks_file_model_order", "file_hash", "embedding_model", "chunk_order"),
+        Index("idx_document_chunks_section", "file_hash", "section_id", "chunk_order"),
+    )
+
+
 class MemoryEvent(SQLModel, table=True):
     """Audit event for durable memory changes."""
     __tablename__ = "memory_events"

@@ -19,8 +19,9 @@ from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runti
 
 
 GRAPH_TOOL_NAMES = [
-    ToolName.SEARCH_DOCUMENTS.value,
-    ToolName.SEARCH_DOCUMENT_BY_ID.value,
+    ToolName.SEARCH_KNOWLEDGE.value,
+    ToolName.INSPECT_DOCUMENT.value,
+    ToolName.READ_CONTEXT.value,
     ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value,
     ToolName.SEARCH_DURABLE_MEMORY.value,
     ToolName.SEARCH_THREAD_EVENTS.value,

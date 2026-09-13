@@ -2,6 +2,7 @@ import io
 import os
 import logging
 import json
+from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Optional
 import spacy
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
@@ -44,6 +45,30 @@ _docling_converter = DocumentConverter(
         InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options)
     }
 )
+
+
+def extraction_configuration() -> dict[str, object]:
+    """Return every parsing input that can change the canonical document."""
+    def installed(name: str) -> str:
+        try:
+            return package_version(name)
+        except PackageNotFoundError:
+            return "unknown"
+
+    return {
+        "do_ocr": bool(_pipeline_options.do_ocr),
+        "do_table_structure": bool(_pipeline_options.do_table_structure),
+        "do_formula_enrichment": bool(_pipeline_options.do_formula_enrichment),
+        "table_mode": str(_table_mode),
+        "force_full_page_ocr": bool(
+            getattr(getattr(_pipeline_options, "ocr_options", None), "force_full_page_ocr", False)
+        ),
+        "docling": installed("docling"),
+        "docling_core": installed("docling-core"),
+        "pdfplumber": installed("pdfplumber"),
+        "spacy": installed("spacy"),
+        "sentence_model": "en_core_web_sm" if _nlp is not None else "spacy-fallback",
+    }
 
 # Initialize spaCy for sentence splitting
 try:

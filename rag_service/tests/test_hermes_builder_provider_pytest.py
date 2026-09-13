@@ -46,10 +46,9 @@ def test_hermes_builtin_is_concrete_and_not_a_graph():
 
 def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
     prompt = _spec()["config"]["system_prompt"]
-    assert "exact namespaced AskPDF retrieval tool directly" in prompt
-    assert "bridge APIs are only for genuinely deferred tools" in prompt
-    assert "search_documents or search_document_by_id" in prompt
-    assert "do not route an already-listed AskPDF tool through tool_search" in prompt
+    assert "exact namespaced names" in prompt
+    assert "search_knowledge with level=chunk" in prompt
+    assert "inspect_document" in prompt and "read_context" in prompt
     assert "Do not use read_file for AskPDF-managed documents" in prompt
 
 

@@ -29,10 +29,10 @@ class ToolWorkerSpec:
 TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
     WorkflowNodeType.RETRIEVAL_WORKER.value: ToolWorkerSpec(
         node_name=WorkflowNodeType.RETRIEVAL_WORKER.value,
-        tool_name=ToolName.SEARCH_DOCUMENTS.value,
+        tool_name=ToolName.SEARCH_KNOWLEDGE.value,
         evidence_kind=EvidenceKind.DOCUMENT.value,
         evidence_label="Document evidence",
-        tool_input=lambda current: {"query": current["question"], "max_results": 10},
+        tool_input=lambda current: {"query": current["question"], "level": "chunk", "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "document_sources": [*current.get("document_sources", []), *artifacts.get("document_sources", [])],
             "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
@@ -147,10 +147,11 @@ async def run_tool_worker(
         tool_name = selected_tool_name
         tool_input = {"query": str(state.get("question") or "")}
     elif spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
-        tool_name = ToolName.SEARCH_DOCUMENT_BY_ID.value
+        tool_name = ToolName.SEARCH_KNOWLEDGE.value
         tool_input = {
             "query": str(state.get("question") or "")[:2_000],
-            "file_hash": str(work_item["file_hash"])[:256],
+            "document_id": str(work_item["file_hash"])[:256],
+            "level": "chunk",
             "max_results": 10,
         }
     else:

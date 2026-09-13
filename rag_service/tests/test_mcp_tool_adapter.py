@@ -57,7 +57,7 @@ def test_mcp_wrapper_uses_authoritative_description():
     from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
     from app.mcp.tool_adapter import create_mcp_tool
 
-    for name in ("get_thread_shape", "search_documents", "search_web", "wikipedia", "wikidata"):
+    for name in ("get_thread_shape", "search_knowledge", "inspect_document", "read_context", "search_web", "wikipedia", "wikidata"):
         tool = create_mcp_tool(name)
         assert tool.description == TOOL_FRIENDLY_CONFIG[name]["description"]
 

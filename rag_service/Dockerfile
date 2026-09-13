@@ -29,7 +29,7 @@ RUN pip install --no-deps /tmp/runtime_protocol
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
-      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
+      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; from transformers import AutoTokenizer; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); AutoTokenizer.from_pretrained('nomic-ai/nomic-embed-text-v1.5'); print('Downloaded local embedding + reranker models and configured external tokenizer')"; \
       python -m spacy download en_core_web_sm; \
     fi
 

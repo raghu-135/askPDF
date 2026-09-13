@@ -209,16 +209,18 @@ async def reconcile_thread_embedding_targets(
         documents = [file for file in documents if str(file.file_hash) in wanted]
     document_count = 0
     vector_db = get_vector_db()
+    from app.services.document_projection_service import evaluate_retrieval_readiness
     for file in documents:
         file_hash = str(file.file_hash)
-        if await vector_db.has_file_indexed(thread_id, file_hash, embedding_model):
+        readiness = await evaluate_retrieval_readiness(file_hash, embedding_model)
+        if readiness.get("ready"):
             continue
         await ensure_embedding_job(
             resource_type=RESOURCE_DOCUMENT,
             resource_id=file_hash,
             scope_id=thread_id,
             embedding_model=embedding_model,
-            source_version=file_hash,
+            source_version=f"{file_hash}:retrieval-v2",
         )
         document_count += 1
 

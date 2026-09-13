@@ -5,7 +5,7 @@ Internet Search (search_web) is ENABLED for this session.
 ## Mandatory Invocation
 
 Call search_web for every factual or informational question:
-  - Run search_web in parallel with search_documents / search_document_by_id in retrieval planning.
+  - Run search_web in parallel with search_knowledge in retrieval planning when attached-document evidence is relevant.
   - Pre-fetched document evidence does not satisfy this mandate; documents and web are complementary.
   - Do not defer web search to a second pass after checking document results; batch them when web is enabled.
 

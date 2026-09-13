@@ -31,7 +31,8 @@ from app.db import (
     update_parsing_status,
 )
 from app.rag.indexer import index_document_for_thread
-from app.services.parsing_service import extract_text_with_coordinates
+from app.services.document_conversion_service import convert_pdf_and_project
+from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.content_store import get_content_store, pdf_content_key
 from app.time_utils import iso_utc_z
 
@@ -118,12 +119,16 @@ async def queue_file_processing(
         )
 
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data and parsed_data.get("sentences"):
+    canonical = await get_canonical_document_repo().get(file_hash)
+    if canonical and canonical.status == "completed":
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
         await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-        background_tasks.add_task(_background_parse, file_hash, file_name, backend_url)
+        background_tasks.add_task(_background_parse, file_hash, file_name, backend_url, indexing_metadata or {})
 
 
 async def queue_project_file_processing(
@@ -169,15 +174,19 @@ async def queue_project_file_processing(
             False,
         )
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data and parsed_data.get("sentences"):
+    canonical = await get_canonical_document_repo().get(file_hash)
+    if canonical and canonical.status == "completed":
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
         await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-        background_tasks.add_task(_background_parse, file_hash, file_name, "")
+        background_tasks.add_task(_background_parse, file_hash, file_name, "", indexing_metadata or {})
 
 
-async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
+async def _background_parse(file_hash: str, filename: str, backend_url: str = "", source_metadata: Optional[Dict[str, Any]] = None):
     """
     Background task to parse PDF and update status with atomic transactions.
     Uses SQLModel repository for transaction safety - sentences and status updated together.
@@ -211,11 +220,12 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
             raise FileNotFoundError(f"PDF content not found for {file_hash}")
         pdf_data = await store.read(key)
 
-        sentences = extract_text_with_coordinates(pdf_data, filename=filename)
-        parsed_data = {
-            "version": "1.0",
-            "sentences": sentences
-        }
+        parsed_data = await convert_pdf_and_project(
+            file_hash=file_hash,
+            data=pdf_data,
+            file_name=filename,
+            source_metadata={"original_title": filename, **(source_metadata or {})},
+        )
 
         # ATOMIC: Store sentences AND update status to completed in ONE transaction
         finished_at = iso_utc_z()
@@ -226,7 +236,11 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
         )
 
         if success:
-            logger.info(f"Background parsing completed for {file_hash} - {len(sentences)} sentences stored atomically")
+            logger.info(
+                "Background conversion completed for %s - %s sentences stored atomically",
+                file_hash,
+                len(parsed_data.get("sentences") or []),
+            )
         else:
             logger.error(f"Failed to atomically complete parsing for {file_hash}")
 
@@ -271,6 +285,12 @@ async def _background_index(
         if not claimed:
             return
 
+        # Conversion/TTS persistence is an independent prerequisite from vector
+        # materialization. Finish it first so readers can use the document even
+        # while the model-specific index is still running or unavailable.
+        if markdown_content is None:
+            await _background_parse(file_hash, file_name, backend_url, metadata)
+
         result = await index_document_for_thread(
             thread_id=thread_id,
             file_hash=file_hash,
@@ -283,8 +303,6 @@ async def _background_index(
             raise Exception(result.get("message", "Indexing failed"))
         logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
 
-        # Trigger PDF parsing for sentence extraction (needed for both PDFs and web sources)
-        await _background_parse(file_hash, file_name, backend_url)
     except Exception as e:
         traceback.print_exc()
         finished_at = iso_utc_z()

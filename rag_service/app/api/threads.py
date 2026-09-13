@@ -43,6 +43,7 @@ from app.db import (
     assign_thread_to_project,
     ensure_default_project,
     get_file_status,
+    get_file,
     get_project,
     get_thread,
     get_thread_files,
@@ -596,6 +597,19 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             }
 
         db = get_vector_db()
+        from app.services.document_projection_service import evaluate_retrieval_readiness
+        from app.services.embedding_materialization_service import ensure_embedding_job, RESOURCE_DOCUMENT
+
+        async def schedule_pdf_repair(target_file_hash: str, readiness: dict) -> None:
+            if readiness.get("ready"):
+                return
+            await ensure_embedding_job(
+                resource_type=RESOURCE_DOCUMENT,
+                resource_id=target_file_hash,
+                scope_id=thread_id,
+                embedding_model=thread.embedding_model,
+                source_version=f"{target_file_hash}:retrieval-v2",
+            )
 
         # Track files list for stats query
         files = []
@@ -611,6 +625,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     "stats": _empty_thread_stats(),
                     "embedding_model_ready": embedding_model_ready,
                 }
+            file_record = await get_file(file_hash)
             scoped_indexing = get_scoped_indexing_status(
                 file_status,
                 embedding_model=thread.embedding_model,
@@ -618,15 +633,23 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
             if ProcessStatus.is_completed(indexing_status):
-                status = EmbeddingReadinessStatus.READY.value
+                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
+                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model)
+                    await schedule_pdf_repair(file_hash, readiness)
+                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
+                else:
+                    status = EmbeddingReadinessStatus.READY.value
             elif ProcessStatus.is_failed(indexing_status):
                 status = EmbeddingReadinessStatus.NOT_READY.value
             elif ProcessStatus.is_running(indexing_status):
                 status = EmbeddingReadinessStatus.NOT_READY.value
             else:
-                # Fallback to vector DB check for backward compatibility
-                is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embedding_model)
-                status = EmbeddingReadinessStatus.READY.value if is_indexed else EmbeddingReadinessStatus.NOT_READY.value
+                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
+                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model)
+                    await schedule_pdf_repair(file_hash, readiness)
+                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
+                else:
+                    status = EmbeddingReadinessStatus.NOT_READY.value
         else:
             # Check all files in thread using file_status
             files = await get_thread_files(thread_id)
@@ -642,11 +665,14 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                         thread_id=thread_id,
                     )
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
-                    if not ProcessStatus.is_completed(indexing_status):
-                        # Fallback to vector DB check for backward compatibility
-                        if not await db.has_file_indexed(thread_id, f.file_hash, thread.embedding_model):
-                            all_indexed = False
-                            break
+                    file_ready = ProcessStatus.is_completed(indexing_status)
+                    if file_ready and str(getattr(f, "source_type", "pdf")) == "pdf":
+                        readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model)
+                        await schedule_pdf_repair(f.file_hash, readiness)
+                        file_ready = bool(readiness.get("ready"))
+                    if not file_ready:
+                        all_indexed = False
+                        break
                 status = EmbeddingReadinessStatus.READY.value if all_indexed else EmbeddingReadinessStatus.NOT_READY.value
 
         # Build file hashes list for stats query

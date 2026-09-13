@@ -55,6 +55,19 @@ export interface FileStatus {
   indexing: IndexingSection;
   indexing_status: FileIndexingStatus;
   updated_at: string;
+  document_processing?: DocumentProcessingStatus;
+}
+
+export interface DocumentProcessingStatus {
+  conversion: { status: string; generation?: string; failure?: Record<string, unknown> | null };
+  reading: { status: string };
+  projection: {
+    status: string;
+    vector_status: "missing" | "running" | "completed" | "failed" | string;
+    vector_count: number;
+    expected_chunk_count: number;
+    manifest_id?: string | null;
+  };
 }
 
 // Helper functions for status checks
@@ -71,6 +84,7 @@ export interface UploadResponse {
   downloadUrl: string;
   fileHash: string;
   fileName: string;
+  documentProcessing?: DocumentProcessingStatus;
 }
 
 interface RawUploadResponse {
@@ -78,6 +92,7 @@ interface RawUploadResponse {
   download_url: string;
   file_hash: string;
   file_name: string;
+  document_processing?: DocumentProcessingStatus;
 }
 
 const mapUploadResponse = (raw: RawUploadResponse): UploadResponse => ({
@@ -85,6 +100,7 @@ const mapUploadResponse = (raw: RawUploadResponse): UploadResponse => ({
   downloadUrl: raw.download_url,
   fileHash: raw.file_hash,
   fileName: raw.file_name,
+  documentProcessing: raw.document_processing,
 });
 
 export type KnowledgeTarget = { scope: "thread" | "project"; id: string };
@@ -143,18 +159,21 @@ export interface PdfData {
   sentences: any[];
   downloadUrl: string;
   fileHash: string;
+  documentProcessing?: DocumentProcessingStatus;
 }
 
 interface RawPdfData {
   sentences: any[];
   download_url: string;
   file_hash: string;
+  document_processing?: DocumentProcessingStatus;
 }
 
 const mapPdfData = (raw: RawPdfData): PdfData => ({
   sentences: raw.sentences,
   downloadUrl: raw.download_url,
   fileHash: raw.file_hash,
+  documentProcessing: raw.document_processing,
 });
 
 export async function getPdfByHash(fileHash: string, threadId: string): Promise<PdfData> {
@@ -895,6 +914,7 @@ export interface ThreadFile {
   isProjectKnowledge?: boolean;
   processingStatus?: "pending" | "completed" | "failed";
   processingError?: string;
+  documentProcessing?: DocumentProcessingStatus;
 }
 
 interface RawThreadFile {
@@ -907,6 +927,7 @@ interface RawThreadFile {
   is_project_knowledge?: boolean;
   processing_status?: "pending" | "completed" | "failed";
   processing_error?: string;
+  document_processing?: DocumentProcessingStatus;
 }
 
 const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
@@ -919,6 +940,7 @@ const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
   isProjectKnowledge: raw.is_project_knowledge,
   processingStatus: raw.processing_status,
   processingError: raw.processing_error,
+  documentProcessing: raw.document_processing,
 });
 
 export interface WebSource {

@@ -261,7 +261,7 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
                 "config": {
                     "context_window": 8192,
                     "use_reranker": False,
-                    "allowed_tool_ids": ["thread_shape", "document_evidence"],
+                        "allowed_tool_ids": ["thread_shape", "document_search_knowledge"],
                 }
             },
         ),
@@ -271,7 +271,7 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
     context = decode_execution_context_token(token, tool_name="get_thread_shape")
     assert context.run_id == "run-1"
     assert context.use_reranker is False
-    assert decode_execution_context_token(token, tool_name="search_documents").run_id == "run-1"
+    assert decode_execution_context_token(token, tool_name="search_knowledge").run_id == "run-1"
     await adapter.aclose()
 
 

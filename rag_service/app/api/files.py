@@ -48,6 +48,7 @@ from app.db import (
     get_thread_file_annotations,
     remove_file_from_thread,
     update_parsing_status,
+    update_indexing_status,
     upsert_thread_file_annotations,
 )
 from app.models.requests import (
@@ -71,6 +72,7 @@ from app.services.embedding_model_service import (
 )
 from app.models.llm_server_client import check_embedding_model_ready
 from app.services.content_store import get_content_store, pdf_content_key
+from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 
 router = APIRouter(tags=["files"])
 
@@ -124,6 +126,48 @@ def _file_payload(file, *, scope: str):
         "association_scope": getattr(file, "association_scope", scope),
         "is_project_knowledge": getattr(file, "is_project_knowledge", scope == "project"),
         "added_at": maybe_iso_utc_z(getattr(file, "added_at", None)),
+    }
+
+
+async def _reset_incomplete_document_for_retry(file_hash: str) -> None:
+    """Release an interrupted canonical conversion before queueing a retry."""
+    repo = get_canonical_document_repo()
+    canonical = await repo.get(file_hash)
+    if canonical is None or canonical.status == ProcessStatus.COMPLETED.value:
+        return
+    if canonical.status == ProcessStatus.RUNNING.value:
+        await repo.fail_conversion(
+            file_hash,
+            {"code": "retry_requested", "message": "Retry requested after interrupted conversion"},
+        )
+    await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
+
+
+async def _document_processing_payload(file_hash: str, embedding_model: str) -> Dict[str, Any]:
+    """Expose independent conversion, reading, projection, and vector readiness."""
+    repo = get_canonical_document_repo()
+    canonical = await repo.get(file_hash)
+    if canonical is None:
+        return {
+            "conversion": {"status": ProcessStatus.UNKNOWN.value},
+            "reading": {"status": ProcessStatus.UNKNOWN.value},
+            "projection": {"status": ProcessStatus.UNKNOWN.value, "vector_status": "missing"},
+        }
+    manifest = await repo.get_ready_manifest(file_hash, embedding_model) if embedding_model else None
+    return {
+        "conversion": {
+            "status": canonical.status,
+            "generation": canonical.generation,
+            "failure": canonical.failure_json,
+        },
+        "reading": {"status": ProcessStatus.COMPLETED.value if canonical.status == "completed" else canonical.status},
+        "projection": {
+            "status": manifest.status if manifest else ProcessStatus.PENDING.value,
+            "vector_status": manifest.vector_status if manifest else "missing",
+            "vector_count": manifest.vector_count if manifest else 0,
+            "expected_chunk_count": manifest.expected_chunk_count if manifest else 0,
+            "manifest_id": manifest.manifest_id if manifest else None,
+        },
     }
 
 
@@ -238,6 +282,7 @@ async def get_thread_files_endpoint(thread_id: str):
                 **_file_payload(file, scope="thread"),
                 "processing_status": processing_status,
                 "processing_error": processing_error,
+                "document_processing": await _document_processing_payload(file.file_hash, thread.embedding_model),
             })
         return {
             "thread_id": thread_id,
@@ -251,7 +296,7 @@ async def get_thread_files_endpoint(thread_id: str):
 
 
 @router.get("/threads/{thread_id}/files/{file_hash}")
-async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
+async def get_pdf_data_endpoint(thread_id: str, file_hash: str, background_tasks: BackgroundTasks):
     """
     Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
     """
@@ -275,13 +320,28 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
             "sentences": sentences,
             "download_url": f"/threads/{thread_id}/files/{file_hash}/download",
             "file_hash": file_hash,
+            "document_processing": await _document_processing_payload(file_hash, thread.embedding_model),
         }
+
+    # Access is also a lazy-repair trigger.  The background task is idempotent
+    # and will rebuild missing/incompatible canonical data from the stored PDF.
+    file = await get_file(file_hash)
+    if file:
+        await queue_file_processing(
+            background_tasks=background_tasks,
+            thread=thread,
+            file_hash=file_hash,
+            file_name=file.file_name,
+            file_path=file.file_path,
+            source_type=file.source_type,
+        )
 
     # If not parsed yet, return empty sentences
     return {
         "sentences": [],
         "download_url": f"/threads/{thread_id}/files/{file_hash}/download",
         "file_hash": file_hash,
+        "document_processing": await _document_processing_payload(file_hash, thread.embedding_model),
     }
 
 
@@ -388,6 +448,7 @@ async def get_file_status_endpoint(
                 # Override status to indicate processing
                 status["parsing"] = {"status": ProcessStatus.PENDING.value}
                 status["indexing"] = {"status": ProcessStatus.PENDING.value}
+                status["document_processing"] = await _document_processing_payload(file_hash, thread.embedding_model)
                 return status
             else:
                 raise HTTPException(status_code=404, detail="File is not attached to this thread")
@@ -405,6 +466,7 @@ async def get_file_status_endpoint(
             embedding_model=embedding_model,
             thread_id=thread_id if direct_association else None,
         )
+        status["document_processing"] = await _document_processing_payload(file_hash, embedding_model)
         parsing_status = (status.get("parsing") or {}).get("status", ProcessStatus.UNKNOWN.value)
         if not ProcessStatus.is_completed(parsing_status):
             parsed_data = await get_file_parsed_sentences(file_hash)
@@ -421,6 +483,7 @@ async def get_file_status_endpoint(
                     embedding_model=embedding_model,
                     thread_id=thread_id if direct_association else None,
                 )
+                status["document_processing"] = await _document_processing_payload(file_hash, embedding_model)
 
         # Filter by section if specified
         if section:
@@ -683,8 +746,16 @@ async def _require_project_file(project_id: str, file_hash: str):
 
 
 @router.get("/projects/{project_id}/files/{file_hash}")
-async def get_project_pdf_data_endpoint(project_id: str, file_hash: str):
-    await _require_project_file(project_id, file_hash)
+async def get_project_pdf_data_endpoint(project_id: str, file_hash: str, background_tasks: BackgroundTasks):
+    project, file = await _require_project_file(project_id, file_hash)
+    await queue_project_file_processing(
+        background_tasks,
+        project,
+        file_hash,
+        file.file_name,
+        file.file_path,
+        file.source_type,
+    )
     parsed_data = await get_file_parsed_sentences(file_hash) or {}
     return {
         "sentences": parsed_data.get("sentences") or [],
@@ -736,6 +807,7 @@ async def get_project_file_status_endpoint(project_id: str, file_hash: str, sect
 async def retry_project_file_endpoint(project_id: str, file_hash: str, background_tasks: BackgroundTasks):
     project = await _require_ready_project(project_id)
     _, file = await _require_project_file(project_id, file_hash)
+    await _reset_incomplete_document_for_retry(file_hash)
     await update_indexing_status(
         file_hash=file_hash,
         status=ProcessStatus.PENDING.value,
@@ -760,6 +832,7 @@ async def retry_thread_file_endpoint(thread_id: str, file_hash: str, background_
     file = await get_file(file_hash)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    await _reset_incomplete_document_for_retry(file_hash)
     if await is_file_in_thread(thread_id, file_hash):
         await update_indexing_status(
             file_hash=file_hash,

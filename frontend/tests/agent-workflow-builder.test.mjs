@@ -60,7 +60,7 @@ test('parallel workflow assembly enables bounded parallel runtime metadata', () 
       { from: 'dispatch', conditional: true, route_fn: 'parallel_dispatch_route', routes: { dispatch: 'aggregate' } },
       { from: 'worker', to: 'aggregate' },
     ],
-    allowed_tool_ids: ['document_evidence'],
+    allowed_tool_ids: ['document_search_knowledge'],
     parallel_policy: {
       enabled: true,
       max_concurrency: 4,
@@ -140,7 +140,7 @@ const catalog = {
     retrieval_worker: node({
       type: 'retrieval_worker',
       display_name: 'Document Retrieval',
-      allowed_tool_contract_ids: ['document_evidence', 'focused_document_evidence'],
+      allowed_tool_contract_ids: ['document_search_knowledge', 'document_inspection', 'document_context'],
       allowed_parent_types: ['router', 'planner', 'replanner', 'serial_dispatch', 'hitl_gate'],
       allowed_child_types: ['serial_dispatch', 'evidence_evaluator', 'synthesizer', 'finalizer', 'hitl_gate'],
       max_instances: 4,
@@ -309,10 +309,28 @@ const catalog = {
       artifact_keys: [],
       warning_codes: [],
     },
-    document_evidence: {
-      id: 'document_evidence',
-      display_name: 'Document Evidence',
-      canonical_tools: ['search_documents'],
+    document_search_knowledge: {
+      id: 'document_search_knowledge',
+      display_name: 'Search Knowledge',
+      canonical_tools: ['search_knowledge'],
+      allowed_node_types: ['retrieval_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['document_sources'],
+      warning_codes: [],
+    },
+    document_inspection: {
+      id: 'document_inspection',
+      display_name: 'Inspect Document',
+      canonical_tools: ['inspect_document'],
+      allowed_node_types: ['retrieval_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['document_sources'],
+      warning_codes: [],
+    },
+    document_context: {
+      id: 'document_context',
+      display_name: 'Read Context',
+      canonical_tools: ['read_context'],
       allowed_node_types: ['retrieval_worker'],
       required_node_capabilities: [],
       artifact_keys: ['document_sources'],
@@ -352,15 +370,6 @@ const catalog = {
       allowed_node_types: ['web_worker'],
       required_node_capabilities: [],
       artifact_keys: ['web_sources'],
-      warning_codes: [],
-    },
-    focused_document_evidence: {
-      id: 'focused_document_evidence',
-      display_name: 'Focused Document Evidence',
-      canonical_tools: ['focused_search'],
-      allowed_node_types: ['retrieval_worker'],
-      required_node_capabilities: [],
-      artifact_keys: ['document_sources'],
       warning_codes: [],
     },
   },
@@ -431,7 +440,7 @@ test('creates a router starter spec with canonical node ids and route function m
   assert.equal(spec.schema_version, 1);
   assert.equal(spec.workflow_id, 'router_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
-  assert.deepEqual(spec.config.allowed_tool_ids, ['thread_shape', 'document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
+  assert.deepEqual(spec.config.allowed_tool_ids, ['thread_shape', 'document_search_knowledge', 'document_inspection', 'document_context', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
     document: 'serial_dispatch',
@@ -454,7 +463,7 @@ test('catalog helpers filter routes, labels, tool contracts, and edge compatibil
   assert.deepEqual(getRouteLabelsForFunction(catalog, 'planner_route'), ['execute', 'direct', 'clarify']);
   assert.deepEqual(
     getAllowedToolContractsForNode(catalog, 'retrieval_worker').map((contract) => contract.id),
-    ['document_evidence', 'focused_document_evidence'],
+    ['document_inspection', 'document_context', 'document_search_knowledge'],
   );
   assert.equal(canConnectNodes(catalog, state, 'router', 'retrieval_worker').ok, true);
   assert.equal(canConnectNodes(catalog, state, 'retrieval_worker', 'router').ok, false);
@@ -619,7 +628,7 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
     ...state,
     nodes: [
       ...state.nodes,
-      { id: 'router_2', type: 'router', tool_contract_ids: ['document_evidence'] },
+      { id: 'router_2', type: 'router', tool_contract_ids: ['document_search_knowledge'] },
       { id: 'retrieval_worker_2', type: 'retrieval_worker', tool_contract_ids: ['missing_contract'] },
     ],
   });

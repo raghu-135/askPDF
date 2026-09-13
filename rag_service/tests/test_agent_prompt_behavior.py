@@ -49,6 +49,6 @@ def test_unknown_tool_instruction_identifier_fails_fast():
 
 
 def test_known_inactive_tool_instruction_is_not_mistaken_for_unknown_identifier():
-    normalized = normalize_tool_instructions({"live_web_recon": "Use fresh sources"}, tool_items=["search_documents"])
+    normalized = normalize_tool_instructions({"live_web_recon": "Use fresh sources"}, tool_items=["search_knowledge"])
     assert "live_web_recon" not in normalized
-    assert "document_evidence" in normalized
+    assert "document_search_knowledge" in normalized
