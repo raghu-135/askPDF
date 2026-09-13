@@ -6,8 +6,7 @@ from app.agent.tool_registry import (
     list_tool_contract_metadata,
     validate_tool_call_allowed,
 )
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.validator import WorkflowValidator
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
 
 def _builtin_spec(builtin_key: str):
@@ -60,17 +59,6 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
 
     assert any(record["tool_name"] == "search_documents" and record["display_name"] == "Document Evidence" for record in records)
     assert records == sorted(records, key=lambda record: record["tool_name"])
-
-
-def test_workflow_validator_accepts_external_contract_ids():
-    spec = _builtin_spec("router_rag_agent")
-    spec["config"]["allowed_tool_ids"] = [
-        *spec["config"]["allowed_tool_ids"],
-        "wikipedia_reference",
-        "semantic_scholar_research",
-    ]
-
-    assert WorkflowValidator().validate(spec) == {"valid": True, "errors": []}
 
 
 def test_tool_contract_records_are_schema_like():

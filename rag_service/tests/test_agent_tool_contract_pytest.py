@@ -11,10 +11,17 @@ from app.agent.tool_contract import (
     tool_started,
 )
 from app.rag.agent_tools import search_durable_memory
+from runtime_protocol import (
+    MAX_TOOL_RESULT_BYTES,
+    MAX_TOOL_RESULT_STRING_LENGTH,
+    ToolResult,
+    normalize_tool_result,
+    validate_tool_result_payload,
+)
 
 
 class TestAskPdfToolContract:
-    def test_make_tool_result_records_trace_metrics_and_legacy_fields(self):
+    def test_make_tool_result_records_trace_metrics_without_legacy_fields(self):
         config = {
             "configurable": {
                 "agent_run_id": "run-1",
@@ -32,33 +39,71 @@ class TestAskPdfToolContract:
             started=started,
             sources=[{"file_hash": "file-1"}],
             artifacts={"document_sources": [{"file_hash": "file-1"}]},
-        ).to_json(legacy_fields={"__document_sources__": [{"file_hash": "file-1"}]})
+        ).to_json()
         payload = normalize_tool_result(raw, tool_name="search_documents", config=config)
 
         assert payload["ok"] is True
         assert payload["content"] == "Evidence"
-        assert payload["__document_sources__"] == [{"file_hash": "file-1"}]
+        assert payload["artifacts"]["document_sources"] == [{"file_hash": "file-1"}]
+        assert all(not key.startswith("__") for key in payload)
         assert payload["trace"]["agent_run_id"] == "run-1"
         assert payload["trace"]["caller_node"] == "retrieval_worker"
         assert payload["metrics"]["result_chars"] == len("Evidence")
 
-    def test_normalize_tool_result_accepts_legacy_json_and_plain_strings(self):
-        legacy = normalize_tool_result(
-            '{"content":"Memory","__used_chat_ids__":["turn-1"]}',
-            tool_name="search_thread_conversation_history",
-        )
-        plain = normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
+    def test_normalize_tool_result_rejects_legacy_json_and_plain_strings(self):
+        with pytest.raises(ValueError, match="legacy"):
+            normalize_tool_result(
+                {"content": "Memory", "_" * 2 + "used_chat_ids": ["turn-1"]},
+                tool_name="search_thread_conversation_history",
+            )
+        with pytest.raises(ValueError, match="non-canonical"):
+            normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
 
-        assert legacy["content"] == "Memory"
-        assert legacy["__used_chat_ids__"] == ["turn-1"]
-        assert plain["content"] == "No thread context found."
-        assert plain["ok"] is True
+    def test_normalize_tool_result_rejects_missing_canonical_fields(self):
+        with pytest.raises(ValueError, match="missing canonical fields"):
+            normalize_tool_result({"ok": True}, tool_name="bad_tool")
 
-    def test_normalize_tool_result_warns_for_missing_content(self):
-        payload = normalize_tool_result({"ok": True}, tool_name="bad_tool")
+    def test_tool_result_bounds_reject_oversized_canonical_payloads(self):
+        with pytest.raises(ValueError, match="maximum length"):
+            validate_tool_result_payload({
+                "ok": True,
+                "content": "x" * (MAX_TOOL_RESULT_STRING_LENGTH + 1),
+                "sources": [], "artifacts": {}, "warnings": [], "error": None,
+                "metrics": {"elapsed_ms": 0.0, "result_chars": 0, "source_count": 0, "warning_count": 0},
+                "trace": {"tool_name": "bad_tool"},
+            })
 
-        assert payload["content"] == ""
-        assert ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT in payload["warnings"]
+    def test_tool_result_size_policy_handles_utf8_and_serialized_bytes(self):
+        exact = ToolResult(content="x" * MAX_TOOL_RESULT_STRING_LENGTH).to_payload()
+        assert len(exact["content"]) == MAX_TOOL_RESULT_STRING_LENGTH
+        with pytest.raises(ValueError, match="serialized size"):
+            ToolResult(artifacts={"blob": "x" * MAX_TOOL_RESULT_BYTES}).to_payload()
+        with pytest.raises(ValueError, match="serialized size"):
+            ToolResult(artifacts={"blob": "é" * MAX_TOOL_RESULT_BYTES}).to_payload()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"ok": True, "content": "ok"},
+            {"ok": "true", "content": "ok"},
+            {"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": {"code": "bad", "message": "bad"}, "metrics": {}, "trace": {}},
+            {"ok": False, "content": "failed", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}},
+        ],
+    )
+    def test_normalizer_rejects_invalid_envelopes(self, payload):
+        with pytest.raises(ValueError):
+            normalize_tool_result(payload)
+
+    def test_normalizer_round_trips_success_and_failure_without_repair(self):
+        success = ToolResult(content="ok").to_payload()
+        failure = ToolResult(
+            ok=False,
+            content="failed",
+            error={"code": "tool_failed", "message": "failed", "type": "ToolError", "retryable": False, "evidence_gap": True},
+        ).to_payload()
+        assert normalize_tool_result(success) == success
+        assert normalize_tool_result(failure) == failure
 
     def test_make_tool_error_result_is_recoverable_and_compact(self):
         config = {"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}}

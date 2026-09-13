@@ -9,6 +9,7 @@ import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 
 export type TraceRunTab = {
   id: string;
+  threadId?: string;
   messageId?: string;
   label: string;
   status?: string;
@@ -75,6 +76,7 @@ export default function TraceWorkspace({
         )}
         <AgentRunDebugPanel
           runId={activeTab.id}
+          threadId={activeTab.threadId}
           routeReason={activeTab.routeReason}
           traceRefs={activeTab.traceRefs}
           runDetails={activeTab.runDetails}

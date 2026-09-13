@@ -95,3 +95,20 @@ test('overlays only the selected node visit and its conditional route', () => {
   assert.equal(overlaid.edges.find((edge) => edge.id === 'replan').selected, true);
   assert.equal(overlaid.edges.find((edge) => edge.id === 'other'), graph.edges[2]);
 });
+
+test('overlays an operation linked to topology with a different operation id', () => {
+  const operation = {
+    ...visit('runtime-step-7', 2, { evaluator_route: 'answer' }),
+    topologyRef: { kind: 'graph_node', id: 'evaluator' },
+  };
+  const graph = {
+    nodes: [{ id: 'evaluator', type: 'evaluator', label: 'Evaluator' }],
+    edges: [{ id: 'answer', source: 'evaluator', target: 'finalizer', route: 'answer', conditional: true }],
+  };
+
+  const overlaid = applySelectedVisitOverlay(graph, [operation], { nodeId: 'evaluator', visitIndex: 2 });
+
+  assert.equal(overlaid.nodes[0].selectedVisitIndex, 2);
+  assert.equal(overlaid.nodes[0].selectedVisitPosition, 1);
+  assert.equal(overlaid.edges[0].selected, true);
+});

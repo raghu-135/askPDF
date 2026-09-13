@@ -1,0 +1,18 @@
+# Managed profile for Hermes Deep Research without external access.
+# Pinned to NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894.
+_config_version: 37
+model:
+  default: askpdf-runtime-selected
+  provider: __HERMES_MODEL_PROVIDER__
+  base_url: ${LLM_API_URL}
+  context_length: __HERMES_MODEL_CONTEXT_LENGTH__
+platforms:
+  # The default profile owns the shared listener in multiplex mode. The key
+  # remains available for authentication on this profile's /p/<profile>/ path.
+  api_server:
+    enabled: false
+auxiliary:
+  title_generation:
+    enabled: false
+# Runtime MCP registration belongs exclusively to generated per-run profiles.
+mcp_servers: {}

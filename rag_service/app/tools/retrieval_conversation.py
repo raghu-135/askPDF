@@ -4,6 +4,7 @@ from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, mak
 from app.tools.contracts import DocumentSearchRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
+from app.rag.retrieval import bounded_retrieval_text
 
 
 async def search_thread_conversation_history(request: DocumentSearchRequest, context: ToolInvocationContext, *, services: DefaultToolServices | None = None):
@@ -20,6 +21,7 @@ async def search_thread_conversation_history(request: DocumentSearchRequest, con
         if not history:
             return make_tool_result(tool_name=tool_name, content="No relevant past conversations found.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONVERSATION_HISTORY])
         from app.agent.evidence_contract import evidence_segment
-        return make_tool_result(tool_name=tool_name, content=history, context=context, started=started, artifacts={"used_chat_ids": used_ids, "evidence_segments": [s for item in refs if (s := evidence_segment(kind="conversation", content=item.get("content"), source=item, raw_score=item.get("rerank_score", item.get("score"))))]})
+        bounded, truncated = bounded_retrieval_text([history])
+        return make_tool_result(tool_name=tool_name, content=bounded, context=context, started=started, artifacts={"used_chat_ids": used_ids, "evidence_segments": [s for item in refs if (s := evidence_segment(kind="conversation", content=str(item.get("content") or "")[:1000], source=item, raw_score=item.get("rerank_score", item.get("score"))))]}, warnings=[ToolWarningCode.RESPONSE_TRUNCATED] if truncated else [])
     except Exception as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=f"Error retrieving chat memory: {exc}")

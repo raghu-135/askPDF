@@ -1,0 +1,186 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.services import agent_run_cancellation as cancellation
+from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+
+
+class Adapter:
+    def __init__(self):
+        self.requests = []
+
+    async def cancel(self, request):
+        self.requests.append(request)
+        return {"status": "cancellation_requested"}
+
+
+class TerminalAdapter(Adapter):
+    async def cancel(self, request):
+        self.requests.append(request)
+        return {"status": "completed", "no_op": True}
+
+
+class Registry:
+    def __init__(self, adapter):
+        self.adapter = adapter
+
+    def get(self, _definition):
+        return self.adapter
+
+
+def _run():
+    return SimpleNamespace(
+        id="run-1", thread_id="thread-1", workflow_id="deep_research_agent",
+        framework="langgraph", builder_id="langgraph_graph", definition_category="task",
+        runtime_binding_json={}, runtime_binding_status="active", status="running", task_id="task-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_task_cancellation_is_submitted_but_not_terminal(monkeypatch):
+    capability = AsyncMock()
+    monkeypatch.setattr(cancellation, "require_capability", capability)
+    adapter = Adapter()
+    registry = Registry(adapter)
+    task = SimpleNamespace(id="task-1", status="cancelling")
+    run = _run()
+    result = await cancellation.request_task_cancellation(task, run, registry=registry)
+    assert result["status"] == "cancelling"
+    assert result["runtime_confirmation"] == "pending"
+    assert len(adapter.requests) == 1
+    capability.assert_awaited_once()
+    assert capability.await_args.kwargs == {"registry": registry, "run": run}
+
+
+@pytest.mark.asyncio
+async def test_terminal_runtime_cancellation_response_preserves_terminal_status(monkeypatch):
+    monkeypatch.setattr(cancellation, "require_capability", AsyncMock())
+    result = await cancellation.request_task_cancellation(
+        SimpleNamespace(id="task-1", status="cancelling"),
+        _run(),
+        registry=Registry(TerminalAdapter()),
+    )
+
+    assert result["status"] == "cancelling"
+    assert result["runtime_status"] == "completed"
+    assert result["runtime_confirmation"] == "terminal"
+
+
+@pytest.mark.asyncio
+async def test_task_without_runtime_cancels_without_adapter():
+    result = await cancellation.request_task_cancellation(SimpleNamespace(id="task-1"), None)
+    assert result == {"status": "cancelled", "task_id": "task-1", "runtime_confirmation": "not_required"}
+
+
+@pytest.mark.asyncio
+async def test_unsupported_cancellation_fails_before_adapter_invocation(monkeypatch):
+    adapter = Adapter()
+    unsupported = AgentRuntimeError.capability_unsupported(
+        operation_id="run.cancel", framework="langgraph", builder_id="langgraph_graph",
+        explanation="disabled for this definition",
+    )
+    monkeypatch.setattr(cancellation, "require_capability", AsyncMock(side_effect=unsupported))
+    task = SimpleNamespace(id="task-1", status="running")
+    run = _run()
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await cancellation.request_task_cancellation(task, run, registry=Registry(adapter))
+
+    assert caught.value.code == "runtime_capability_unsupported"
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_is_retryable_and_nonterminal(monkeypatch):
+    monkeypatch.setattr(cancellation, "require_capability", AsyncMock())
+    adapter = Adapter()
+    adapter.cancel = AsyncMock(side_effect=OSError("connection reset"))
+
+    with pytest.raises(AgentRuntimeError) as caught:
+        await cancellation.request_task_cancellation(
+            SimpleNamespace(id="task-1", status="cancelling"),
+            _run(),
+            registry=Registry(adapter),
+        )
+
+    assert caught.value.code == "runtime_transport_error"
+    assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_confirmed_cancellation_atomically_terminalizes_task_and_run(monkeypatch):
+    record = AsyncMock()
+    finalize = AsyncMock(return_value=SimpleNamespace(status="cancelled"))
+    complete_commands = AsyncMock()
+    monkeypatch.setattr("app.services.agent_runtime_reconciliation.record_terminal_result", record)
+    monkeypatch.setattr("app.services.agent_task_repository.finalize_task_run", finalize)
+    monkeypatch.setattr("app.services.agent_task_repository.complete_pending_cancel_commands", complete_commands)
+    task = SimpleNamespace(id="task-1")
+    run = _run()
+    run.metrics_json = {"model_calls": 1}
+    run.debug_trace_json = {"events": []}
+
+    result = await cancellation.confirm_task_cancellation(
+        task, run, result={"status": "cancelled"}, terminal_event_id="terminal-1"
+    )
+
+    assert result.status == "cancelled"
+    record.assert_awaited_once()
+    kwargs = finalize.await_args.kwargs
+    assert kwargs["run_status"] == kwargs["task_status"] == "cancelled"
+    assert kwargs["terminal_event"].kind == "run.cancelled"
+    assert kwargs["terminal_event"].terminal is True
+    complete_commands.assert_awaited_once()
+    assert complete_commands.await_args.kwargs["result"]["runtime_confirmation"] == "confirmed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed"])
+async def test_terminal_acknowledgement_reconciles_instead_of_forcing_cancel(monkeypatch, status):
+    reconcile = AsyncMock(return_value="projected")
+    finalize = AsyncMock()
+    monkeypatch.setattr("app.services.agent_runtime_reconciliation.reconcile_run_by_id", reconcile)
+    monkeypatch.setattr("app.services.agent_task_repository.finalize_task_run", finalize)
+    assert await cancellation.confirm_task_cancellation(
+        SimpleNamespace(id="task-1"), _run(),
+        result={"status": "cancelling", "runtime_status": status},
+    ) == "projected"
+    reconcile.assert_awaited_once_with("run-1")
+    finalize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_cancellation_cannot_terminalize():
+    with pytest.raises(ValueError, match="confirmed cancelled"):
+        await cancellation.confirm_task_cancellation(SimpleNamespace(id="task-1"), _run(), result={"status": "cancelling"})
+
+
+def test_timeout_reason_survives_recovery_state():
+    from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
+    run = _run()
+    run.run_metadata_json = {"cancellation_request": {
+        "reason": "active_runtime_wake_limit", "effective_limit_seconds": 600,
+        "elapsed_seconds": 600.1, "runtime_confirmation": "pending",
+    }}
+    task = SimpleNamespace(terminal_reason="runtime_projection_failed")
+    assert cancellation_reason(task, run) == "active_runtime_wake_limit"
+    assert confirmed_cancellation_details(task, run)["effective_limit_seconds"] == 600
+    assert confirmed_cancellation_details(task, run)["runtime_confirmation"] == "confirmed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+async def test_hermes_terminal_acknowledgement_is_normalized_in_adapter(monkeypatch, status):
+    from app.runtime.hermes_adapter import HermesRuntimeAdapter
+    from runtime_protocol.contracts import AgentRuntimeRequest, ContinuationBinding
+
+    monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
+    adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
+    monkeypatch.setattr(adapter.transport, "_json", AsyncMock(return_value={"status": "already_terminal", "upstream_status": status}))
+    result = await adapter.cancel(AgentRuntimeRequest(
+        run_id="run-1", thread_id="thread-1", definition_id="hermes_rag_agent", framework="hermes", builder_id="hermes_agent",
+        continuation=ContinuationBinding(binding_type="hermes_session", payload={"upstream_run_id": "upstream-1"}),
+    ))
+    assert result["status"] == status

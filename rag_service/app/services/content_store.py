@@ -26,6 +26,9 @@ class ContentStore(ABC):
     async def put(self, key: str, content: bytes | BinaryIO, *, expected_sha256: str | None = None) -> ContentStat: ...
 
     @abstractmethod
+    async def put_if_absent(self, key: str, content: bytes, *, expected_sha256: str | None = None) -> tuple[bool, ContentStat]: ...
+
+    @abstractmethod
     async def read(self, key: str) -> bytes: ...
 
     @abstractmethod
@@ -107,6 +110,46 @@ class SharedVolumeContentStore(ContentStore):
                     os.unlink(temporary_name)
 
         return await asyncio.to_thread(write)
+
+    async def put_if_absent(self, key: str, content: bytes, *, expected_sha256: str | None = None) -> tuple[bool, ContentStat]:
+        body = bytes(content)
+        actual = hashlib.sha256(body).hexdigest()
+        if expected_sha256 is not None and actual != expected_sha256:
+            raise ValueError("content SHA-256 does not match metadata")
+
+        def create() -> tuple[bool, ContentStat]:
+            target = self._resolve(key, create_parents=True)
+            fd, temporary_name = tempfile.mkstemp(prefix=".content-", dir=target.parent)
+            try:
+                os.fchmod(fd, 0o640)
+                with os.fdopen(fd, "wb") as output:
+                    output.write(body)
+                    output.flush()
+                    os.fsync(output.fileno())
+                try:
+                    # Hard-linking the completed temporary file publishes it
+                    # atomically while preserving no-overwrite semantics.
+                    os.link(temporary_name, target)
+                except FileExistsError:
+                    return False, self._stat_sync(key)
+                return True, ContentStat(size=len(body), sha256=actual)
+            except Exception:
+                raise
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
+
+        return await asyncio.to_thread(create)
+
+    def _stat_sync(self, key: str) -> ContentStat:
+        path = self._resolve(key)
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as content:
+            for chunk in iter(lambda: content.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
+        return ContentStat(size=size, sha256=digest.hexdigest())
 
     async def read(self, key: str) -> bytes:
         return await asyncio.to_thread(self._resolve(key).read_bytes)

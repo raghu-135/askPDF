@@ -132,9 +132,15 @@ function Canvas({
         const entry = catalog.node_catalog[node.type];
         const routeFn = getAllowedRouteFunctionsForNode(catalog, node.type)[0];
         const labels = routeFn ? getRouteLabelsForFunction(catalog, routeFn) : [];
+        const routeKind = routeFn ? catalog.route_functions[routeFn]?.route_kind : undefined;
         const routeOptions = routeFn ? catalog.route_functions[routeFn]?.route_options || {} : {};
-        const outputPorts = labels === null
+        const graphRoutes = state.edges
+          .filter((edge) => edge.from === node.id && edge.conditional)
+          .flatMap((edge) => Object.keys(edge.routes || {}));
+        const outputPorts = routeKind === 'hitl'
           ? (node.hitl?.allowed_actions || []).map((id) => ({ id, label: id.replace(/_/g, ' ') }))
+          : ['conditional', 'parallel_dispatch', 'serial_dispatch'].includes(routeKind || '') && labels === null && graphRoutes.length > 0
+            ? Array.from(new Set(graphRoutes)).map((id) => ({ id, label: id.replace(/_/g, ' ') }))
           : labels?.map((id) => ({
             id,
             label: routeOptions[id]?.display_name || id.replace(/_/g, ' '),

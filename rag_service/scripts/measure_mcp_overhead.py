@@ -25,7 +25,7 @@ def _summary(values: list[float]) -> str:
 async def _run() -> None:
     from app.mcp import discovery
     logging.basicConfig(level=logging.CRITICAL)
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.transport import InProcessMCPClient
 
     client = InProcessMCPClient()
@@ -47,11 +47,11 @@ async def _run() -> None:
 
         discovery.clear_discovery_cache()
         started = time.perf_counter()
-        await langchain_adapter.call_mcp_tool("get_thread_shape", {})
+        await tool_adapter.call_mcp_tool("get_thread_shape", {})
         uncached_adapter_elapsed = (time.perf_counter() - started) * 1000
 
         started = time.perf_counter()
-        await langchain_adapter.call_mcp_tool("get_thread_shape", {})
+        await tool_adapter.call_mcp_tool("get_thread_shape", {})
         cached_adapter_elapsed = (time.perf_counter() - started) * 1000
 
         if index >= warmup:

@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/workspace:/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1 ASKPDF_REPO_DIR=/workspace
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils tesseract-ocr libmagic-dev libgl1 libglib2.0-0 libgomp1 \
+    libsndfile1 espeak-ng curl g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY rag_service/requirements.txt requirements.txt
+COPY rag_service/requirements-dev.txt requirements-dev.txt
+RUN pip install -r requirements-dev.txt
+RUN python -m spacy download en_core_web_sm
+COPY runtime_protocol /tmp/runtime_protocol
+RUN pip install --no-deps /tmp/runtime_protocol
+
+COPY rag_service/alembic alembic
+COPY rag_service/scripts scripts
+COPY rag_service/app app
+COPY rag_service/tests tests
+COPY rag_service/alembic.ini rag_service/main.py ./
+COPY hermes_runtime /workspace/hermes_runtime
+
+CMD ["python", "scripts/run_tests.py"]

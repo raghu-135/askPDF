@@ -6,6 +6,7 @@ from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, mak
 from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
+from app.rag.retrieval import RETRIEVAL_CONTENT_BUDGET, bounded_retrieval_text
 
 
 async def search_documents(
@@ -48,7 +49,10 @@ async def search_documents(
         if not expanded and not web:
             return make_tool_result(tool_name=tool_name, content="No relevant content found in documents or cached web results.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
         from app.rag.retrieval import group_document_chunks
-        document_content, document_sources = group_document_chunks(expanded, lookup)
+        document_content, document_sources = group_document_chunks(
+            expanded, lookup, char_budget=RETRIEVAL_CONTENT_BUDGET
+        )
+        document_truncated = len(document_sources) < sum(1 for chunk in expanded if chunk.get("text"))
         web_sources: list[dict[str, Any]] = []
         groups: dict[str, dict[str, Any]] = {}
         for chunk in web:
@@ -60,13 +64,22 @@ async def search_documents(
                     item[field] = chunk[field]
             web_sources.append(item)
         parts = [document_content] if document_content else []
+        selected_web_urls: set[str] = set()
         for url, group in groups.items():
             prefix = f"Cached web result from search performed at {group['web_search_performed_at']}:\n" if group.get("web_search_performed_at") else ""
-            parts.append(f'{prefix}[Source: Internet Search - "{group["title"]}" | {url}]\n' + "\n".join(group["texts"]))
+            candidate = f'{prefix}[Source: Internet Search - "{group["title"]}" | {url}]\n' + "\n".join(group["texts"])
+            bounded, truncated = bounded_retrieval_text(parts + [candidate])
+            if not truncated:
+                parts.append(candidate)
+                selected_web_urls.add(url)
+        web_sources = [source for source in web_sources if source.get("url") in selected_web_urls]
+        content, content_truncated = bounded_retrieval_text(parts)
         from app.agent.evidence_contract import evidence_segment
-        segments = [s for chunk in expanded if (s := evidence_segment(kind="document", content=chunk.get("text"), source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]
-        segments += [s for chunk in web if (s := evidence_segment(kind="web", content=chunk.get("text"), source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]
-        return make_tool_result(tool_name=tool_name, content="\n\n".join(parts), context=context, started=started, sources=[*document_sources, *web_sources], artifacts={"document_sources": document_sources, "web_sources": web_sources, "evidence_segments": segments})
+        selected_doc_ids = {(item.get("file_hash"), item.get("chunk_id")) for item in document_sources}
+        segments = [s for chunk in expanded if (chunk.get("file_hash"), chunk.get("chunk_id")) in selected_doc_ids and (s := evidence_segment(kind="document", content=str(chunk.get("text") or "")[:1000], source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]
+        segments += [s for chunk in web if chunk.get("url") in selected_web_urls and (s := evidence_segment(kind="web", content=str(chunk.get("text") or "")[:1000], source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]
+        warnings = [ToolWarningCode.RESPONSE_TRUNCATED] if content_truncated or document_truncated else []
+        return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=[*document_sources, *web_sources], artifacts={"document_sources": document_sources, "web_sources": web_sources, "evidence_segments": segments}, warnings=warnings)
     except Exception as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=f"Error retrieving knowledge: {exc}")
 
@@ -93,10 +106,14 @@ async def search_document_by_id(request: FocusedDocumentSearchRequest, context: 
         expanded = await db.get_knowledge_source_chunks_by_ids(thread_id=context.thread_id, embedding_model=context.embedding_model, file_hash=request.file_hash, chunk_ids=sorted(ids))
         expanded.sort(key=lambda item: int(item.get("chunk_id") or 0))
         from app.rag.retrieval import group_document_chunks
-        content, sources = group_document_chunks(expanded, lookup)
+        content, sources = group_document_chunks(expanded, lookup, char_budget=RETRIEVAL_CONTENT_BUDGET)
+        document_truncated = len(sources) < sum(1 for chunk in expanded if chunk.get("text"))
         if not content:
             return make_tool_result(tool_name=tool_name, content="No relevant content was found in the requested document.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
         from app.agent.evidence_contract import evidence_segment
-        return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=sources, artifacts={"document_sources": sources, "evidence_segments": [s for chunk in expanded if (s := evidence_segment(kind="document", content=chunk.get("text"), source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]})
+        bounded, truncated = bounded_retrieval_text([content])
+        selected_ids = {(item.get("file_hash"), item.get("chunk_id")) for item in sources}
+        segments = [s for chunk in expanded if (chunk.get("file_hash"), chunk.get("chunk_id")) in selected_ids and (s := evidence_segment(kind="document", content=str(chunk.get("text") or "")[:1000], source=chunk, raw_score=chunk.get("rerank_score", chunk.get("score"))))]
+        return make_tool_result(tool_name=tool_name, content=bounded, context=context, started=started, sources=sources, artifacts={"document_sources": sources, "evidence_segments": segments}, warnings=[ToolWarningCode.RESPONSE_TRUNCATED] if truncated or document_truncated else [])
     except Exception as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=f"Error retrieving the requested document: {exc}")

@@ -174,7 +174,7 @@ function AgentGraphCanvasInner({
         route: traceView.route,
         metrics: traceView.metrics,
         nodeCatalog,
-        nodeRows: traceView.nodes.map((node) => ({
+        nodeRows: traceView.operations.map((node) => ({
           ...node.raw,
           node: node.id,
           node_type: node.type,
@@ -196,7 +196,7 @@ function AgentGraphCanvasInner({
       baseGraph = buildAgentGraph(graphSpec, { nodeCatalog });
     }
     const focusedGraph = applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
-    return traceView ? applySelectedVisitOverlay(focusedGraph, traceView.nodes, selectedVisitRef) : focusedGraph;
+    return traceView ? applySelectedVisitOverlay(focusedGraph, traceView.operations, selectedVisitRef) : focusedGraph;
   }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, selectedVisitRef, workflowId, traceView]);
   const focusSignature = useMemo(() => JSON.stringify({
     node_ids: focusedTraceRefs?.node_ids || [],

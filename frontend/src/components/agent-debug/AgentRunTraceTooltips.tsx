@@ -4,7 +4,7 @@ import { formatSkipReason } from '../../lib/agentDebugLabels';
 import { formatDurationMs } from '../../lib/formatDuration';
 import { formatNodeInstanceLabel } from '../agent-graph/agent-graph-mapper';
 import { formatTraceError } from './agent-debug-utils';
-import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
+import type { TraceOperationView, TraceToolView } from './agent-trace-projection';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 
 const visitSuffix = (visitIndex?: number) => (
@@ -32,25 +32,25 @@ const TraceTooltipList = ({
   </Box>
 );
 
-export const TraceNodesTooltip = ({
-  nodes,
+export const TraceOperationsTooltip = ({
+  operations,
   usedCount,
   availableCount,
 }: {
-  nodes: TraceNodeView[];
+  operations: TraceOperationView[];
   usedCount: number;
   availableCount?: number;
 }) => {
-  const skippedCount = nodes.filter((node) => node.skipped).length;
+  const skippedCount = operations.filter((operation) => operation.skipped).length;
   const title = [
-    `Node spans: ${nodes.length}`,
+    `Operation visits: ${operations.length}`,
     `used: ${usedCount}${availableCount ? `/${availableCount}` : ''}`,
     skippedCount ? `skipped: ${skippedCount}` : null,
   ].filter(Boolean).join(' · ');
 
   return (
-    <TraceTooltipList title={title} emptyText="No node spans recorded.">
-      {nodes.map((node, index) => {
+    <TraceTooltipList title={title} emptyText="No operation visits recorded.">
+      {operations.map((node, index) => {
         const elapsed = formatDurationMs(node.durationMs);
         const status = node.status || (node.skipped ? 'skipped' : 'completed');
         const skipReason = formatSkipReason(node.raw?.skip_reason);

@@ -14,7 +14,7 @@ try:
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
     from sqlalchemy import text
     from sqlmodel import SQLModel, select
-    from app.db.connection_sqlmodel import get_session, init_db
+    from app.db.connection_sqlmodel import get_session
     from app.db.models_sqlmodel import Project, Thread
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))

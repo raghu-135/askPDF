@@ -1,0 +1,394 @@
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from app.product_orchestration.canonical_trace import (
+    TraceProjectionError,
+    build_canonical_trace_projection,
+    build_parallel_groups,
+    build_parallel_groups_safely,
+)
+from app.product_orchestration.debug_trace import build_debug_payload_from_journal
+from app.product_orchestration.trace_recorder import AgentTraceRecorder
+from runtime_protocol.contracts import AgentRuntimeEvent
+
+
+def _event(sequence: int, kind: str, payload: dict, framework: str = "langgraph") -> AgentRuntimeEvent:
+    return AgentRuntimeEvent(
+        event_id=f"event-{sequence}",
+        run_id="run-1",
+        sequence=sequence,
+        kind=kind,
+        payload=payload,
+        source_metadata={"framework": framework},
+    )
+
+
+def test_confirmed_timeout_is_cancellation_not_unexplained_node_failure():
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "run.cancelled", {"error": {"code": "run_cancelled"}})],
+        resolved_spec={}, framework="langgraph",
+        cancellation_request={"reason": "active_runtime_wake_limit", "effective_limit_seconds": 600,
+                              "elapsed_seconds": 600.1, "active_node": "evidence_critic"},
+    )
+    diagnostics = projection["diagnostics"]
+    assert diagnostics["summary"]["failure_count"] == 0
+    assert diagnostics["summary"]["cancellation_count"] == 1
+    assert diagnostics["summary"]["code"] == "active_runtime_wake_limit"
+    assert "600 seconds" in diagnostics["summary"]["message"]
+    assert diagnostics["failures"][0]["details"]["active_node"] == "evidence_critic"
+
+
+def test_canonical_projection_never_synthesizes_an_operation_identity() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "operation.completed", {"operation_type": "unknown"}, "future")],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert projection["operations"] == []
+    assert set(projection["visualizations"]) == {"generic.timeline"}
+    assert projection["events"][0]["kind"] == "operation.completed"
+
+
+def test_parallel_projection_scopes_reused_work_id_to_each_dispatch_group() -> None:
+    events = [
+        _event(1, "dispatch.started", {"dispatch_id": "dispatch-1", "planned": 1}),
+        _event(2, "worker.started", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(3, "worker.failed", {"dispatch_id": "dispatch-1", "work_id": "work-a", "attempt": 1}),
+        _event(4, "dispatch.started", {"dispatch_id": "dispatch-2", "planned": 1}),
+        _event(5, "worker.started", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+        _event(6, "worker.completed", {"dispatch_id": "dispatch-2", "work_id": "work-a", "attempt": 1}),
+    ]
+    groups = build_parallel_groups(events)
+
+    assert [group["group_id"] for group in groups] == ["dispatch-1", "dispatch-2"]
+    assert [group["members"][0]["member_id"] for group in groups] == ["work-a", "work-a"]
+    assert groups[0]["members"][0]["attempts"][0]["status"] == "failed"
+    assert groups[1]["members"][0]["attempts"][0]["status"] == "completed"
+
+    rendered = build_canonical_trace_projection(events=events, resolved_spec={}, framework="langgraph")
+    assert [group["group_id"] for group in rendered["parallel_groups"]] == ["dispatch-1", "dispatch-2"]
+
+
+def test_safe_parallel_projection_omits_only_malformed_group_projection() -> None:
+    events = [
+        _event(1, "worker.started", {"work_id": "work-a"}),
+        _event(2, "dispatch.started", {"dispatch_id": "dispatch-b", "planned": 1}),
+        _event(3, "worker.completed", {"dispatch_id": "dispatch-b", "work_id": "work-b", "attempt": 1}),
+    ]
+
+    groups = build_parallel_groups_safely(events)
+    assert [group["group_id"] for group in groups] == ["dispatch-b"]
+
+
+def test_unknown_framework_metadata_remains_visible_without_specialized_visualization() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "runtime.event", {
+            "message": "framework progress",
+            "framework_details": {"future": {"phase": "inspect"}},
+        }, "future")],
+        resolved_spec={"config": {"graph": {"nodes": [{"id": "not-a-future-graph"}]}}},
+        framework="future",
+    )
+
+    assert set(projection["visualizations"]) == {"generic.timeline"}
+    assert projection["events"][0]["framework_details"]["future"]["phase"] == "inspect"
+
+
+def test_tool_projection_records_argument_names_without_values() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "tool.completed", {
+            "tool_name": "search_documents",
+            "arguments": {"query": "private query", "authorization": "secret"},
+            "ok": True,
+        })],
+        resolved_spec={},
+        framework="langgraph",
+    )
+
+    payload = projection["tools"][0]["payload"]
+    assert payload["provided_argument_names"] == ["authorization", "query"]
+    assert "arguments" not in payload
+    assert "private query" not in str(projection)
+
+
+def test_model_lifecycle_projection_is_correlated_and_summary_only() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "operation.started", {"operation_id": "planner", "operation_type": "deep_task_planner"}, "future"),
+            _event(2, "llm.started", {
+                "invocation_id": "llm-1",
+                "model_name": "test-model",
+                "operation_id": "planner",
+                "visit_index": 1,
+                "prompt": "private prompt",
+            }, "future"),
+            _event(3, "llm.completed", {
+                "invocation_id": "llm-1",
+                "model_name": "test-model",
+                "operation_id": "planner",
+                "visit_index": 1,
+                "status": "completed",
+                "duration_ms": 12,
+                "usage": {"total_tokens": 42},
+                "response": "private generated response",
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert [row["event_id"] for row in projection["models"]] == ["event-2", "event-3"]
+    assert projection["models"][0]["payload"]["operation_id"] == "planner"
+    assert "prompt" not in str(projection["models"])
+    assert "response" not in str(projection["models"])
+
+
+def test_hermes_projection_keeps_generic_events_and_session_visualization() -> None:
+    events = [
+        _event(1, "operation.started", {"operation_id": "hermes_session", "operation_type": "agent_session", "operation_label": "Hermes Agent", "session_id": "session-1"}, "hermes"),
+        _event(2, "reasoning.available", {"session_id": "session-1", "upstream_run_id": "upstream-1"}, "hermes"),
+        _event(3, "subagent.started", {"subagent_id": "child-1", "parent_subagent_id": "root"}, "hermes"),
+        _event(4, "operation.completed", {"operation_id": "hermes_session", "operation_type": "agent_session", "operation_label": "Hermes Agent", "session_id": "session-1"}, "hermes"),
+    ]
+
+    projection = build_canonical_trace_projection(events=events, resolved_spec={}, framework="hermes")
+
+    assert projection["operations"][0]["operation_label"] == "Hermes Agent"
+    assert len(projection["events"]) == 4
+    hermes = projection["visualizations"]["hermes.session"]
+    assert hermes["session_id"] == "session-1"
+    assert hermes["upstream_run_id"] == "upstream-1"
+    assert len(hermes["reasoning"]) == 1
+    assert len(hermes["subagents"]) == 1
+
+
+def test_parallel_failures_remain_distinct_and_terminal_failure_correlates_them() -> None:
+    events = [
+        _event(1, "tool.failed", {
+            "operation_id": "research-a",
+            "parallel_group_id": "research-wave-1",
+            "tool_name": "search_documents",
+            "error": {"code": "document_search_failed", "message": "Index unavailable"},
+        }, "hermes"),
+        _event(2, "subagent.failed", {
+            "operation_id": "research-b",
+            "parallel_group_id": "research-wave-1",
+            "subagent_id": "delegate-b",
+            "error": {"code": "delegate_timeout", "message": "Delegate timed out"},
+        }, "hermes"),
+        _event(3, "run.failed", {
+            "status": "failed",
+            "error": {"code": "runtime_failed", "message": "Runtime failed"},
+        }, "hermes"),
+    ]
+
+    projection = build_canonical_trace_projection(events=events, resolved_spec={}, framework="hermes")
+
+    diagnostics = projection["diagnostics"]
+    assert [row["event_id"] for row in diagnostics["failures"]] == ["event-1", "event-2", "event-3"]
+    assert diagnostics["failures"][0]["classification"] == "primary"
+    assert diagnostics["failures"][1]["classification"] == "concurrent"
+    terminal = diagnostics["failures"][-1]
+    assert terminal["classification"] == "terminal_summary"
+    assert diagnostics["summary"]["failure_count"] == 3
+    assert diagnostics["summary"]["primary_failure_event_id"] == "event-1"
+    assert diagnostics["summary"]["primary_basis"] == "earliest_observed"
+    assert [row["event_id"] for row in projection["visualizations"]["hermes.session"]["failures"]] == [
+        "event-1", "event-2", "event-3",
+    ]
+
+
+def test_explicit_causal_chain_selects_root_without_framework_logic() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "tool.failed", {"tool_name": "search", "error": {"code": "provider_down", "message": "Provider unavailable"}}, "future"),
+            _event(2, "operation.failed", {"operation_id": "retrieve", "caused_by_event_id": "event-1", "error": {"code": "retrieval_failed"}}, "future"),
+            _event(3, "run.failed", {"caused_by_event_id": "event-2", "error": {"code": "run_failed"}}, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    diagnostics = projection["diagnostics"]
+    assert diagnostics["summary"]["primary_failure_event_id"] == "event-1"
+    assert diagnostics["summary"]["primary_basis"] == "explicit_cause"
+    assert diagnostics["failures"][1]["classification"] == "downstream"
+
+
+def test_terminal_only_failure_reports_observability_gap_and_omits_large_runtime_payloads() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "run.failed", {
+            "error": {"code": "opaque_failure", "message": "Runtime failed", "retryable": True},
+            "response": {"answer": "generated response that must not be duplicated"},
+            "runtime_binding": {"session_id": "private-session"},
+            "headers": {"authorization": "secret"},
+        }, "future")],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert projection["diagnostics"]["observability_gaps"][0]["code"] == "terminal_failure_without_lower_level_events"
+    assert projection["diagnostics"]["summary"]["retryable"] is True
+    payload = projection["events"][0]["payload"]
+    assert "response" not in payload
+    assert "runtime_binding" not in payload
+    assert "headers" not in payload
+    assert "generated response" not in str(projection)
+
+
+def test_journal_projection_builds_in_flight_debug_payload() -> None:
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        framework="langgraph",
+        status="running",
+        started_at=None,
+        completed_at=None,
+        resolved_spec_json={},
+        metrics_json={},
+        error_json=None,
+        debug_trace_json=None,
+    )
+    payload = build_debug_payload_from_journal(run, [
+        _event(1, "operation.started", {
+            "operation_id": "planner",
+            "operation_type": "planner",
+            "operation_label": "Planner",
+            "visit_index": 1,
+        }),
+        _event(2, "tool.completed", {"tool_name": "search_documents", "ok": True}),
+    ])
+
+    assert payload is not None
+    assert payload["version"] == 1
+    assert payload["trace"]["status"] == "running"
+    assert payload["operations"][0]["operation_id"] == "planner"
+    assert payload["events"][0]["kind"] == "operation.started"
+
+
+def test_trace_recorder_emits_version_one_from_canonical_events() -> None:
+    run = SimpleNamespace(
+        id="run-1",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        framework="future",
+        status="completed",
+        started_at=None,
+        completed_at=None,
+        resolved_spec_json={},
+    )
+    recorder = AgentTraceRecorder(run)
+    recorder.record_agent_runtime_event(_event(1, "operation.completed", {
+        "operation_id": "step-1",
+        "operation_type": "agent_step",
+        "operation_label": "Inspect",
+        "visit_index": 1,
+    }, "future"))
+
+    payload = recorder.finalize(run=run, chat_turn_id=None, metrics={})
+
+    assert payload["version"] == 1
+    assert payload["operations"][0]["operation_id"] == "step-1"
+    assert payload["trace"]["events"] == payload["events"]
+    assert payload["diagnostics"]["outcome"] == "completed"
+    assert payload["parallel_groups"] == []
+    assert "graph" not in payload
+
+
+def test_parallel_projection_preserves_groups_members_retries_and_zero_wave_id() -> None:
+    events = [
+        _event(1, "dispatch.started", {"wave_id": 0, "planned": 2, "parent_operation_id": "research"}, "future"),
+        _event(2, "worker.started", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 1, "operation_id": "retrieve-a"}, "future"),
+        _event(3, "worker.retrying", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 1, "operation_id": "retrieve-a"}, "future"),
+        _event(4, "worker.started", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 2, "operation_id": "retrieve-a"}, "future"),
+        _event(5, "worker.completed", {"wave_id": 0, "work_id": "work-a", "ordinal": 0, "attempt": 2, "operation_id": "retrieve-a", "elapsed_ms": 12}, "future"),
+        _event(6, "worker.timed_out", {"wave_id": 0, "work_id": "work-b", "ordinal": 1, "attempt": 1, "operation_id": "retrieve-b"}, "future"),
+        _event(7, "worker.progress", {"wave_id": 0, "work_id": "work-b", "ordinal": 1, "attempt": 1, "operation_id": "retrieve-b"}, "future"),
+        _event(8, "dispatch.barrier_reached", {"wave_id": 0, "result_count": 2}, "future"),
+        _event(9, "aggregation.partial", {"wave_id": 0, "planned": 2, "completed": 1, "timed_out": 1}, "future"),
+    ]
+
+    projection = build_canonical_trace_projection(events=events, resolved_spec={}, framework="future")
+
+    assert projection["visualizations"]["generic.parallel"]["group_ids"] == ["0"]
+    group = projection["parallel_groups"][0]
+    assert group["group_id"] == "0"
+    assert group["parent_operation_id"] == "research"
+    assert group["status"] == "partial"
+    assert group["barrier"]["status"] == "reached"
+    assert group["aggregation"]["counts"] == {"planned": 2, "completed": 1, "timed_out": 1}
+    assert [member["member_id"] for member in group["members"]] == ["work-a", "work-b"]
+    assert [attempt["status"] for attempt in group["members"][0]["attempts"]] == ["retrying", "completed"]
+    assert group["members"][1]["status"] == "timed_out"
+    assert group["members"][1]["attempts"][0]["failure_event_ids"] == ["event-6"]
+    assert projection["events"][1]["parallel_group_id"] == "0"
+    assert projection["events"][1]["parallel_member_id"] == "work-a"
+
+
+def test_parallel_projection_preserves_required_empty_structural_collections() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "dispatch.started", {"dispatch_id": "dispatch-a", "planned": 1}, "future"),
+            _event(2, "worker.completed", {
+                "dispatch_id": "dispatch-a",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+                "attempt": 1,
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    group = projection["parallel_groups"][0]
+    assert group["aggregation"] == {"status": "pending", "counts": {}}
+    attempt = group["members"][0]["attempts"][0]
+    assert attempt["failure_event_ids"] == []
+    assert attempt["caused_by_event_ids"] == []
+    assert attempt["related_event_ids"] == []
+
+
+def test_serial_dispatch_events_never_create_parallel_groups() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "operation.completed", {
+                "dispatch_id": "serial-1",
+                "mode": "serial",
+                "operation_id": "serial_dispatch",
+            }, "future"),
+            _event(2, "worker.started", {
+                "dispatch_id": "serial-1",
+                "dispatch_mode": "serial",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+            }, "future"),
+            _event(3, "worker.completed", {
+                "dispatch_id": "serial-1",
+                "dispatch_mode": "serial",
+                "work_id": "work-a",
+                "operation_id": "retrieve-a",
+            }, "future"),
+        ],
+        resolved_spec={},
+        framework="future",
+    )
+
+    assert projection["parallel_groups"] == []
+    assert "generic.parallel" not in projection["visualizations"]
+
+
+@pytest.mark.parametrize(
+    "events, message",
+    [
+        ([_event(1, "worker.started", {"work_id": "work-a"})], "missing a group identity"),
+        ([_event(1, "worker.started", {"dispatch_id": "dispatch-a"})], "missing a member identity"),
+        ([_event(1, "worker.started", {"dispatch_id": "dispatch-a", "work_id": "work-a", "attempt": 0})], "invalid attempt"),
+    ],
+)
+def test_parallel_projection_rejects_malformed_correlation(events, message) -> None:
+    with pytest.raises(TraceProjectionError, match=message):
+        build_parallel_groups(events)

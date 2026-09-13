@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from ddgs import DDGS
 
 from app.rag.retrieval import rerank_document_chunks
+from app.services.retry import run_with_bounded_retries
 from app.time_utils import iso_utc_z
 
 
@@ -41,7 +42,10 @@ async def search_internet(
         raise ValueError("Web search query cannot be empty")
     if max_results <= 0:
         raise ValueError("max_results must be positive")
-    raw = await asyncio.to_thread(_search_provider, normalized_query, max_results)
+    raw = await run_with_bounded_retries(
+        lambda: asyncio.to_thread(_search_provider, normalized_query, max_results),
+        operation_name="web search",
+    )
     rows = _normalize_results(raw)
     chunks = [
         {

@@ -31,7 +31,11 @@ const statusBg: Record<string, string> = {
 
 export default function AgentGraphNode({ data, selected }: { data: AgentGraphNodeModel; selected?: boolean }) {
   const elapsed = formatDurationMs(data.elapsedMs);
-  const toolCount = data.toolSummaries.length;
+  // Topology-only visualization nodes do not necessarily carry a runtime
+  // overlay. Keep the renderer total at this boundary instead of allowing an
+  // incomplete live/retained payload to crash the whole trace workspace.
+  const toolSummaries = Array.isArray(data.toolSummaries) ? data.toolSummaries : [];
+  const toolCount = toolSummaries.length;
   const isVertical = data.layoutDirection === 'DOWN';
   const targetPosition = isVertical ? Position.Top : Position.Left;
   const sourcePosition = isVertical ? Position.Bottom : Position.Right;

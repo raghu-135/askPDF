@@ -74,7 +74,7 @@ async def test_active_parent_span_is_propagated_to_mcp_server_span(monkeypatch):
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from app.agent.tool_contract import ToolResult
     from app.mcp import server as server_module
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.transport import InProcessMCPClient
 
     exporter = InMemorySpanExporter()
@@ -96,9 +96,9 @@ async def test_active_parent_span_is_propagated_to_mcp_server_span(monkeypatch):
         "get_thread_shape",
         definition.__class__(definition.name, definition.request_model, handler, definition.registry_contract_id, definition.contract_version, definition.server_name),
     )
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: InProcessMCPClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: InProcessMCPClient())
     with tracer.start_as_current_span("parent") as parent:
-        await langchain_adapter.call_mcp_tool(
+        await tool_adapter.call_mcp_tool(
             "get_thread_shape",
             {},
             {"configurable": {"thread_id": "thread-1", "tool_call_id": "call-1"}},
@@ -119,7 +119,7 @@ async def test_otel_disabled_does_not_create_mcp_spans(monkeypatch):
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from app.agent.tool_contract import ToolResult
     from app.mcp import server as server_module
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
     from app.mcp.transport import InProcessMCPClient
 
     monkeypatch.setenv("MCP_OTEL_ENABLED", "false")
@@ -136,10 +136,10 @@ async def test_otel_disabled_does_not_create_mcp_spans(monkeypatch):
         "get_thread_shape",
         definition.__class__(definition.name, definition.request_model, handler, definition.registry_contract_id, definition.contract_version, definition.server_name),
     )
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: InProcessMCPClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: InProcessMCPClient())
     tracer = provider.get_tracer("test")
     with tracer.start_as_current_span("parent"):
-        await langchain_adapter.call_mcp_tool(
+        await tool_adapter.call_mcp_tool(
             "get_thread_shape",
             {},
             {"configurable": {"thread_id": "thread-1", "tool_call_id": "call-1"}},

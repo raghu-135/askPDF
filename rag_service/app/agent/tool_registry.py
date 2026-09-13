@@ -14,7 +14,7 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 from app.agent.tool_contract import ToolWarningCode
-from app.agent_workflows.enums import NodeCapability, NodeCategory, ToolContractId, ToolName, WorkflowNodeType
+from app.product_orchestration.enums import NodeCapability, NodeCategory, ToolContractId, ToolName, WorkflowNodeType
 
 
 NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value

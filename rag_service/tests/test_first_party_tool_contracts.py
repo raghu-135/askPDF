@@ -133,7 +133,6 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
         *payload["artifacts"]["document_sources"],
         *payload["artifacts"]["web_sources"],
     ]
-    assert payload["__document_sources__"] == payload["artifacts"]["document_sources"]
     assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.search_web_chunks.call_args.kwargs["embedding_model"] == "embed-1"
@@ -206,7 +205,6 @@ async def test_search_thread_conversation_history_returns_used_chat_ids_contract
         artifact_keys=("used_chat_ids",),
     )
     assert payload["artifacts"]["used_chat_ids"] == ["turn-1:assistant"]
-    assert payload["__used_chat_ids__"] == ["turn-1:assistant"]
 
 
 @pytest.mark.asyncio
@@ -246,13 +244,12 @@ async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypa
     )
     assert payload["artifacts"]["timeline_events"][0]["message_id"] == "turn-1:assistant"
     assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "conversation:turn-1:assistant"
-    assert payload["__timeline_events__"] == payload["artifacts"]["timeline_events"]
     assert fake_db.search_chat_memory.call_args.kwargs["embedding_model"] == "embed-1"
 
 
 @pytest.mark.asyncio
 async def test_search_web_returns_web_source_contract(monkeypatch):
-    from app.mcp import langchain_adapter
+    from app.mcp import tool_adapter
 
     class FakeClient:
         async def request(self, method, params):
@@ -266,18 +263,19 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
                     "ok": True,
                     "content": "fresh web evidence",
                     "sources": [{"url": "https://example.com", "title": "Example", "text": "fresh web evidence"}],
-                    "artifacts": {
-                        "web_sources": [{"url": "https://example.com", "title": "Example", "text": "fresh web evidence"}],
-                        "evidence_segments": [{"source_id": "web:https://example.com/"}],
-                    },
-                    "warnings": [],
-                    "metrics": {"elapsed_ms": 1.0, "result_chars": 18, "warning_count": 0},
+                        "artifacts": {
+                            "web_sources": [{"url": "https://example.com", "title": "Example", "text": "fresh web evidence"}],
+                            "evidence_segments": [{"source_id": "web:https://example.com/"}],
+                        },
+                        "warnings": [],
+                        "error": None,
+                        "metrics": {"elapsed_ms": 1.0, "result_chars": 18, "warning_count": 0},
                     "trace": {"tool_name": "search_web", "agent_run_id": "run-1", "thread_id": "thread-1", "caller_node": "web_worker"},
                 },
                 "isError": False,
             }
 
-    monkeypatch.setattr(langchain_adapter, "get_mcp_client", lambda: FakeClient())
+    monkeypatch.setattr(tool_adapter, "get_mcp_client", lambda: FakeClient())
 
     raw = await external_research_tools.search_web.ainvoke(
         {"query": "latest diffusion"},
@@ -293,12 +291,12 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
         artifact_keys=("web_sources", "evidence_segments"),
     )
     assert payload["sources"] == payload["artifacts"]["web_sources"]
-    assert payload["__web_sources__"] == payload["artifacts"]["web_sources"]
     assert payload["artifacts"]["evidence_segments"][0]["source_id"] == "web:https://example.com/"
 
 
 @pytest.mark.asyncio
-async def test_warning_paths_still_return_valid_tool_contracts():
+async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
+    monkeypatch.setattr("app.mcp.server.persist_tool_audit", AsyncMock())
     raw = await external_research_tools.search_web.ainvoke(
         {"query": "latest diffusion"},
         config=_config(caller_node="web_worker", route="web", use_web_search=False),

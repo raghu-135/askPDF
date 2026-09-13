@@ -72,7 +72,7 @@ async def test_application_startup_failure_closes_http_clients(monkeypatch):
         nonlocal initialized
         initialized = True
 
-    async def failing_init_db():
+    async def failing_data_initialization():
         raise RuntimeError("database startup failed")
 
     async def fake_close_http_clients():
@@ -86,7 +86,7 @@ async def test_application_startup_failure_closes_http_clients(monkeypatch):
         return None
 
     monkeypatch.setattr(application, "init_http_clients", fake_init_http_clients)
-    monkeypatch.setattr(application, "init_db", failing_init_db)
+    monkeypatch.setattr(application, "ensure_default_project", failing_data_initialization)
     monkeypatch.setattr(application, "close_http_clients", fake_close_http_clients)
     monkeypatch.setattr(application, "close_db", fake_close_db)
     monkeypatch.setattr(application, "close_vector_db", lambda: None)

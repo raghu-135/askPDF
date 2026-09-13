@@ -6,7 +6,12 @@ import json
 import re
 from typing import Any, Dict, Optional, Tuple
 
-from app.db.enums import ReasoningFormat
+
+
+class ReasoningFormat:
+    NONE = type("Value", (), {"value": "none"})
+    STRUCTURED = type("Value", (), {"value": "structured"})
+    TAGGED_TEXT = type("Value", (), {"value": "tagged_text"})
 
 _THINK_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 

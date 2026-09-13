@@ -10,7 +10,6 @@ from typing import Any, Dict
 from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus, ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field
@@ -541,7 +540,11 @@ async def _clone_thread(
             run_metadata_json=run_metadata,
             resolved_spec_json=copy.deepcopy(run.resolved_spec_json or {}),
             status=run.status,
-            checkpoint_thread_id=None,
+            # A cloned run is historical product data with no executable
+            # continuation. Persist the neutral empty binding explicitly so
+            # callers never interpret NULL as an omitted/unknown boundary.
+            runtime_binding_json={},
+            runtime_binding_status="unbound",
             pending_interrupt_json=None,
             started_at=run.started_at,
             completed_at=run.completed_at,
@@ -627,12 +630,11 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
                 ) if thread_ids else False,
             ))
         )).scalars().all())
-        checkpoint_ids = []
+        runtime_runs = []
         if thread_ids:
-            checkpoint_ids = list((await session.execute(
-                select(AgentRun.checkpoint_thread_id).where(
+            runtime_runs = list((await session.execute(
+                select(AgentRun).where(
                     AgentRun.thread_id.in_(thread_ids),
-                    AgentRun.checkpoint_thread_id.is_not(None),
                 )
             )).scalars().all())
         affected_files = set((await session.execute(
@@ -668,11 +670,14 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
     for scope_type, scope_id, model in memory_scopes:
         if not await vector_db.delete_memory_vectors_for_scope(scope_type, scope_id, model):
             raise ProjectCleanupError(f"Failed to delete memory vectors for {scope_type}:{scope_id}")
-    if checkpoint_ids:
+    if runtime_runs:
         try:
-            await delete_agent_checkpoints(checkpoint_ids)
+            from app.runtime.cleanup import cleanup_runs
+            outcomes = await cleanup_runs(runtime_runs)
+            if any(not outcome.owner_deletion_allowed for outcome in outcomes):
+                raise ProjectCleanupError("Runtime continuation cleanup was not confirmed")
         except Exception as exc:
-            raise ProjectCleanupError("Failed to delete project checkpoints") from exc
+            raise ProjectCleanupError("Failed to delete project runtime continuations") from exc
 
     vector_models_deleted: set[tuple[str, str]] = set()
     orphan_file_hashes = {
@@ -771,7 +776,7 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
         "deleted": True,
         "counts": {
             **summary,
-            "checkpoint_count": len(checkpoint_ids),
+            "runtime_continuation_count": len(runtime_runs),
             "canonical_files_deleted": len(orphan_file_hashes),
             "document_vector_models_deleted": len(vector_models_deleted),
         },

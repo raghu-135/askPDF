@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -368,6 +368,7 @@ class ThreadSettingsResponse(BaseModel):
     hitl_web_approval: bool = False
     use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
+    agent_workflow_validation: Optional[Dict[str, Any]] = None
     memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
 
 

@@ -9,4 +9,4 @@ def test_mcp_registry_matches_authoritative_tool_registry():
         assert item["name"] == TOOL_FRIENDLY_CONFIG[name]["mcp_tool"]
         assert item["_meta"]["com.askpdf/contract-id"] == TOOL_FRIENDLY_CONFIG[name]["id"]
         assert "inputSchema" in item
-        assert item["outputSchema"]["required"] == ["ok", "content", "sources", "artifacts", "warnings", "metrics", "trace"]
+        assert item["outputSchema"]["required"] == ["ok", "content", "sources", "artifacts", "warnings", "error", "metrics", "trace"]

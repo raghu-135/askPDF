@@ -26,11 +26,16 @@ from app.agent.prompting import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
-from app.agent_workflows.prompting import build_agent_workflow_prompt_preview
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key, workflow_supports_replans
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys
+from app.product_orchestration.workflow_runtime import (
+    default_agent_workflow_key,
+    workflow_is_chat_eligible,
+    workflow_supports_replans,
+)
 from app.time_utils import iso_utc_z
+from app.runtime.builder_registry import builder_for_definition
+from app.runtime.catalog import definition_from_workflow
 from app.db import (
     EmbeddingReadinessStatus,
     ProcessStatus,
@@ -85,6 +90,29 @@ async def _settings_workflow_supports_replans(settings: dict) -> bool:
     workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
     return workflow_supports_replans(spec)
+
+
+async def _resolve_chat_workflow(workflow_id: str):
+    repo = AgentWorkflowRepository()
+    await repo.seed_builtin_workflows()
+    workflow = await repo.get_workflow(
+        workflow_id,
+        include_custom=workflow_id not in builtin_workflow_keys(),
+    )
+    return workflow if workflow and workflow_is_chat_eligible(workflow.spec_json) else None
+
+
+async def _normalize_chat_workflow_setting(settings: dict) -> tuple[dict, Optional[dict]]:
+    agent_workflow = settings.get("agent_workflow")
+    workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
+    workflow_id = str(workflow_id or default_agent_workflow_key())
+    if await _resolve_chat_workflow(workflow_id):
+        return settings, None
+    return settings, {
+        "valid": False,
+        "code": "workflow_not_available_for_chat",
+        "requested_workflow_id": workflow_id,
+    }
 
 
 def _empty_thread_stats() -> dict:
@@ -164,7 +192,14 @@ async def _delete_thread_resources(thread_id: str) -> bool:
         return False
 
     files = await get_thread_files(thread_id)
+    from app.runtime.cleanup import cleanup_runs
+    from app.services.agent_task_repository import list_task_runtime_runs_for_threads
     from app.services.task_artifact_service import delete_task_resources_for_threads
+    outcomes = await cleanup_runs(
+        await list_task_runtime_runs_for_threads([thread_id])
+    )
+    if any(not outcome.owner_deletion_allowed for outcome in outcomes):
+        raise RuntimeError("Runtime continuation cleanup was not confirmed")
     await delete_task_resources_for_threads([thread_id])
 
     db = get_vector_db()
@@ -213,23 +248,33 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
         await repo.seed_builtin_workflows()
         supported_builtin_workflow_keys = builtin_workflow_keys()
         workflow_id = requested_workflow if requested_workflow else default_agent_workflow_key()
-        workflow = await repo.get_workflow(workflow_id, include_custom=workflow_id not in supported_builtin_workflow_keys)
+        workflow = await repo.get_workflow(
+            workflow_id,
+            include_custom=workflow_id not in supported_builtin_workflow_keys,
+        )
         if workflow is None:
-            workflow = await repo.get_workflow(default_agent_workflow_key())
+            raise HTTPException(status_code=404, detail={"code": "agent_workflow_not_found"})
+        if not workflow_is_chat_eligible(workflow.spec_json):
+            raise HTTPException(status_code=422, detail={"code": "agent_workflow_not_chat_eligible"})
         spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
-        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-        prompt = build_agent_workflow_prompt_preview(
-            prompt_profile=str(runtime.get("prompt_preview") or "router"),
-            context_window=req.context_window,
-            system_role=req.system_role or "",
-            tool_instructions=tool_instructions,
-            custom_instructions=req.custom_instructions or "",
-            use_web_search=req.use_web_search,
-            client_timezone=req.client_timezone,
-            client_locale=req.client_locale,
-            client_now_iso=req.client_now_iso,
+        definition = definition_from_workflow(workflow)
+        prompt = await builder_for_definition(definition).prompt_preview(
+            definition,
+            spec,
+            {
+                "context_window": req.context_window,
+                "system_role": req.system_role or "",
+                "tool_instructions": tool_instructions,
+                "custom_instructions": req.custom_instructions or "",
+                "use_web_search": req.use_web_search,
+                "client_timezone": req.client_timezone,
+                "client_locale": req.client_locale,
+                "client_now_iso": req.client_now_iso,
+            },
         )
         return {"prompt": prompt}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -457,10 +502,11 @@ async def get_thread_settings_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
         settings = merge_thread_settings(await get_thread_settings(thread_id))
+        settings, workflow_validation = await _normalize_chat_workflow_setting(settings)
         settings["tool_instructions"] = normalize_tool_instructions(
             settings.get("tool_instructions", {})
         )
-        return ThreadSettingsResponse(**settings)
+        return ThreadSettingsResponse(**settings, agent_workflow_validation=workflow_validation)
     except HTTPException:
         raise
     except Exception as e:
@@ -481,6 +527,16 @@ async def update_thread_settings_endpoint(
         current = merge_thread_settings(await get_thread_settings(thread_id))
         updates = req.model_dump(exclude_none=True)
         next_settings = {**current, **updates}
+        requested_agent_workflow = next_settings.get("agent_workflow")
+        requested_workflow_id = (
+            requested_agent_workflow.get("workflow_id")
+            if isinstance(requested_agent_workflow, dict)
+            else None
+        )
+        if not isinstance(requested_workflow_id, str) or not requested_workflow_id.strip():
+            raise HTTPException(status_code=400, detail="A valid chat agent workflow is required")
+        if not await _resolve_chat_workflow(requested_workflow_id):
+            raise HTTPException(status_code=400, detail="Agent workflow is not available for chat")
         if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)
         next_settings["tool_instructions"] = normalize_tool_instructions(

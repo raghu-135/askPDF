@@ -5,19 +5,21 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
-import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
+import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
+import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
+import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
-import { PARALLEL_WORKER_STATUS_LABELS } from '../../lib/parallel-runtime';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
+import { useAgentRunCapabilities } from '../../lib/use-agent-run-capabilities';
 
 function AgentRunDebugPanel({
   runId,
+  threadId,
   routeReason,
   traceRefs,
-  runDetails,
+  runDetails: providedRunDetails,
   loading,
   error,
   onRunDetailsChange,
@@ -26,7 +28,8 @@ function AgentRunDebugPanel({
   running = false,
   onResumeAction,
 }: {
-  runId: string;
+  runId?: string;
+  threadId?: string;
   routeReason?: string;
   traceRefs?: AgentTraceRefs | null;
   runDetails?: AgentRunDetails;
@@ -38,26 +41,46 @@ function AgentRunDebugPanel({
   running?: boolean;
   onResumeAction?: (action: AgentRunResumeAction, selectedOptionIds?: string[]) => Promise<boolean>;
 }) {
+  const normalizedRunId = typeof runId === 'string' && !runId.startsWith('temp-assistant-')
+    ? runId.trim()
+    : '';
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const resumeSubmissionKeyRef = useRef<string | null>(null);
+  const traceRefreshAttemptedRef = useRef(new Map<string, number>());
+  const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
+  const [refreshedRunDetails, setRefreshedRunDetails] = useState<AgentRunDetails | undefined>();
+  const runDetails = refreshedRunDetails?.id === normalizedRunId ? refreshedRunDetails : providedRunDetails;
+  const runCapabilities = useAgentRunCapabilities(
+    normalizedRunId || null,
+    runDetails?.thread_id || threadId,
+    `${runDetails?.status}:${runDetails?.runtime_binding_status}:${runDetails?.pending_interrupt?.interrupt_id}:${runDetails?.pending_interrupt?.status}:${runDetails?.pending_interrupt?.resume_version}`,
+  ).capabilities;
   const debug = runDetails?.debug;
+  const retainedErrorMessage = runDetails ? getRetainedRunErrorMessage(runDetails) : null;
   const pendingInterrupt = runDetails?.pending_interrupt;
   const isTaskOwnedRun = isTaskOwnedAgentRun(runDetails);
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
+  const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
+  const responseAvailability = responseOperation
+    ? runtimeOperationAvailability(runCapabilities, responseOperation)
+    : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
+  const debugParseResult = useMemo(() => runDetails?.debug && runDetails ? parseRunDebug(runDetails) : null, [runDetails]);
+  const debugParseError = debugParseResult && 'reason' in debugParseResult ? debugParseResult.reason : null;
+  const debugParseCorrelationId = debugParseResult && 'correlationId' in debugParseResult ? debugParseResult.correlationId : null;
+  const liveParseError = liveTraceView?.parseError;
   const executionTraceView = useMemo(
-    () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
+    () => liveTraceView?.parseError ? liveTraceView : liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
     [liveTraceView, traceView],
   );
-  const trace = traceView?.trace;
-  const traceJson = useMemo(() => buildTraceExportJson(traceView), [traceView]);
+  const traceJson = useMemo(() => buildTraceExportJson(executionTraceView), [executionTraceView]);
   const interruptOptions = Array.isArray(pendingInterrupt?.options)
     ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
     : [];
@@ -65,11 +88,10 @@ function AgentRunDebugPanel({
   const isMultiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti;
   const executionThreadId = runDetails?.thread_id || null;
   const executionWorkflowId = runDetails?.workflow_id;
+  const executionFramework = (runDetails as any)?.framework || (runDetails as any)?.runtime_metadata?.framework;
   const executionResolvedSpec = runDetails?.resolved_spec_json;
   const executionStatus = runDetails?.status || (running ? 'running' : undefined);
   const executionDetailsAvailable = Boolean(runDetails && !running);
-  const parallelSummary = liveTraceView?.parallel?.summary || runDetails?.parallel_summary || runDetails?.metrics_json?.parallel_summary;
-  const parallelTasks = liveTraceView?.parallel?.tasks || [];
   const correctiveInspection = useMemo(
     () => runDetails ? buildCorrectiveInspection(runDetails, traceView?.metrics) : undefined,
     [runDetails, traceView?.metrics],
@@ -81,6 +103,54 @@ function AgentRunDebugPanel({
     || (typeof grounding?.usefulness_score === 'number'
       ? (Number(grounding.usefulness_score) >= 3 ? 'yes (historical score)' : 'no (historical score)')
       : undefined);
+
+  useEffect(() => {
+    setRefreshedRunDetails(undefined);
+    setTraceRefreshExhausted(false);
+  }, [normalizedRunId, providedRunDetails]);
+
+  useEffect(() => {
+    const metadataThreadId = threadId || runDetails?.thread_id;
+    if (runDetails || !metadataThreadId || !normalizedRunId) return undefined;
+    let active = true;
+    void getAgentRun(normalizedRunId, metadataThreadId)
+      .then((details) => {
+        if (!active) return;
+        setRefreshedRunDetails(details);
+        onRunDetailsChange?.(details);
+      })
+      .catch(() => {
+        // The live event projection remains usable when metadata is not yet
+        // available; the existing loading/retained-state handling reports the
+        // final result when polling catches up.
+      });
+    return () => {
+      active = false;
+    };
+  }, [normalizedRunId, onRunDetailsChange, runDetails, threadId]);
+
+  useEffect(() => {
+    if (!normalizedRunId || !runDetails || !executionThreadId || !shouldRefreshRetainedTrace(runDetails)) return;
+    const live = String(runDetails.status) === 'running' || String(runDetails.status) === 'awaiting_human';
+    if (!live) {
+      const attempts = traceRefreshAttemptedRef.current.get(normalizedRunId) || 0;
+      if (attempts >= 5) {
+        setTraceRefreshExhausted(true);
+        return;
+      }
+      traceRefreshAttemptedRef.current.set(normalizedRunId, attempts + 1);
+    }
+    const attempts = traceRefreshAttemptedRef.current.get(normalizedRunId) || 1;
+    const timer = window.setTimeout(() => {
+      void getAgentRun(normalizedRunId, executionThreadId)
+        .then((refreshed) => {
+          setRefreshedRunDetails(refreshed);
+          onRunDetailsChange?.(refreshed);
+        })
+        .catch(() => undefined);
+    }, live ? 1000 : 500 * attempts);
+    return () => window.clearTimeout(timer);
+  }, [executionThreadId, normalizedRunId, onRunDetailsChange, runDetails]);
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -112,14 +182,18 @@ function AgentRunDebugPanel({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `agent-trace-${runId}.json`;
+    link.download = `agent-trace-${normalizedRunId || 'pending'}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   const handleResume = async (action: AgentRunResumeAction) => {
     if (!runDetails || !pendingInterrupt?.interrupt_id) return;
-    const submissionKey = `${runId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
+    if (!responseOperation) {
+      setResumeError('This human-input request has an invalid runtime response contract.');
+      return;
+    }
+    const submissionKey = `${normalizedRunId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
     if (resumeSubmissionKeyRef.current) return;
     resumeSubmissionKeyRef.current = submissionKey;
     setResumeSubmitting(action);
@@ -135,7 +209,7 @@ function AgentRunDebugPanel({
       if (!executionThreadId) {
         throw new Error('Cannot submit human review because the run thread is unavailable.');
       }
-      const response = await resumeAgentRun(runId, {
+      const response = await resumeAgentRun(normalizedRunId, {
         action,
         interrupt_id: pendingInterrupt.interrupt_id,
         resume_token: pendingInterrupt.resume_token || undefined,
@@ -171,7 +245,7 @@ function AgentRunDebugPanel({
     icon: React.ReactNode,
     color: 'primary' | 'error' | 'inherit' = 'primary',
   ) => {
-    if (!allowedActions.includes(action)) return null;
+    if (!allowedActions.includes(action) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)) return null;
     return (
       <Button
         key={action}
@@ -201,12 +275,12 @@ function AgentRunDebugPanel({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
       <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
-        <Tooltip title={runId} arrow>
+        <Tooltip title={normalizedRunId || 'Run ID pending'} arrow>
           <Typography variant="caption" color="text.secondary">
-            Run …{runId.slice(-8)}
+            {normalizedRunId ? `Run …${normalizedRunId.slice(-8)}` : 'Run pending'}
           </Typography>
         </Tooltip>
-        {trace && (
+        {traceJson && (
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <Tooltip title={copyStatus === 'copied' ? 'Copied trace JSON' : copyStatus === 'failed' ? 'Copy failed' : 'Copy trace JSON'} arrow>
               <span>
@@ -240,66 +314,6 @@ function AgentRunDebugPanel({
         <Typography variant="caption" color="error">
           {error}
         </Typography>
-      )}
-      {parallelSummary && (
-        <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: parallelSummary.partial_evidence ? 'warning.main' : 'divider' }}>
-          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-            Parallel dispatch{parallelSummary.partial_evidence ? ' · partial evidence' : ''}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
-            {Number(parallelSummary.completed || 0)}/{Number(parallelSummary.planned || 0)} completed
-            {Number(parallelSummary.failed || 0) ? ` · ${parallelSummary.failed} failed` : ''}
-            {Number(parallelSummary.timed_out || 0) ? ` · ${parallelSummary.timed_out} timed out` : ''}
-            {Number(parallelSummary.retried || 0) ? ` · ${parallelSummary.retried} retries` : ''}
-            {parallelSummary.elapsed_ms != null ? ` · ${Math.round(Number(parallelSummary.elapsed_ms))} ms worker time` : ''}
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, my: 0.5 }}>
-            {Object.entries(PARALLEL_WORKER_STATUS_LABELS).map(([status, label]) => (
-              Number(parallelSummary[status] || 0) > 0 ? <Chip key={status} size="small" variant="outlined" label={`${parallelSummary[status]} ${label}`} /> : null
-            ))}
-            <Chip size="small" variant="outlined" label={`barrier ${parallelSummary.barrier_state || 'pending'}`} />
-            <Chip size="small" variant="outlined" label={`aggregation ${parallelSummary.aggregation_state || (parallelSummary.partial_evidence ? 'partial' : 'completed')}`} />
-          </Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Fan-out {Number(parallelSummary.fan_out_width ?? parallelSummary.planned ?? 0)}
-            {' · '}peak {Number(parallelSummary.peak_concurrency || 0)}
-            {parallelSummary.elapsed_ms != null ? ` · dispatch ${Math.round(Number(parallelSummary.elapsed_ms))} ms` : ''}
-          </Typography>
-          {(parallelSummary.evidence_packets_before_dedupe != null || parallelSummary.document_sources_before_dedupe != null || parallelSummary.web_sources_before_dedupe != null) && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Deduplication: evidence {Number(parallelSummary.evidence_packets_before_dedupe || 0)}→{Number(parallelSummary.evidence_packets_after_dedupe || 0)}
-              {' · '}documents {Number(parallelSummary.document_sources_before_dedupe || 0)}→{Number(parallelSummary.document_sources_after_dedupe || 0)}
-              {' · '}web {Number(parallelSummary.web_sources_before_dedupe || 0)}→{Number(parallelSummary.web_sources_after_dedupe || 0)}
-            </Typography>
-          )}
-          {parallelSummary.dispatch_id && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-              Dispatch {parallelSummary.dispatch_id}
-            </Typography>
-          )}
-          {parallelTasks.length > 0 && (
-            <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-              {parallelTasks.map((task) => (
-                <Box component="details" key={String(task.work_id)} sx={{ '& summary': { cursor: 'pointer' } }}>
-                  <Typography component="summary" variant="caption" color="text.secondary">
-                    {Number(task.ordinal || 0) + 1}. {task.worker_node_id || task.worker_type || 'worker'} · {task.status || 'queued'}
-                    {Number(task.attempt || 0) > 1 ? ` · attempt ${task.attempt}` : ''}
-                    {task.elapsed_ms != null ? ` · ${Math.round(Number(task.elapsed_ms))} ms` : ''}
-                  </Typography>
-                  {(Array.isArray(task.attempts) ? task.attempts : []).map((attempt: Record<string, any>) => (
-                    <Typography key={`${task.work_id}:${attempt.attempt}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 2 }}>
-                      Attempt {Number(attempt.attempt || 1)} · {attempt.status || 'unknown'}
-                      {attempt.reason ? ` · ${attempt.reason}` : ''}
-                      {attempt.retryable === true ? ' · retryable' : attempt.retryable === false ? ' · non-retryable' : ''}
-                      {attempt.elapsed_ms != null ? ` · ${Math.round(Number(attempt.elapsed_ms))} ms` : ''}
-                      {attempt.occurred_at ? ` · ${attempt.occurred_at}` : ''}
-                    </Typography>
-                  ))}
-                </Box>
-              ))}
-            </Box>
-          )}
-        </Box>
       )}
       {corrective && (
         <Box sx={{ mx: 1, my: 0.75, p: 1, borderRadius: 1, border: 1, borderColor: corrective.exhausted_budget_type ? 'warning.main' : 'divider' }}>
@@ -367,7 +381,17 @@ function AgentRunDebugPanel({
           )}
           {grounding && (
             <Box component="details" sx={{ mt: 0.4, '& summary': { cursor: 'pointer' } }}>
-              <Typography component="summary" variant="caption">Support and citations · {Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported</Typography>
+              <Typography component="summary" variant="caption">
+                {typeof grounding.grounded === 'boolean'
+                  ? `Hermes grounding · ${grounding.grounded ? 'grounded' : 'evidence unavailable'} · ${Number(grounding.evidence_result_count || 0)} results`
+                  : `Support and citations · ${Math.round(Number(grounding.supported_claim_ratio || 0) * 100)}% supported`}
+              </Typography>
+              {Array.isArray(grounding.successful_evidence_tools) && grounding.successful_evidence_tools.length > 0
+                ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5 }}>Tools: {grounding.successful_evidence_tools.join(', ')}</Typography>
+                : null}
+              {Array.isArray(grounding.failure_codes) && grounding.failure_codes.length > 0
+                ? <Typography variant="caption" color="error" sx={{ display: 'block', pl: 1.5 }}>Failures: {grounding.failure_codes.join(', ').replaceAll('_', ' ')}</Typography>
+                : null}
               {(Array.isArray(grounding.claims) ? grounding.claims : []).map((claim: Record<string, any>, index: number) => (
                 <Typography key={`claim:${index}`} variant="caption" color="text.secondary" sx={{ display: 'block', pl: 1.5, overflowWrap: 'anywhere' }}>
                   {claim.claim_id ? `${claim.claim_id} · ` : ''}{claim.support}: {claim.claim}{(claim.source_ids || []).length ? ` · ${(claim.source_ids || []).join(', ')}` : ''}{claim.contradicted ? ' · contradicted' : ''}
@@ -403,6 +427,16 @@ function AgentRunDebugPanel({
           )}
           {interruptStatus === InterruptStatus.Pending && (
             <>
+              {!responseOperation && (
+                <Typography variant="caption" color="error">
+                  This human-input request has an invalid runtime response contract.
+                </Typography>
+              )}
+              {responseAvailability.visible && !responseAvailability.enabled && (
+                <Typography variant="caption" color="text.secondary">
+                  Human input is currently unavailable: {responseAvailability.disabledReason}
+                </Typography>
+              )}
               {isTaskOwnedRun ? (
                 <Typography variant="caption" color="text.secondary">
                   Respond to this request in the Deep Research panel. Debug Trace is inspection-only for task runs.
@@ -430,7 +464,7 @@ function AgentRunDebugPanel({
                   ))}
                 </Box>
               )}
-              {!isTaskOwnedRun && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              {!isTaskOwnedRun && responseOperation && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
                 {renderInterruptAction(AgentRunResumeActionValue.Approve, 'Approve', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ApproveForScope, 'Approve for this run', <CheckIcon fontSize="inherit" />)}
                 {renderInterruptAction(AgentRunResumeActionValue.ApproveSelected, 'Approve selected', <CheckIcon fontSize="inherit" />)}
@@ -452,28 +486,41 @@ function AgentRunDebugPanel({
         </Box>
       )}
       {!loading && !error && runDetails && !debug && (
-        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
-          Trace not captured for this run.
+        <Typography variant="caption" color={retainedErrorMessage ? 'error' : 'text.secondary'} sx={{ px: 1, py: 0.75 }}>
+          {retainedErrorMessage || (traceRefreshExhausted ? 'Trace not captured for this run.' : 'Retained execution trace is finalizing…')}
         </Typography>
       )}
       {debug && !traceView && (
-        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
-          Trace payload is incomplete.
-        </Typography>
+        <Box sx={{ px: 1, py: 0.75 }}>
+          <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
+          {debugParseError && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{debugParseError}</Typography>
+          )}
+          {debugParseCorrelationId && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {debugParseCorrelationId}</Typography>
+          )}
+        </Box>
       )}
-      {executionTraceView && (
+      {liveParseError && (
+        <Box sx={{ px: 1, py: 0.75 }}>
+          <Typography variant="caption" color="error" sx={{ display: 'block' }}>Debug trace data could not be parsed.</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{liveParseError}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {liveTraceView?.parseCorrelationId || `trace:${normalizedRunId || 'pending'}`}</Typography>
+        </Box>
+      )}
+      {executionTraceView && !liveParseError && (
         <>
-          <AgentExecutionView
-            runId={runId}
+      <AgentExecutionView
+            runId={normalizedRunId}
             threadId={executionThreadId}
             resolvedSpec={executionResolvedSpec}
-            workflowId={executionWorkflowId}
+        workflowId={executionWorkflowId}
+        framework={executionFramework}
             traceView={executionTraceView}
             status={executionStatus}
             running={running}
             focusedTraceRefs={traceRefs}
             suspended={suspendHeavyContent}
-            defaultGraphOpen
             defaultFinalAnswerOpen={false}
             chatMode
             detailsAvailable={executionDetailsAvailable}

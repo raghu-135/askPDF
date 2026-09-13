@@ -10,7 +10,9 @@ This module handles:
 import logging
 import os
 import asyncio
+import time
 from contextlib import asynccontextmanager, suppress
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -30,7 +32,7 @@ logging.basicConfig(
 logging.getLogger("app").setLevel(getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,9 +48,10 @@ from app.api.models import router as models_router
 from app.api.agent_workflows import router as agent_workflows_router
 from app.api.agent_tasks import router as agent_tasks_router
 from app.api.tools import router as tools_router
-from app.agent_workflows.repository import AgentWorkflowRepository
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.execution_stream import drain_retained_executions
 from app.db import ensure_default_project
-from app.db.connection_sqlmodel import init_db, close_db
+from app.db.connection_sqlmodel import close_db
 from app.db.vector import close_vector_db, get_vector_db
 from app.services.memory_service import (
     retry_pending_memory_indexes,
@@ -57,11 +60,81 @@ from app.services.memory_repair_scheduler import shutdown_memory_repairs
 from app.services.embedding_materialization_service import embedding_job_worker
 from app.services.agent_task_runtime import run_task_worker
 from app.mcp.server import get_http_app
+from app.mcp.registry import descriptor, enabled_definitions
+from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOOL_IDS
 from app.http_clients import close_http_clients, init_http_clients
+from app.runtime.registry import get_runtime_registry
+from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
+from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.auth import valid_bearer_token
+from app.auth import authenticate, reset_principal, set_principal
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
-MCP_HTTP_APP = get_http_app()
+RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS = 30
+MCP_HTTP_APP = get_http_app(require_execution_token=True)
+
+
+async def _probe_runtime_readiness(*, startup: bool = False) -> None:
+    """Refresh runtime readiness, optionally enforcing the startup gate."""
+    registry = get_runtime_registry()
+    results: dict[str, dict[str, object]] = {}
+
+    async def probe(adapter: object) -> None:
+        identity = registry.deployment_id(adapter)  # type: ignore[arg-type]
+        try:
+            probe = getattr(adapter, "startup_readiness", None) if startup else None
+            readiness = await (probe() if probe is not None else adapter.readiness())  # type: ignore[attr-defined]
+            if not isinstance(readiness, Mapping) or readiness.get("status") != "ok":
+                results[identity] = {
+                    "status": "unavailable",
+                    "reason": "runtime_not_ready",
+                    "checks": dict(readiness.get("checks") or {}) if isinstance(readiness, Mapping) else {},
+                }
+                if startup and getattr(adapter, "framework", "") == "langgraph":
+                    raise RuntimeError(
+                        f"LangGraph runtime is not ready: {identity} "
+                        f"({results[identity].get('reason')})"
+                    )
+                return
+            results[identity] = {
+                "status": "ready",
+                "checks": dict(readiness.get("checks") or {}),
+            }
+        except Exception as exc:
+            results[identity] = {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+            }
+            if startup and getattr(adapter, "framework", "") == "langgraph":
+                raise RuntimeError(f"LangGraph runtime startup probe failed: {type(exc).__name__}") from exc
+
+    adapters = [
+        adapter for adapter in registry.adapters()
+        if getattr(adapter, "framework", "") != "hermes" or hermes_runtime_enabled()
+    ]
+    await asyncio.gather(*(probe(adapter) for adapter in adapters))
+    app.state.runtime_readiness = {
+        "checked_at": time.time(),
+        "runtimes": results,
+        "ready": bool(results) and all(item["status"] == "ready" for item in results.values()),
+    }
+
+
+async def _runtime_readiness_loop(stop: asyncio.Event) -> None:
+    interval = float(os.environ["AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS"])
+    while not stop.is_set():
+        await _probe_runtime_readiness()
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            continue
+HERMES_OFFLINE_MCP_APP = get_http_app(
+    allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
+)
+HERMES_EXTERNAL_MCP_APP = get_http_app(
+    allowed_tools=frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS), require_execution_token=True,
+)
 
 
 def _record_agent_task_worker_completion(app: FastAPI, task: asyncio.Task) -> None:
@@ -86,8 +159,8 @@ def _record_agent_task_worker_completion(app: FastAPI, task: asyncio.Task) -> No
 async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
     """Incrementally retry pending and failed memory indexes."""
 
-    interval = max(30, int(os.environ.get("MEMORY_MAINTENANCE_INTERVAL_SECONDS", "300")))
-    batch_size = max(1, min(500, int(os.environ.get("MEMORY_MAINTENANCE_BATCH_SIZE", "100"))))
+    interval = float(os.environ["MEMORY_MAINTENANCE_INTERVAL_SECONDS"])
+    batch_size = int(os.environ["MEMORY_MAINTENANCE_BATCH_SIZE"])
     while not stop_event.is_set():
         try:
             await retry_pending_memory_indexes(limit=batch_size)
@@ -111,17 +184,22 @@ async def lifespan(app: FastAPI):
     embedding_job_task = None
     agent_task_worker_stop = None
     agent_task_worker = None
-    mcp_lifespan = None
+    runtime_readiness_stop = None
+    runtime_readiness_task = None
+    mcp_lifespans = []
     try:
+        validate_runtime_environment(service="control_plane")
+        if hermes_runtime_enabled():
+            validate_hermes_model_compatibility()
+        get_runtime_registry().initialize()
+        app.state.runtime_readiness = {"checked_at": None, "runtimes": {}, "ready": False}
         # Keep cleanup active from the first allocation onward.  In
         # particular, database or MCP startup failures must not strand the
         # application-scoped HTTP clients initialized above them.
         await init_http_clients()
-        logger.info("Initializing PostgreSQL database with SQLModel...")
-        await init_db()
         await ensure_default_project()
         await AgentWorkflowRepository().seed_builtin_workflows()
-        logger.info("Database initialization complete.")
+        logger.info("Database migrations already applied; application data initialization complete.")
 
         try:
             logger.info("Initializing Weaviate collections...")
@@ -129,6 +207,11 @@ async def lifespan(app: FastAPI):
             logger.info("Weaviate collection initialization complete.")
         except Exception:
             logger.exception("Failed to initialize Weaviate collections")
+
+        # Do not start workers against a missing external executor.  The
+        # initial gate probes the runtime core (/startupz); the background
+        # loop below continues to track full dependency readiness (/readyz).
+        await _probe_runtime_readiness(startup=True)
 
         memory_maintenance_stop = asyncio.Event()
         memory_maintenance_task = asyncio.create_task(
@@ -145,21 +228,40 @@ async def lifespan(app: FastAPI):
         agent_task_worker.add_done_callback(
             lambda task: _record_agent_task_worker_completion(app, task)
         )
+        runtime_readiness_stop = asyncio.Event()
+        runtime_readiness_task = asyncio.create_task(_runtime_readiness_loop(runtime_readiness_stop))
         # The SDK streamable-HTTP session manager is single-use. Rebuild the
         # mounted app for every FastAPI lifespan so TestClient restarts,
         # reloads, and application shutdown/startup cycles get a fresh manager.
-        global MCP_HTTP_APP
-        MCP_HTTP_APP = get_http_app()
+        global MCP_HTTP_APP, HERMES_OFFLINE_MCP_APP, HERMES_EXTERNAL_MCP_APP
+        MCP_HTTP_APP = get_http_app(require_execution_token=True)
+        HERMES_OFFLINE_MCP_APP = get_http_app(
+            allowed_tools=frozenset(HERMES_BASE_TOOL_IDS), require_execution_token=True,
+        )
+        HERMES_EXTERNAL_MCP_APP = get_http_app(
+            allowed_tools=frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS), require_execution_token=True,
+        )
+        apps_by_route = {
+            "internal-mcp": MCP_HTTP_APP,
+            "internal-hermes-mcp-offline": HERMES_OFFLINE_MCP_APP,
+            "internal-hermes-mcp-external": HERMES_EXTERNAL_MCP_APP,
+        }
         for route in app.router.routes:
-            if getattr(route, "name", None) == "internal-mcp":
-                route.app = MCP_HTTP_APP
-                break
-        mcp_lifespan = MCP_HTTP_APP.router.lifespan_context(MCP_HTTP_APP)
-        await mcp_lifespan.__aenter__()
+            mounted = apps_by_route.get(getattr(route, "name", None))
+            if mounted is not None:
+                route.app = mounted
+        for mounted in apps_by_route.values():
+            manager = mounted.router.lifespan_context(mounted)
+            await manager.__aenter__()
+            mcp_lifespans.append(manager)
         yield
     finally:
         logger.info("--- RAG Service Shutting Down ---")
-        if mcp_lifespan is not None:
+        try:
+            await drain_retained_executions(RETAINED_EXECUTION_SHUTDOWN_GRACE_SECONDS)
+        except Exception:
+            logger.exception("Error draining retained agent executions")
+        for mcp_lifespan in reversed(mcp_lifespans):
             try:
                 await mcp_lifespan.__aexit__(None, None, None)
             except Exception:
@@ -182,6 +284,9 @@ async def lifespan(app: FastAPI):
                     await agent_task_worker
             except Exception:
                 logger.exception("Agent task worker exited unexpectedly")
+        if runtime_readiness_task is not None and runtime_readiness_stop is not None:
+            runtime_readiness_stop.set()
+            await runtime_readiness_task
         if memory_maintenance_task is not None and memory_maintenance_stop is not None:
             memory_maintenance_stop.set()
             await memory_maintenance_task
@@ -218,11 +323,92 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+
+@app.middleware("http")
+async def control_plane_authentication(request, call_next):
+    """Protect product APIs while leaving health and internal MCP boundaries independent."""
+    path = request.url.path
+    if path in {"/health", "/ready"} or path.startswith("/internal/"):
+        return await call_next(request)
+    principal = authenticate(request)
+    if principal is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": {"code": "unauthorized", "message": "Authentication is required"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = set_principal(principal)
+    request.state.principal = principal
+    try:
+        return await call_next(request)
+    finally:
+        reset_principal(token)
+
+
+@app.get("/internal/hermes-mcp/preflight", include_in_schema=False)
+async def hermes_mcp_preflight(
+    execution_context: str | None = Header(default=None, alias="X-AskPDF-Execution-Context"),
+    expected_run_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Run-Id"),
+    expected_thread_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Thread-Id"),
+    expected_task_id: str | None = Header(default=None, alias="X-AskPDF-Expected-Task-Id"),
+):
+    """Validate a run-scoped MCP context without invoking or auditing a tool."""
+    from app.mcp.execution_context_token import (
+        ExecutionContextTokenError,
+        decode_execution_context_token,
+        validate_execution_context_identity,
+    )
+
+    if not execution_context:
+        logger.warning("Hermes MCP preflight rejected reason=missing")
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"})
+    if not expected_run_id or not expected_thread_id or not expected_task_id:
+        logger.warning("Hermes MCP preflight rejected reason=identity_mismatch fields=expected_identity")
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"})
+    try:
+        context = decode_execution_context_token(execution_context)
+    except ExecutionContextTokenError as exc:
+        logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc
+    try:
+        validate_execution_context_identity(
+            context,
+            run_id=expected_run_id,
+            thread_id=expected_thread_id,
+            task_id=expected_task_id,
+        )
+    except ExecutionContextTokenError as exc:
+        logger.warning("Hermes MCP preflight rejected reason=%s", exc.reason)
+        raise HTTPException(status_code=401, detail={"code": "mcp_execution_context_rejected"}) from exc
+    return {"status": "ok", "run_id": context.run_id}
+
+
+@app.get("/internal/mcp/health", include_in_schema=False)
+async def mcp_runtime_health(authorization: str | None = Header(default=None)):
+    """Authenticated capability probe for external runtime dependency checks.
+
+    This is deliberately separate from the MCP protocol mount: runtime services
+    must authenticate their service-to-service health check, while actual MCP
+    discovery and tool calls continue to require signed execution grants.
+    """
+    expected = os.getenv("LANGGRAPH_RUNTIME_TOKEN", "").strip()
+    if not expected or not valid_bearer_token(authorization, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "runtime_unauthorized", "message": "A valid runtime bearer token is required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return {
+        "status": "ok",
+        "service": "askpdf-mcp",
+        "tools": [descriptor(name, definition) for name, definition in enabled_definitions().items()],
+    }
+
 # CORS Middleware for cross-service communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[value.strip() for value in os.getenv("ASKPDF_CORS_ORIGINS", "http://localhost:3000").split(",") if value.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -243,18 +429,50 @@ app.include_router(tools_router, prefix="/api")
 async def health_check():
     """Service health check endpoint."""
     worker_status = getattr(app.state, "agent_task_worker_status", "not_started")
-    healthy = worker_status == "running"
     payload = {
-        "status": "ok" if healthy else "degraded",
+        "status": "ok",
         "service": "rag-service",
         "version": "2.0.0",
         "mode": "modular",
         "agent_task_worker": worker_status,
     }
-    return payload if healthy else JSONResponse(status_code=503, content=payload)
+    return payload
+
+
+@app.get("/ready")
+async def product_readiness():
+    """Readiness for product traffic, including mandatory external runtimes."""
+    worker_status = getattr(app.state, "agent_task_worker_status", "not_started")
+    runtime_readiness = getattr(app.state, "runtime_readiness", {})
+    checked_at = runtime_readiness.get("checked_at")
+    try:
+        freshness_window = max(
+            5.0,
+            3.0 * float(os.environ["AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS"]),
+        )
+    except (TypeError, ValueError):
+        freshness_window = 5.0
+    runtime_fresh = (
+        isinstance(checked_at, (int, float))
+        and time.time() - float(checked_at) <= freshness_window
+    )
+    ready = (
+        worker_status == "running"
+        and bool(runtime_readiness.get("ready"))
+        and runtime_fresh
+    )
+    payload = {
+        "status": "ok" if ready else "unavailable",
+        "service": "rag-service",
+        "agent_task_worker": worker_status,
+        "runtime_readiness": {**runtime_readiness, "fresh": runtime_fresh},
+    }
+    return payload if payload["status"] == "ok" else JSONResponse(status_code=503, content=payload)
 
 
 app.mount("/internal/mcp/", MCP_HTTP_APP, name="internal-mcp")
+app.mount("/internal/hermes-mcp/offline/", HERMES_OFFLINE_MCP_APP, name="internal-hermes-mcp-offline")
+app.mount("/internal/hermes-mcp/external/", HERMES_EXTERNAL_MCP_APP, name="internal-hermes-mcp-external")
 
 
 # Mount static files last to avoid shadowing API routes.

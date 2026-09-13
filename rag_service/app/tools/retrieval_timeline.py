@@ -9,6 +9,7 @@ from app.time_utils import parse_datetime_utc
 from app.tools.contracts import TimelineRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
+from app.rag.retrieval import bounded_retrieval_text
 
 
 def _excerpt(value: Any, limit: int = 260) -> str:
@@ -66,6 +67,16 @@ async def search_thread_events(request: TimelineRequest, context: ToolInvocation
                     events.append({"source_type": TimelineSourceType.WEB_CACHE.value, "timeline_event_at": item["web_search_performed_at"], "timeline_event_type": TimelineEventType.WEB_SEARCH_PERFORMED.value, "web_search_performed_at": item["web_search_performed_at"], "url": item.get("url", ""), "title": item.get("title") or "Internet Search", "label": f"Cached web result: \"{item.get('title') or 'Internet Search'}\"", "excerpt": _excerpt(item.get("text")), "score": item.get("rerank_score", item.get("score"))})
         events = sorted(events, key=lambda item: _sort_key(item, order))[:request.max_results]
         from app.agent.evidence_contract import evidence_segment
-        return make_tool_result(tool_name=tool_name, content="No timeline events matched the request." if not events else "[THREAD TIMELINE EVENTS]\n" + "\n".join(f"- {item.get('timeline_event_at') or 'unknown time'} | {item.get('timeline_event_type') or 'unknown_event'} | {item.get('label') or item.get('source_type')}: {item.get('excerpt') or ''}" for item in events), context=context, started=started, sources=events, artifacts={"timeline_events": events, "evidence_segments": [s for event in events if (s := evidence_segment(kind="timeline", content=event.get("excerpt"), source=event, raw_score=event.get("score")))]}, warnings=[] if events else [ToolWarningCode.NO_TIMELINE_EVENTS])
+        timeline_parts = [f"- {item.get('timeline_event_at') or 'unknown time'} | {item.get('timeline_event_type') or 'unknown_event'} | {item.get('label') or item.get('source_type')}: {item.get('excerpt') or ''}" for item in events]
+        bounded_events: list[dict[str, Any]] = []
+        selected_lines: list[str] = []
+        for event, line in zip(events, timeline_parts):
+            candidate, truncated = bounded_retrieval_text(["[THREAD TIMELINE EVENTS]", *selected_lines, line])
+            if truncated:
+                break
+            selected_lines.append(line)
+            bounded_events.append(event)
+        content = "No timeline events matched the request." if not bounded_events else "\n".join(["[THREAD TIMELINE EVENTS]", *selected_lines])
+        return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=bounded_events, artifacts={"timeline_events": bounded_events, "evidence_segments": [s for event in bounded_events if (s := evidence_segment(kind="timeline", content=event.get("excerpt"), source=event, raw_score=event.get("score")))]}, warnings=([ToolWarningCode.RESPONSE_TRUNCATED] if len(bounded_events) < len(events) else []) + ([] if events else [ToolWarningCode.NO_TIMELINE_EVENTS]))
     except Exception as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=f"Error searching thread timeline: {exc}")
