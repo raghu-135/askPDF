@@ -608,7 +608,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 resource_id=target_file_hash,
                 scope_id=thread_id,
                 embedding_model=thread.embedding_model,
-                source_version=f"{target_file_hash}:retrieval-v2",
+                source_version=readiness.get("repair_source_version") or f"{target_file_hash}:{thread.embedding_model}:document-repair-v1",
                 requeue_completed=True,
             )
 

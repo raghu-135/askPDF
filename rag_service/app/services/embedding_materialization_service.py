@@ -232,7 +232,7 @@ async def reconcile_thread_embedding_targets(
             resource_id=file_hash,
             scope_id=thread_id,
             embedding_model=embedding_model,
-            source_version=f"{file_hash}:retrieval-v2",
+            source_version=readiness.get("repair_source_version") or hashlib.sha256(f"document-repair-v1:{file_hash}:{embedding_model}".encode()).hexdigest(),
             requeue_completed=True,
         )
         document_count += 1

@@ -34,7 +34,7 @@ class CanonicalDocumentRepository:
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash))
             return result.scalar_one_or_none()
 
-    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900) -> str | None:
+    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900, force_rebuild: bool = False) -> str | None:
         """Return a claim token, or None when another/current result owns work."""
         session = await self._owned_session()
         async with session.begin():
@@ -49,7 +49,7 @@ class CanonicalDocumentRepository:
                 DocumentProcessingJob.extraction_fingerprint == fingerprint,
                 DocumentProcessingJob.chunking_fingerprint == "",
             ).with_for_update())).scalars().first()
-            if row is not None and row.extraction_fingerprint == fingerprint and row.status == "completed":
+            if row is not None and row.extraction_fingerprint == fingerprint and row.status == "completed" and not force_rebuild:
                 if job is not None and job.status != "completed":
                     job.status = "completed"
                     job.claim_token = None
@@ -350,12 +350,14 @@ class CanonicalDocumentRepository:
             result = await session.execute(delete(DocumentChunkManifest).where(DocumentChunkManifest.manifest_id == manifest_id))
             return bool(result.rowcount)
 
-    async def get_ready_manifest(self, file_hash: str, embedding_model: str) -> Optional[DocumentChunkManifest]:
+    async def get_ready_manifest(self, file_hash: str, embedding_model: str, generation: str, chunking_fingerprint: str) -> Optional[DocumentChunkManifest]:
         session = await self._owned_session()
         async with session.begin():
             query = select(DocumentChunkManifest).where(
                 DocumentChunkManifest.file_hash == file_hash,
                 DocumentChunkManifest.embedding_model == embedding_model,
+                DocumentChunkManifest.generation == generation,
+                DocumentChunkManifest.chunking_fingerprint == chunking_fingerprint,
                 DocumentChunkManifest.status == "completed",
                 DocumentChunkManifest.vector_status == "completed",
                 DocumentChunkManifest.published_at.is_not(None),

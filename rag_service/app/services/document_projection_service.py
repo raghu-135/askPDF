@@ -9,9 +9,23 @@ from typing import Any, Mapping
 from app.db import get_file
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.content_store import get_content_store, pdf_content_key
-from app.services.document_conversion_service import convert_pdf_and_project, current_extraction_fingerprint
-from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint
+from app.services.document_pipeline import (
+    RETRIEVAL_CHUNKING_VERSION,
+    is_valid_canonical_payload,
+    pack_retrieval_chunks,
+    project_sentences,
+    stable_fingerprint,
+)
 from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+
+
+def retrieval_chunking_fingerprint(canonical: Any, embedding_model: str, tokenizer_fingerprint: str) -> str:
+    return stable_fingerprint(
+        canonical.generation,
+        embedding_model,
+        tokenizer_fingerprint,
+        RETRIEVAL_CHUNKING_VERSION,
+    )
 
 
 async def ensure_retrieval_projection(
@@ -22,6 +36,8 @@ async def ensure_retrieval_projection(
     source_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
     """Return a complete chunk manifest, lazily repairing canonical data if needed."""
+    from app.services.document_conversion_service import convert_pdf_and_project, current_extraction_fingerprint
+
     repo = get_canonical_document_repo()
     canonical = await repo.get(file_hash)
     store = get_content_store()
@@ -31,7 +47,10 @@ async def ensure_retrieval_projection(
     if canonical is not None and canonical.status == "completed":
         if data is None:
             raise FileNotFoundError(f"PDF content not found for {file_hash}; cannot validate extraction fingerprint")
-        extraction_stale = canonical.extraction_fingerprint != current_extraction_fingerprint(data)
+        extraction_stale = (
+            canonical.extraction_fingerprint != current_extraction_fingerprint(data)
+            or not is_valid_canonical_payload(canonical.document_json)
+        )
     if canonical is None or canonical.status != "completed" or extraction_stale:
         if data is None:
             raise FileNotFoundError(f"PDF content not found for {file_hash}")
@@ -59,19 +78,14 @@ async def ensure_retrieval_projection(
     )
     config, counter = resolve_embedding_tokenizer(embedding_model)
     payload = canonical.document_json or {}
-    sentences = project_sentences(payload)
+    sentences = project_sentences(payload, element_policy=None)
     chunks = pack_retrieval_chunks(
         sentences,
         token_counter=counter,
         embedding_token_limit=config.effective_input_limit,
         document_identity=f"{file_hash}:{canonical.generation}",
     )
-    fingerprint = stable_fingerprint(
-        canonical.generation,
-        embedding_model,
-        config.fingerprint,
-        "sentence-pack-v2",
-    )
+    fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, config.fingerprint)
     manifest = await repo.get_manifest(file_hash, embedding_model, canonical.generation, fingerprint)
     if (
         manifest is None
@@ -98,6 +112,13 @@ async def ensure_retrieval_projection(
         # Document-wide structural metadata is for inspection only. Chunk
         # filtering uses the per-chunk tags persisted by the repository.
         "element_types": sorted({str(item.get("element_type")) for item in payload.get("elements") or []}),
+        "repair_source_version": stable_fingerprint(
+            "document-repair-v1",
+            file_hash,
+            canonical.generation,
+            canonical.extraction_fingerprint,
+            fingerprint,
+        ),
     }
     return manifest, chunks, metadata
 
@@ -107,14 +128,25 @@ async def evaluate_retrieval_readiness(file_hash: str, embedding_model: str) -> 
     repo = get_canonical_document_repo()
     canonical = await repo.get(file_hash)
     if canonical is None or canonical.status != "completed":
-        return {"ready": False, "reason": "conversion_incomplete", "manifest": None}
+        return {
+            "ready": False,
+            "reason": "conversion_incomplete",
+            "manifest": None,
+            "repair_source_version": stable_fingerprint("document-repair-v1", file_hash, "conversion"),
+        }
     try:
         manifest, chunks, metadata = await ensure_retrieval_projection(
             file_hash=file_hash,
             embedding_model=embedding_model,
         )
     except Exception as exc:
-        return {"ready": False, "reason": "projection_unavailable", "error": str(exc), "manifest": None}
+        return {
+            "ready": False,
+            "reason": "projection_unavailable",
+            "error": str(exc),
+            "manifest": None,
+            "repair_source_version": stable_fingerprint("document-repair-v1", file_hash, embedding_model),
+        }
     expected = list(manifest.expected_source_ids or [])
     manifest_complete = not (
         manifest.status != "completed"
@@ -136,34 +168,6 @@ async def evaluate_retrieval_readiness(file_hash: str, embedding_model: str) -> 
                 expected,
                 manifest_id=manifest.manifest_id,
             )
-        else:
-            fallback = await repo.get_ready_manifest(file_hash, embedding_model)
-            if fallback is not None and fallback.manifest_id != manifest.manifest_id:
-                fallback_expected = list(fallback.expected_source_ids or [])
-                fallback_complete = (
-                    fallback.status == "completed"
-                    and fallback.vector_status == "completed"
-                    and fallback.published_at is not None
-                    and fallback.superseded_at is None
-                    and fallback.expected_chunk_count == len(fallback_expected)
-                    and bool(fallback_expected)
-                )
-                if fallback_complete:
-                    fallback_vectors_complete = await vector_db.has_file_indexed_chunks(
-                        file_hash,
-                        embedding_model,
-                        fallback_expected,
-                        manifest_id=fallback.manifest_id,
-                    )
-                    if fallback_vectors_complete and fallback.vector_count == len(fallback_expected):
-                        return {
-                            "ready": False,
-                            "reason": "repair_in_progress",
-                            "manifest": manifest,
-                            "fallback_manifest": fallback,
-                            "fallback_ready": True,
-                            "metadata": metadata,
-                        }
     except Exception as exc:
         return {"ready": False, "reason": "vector_check_failed", "error": str(exc), "manifest": manifest, "metadata": metadata}
     return {
@@ -171,7 +175,8 @@ async def evaluate_retrieval_readiness(file_hash: str, embedding_model: str) -> 
         "reason": "ready" if manifest_complete and vectors_complete and manifest.vector_count == len(expected) else "manifest_incomplete",
         "manifest": manifest,
         "metadata": metadata,
+        "repair_source_version": metadata.get("repair_source_version"),
     }
 
 
-__all__ = ["ensure_retrieval_projection", "evaluate_retrieval_readiness"]
+__all__ = ["ensure_retrieval_projection", "evaluate_retrieval_readiness", "retrieval_chunking_fingerprint"]

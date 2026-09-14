@@ -10,7 +10,16 @@ from difflib import SequenceMatcher
 from typing import Any, Mapping
 
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
-from app.services.document_pipeline import build_canonical_payload, derive_hierarchy, project_sentences, stable_fingerprint, stable_identity
+from app.services.document_pipeline import (
+    CANONICAL_SCHEMA_VERSION,
+    EXTRACTION_PIPELINE_VERSION,
+    build_canonical_payload,
+    derive_hierarchy,
+    is_valid_canonical_payload,
+    project_sentences,
+    stable_fingerprint,
+    stable_identity,
+)
 from app.services.parsing_service import extraction_configuration, parse_with_docling, parse_with_pdfplumber
 
 
@@ -62,7 +71,8 @@ def current_extraction_fingerprint(data: bytes, *, merge_multi_bbox: bool = True
 
     return stable_fingerprint(
         hashlib.sha256(data).hexdigest(),
-        "docling-pdf-v1",
+        EXTRACTION_PIPELINE_VERSION,
+        CANONICAL_SCHEMA_VERSION,
         extraction_configuration(),
         merge_multi_bbox,
     )
@@ -123,10 +133,17 @@ async def convert_pdf_and_project(
     import docling
     generation = stable_identity("conversion", file_hash, fingerprint)
     repo = get_canonical_document_repo()
-    claim_token = await repo.claim_conversion(file_hash, fingerprint, generation)
+    existing = await repo.get(file_hash)
+    existing_payload_valid = bool(existing and is_valid_canonical_payload(existing.document_json))
+    claim_token = await repo.claim_conversion(
+        file_hash,
+        fingerprint,
+        generation,
+        force_rebuild=bool(existing and existing.status == "completed" and not existing_payload_valid),
+    )
     if not claim_token:
         existing = await repo.get(file_hash)
-        if existing and existing.status == "completed" and existing.extraction_fingerprint == fingerprint:
+        if existing and existing.status == "completed" and existing.extraction_fingerprint == fingerprint and is_valid_canonical_payload(existing.document_json):
             reading = existing.document_json.get("reading_projection") if isinstance(existing.document_json, dict) else None
             return {
                 "version": "2.0",
@@ -138,7 +155,7 @@ async def convert_pdf_and_project(
             for _ in range(1200):
                 await asyncio.sleep(0.5)
                 existing = await repo.get(file_hash)
-                if existing and existing.status == "completed" and existing.extraction_fingerprint == fingerprint:
+                if existing and existing.status == "completed" and existing.extraction_fingerprint == fingerprint and is_valid_canonical_payload(existing.document_json):
                     reading = existing.document_json.get("reading_projection") if isinstance(existing.document_json, dict) else None
                     return {
                         "version": "2.0",

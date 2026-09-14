@@ -42,6 +42,7 @@ from app.services.content_store import get_content_store, pdf_content_key
 from app.services.document_projection_service import ensure_retrieval_projection
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint, stable_source_id, whitespace_token_counter
+from app.services.embedding_tokenizer import resolve_embedding_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +565,7 @@ def split_chat_memory_text(compact_text: str) -> List[str]:
     return [c.page_content for c in chunks]
 
 
-async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[List[float]]:
+async def generate_embeddings(chunks: List[str], embedding_model: str, formatter=None) -> List[List[float]]:
     """
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
@@ -572,6 +573,7 @@ async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[L
     """
     from app.models.retry import invoke_with_retry
     embedding_client = get_embedding_model(embedding_model)
+    formatted_chunks = [formatter(chunk) for chunk in chunks] if formatter is not None else chunks
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     
@@ -581,7 +583,7 @@ async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[L
     
     async def process_batch(start_idx: int) -> List[List[float]]:
         async with semaphore:
-            batch = chunks[start_idx:start_idx + batch_size]
+            batch = formatted_chunks[start_idx:start_idx + batch_size]
             return await invoke_with_retry(embedding_client.aembed_documents, batch)
     
     # Create tasks for each batch
@@ -633,6 +635,7 @@ async def index_document_for_thread(
     total_chars = 0
     document_available_in_thread_at: Optional[str] = None
     retrieval_manifest = None
+    document_formatter = None
     try:
         if not persist_thread_state:
             raise LookupError
@@ -671,6 +674,9 @@ async def index_document_for_thread(
                     source_metadata=metadata,
                 )
                 metadata.update(projection_metadata)
+                if projection_metadata.get("tokenizer"):
+                    tokenizer_config, _ = resolve_embedding_tokenizer(embedding_model)
+                    document_formatter = tokenizer_config.format_document_input
 
             if (
                 retrieval_manifest is not None
@@ -787,7 +793,7 @@ async def index_document_for_thread(
             logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
 
             # 2. Generate embeddings
-            vectors = await generate_embeddings(chunks, embedding_model)
+            vectors = await generate_embeddings(chunks, embedding_model, formatter=document_formatter)
 
             # 3. Prepare metadata for each chunk
             chunk_metadatas = []

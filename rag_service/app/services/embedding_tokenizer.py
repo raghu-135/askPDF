@@ -46,10 +46,24 @@ class EmbeddingTokenizerConfig:
     effective_input_limit: int
     required_prefix: str = ""
     required_suffix: str = ""
+    query_prefix: str | None = None
+    query_suffix: str | None = None
+
+    def format_document_input(self, text: str) -> str:
+        return f"{self.required_prefix}{text}{self.required_suffix}"
+
+    def format_query_input(self, text: str) -> str:
+        prefix = self.required_prefix if self.query_prefix is None else self.query_prefix
+        suffix = self.required_suffix if self.query_suffix is None else self.query_suffix
+        return f"{prefix}{text}{suffix}"
 
     @property
     def fingerprint(self) -> str:
-        return f"{self.identity}@{self.revision or 'default'}:{self.effective_input_limit}:{self.required_prefix}:{self.required_suffix}"
+        return (
+            f"{self.identity}@{self.revision or 'default'}:{self.effective_input_limit}:"
+            f"{self.required_prefix}:{self.required_suffix}:"
+            f"{self.query_prefix}:{self.query_suffix}"
+        )
 
 
 def _external_mapping() -> dict[str, Any]:
@@ -98,6 +112,8 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
         effective_input_limit=limit,
         required_prefix=str(settings.get("prefix") or ""),
         required_suffix=str(settings.get("suffix") or ""),
+        query_prefix=(str(settings["query_prefix"]) if "query_prefix" in settings else None),
+        query_suffix=(str(settings["query_suffix"]) if "query_suffix" in settings else None),
     )
 
     try:
@@ -105,7 +121,7 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
         tokenizer = AutoTokenizer.from_pretrained(config.identity, revision=config.revision, local_files_only=True)
 
         def count(text: str) -> int:
-            formatted = f"{config.required_prefix}{text}{config.required_suffix}"
+            formatted = config.format_document_input(text)
             return len(tokenizer(formatted, add_special_tokens=True, truncation=False)["input_ids"])
 
         def split(text: str, limit: int) -> Sequence[str]:
@@ -136,11 +152,21 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
                 f"Tokenizer '{config.identity}' is unavailable locally for embedding model '{model}'. "
                 "Install/cache the tokenizer or explicitly set EMBEDDING_TOKENIZER_ALLOW_FALLBACK=true only for development tests."
             ) from exc
-        words = lambda text: len(str(text).split())
+        words = lambda text: len(config.format_document_input(str(text)).split())
         def fallback_split(text: str, limit: int) -> Sequence[str]:
             parts = str(text).split()
-            width = max(1, limit)
-            return [" ".join(parts[index:index + width]) for index in range(0, len(parts), width)]
+            output: list[str] = []
+            current: list[str] = []
+            for part in parts:
+                candidate = " ".join([*current, part])
+                if current and words(candidate) > limit:
+                    output.append(" ".join(current))
+                    current = [part]
+                else:
+                    current.append(part)
+            if current:
+                output.append(" ".join(current))
+            return output
 
         return config, TokenCounter(count=words, split=fallback_split)
 

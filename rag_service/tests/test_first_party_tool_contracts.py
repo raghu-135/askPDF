@@ -199,6 +199,7 @@ async def test_search_knowledge_enforces_document_ownership(monkeypatch):
 async def test_search_knowledge_does_not_query_unpublished_materialization(monkeypatch):
     readiness = AsyncMock(return_value={"ready": False, "reason": "manifest_incomplete"})
     monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
+    monkeypatch.setattr("app.services.embedding_materialization_service.ensure_embedding_job", AsyncMock())
     embed = AsyncMock(return_value=[0.1, 0.2])
     search = AsyncMock(return_value=[])
 

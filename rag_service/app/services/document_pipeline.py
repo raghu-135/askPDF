@@ -16,7 +16,17 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v2"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v1"
+RETRIEVAL_CHUNKING_VERSION = "sentence-pack-v3"
+READING_EXCLUDED_LABELS = frozenset({
+    "page_header",
+    "page_footer",
+    "header",
+    "footer",
+    "footnote",
+    "caption",
+})
 # Keep retrieval units small and structurally local.  The tokenizer remains the
 # hard bound, but a chunk must never span more than three consecutive sentences.
 CHUNK_MAX_SENTENCES = 3
@@ -43,6 +53,17 @@ def stable_identity(*values: Any) -> str:
 def stable_source_id(file_hash: str, generation: str, chunk_identity: str) -> str:
     """Return the schema-safe, model-independent citation identifier."""
     return f"src_{stable_identity('source', file_hash, generation, chunk_identity)}"
+
+
+def is_valid_canonical_payload(payload: Any) -> bool:
+    """Validate the minimum persisted shape required by current projections."""
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("schema_version") == CANONICAL_SCHEMA_VERSION
+        and isinstance(payload.get("docling"), Mapping)
+        and isinstance(payload.get("elements"), list)
+        and isinstance(payload.get("sections"), list)
+    )
 
 
 def _ref_value(value: Any) -> str | None:
@@ -287,15 +308,41 @@ def _default_sentence_split(text: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+|\n+", text.strip()) if part.strip()]
 
 
+def _raw_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return value.get("value")
+    return value
+
+
+def reading_element_policy(element: Mapping[str, Any]) -> bool:
+    """Return whether an element belongs in the speech/reading projection."""
+    label = str(element.get("label") or element.get("element_type") or "").strip().casefold()
+    if label in READING_EXCLUDED_LABELS:
+        return False
+    raw = element.get("raw") if isinstance(element.get("raw"), Mapping) else {}
+    content_layer = str(_raw_value(raw.get("content_layer")) or "").casefold()
+    if content_layer == "furniture":
+        return False
+    parent_ref = str(element.get("parent_ref") or raw.get("parent") or "").casefold()
+    return "picture" not in parent_ref
+
+
 def project_sentences(
     payload: Mapping[str, Any],
     *,
     sentence_splitter: Callable[[str], Sequence[str]] | None = None,
+    element_policy: Callable[[Mapping[str, Any]], bool] | None = reading_element_policy,
 ) -> list[dict[str, Any]]:
-    """Project canonical text into stable, provenance-bearing sentences."""
+    """Project canonical text into stable, provenance-bearing sentences.
+
+    The default is the reading policy. Retrieval callers pass ``None`` to
+    retain every canonical text element, including captions and footnotes.
+    """
     splitter = sentence_splitter or _default_sentence_split
     sentences: list[dict[str, Any]] = []
     for element in payload.get("elements") or []:
+        if element_policy is not None and not element_policy(element):
+            continue
         text = str(element.get("text") or "").strip()
         if not text:
             continue
@@ -315,13 +362,16 @@ def project_sentences(
                 rendered = f"Table headers: {header_text}\nRow {row_index}: {row_text}" if header_text else f"Row {row_index}: {row_text}"
                 table_rows.append((rendered, f"{element.get('element_id')}:row:{row_index}"))
         projected = table_rows or [(sentence, None) for sentence in splitter(text)]
+        search_cursor = 0
         for local_index, (sentence_text, table_row_id) in enumerate(projected):
             sentence_text = str(sentence_text).strip()
             if not sentence_text:
                 continue
-            start = text.find(sentence_text)
+            start = text.find(sentence_text, search_cursor)
             if start < 0:
                 start = 0
+            else:
+                search_cursor = start + len(sentence_text)
             sentence_id = len(sentences)
             sentences.append(
                 {
@@ -513,8 +563,11 @@ def pack_retrieval_chunks(
                     span = dict(span_value)
                     span_start = int(span.get("start", 0))
                     span_end = int(span.get("end", span_start))
-                    overlap_start = max(start, span_start)
-                    overlap_end = min(end, span_end)
+                    # ``start``/``end`` are sentence-relative, while the
+                    # persisted source span is element-relative. Translate
+                    # the fragment before intersecting with the source span.
+                    overlap_start = max(span_start, span_start + start)
+                    overlap_end = min(span_end, span_start + end)
                     if overlap_start >= overlap_end:
                         continue
                     span["start"] = overlap_start
@@ -522,9 +575,6 @@ def pack_retrieval_chunks(
                     fragment_spans.append(span)
                     if span.get("element_id"):
                         fragment_element_ids.add(str(span["element_id"]))
-                if not fragment_spans:
-                    fragment_spans = original_spans
-                    fragment_element_ids = {str(value) for value in item.get("source_element_ids") or []}
                 for page in item.get("pages") or []:
                     if isinstance(page, int) and page > 0:
                         fragment_pages.add(page)
@@ -570,12 +620,16 @@ __all__ = [
     "CANONICAL_SCHEMA_VERSION",
     "CHUNK_MAX_SENTENCES",
     "DEFAULT_EMBEDDING_TOKEN_LIMIT",
+    "EXTRACTION_PIPELINE_VERSION",
+    "READING_EXCLUDED_LABELS",
+    "RETRIEVAL_CHUNKING_VERSION",
     "STRUCTURAL_CONTEXT_TOKEN_LIMIT",
     "TokenCounter",
     "build_canonical_payload",
     "derive_hierarchy",
     "pack_retrieval_chunks",
     "project_sentences",
+    "reading_element_policy",
     "stable_fingerprint",
     "stable_identity",
     "stable_source_id",

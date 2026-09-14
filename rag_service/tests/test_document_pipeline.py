@@ -6,6 +6,7 @@ from app.services.document_pipeline import (
     stable_source_id,
     whitespace_token_counter,
 )
+from app.services.embedding_tokenizer import EmbeddingTokenizerConfig
 
 
 def _counter() -> TokenCounter:
@@ -163,3 +164,53 @@ def test_source_ids_are_schema_safe_and_model_independent():
     assert source_id.startswith("src_")
     assert "/" not in source_id
     assert "BAAI" not in source_id
+
+
+def test_reading_projection_excludes_furniture_and_repeated_sentences_keep_offsets():
+    from app.services.document_pipeline import project_sentences
+
+    payload = {
+        "elements": [
+            {"element_id": "header", "element_type": "page_header", "label": "page_header", "text": "Header", "raw": {"content_layer": "furniture"}},
+            {"element_id": "body", "element_type": "text", "label": "text", "text": "Repeat. Repeat.", "raw": {}},
+            {"element_id": "caption", "element_type": "caption", "label": "caption", "text": "Caption", "raw": {}},
+        ]
+    }
+
+    reading = project_sentences(payload, sentence_splitter=lambda value: ["Repeat.", "Repeat."] if value.startswith("Repeat") else [value])
+    assert [item["text"] for item in reading] == ["Repeat.", "Repeat."]
+    assert [item["source_spans"][0]["start"] for item in reading] == [0, 8]
+
+    retrieval = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
+    assert [item["element_type"] for item in retrieval] == ["page_header", "text", "caption"]
+
+
+def test_oversized_nonfirst_sentence_translates_fragment_offsets_to_element_coordinates():
+    sentence = {
+        "id": "second",
+        "text": "one two three four five six",
+        "section_id": "s",
+        "paragraph_id": "p2",
+        "source_element_ids": ["element"],
+        "source_spans": [{"element_id": "element", "start": 100, "end": 128}],
+    }
+    chunks = pack_retrieval_chunks([{"id": "first", "text": "intro", "section_id": "s", "paragraph_id": "p1"}, sentence], token_counter=whitespace_token_counter(), embedding_token_limit=3)
+    second_chunks = [chunk for chunk in chunks if chunk["sentence_ids"] == ["second"]]
+    assert len(second_chunks) == 2
+    assert second_chunks[0]["source_spans"][0]["start"] == 100
+    assert second_chunks[1]["source_spans"][0]["start"] > second_chunks[0]["source_spans"][0]["end"]
+
+
+def test_embedding_document_and_query_formatting_are_explicit():
+    config = EmbeddingTokenizerConfig(
+        identity="fixture-tokenizer",
+        revision="r1",
+        effective_input_limit=32,
+        required_prefix="document: ",
+        required_suffix=" </document>",
+        query_prefix="query: ",
+        query_suffix=" </query>",
+    )
+    assert config.format_document_input("body") == "document: body </document>"
+    assert config.format_query_input("body") == "query: body </query>"
+    assert config.fingerprint.endswith(":query: : </query>")

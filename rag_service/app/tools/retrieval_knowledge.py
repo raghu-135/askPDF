@@ -112,16 +112,25 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         repo = get_canonical_document_repo()
         from app.services.document_projection_service import evaluate_retrieval_readiness
         ready_manifests = []
-        fallback_used = False
+        repair_scheduled = False
+        from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+        from app.services.document_pipeline import stable_fingerprint
         for file_hash in file_hashes:
             readiness = await evaluate_retrieval_readiness(file_hash, context.embedding_model)
             if readiness.get("ready") and readiness.get("manifest") is not None:
                 ready_manifests.append(readiness["manifest"])
-            elif readiness.get("fallback_ready") and readiness.get("fallback_manifest") is not None:
-                ready_manifests.append(readiness["fallback_manifest"])
-                fallback_used = True
+            else:
+                await ensure_embedding_job(
+                    resource_type=RESOURCE_DOCUMENT,
+                    resource_id=file_hash,
+                    scope_id=context.thread_id,
+                    embedding_model=context.embedding_model,
+                    source_version=readiness.get("repair_source_version") or stable_fingerprint("document-repair-v1", file_hash, context.embedding_model),
+                    requeue_completed=True,
+                )
+                repair_scheduled = True
         if not ready_manifests:
-            return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS], artifacts={"readiness": "indexing"})
+            return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "indexing", "repair_scheduled": repair_scheduled})
         ready_file_hashes = [manifest.file_hash for manifest in ready_manifests]
         repo = get_canonical_document_repo()
         scoped_section_ids: set[str] = set()
@@ -153,7 +162,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             },
         )
         if not raw:
-            return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS])
+            return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "indexing", "repair_scheduled": repair_scheduled})
         if context.use_reranker and raw:
             raw = await services.rerank(request.query, raw)
         if request.section_id:
@@ -231,7 +240,8 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             "matches": sources,
             "document_sources": sources,
             "level": request.level,
-            "readiness": "stale_fallback" if fallback_used else "ready",
+            "readiness": "repair_in_progress" if repair_scheduled else "ready",
+            "repair_scheduled": repair_scheduled,
             "truncated": truncated,
         }
         return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=sources, artifacts=artifacts, warnings=[ToolWarningCode.RESPONSE_TRUNCATED] if truncated else [])

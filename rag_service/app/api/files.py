@@ -153,7 +153,21 @@ async def _document_processing_payload(file_hash: str, embedding_model: str) -> 
             "reading": {"status": ProcessStatus.UNKNOWN.value},
             "projection": {"status": ProcessStatus.UNKNOWN.value, "vector_status": "missing"},
         }
-    manifest = await repo.get_ready_manifest(file_hash, embedding_model) if embedding_model else None
+    manifest = None
+    if embedding_model:
+        try:
+            from app.services.document_projection_service import retrieval_chunking_fingerprint
+            from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+            tokenizer_config, _ = resolve_embedding_tokenizer(embedding_model)
+            chunking_fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, tokenizer_config.fingerprint)
+            manifest = await repo.get_ready_manifest(
+                file_hash,
+                embedding_model,
+                canonical.generation,
+                chunking_fingerprint,
+            )
+        except Exception:
+            manifest = None
     return {
         "conversion": {
             "status": canonical.status,
