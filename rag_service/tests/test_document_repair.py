@@ -52,6 +52,12 @@ async def test_readiness_does_not_consider_an_unrelated_published_manifest(monke
         vector_count=0,
         manifest_id="current-manifest",
         chunking_fingerprint=document_projection_service.retrieval_chunking_fingerprint(canonical, "model-a", config.fingerprint),
+        extraction_fingerprint=canonical.extraction_fingerprint,
+        source_version=document_projection_service.retrieval_source_version(
+            canonical.file_hash, canonical, "model-a",
+            document_projection_service.retrieval_chunking_fingerprint(canonical, "model-a", config.fingerprint),
+        ),
+        is_current=False,
     )
 
     class Repo:
@@ -152,6 +158,12 @@ async def test_readiness_uses_persisted_manifest_without_materializing(monkeypat
         embedding_model="model-a",
         chunking_fingerprint=document_projection_service.retrieval_chunking_fingerprint(canonical, "model-a", config.fingerprint),
         file_hash="file-a",
+        extraction_fingerprint=canonical.extraction_fingerprint,
+        source_version=document_projection_service.retrieval_source_version(
+            canonical.file_hash, canonical, "model-a",
+            document_projection_service.retrieval_chunking_fingerprint(canonical, "model-a", config.fingerprint),
+        ),
+        is_current=True,
     )
 
     class Repo:
@@ -227,6 +239,9 @@ def test_manifest_validation_rejects_equal_count_rows_from_another_manifest():
         manifest_id="new-manifest",
         file_hash="file-a",
         generation="generation-a",
+        extraction_fingerprint="extraction-a",
+        chunking_fingerprint="chunking-a",
+        source_version="source-a",
         expected_chunk_count=2,
         expected_chunk_ids=["new-1", "new-2"],
         expected_source_ids=["src-new-1", "src-new-2"],
@@ -235,7 +250,7 @@ def test_manifest_validation_rejects_equal_count_rows_from_another_manifest():
         SimpleNamespace(chunk_id="old-1", source_id="src-old-1", manifest_id="old-manifest", file_hash="file-a", embedding_model="model-a"),
         SimpleNamespace(chunk_id="old-2", source_id="src-old-2", manifest_id="old-manifest", file_hash="file-a", embedding_model="model-a"),
     ]
-    canonical = SimpleNamespace(file_hash="file-a")
+    canonical = SimpleNamespace(file_hash="file-a", generation="generation-a", extraction_fingerprint="extraction-a")
     assert document_projection_service._manifest_rows_complete(manifest, rows, canonical, "model-a") is False
 
 

@@ -71,6 +71,9 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
                 "manifest_id": "manifest-1",
                 "generation": "generation-1",
                 "source_id": "src-source-1",
+                "extraction_fingerprint": "extraction-1",
+                "chunking_fingerprint": "chunking-1",
+                "source_element_ids": [],
                 "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 "document_indexed_at": "2026-06-25T19:01:00Z",
                 "page_start": 3,
@@ -397,7 +400,11 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
         lambda: SimpleNamespace(
             mark_vector_status=AsyncMock(),
             get_published_manifest_ids=AsyncMock(return_value=[]),
-            publish_manifest=AsyncMock(return_value=True),
+            publish_manifest=AsyncMock(return_value=SimpleNamespace(
+                published=True,
+                stale=False,
+                superseded_manifest_ids=(),
+            )),
         ),
     )
     monkeypatch.setattr(
@@ -412,10 +419,22 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
                 expected_source_ids=["source-1"],
                 published_at=None,
                 superseded_at=None,
+                is_current=False,
                 generation="generation-1",
+                extraction_fingerprint="extraction-1",
+                source_version="source-version-1",
+                chunking_fingerprint="chunking-1",
             ),
             [{"chunk_id": "chunk-1", "body_text": "Chunk text", "contextualized_text": "Chunk text", "pages": [3], "sentence_ids": ["1"]}],
-            {"page_count": 1, "sentence_count": 1, "languages": ["eng"], "filetype": "application/pdf"},
+                {
+                    "page_count": 1,
+                    "sentence_count": 1,
+                    "languages": ["eng"],
+                    "filetype": "application/pdf",
+                    "extraction_fingerprint": "extraction-1",
+                    "source_version": "source-version-1",
+                    "chunking_fingerprint": "chunking-1",
+                },
         )),
     )
     monkeypatch.setattr(indexer, "generate_embeddings", AsyncMock(return_value=[[0.1, 0.2]]))

@@ -443,12 +443,17 @@ class WeaviateAdapter:
             source_id = str(md.get("source_id") or "").strip()
             if not manifest_id or not generation or not source_id:
                 raise ValueError("document vector metadata requires manifest_id, generation, and source_id")
+            source_kind = md.get("source_kind", FileSourceType.PDF.value)
+            if source_kind == FileSourceType.PDF.value:
+                if not str(md.get("extraction_fingerprint") or "").strip() or not str(md.get("chunking_fingerprint") or "").strip():
+                    raise ValueError("document vector metadata requires extraction and chunking fingerprints")
+                if "source_element_ids" not in md:
+                    raise ValueError("document vector metadata requires source_element_ids")
             md_for_storage = {
                 k: v
                 for k, v in md.items()
                 if k not in _DOCUMENT_THREAD_TEMPORAL_FIELDS and k != "document_indexed_at"
             }
-            source_kind = md.get("source_kind", FileSourceType.PDF.value)
             url = md.get("url") or md.get("original_url") or ""
             title = md.get("title") or ""
             properties = {
@@ -933,6 +938,13 @@ class WeaviateAdapter:
             if not source_id or not manifest_id or not generation:
                 raise VectorDBQueryError("document vector metadata is incomplete")
             metadata = _parse_metadata(p.get("metadata_json"))
+            source_kind = p.get("source_kind", "pdf")
+            if source_kind == FileSourceType.PDF.value and (
+                not str(metadata.get("extraction_fingerprint") or "").strip()
+                or not str(metadata.get("chunking_fingerprint") or "").strip()
+                or "source_element_ids" not in metadata
+            ):
+                raise VectorDBQueryError("document vector metadata provenance is incomplete")
             result = {
                 "text": p.get("text", ""),
                 "file_hash": p.get("file_hash"),

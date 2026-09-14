@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Iterable, Optional
 import uuid
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.models_sqlmodel import (
@@ -18,7 +19,14 @@ from app.db.models_sqlmodel import (
     DocumentSection,
 )
 from app.time_utils import utc_now
-from app.services.document_pipeline import stable_source_id
+from app.services.document_pipeline import RETRIEVAL_SOURCE_VERSION, stable_fingerprint, stable_source_id
+
+
+@dataclass(frozen=True)
+class ManifestPublicationResult:
+    published: bool
+    stale: bool = False
+    superseded_manifest_ids: tuple[str, ...] = ()
 
 
 class CanonicalDocumentRepository:
@@ -41,6 +49,7 @@ class CanonicalDocumentRepository:
         generation: str,
         extraction_fingerprint: str,
         force_rebuild: bool = False,
+        retry_failed: bool = False,
     ) -> DocumentProcessingJob:
         """Enqueue one durable conversion target without executing conversion in the request."""
         session = await self._owned_session()
@@ -63,7 +72,7 @@ class CanonicalDocumentRepository:
                     available_at=utc_now(),
                 )
                 session.add(job)
-            elif job.status == "failed" or (force_rebuild and job.status == "completed"):
+            elif (retry_failed and job.status == "failed") or (force_rebuild and job.status == "completed"):
                 job.status = "pending"
                 job.attempts = 0
                 job.available_at = utc_now()
@@ -313,7 +322,17 @@ class CanonicalDocumentRepository:
                 query = query.where(DocumentElement.generation == generation)
             return list((await session.execute(query)).scalars().all())
 
-    async def replace_manifest(self, *, file_hash: str, embedding_model: str, generation: str, chunking_fingerprint: str, chunks: Iterable[dict[str, Any]]) -> DocumentChunkManifest:
+    async def replace_manifest(
+        self,
+        *,
+        file_hash: str,
+        embedding_model: str,
+        generation: str,
+        extraction_fingerprint: str,
+        source_version: str,
+        chunking_fingerprint: str,
+        chunks: Iterable[dict[str, Any]],
+    ) -> DocumentChunkManifest:
         chunk_list = list(chunks)
         session = await self._owned_session()
         async with session.begin():
@@ -324,7 +343,9 @@ class CanonicalDocumentRepository:
                 file_hash=file_hash,
                 embedding_model=embedding_model,
                 generation=generation,
+                extraction_fingerprint=extraction_fingerprint,
                 chunking_fingerprint=chunking_fingerprint,
+                source_version=source_version,
                 status="running",
                 vector_status="missing",
                 vector_count=0,
@@ -377,6 +398,11 @@ class CanonicalDocumentRepository:
                         "alignment_precision": item.get("alignment_precision"),
                         "tags": list(item.get("tags") or []),
                         "tag_provenance": dict(item.get("tag_provenance") or {}),
+                        "generation": generation,
+                        "extraction_fingerprint": extraction_fingerprint,
+                        "source_version": source_version,
+                        "manifest_id": manifest.manifest_id,
+                        "source_element_ids": list(item.get("source_element_ids") or []),
                     },
                 ))
             manifest.status = "completed"
@@ -413,32 +439,76 @@ class CanonicalDocumentRepository:
             await session.flush()
             return True
 
-    async def publish_manifest(self, manifest_id: str, *, vector_count: int) -> bool:
+    async def publish_manifest(self, manifest_id: str, *, vector_count: int) -> ManifestPublicationResult:
         session = await self._owned_session()
         async with session.begin():
+            candidate = (await session.execute(
+                select(DocumentChunkManifest).where(DocumentChunkManifest.manifest_id == manifest_id)
+            )).scalar_one_or_none()
+            if candidate is None:
+                return ManifestPublicationResult(published=False, stale=True)
+
+            # This lock is cross-process and scoped to one file/model pair. The
+            # canonical row lock makes the generation check and current-pointer
+            # update one database-serialized decision.
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": f"{candidate.file_hash}:{candidate.embedding_model}"},
+            )
+            canonical = (await session.execute(
+                select(CanonicalDocument)
+                .where(CanonicalDocument.file_hash == candidate.file_hash)
+                .with_for_update()
+            )).scalar_one_or_none()
             manifest = (await session.execute(
                 select(DocumentChunkManifest).where(DocumentChunkManifest.manifest_id == manifest_id).with_for_update()
             )).scalar_one_or_none()
-            if manifest is None:
-                return False
+            if manifest is None or canonical is None:
+                return ManifestPublicationResult(published=False, stale=True)
+            if (
+                canonical.status != "completed"
+                or manifest.generation != canonical.generation
+                or manifest.extraction_fingerprint != canonical.extraction_fingerprint
+                or manifest.source_version != stable_fingerprint(
+                    RETRIEVAL_SOURCE_VERSION,
+                    manifest.file_hash,
+                    canonical.generation,
+                    canonical.extraction_fingerprint,
+                    manifest.embedding_model,
+                    manifest.chunking_fingerprint,
+                )
+            ):
+                return ManifestPublicationResult(published=False, stale=True)
             now = utc_now()
+            prior_ids = [str(value) for value in (await session.execute(
+                select(DocumentChunkManifest.manifest_id).where(
+                    DocumentChunkManifest.file_hash == manifest.file_hash,
+                    DocumentChunkManifest.embedding_model == manifest.embedding_model,
+                    DocumentChunkManifest.is_current.is_(True),
+                    DocumentChunkManifest.manifest_id != manifest_id,
+                ).with_for_update()
+            )).scalars().all()]
             await session.execute(
                 update(DocumentChunkManifest)
                 .where(
                     DocumentChunkManifest.file_hash == manifest.file_hash,
                     DocumentChunkManifest.embedding_model == manifest.embedding_model,
-                    DocumentChunkManifest.published_at.is_not(None),
+                    DocumentChunkManifest.is_current.is_(True),
                     DocumentChunkManifest.manifest_id != manifest_id,
                 )
-                .values(superseded_at=now)
+                .values(is_current=False, superseded_at=now)
             )
             manifest.vector_status = "completed"
             manifest.vector_count = int(vector_count)
             manifest.published_at = now
             manifest.superseded_at = None
+            manifest.is_current = True
             manifest.failure_json = None
             await session.flush()
-            return True
+            return ManifestPublicationResult(
+                published=True,
+                superseded_manifest_ids=tuple(prior_ids),
+            )
 
     async def get_published_manifest_ids(self, file_hash: str, embedding_model: str, *, exclude_manifest_id: str | None = None) -> list[str]:
         session = await self._owned_session()
@@ -446,7 +516,7 @@ class CanonicalDocumentRepository:
             query = select(DocumentChunkManifest.manifest_id).where(
                 DocumentChunkManifest.file_hash == file_hash,
                 DocumentChunkManifest.embedding_model == embedding_model,
-                DocumentChunkManifest.published_at.is_not(None),
+                DocumentChunkManifest.is_current.is_(True),
             )
             if exclude_manifest_id:
                 query = query.where(DocumentChunkManifest.manifest_id != exclude_manifest_id)
@@ -466,6 +536,7 @@ class CanonicalDocumentRepository:
                 DocumentChunkManifest.embedding_model == embedding_model,
                 DocumentChunkManifest.generation == generation,
                 DocumentChunkManifest.chunking_fingerprint == chunking_fingerprint,
+                DocumentChunkManifest.is_current.is_(True),
                 DocumentChunkManifest.status == "completed",
                 DocumentChunkManifest.vector_status == "completed",
                 DocumentChunkManifest.published_at.is_not(None),

@@ -341,6 +341,9 @@ class TestProductionErrorHandling:
                     "manifest_id": "manifest-1",
                     "generation": "generation-1",
                     "source_id": "src-source-1",
+                    "extraction_fingerprint": "extraction-1",
+                    "chunking_fingerprint": "chunking-1",
+                    "source_element_ids": [],
                 }]
             )
             

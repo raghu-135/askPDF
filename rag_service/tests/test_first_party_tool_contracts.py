@@ -10,6 +10,8 @@ from app.tools.context import ToolInvocationContext
 from app.tools.contracts import DocumentSearchRequest, ReadContextRequest, SearchKnowledgeRequest, TimelineRequest
 from app.tools.retrieval_conversation import search_thread_conversation_history as neutral_history
 from app.tools.retrieval_knowledge import (
+    _context_cursor,
+    _context_cursor_payload,
     _source_from_chunk,
     read_context,
     search_knowledge as neutral_knowledge,
@@ -66,6 +68,9 @@ def _patch_ready_manifest(monkeypatch):
                 file_hash=file_hash,
                 manifest_id=f"manifest-{file_hash}",
                 generation="generation-1",
+                source_version=f"ready-{file_hash}",
+                extraction_fingerprint="extract-1",
+                chunking_fingerprint="chunk-1",
             ),
         }
 
@@ -116,7 +121,7 @@ async def test_search_knowledge_returns_sources_and_artifacts_contract(monkeypat
             return_value=[{
                 "file_hash": "file-1", "chunk_id": 1, "source_id": "src-1", "score": 0.9,
                 "text": "seed", "manifest_id": "manifest-file-1", "generation": "generation-1",
-                "metadata": {"extraction_fingerprint": "extract-1"},
+                "metadata": {"extraction_fingerprint": "extract-1", "chunking_fingerprint": "chunk-1"},
             }]
         ),
     )
@@ -161,6 +166,7 @@ async def test_search_knowledge_chunk_level_returns_body_text_over_structural_co
                     "body_text": "The paper evaluates evidence-grounded research artifacts.",
                     "pages": [3],
                     "extraction_fingerprint": "extract-1",
+                    "chunking_fingerprint": "chunk-1",
                 },
             }]
         ),
@@ -190,7 +196,7 @@ async def test_search_knowledge_enforces_document_ownership(monkeypatch):
         search_knowledge_sources=AsyncMock(return_value=[{
             "file_hash": "owned", "chunk_id": 0, "source_id": "src-owned", "text": "seed",
             "manifest_id": "manifest-owned", "generation": "generation-1",
-            "metadata": {"extraction_fingerprint": "extract-1"},
+            "metadata": {"extraction_fingerprint": "extract-1", "chunking_fingerprint": "chunk-1"},
         }]),
     )
     class Services:
@@ -262,9 +268,11 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
         sentence_ids=["sentence-1"],
         source_element_ids=["element-1"],
         metadata_json={
-            "pages": [1],
-            "generation": "generation-1",
-            "extraction_fingerprint": "extract-1",
+                "pages": [1],
+                "generation": "generation-1",
+                "extraction_fingerprint": "extract-1",
+                "chunking_fingerprint": "chunk-1",
+                "source_version": "ready-file-1",
         },
     )
     canonical = SimpleNamespace(
@@ -288,7 +296,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
+            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
         }
 
     monkeypatch.setattr(
@@ -298,7 +306,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
     monkeypatch.setattr(
         "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
         lambda _model: (
-            SimpleNamespace(),
+                SimpleNamespace(fingerprint="tokenizer-1"),
             TokenCounter(
                 count=lambda value: len(str(value).split()),
                 split=lambda value, limit: [" ".join(str(value).split()[index:index + limit]) for index in range(0, len(str(value).split()), limit)],
@@ -339,7 +347,13 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
             page_end=1,
             sentence_ids=[f"sentence-{order}"],
             source_element_ids=[f"element-{order}"],
-            metadata_json={"pages": [1], "extraction_fingerprint": "extract-1"},
+            metadata_json={
+                "pages": [1],
+                "generation": "generation-1",
+                "extraction_fingerprint": "extract-1",
+                "chunking_fingerprint": "chunk-1",
+                "source_version": "ready-file-1",
+            },
         )
 
     chunks = [
@@ -364,7 +378,7 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
+            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
         }),
     )
     monkeypatch.setattr(
@@ -374,7 +388,7 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
     monkeypatch.setattr(
         "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
         lambda _model: (
-            SimpleNamespace(),
+                SimpleNamespace(fingerprint="tokenizer-1"),
             TokenCounter(
                 count=lambda value: len(str(value).split()),
                 split=lambda value, limit: [" ".join(str(value).split()[index:index + limit]) for index in range(0, len(str(value).split()), limit)],
@@ -412,6 +426,46 @@ def test_citation_requires_generation_manifest_and_extraction_identity():
             "text": "evidence",
             "metadata": {"extraction_fingerprint": "extract-1"},
         })
+
+
+def test_vector_citation_preserves_validated_provenance_metadata():
+    source = _source_from_chunk({
+        "file_hash": "file-1",
+        "source_id": "src-1",
+        "generation": "generation-1",
+        "manifest_id": "manifest-file-1",
+        "text": "evidence",
+        "metadata": {
+            "body_text": "evidence",
+            "generation": "generation-1",
+            "manifest_id": "manifest-file-1",
+            "extraction_fingerprint": "extract-1",
+            "chunking_fingerprint": "chunk-1",
+            "source_element_ids": ["element-1"],
+        },
+    })
+    assert source["generation"] == "generation-1"
+    assert source["manifest_id"] == "manifest-file-1"
+    assert source["extraction_fingerprint"] == "extract-1"
+    assert source["chunking_fingerprint"] == "chunk-1"
+    assert source["source_element_ids"] == ["element-1"]
+
+
+def test_context_cursor_binds_budget_and_tokenizer_version():
+    cursor = _context_cursor(
+        manifest_id="manifest-1",
+        generation="generation-1",
+        source_version="source-1",
+        anchor_chunk_id="chunk-1",
+        expansion="section",
+        token_budget=512,
+        tokenizer_fingerprint="tokenizer-1",
+        segment_index=3,
+    )
+    payload = _context_cursor_payload(cursor)
+    assert payload["token_budget"] == 512
+    assert payload["tokenizer_fingerprint"] == "tokenizer-1"
+    assert payload["segment_index"] == 3
 
 
 @pytest.mark.asyncio

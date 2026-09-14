@@ -11,6 +11,7 @@ from app.services.document_pipeline import (
     CANONICAL_SCHEMA_VERSION,
     EXTRACTION_PIPELINE_VERSION,
     RETRIEVAL_CHUNKING_VERSION,
+    RETRIEVAL_SOURCE_VERSION,
     is_valid_canonical_payload,
     pack_retrieval_chunks,
     project_sentences,
@@ -27,6 +28,15 @@ class DocumentConversionPendingError(RuntimeError):
     def __init__(self, file_hash: str):
         self.file_hash = str(file_hash)
         super().__init__(f"document conversion is pending for {self.file_hash}")
+
+
+class DocumentConversionFailedError(RuntimeError):
+    """Raised when the exact conversion target has reached a stable failure."""
+
+    def __init__(self, file_hash: str, error: str | None = None):
+        self.file_hash = str(file_hash)
+        self.error = str(error or "document conversion failed")
+        super().__init__(f"document conversion failed for {self.file_hash}: {self.error}")
 
 
 def retrieval_chunking_fingerprint(canonical: Any, embedding_model: str, tokenizer_fingerprint: str) -> str:
@@ -72,7 +82,7 @@ def retrieval_source_version(
     if not generation or not extraction_fingerprint or not chunking_fingerprint:
         raise ValueError("canonical retrieval version metadata is incomplete")
     return stable_fingerprint(
-        "document-retrieval-v3",
+        RETRIEVAL_SOURCE_VERSION,
         file_hash,
         generation,
         extraction_fingerprint,
@@ -159,6 +169,13 @@ def _manifest_rows_complete(manifest: Any, rows: list[Any], canonical: Any, embe
         str(getattr(manifest, "file_hash", "")) != str(canonical.file_hash)
         or str(getattr(manifest, "embedding_model", "")) != str(embedding_model)
         or str(getattr(manifest, "generation", "")) != str(canonical.generation)
+        or str(getattr(manifest, "extraction_fingerprint", "")) != str(canonical.extraction_fingerprint)
+        or str(getattr(manifest, "source_version", "")) != retrieval_source_version(
+            str(canonical.file_hash),
+            canonical,
+            embedding_model,
+            str(getattr(manifest, "chunking_fingerprint", "")),
+        )
     ):
         return False
     expected_chunks = [str(value) for value in (getattr(manifest, "expected_chunk_ids", None) or [])]
@@ -253,8 +270,11 @@ async def evaluate_document_freshness(
             and manifest.status == "completed"
             and manifest.published_at is not None
             and manifest.superseded_at is None
+            and manifest.is_current
             and manifest.generation == canonical.generation
+            and manifest.extraction_fingerprint == canonical.extraction_fingerprint
             and manifest.chunking_fingerprint == fingerprint
+            and manifest.source_version == result["source_version"]
             and manifest.expected_chunk_count == len(expected)
             and _manifest_rows_complete(manifest, manifest_rows, canonical, embedding_model)
         )
@@ -331,6 +351,12 @@ async def ensure_retrieval_projection(
     freshness = await evaluate_document_freshness(file_hash, embedding_model, require_manifest=True)
     data = None
     if not freshness.get("canonical_ready"):
+        if canonical is not None and canonical.status == "failed":
+            raise DocumentConversionFailedError(
+                file_hash,
+                dict(getattr(canonical, "failure_json", None) or {}).get("message")
+                or dict(getattr(canonical, "failure_json", None) or {}).get("error"),
+            )
         data = await store.read(key) if await store.exists(key) else None
         if data is None:
             raise FileNotFoundError(f"PDF content not found for {file_hash}")
@@ -340,6 +366,7 @@ async def ensure_retrieval_projection(
             data=data,
             file_name=file_name or (file.file_name if file else f"{file_hash}.pdf"),
             force_rebuild=True,
+            retry_failed=False,
         )
         raise DocumentConversionPendingError(file_hash)
 
@@ -348,6 +375,7 @@ async def ensure_retrieval_projection(
     if (
         freshness.get("canonical_ready")
         and existing_manifest is not None
+        and existing_manifest.is_current
         and existing_manifest.status == "completed"
         and existing_manifest.vector_status != "failed"
     ):
@@ -379,8 +407,9 @@ async def ensure_retrieval_projection(
         document_title=_document_title(canonical, file_name),
     )
     fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, config.fingerprint)
+    source_version = retrieval_source_version(file_hash, canonical, embedding_model, fingerprint)
     manifest = await repo.get_manifest(file_hash, embedding_model, canonical.generation, fingerprint)
-    if manifest is not None and manifest.status == "completed" and manifest.vector_status != "failed":
+    if manifest is not None and manifest.is_current and manifest.status == "completed" and manifest.vector_status != "failed":
         existing_rows = await repo.get_chunks(file_hash, embedding_model, manifest_id=manifest.manifest_id)
         if _manifest_rows_complete(manifest, existing_rows, canonical, embedding_model):
             return manifest, [_chunk_from_row(row) for row in existing_rows], _metadata_for_canonical(canonical, embedding_model, config)
@@ -400,6 +429,8 @@ async def ensure_retrieval_projection(
             file_hash=file_hash,
             embedding_model=embedding_model,
             generation=canonical.generation,
+            extraction_fingerprint=canonical.extraction_fingerprint,
+            source_version=source_version,
             chunking_fingerprint=fingerprint,
             chunks=chunks,
         )
@@ -446,6 +477,7 @@ __all__ = [
     "evaluate_document_freshness",
     "evaluate_retrieval_readiness",
     "DocumentConversionPendingError",
+    "DocumentConversionFailedError",
     "conversion_source_version",
     "retrieval_source_version",
     "retrieval_chunking_fingerprint",

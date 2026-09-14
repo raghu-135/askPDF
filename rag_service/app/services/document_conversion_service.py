@@ -92,6 +92,7 @@ async def enqueue_pdf_conversion(
     file_name: str,
     merge_multi_bbox: bool = True,
     force_rebuild: bool = False,
+    retry_failed: bool = False,
 ):
     """Persist a conversion target; execution belongs to the conversion worker."""
     fingerprint = current_extraction_fingerprint(data, merge_multi_bbox=merge_multi_bbox)
@@ -116,6 +117,7 @@ async def enqueue_pdf_conversion(
         generation=generation,
         extraction_fingerprint=fingerprint,
         force_rebuild=force_rebuild or same_target_invalid,
+        retry_failed=retry_failed,
     )
 
 

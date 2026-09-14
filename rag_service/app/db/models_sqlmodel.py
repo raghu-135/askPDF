@@ -1252,7 +1252,10 @@ class DocumentChunkManifest(SQLModel, table=True):
     )
     embedding_model: str = Field(index=True)
     generation: str = Field(index=True)
+    extraction_fingerprint: str = Field(default="", index=True)
     chunking_fingerprint: str = Field(index=True)
+    source_version: str = Field(default="", index=True)
+    is_current: bool = Field(default=False, index=True)
     status: str = Field(default="pending", index=True)
     vector_status: str = Field(default="missing", index=True)
     vector_count: int = Field(default=0)
@@ -1286,6 +1289,13 @@ class DocumentChunkManifest(SQLModel, table=True):
         CheckConstraint("expected_chunk_count >= 0", name="ck_document_chunk_manifests_count"),
         Index("idx_document_chunk_manifests_ready", "file_hash", "embedding_model", "status"),
         Index("idx_document_chunk_manifests_published", "file_hash", "embedding_model", "published_at"),
+        Index(
+            "uq_document_chunk_manifests_current",
+            "file_hash",
+            "embedding_model",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
     )
 
 

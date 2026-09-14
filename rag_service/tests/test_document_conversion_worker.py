@@ -1,11 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 
-from app.db.models_sqlmodel import DocumentProcessingJob, File
+from app.db.models_sqlmodel import CanonicalDocument, DocumentChunkManifest, DocumentProcessingJob, File
 
 from app.workers import document_conversion_worker as worker
 
@@ -97,6 +98,99 @@ async def test_conversion_repair_requeues_completed_and_exhausted_jobs(engine, m
         file_hash=file_hash,
         generation="generation-a",
         extraction_fingerprint="fingerprint-a",
+        retry_failed=True,
     )
     assert retried.status == "pending"
     assert retried.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_automatic_conversion_reconciliation_preserves_failed_attempts(engine, monkeypatch):
+    from app.db.repositories import canonical_document_repo
+    from app.db.repositories.canonical_document_repo import CanonicalDocumentRepository
+
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(canonical_document_repo, "async_session_maker", maker)
+    file_hash = "d" * 32
+    async with maker() as session:
+        async with session.begin():
+            session.add(File(file_hash=file_hash, file_name="failed.pdf"))
+
+    repo = CanonicalDocumentRepository()
+    job = await repo.ensure_conversion_job(
+        file_hash=file_hash,
+        generation="generation-failed",
+        extraction_fingerprint="fingerprint-failed",
+    )
+    async with maker() as session:
+        async with session.begin():
+            row = (await session.execute(select(DocumentProcessingJob).where(DocumentProcessingJob.id == job.id))).scalar_one()
+            row.status = "failed"
+            row.attempts = 5
+            row.error = "permanent parser failure"
+
+    unchanged = await repo.ensure_conversion_job(
+        file_hash=file_hash,
+        generation="generation-failed",
+        extraction_fingerprint="fingerprint-failed",
+    )
+    assert unchanged.status == "failed"
+    assert unchanged.attempts == 5
+    assert unchanged.error == "permanent parser failure"
+
+
+@pytest.mark.asyncio
+async def test_manifest_publication_rejects_stale_generation_and_keeps_current(engine, monkeypatch):
+    from app.db.repositories import canonical_document_repo
+    from app.db.repositories.canonical_document_repo import CanonicalDocumentRepository
+
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(canonical_document_repo, "async_session_maker", maker)
+    file_hash = "e" * 32
+    async with maker() as session:
+        async with session.begin():
+            session.add(File(file_hash=file_hash, file_name="versioned.pdf"))
+            await session.flush()
+            session.add(CanonicalDocument(
+                file_hash=file_hash,
+                generation="generation-new",
+                extraction_fingerprint="fingerprint-new",
+                status="completed",
+                document_json={"schema_version": "test"},
+                source_metadata_json={"_file_hash": file_hash},
+            ))
+            session.add(DocumentChunkManifest(
+                manifest_id="manifest-current",
+                file_hash=file_hash,
+                embedding_model="model-a",
+                generation="generation-new",
+                extraction_fingerprint="fingerprint-new",
+                chunking_fingerprint="chunking-new",
+                source_version="version-new",
+                status="completed",
+                vector_status="completed",
+                is_current=True,
+                published_at=datetime.now(timezone.utc),
+            ))
+            session.add(DocumentChunkManifest(
+                manifest_id="manifest-stale",
+                file_hash=file_hash,
+                embedding_model="model-a",
+                generation="generation-old",
+                extraction_fingerprint="fingerprint-old",
+                chunking_fingerprint="chunking-old",
+                source_version="version-old",
+                status="completed",
+                vector_status="completed",
+            ))
+
+    result = await CanonicalDocumentRepository().publish_manifest("manifest-stale", vector_count=1)
+    assert result.published is False
+    assert result.stale is True
+
+    async with maker() as session:
+        async with session.begin():
+            current = await session.get(DocumentChunkManifest, "manifest-current")
+            stale = await session.get(DocumentChunkManifest, "manifest-stale")
+            assert current.is_current is True
+            assert stale.is_current is False

@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 EXTRACTION_PIPELINE_VERSION = "docling-pdf-v3"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
 RETRIEVAL_CHUNKING_VERSION = "sentence-pack-v4"
+RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
     "page_footer",
@@ -827,6 +828,7 @@ __all__ = [
     "EXTRACTION_PIPELINE_VERSION",
     "READING_EXCLUDED_LABELS",
     "RETRIEVAL_CHUNKING_VERSION",
+    "RETRIEVAL_SOURCE_VERSION",
     "STRUCTURAL_CONTEXT_TOKEN_LIMIT",
     "TokenCounter",
     "build_canonical_payload",

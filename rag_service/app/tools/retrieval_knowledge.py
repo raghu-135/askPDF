@@ -31,13 +31,27 @@ def _cursor(offset: int) -> str:
     return base64.urlsafe_b64encode(json.dumps({"offset": max(0, offset)}, separators=(",", ":")).encode()).decode()
 
 
-def _context_cursor(manifest_id: str, anchor_chunk_id: str, expansion: str, segment_index: int) -> str:
+def _context_cursor(
+    *,
+    manifest_id: str,
+    generation: str,
+    source_version: str,
+    anchor_chunk_id: str,
+    expansion: str,
+    token_budget: int,
+    tokenizer_fingerprint: str,
+    segment_index: int,
+) -> str:
     payload = {
-        "version": 1,
+        "version": 2,
         "kind": "read_context",
         "manifest_id": manifest_id,
+        "generation": generation,
+        "source_version": source_version,
         "anchor_chunk_id": anchor_chunk_id,
         "expansion": expansion,
+        "token_budget": int(token_budget),
+        "tokenizer_fingerprint": tokenizer_fingerprint,
         "segment_index": max(0, segment_index),
     }
     return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
@@ -50,7 +64,7 @@ def _context_cursor_payload(value: str | None) -> dict[str, Any]:
         decoded = json.loads(base64.urlsafe_b64decode(value.encode("ascii")).decode("utf-8"))
     except Exception as exc:
         raise ValueError("invalid context continuation cursor") from exc
-    if not isinstance(decoded, dict) or decoded.get("kind") != "read_context" or decoded.get("version") != 1:
+    if not isinstance(decoded, dict) or decoded.get("kind") != "read_context" or decoded.get("version") != 2:
         raise ValueError("invalid context continuation cursor")
     decoded["segment_index"] = max(0, int(decoded.get("segment_index", 0)))
     return decoded
@@ -101,9 +115,30 @@ def _source_from_chunk(
         or metadata.get("extraction_fingerprint")
         or ""
     )
-    if not generation or not manifest_id or not extraction_fingerprint:
+    chunking_fingerprint = str(
+        get("chunking_fingerprint", "")
+        or metadata.get("chunking_fingerprint")
+        or ""
+    )
+    if not generation or not manifest_id or not extraction_fingerprint or not chunking_fingerprint:
         raise ValueError("chunk citation metadata is incomplete")
+    metadata_generation = str(metadata.get("generation") or "")
+    metadata_manifest_id = str(metadata.get("manifest_id") or "")
+    metadata_extraction = str(metadata.get("extraction_fingerprint") or "")
+    metadata_chunking = str(metadata.get("chunking_fingerprint") or "")
+    if (
+        (metadata_generation and metadata_generation != generation)
+        or (metadata_manifest_id and metadata_manifest_id != manifest_id)
+        or (metadata_extraction and metadata_extraction != extraction_fingerprint)
+        or (metadata_chunking and metadata_chunking != chunking_fingerprint)
+    ):
+        raise ValueError("chunk citation metadata does not match its validated identity")
     body = str(metadata.get("body_text") or get("body_text", get("text", "")) or "")
+    source_element_ids = list(
+        get("source_element_ids", None)
+        or metadata.get("source_element_ids")
+        or []
+    )
     return {
         "source_id": source_id,
         "file_hash": get("file_hash"),
@@ -113,11 +148,14 @@ def _source_from_chunk(
         "page_start": get("page_start") or (min(pages) if pages else None),
         "page_end": get("page_end") or (max(pages) if pages else None),
         "pages": pages,
-        "source_element_ids": list(get("source_element_ids", []) or []),
+        "source_element_ids": source_element_ids,
         "tags": list(metadata.get("tags") or get("tags", []) or []),
         "tag_provenance": dict(metadata.get("tag_provenance") or {}),
         "heading_path": list(metadata.get("heading_path") or get("heading_path", []) or []),
-        "manifest_id": get("manifest_id"),
+        "generation": generation,
+        "manifest_id": manifest_id,
+        "extraction_fingerprint": extraction_fingerprint,
+        "chunking_fingerprint": chunking_fingerprint,
         "score": score,
         "evidence_role": role,
     }
@@ -380,10 +418,16 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
             return make_tool_result(tool_name=tool_name, content="No thread context found.", context=context, started=started, warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT])
         await _scoped_files(context, request.document_id)
         repo = get_canonical_document_repo()
-        from app.services.document_projection_service import evaluate_document_freshness
+        from app.services.document_projection_service import DocumentConversionFailedError, evaluate_document_freshness
         freshness = await evaluate_document_freshness(request.document_id, context.embedding_model)
         canonical = freshness.get("canonical")
         if not freshness.get("canonical_ready"):
+            if canonical is not None and canonical.status == "failed":
+                raise DocumentConversionFailedError(
+                    request.document_id,
+                    dict(getattr(canonical, "failure_json", None) or {}).get("message")
+                    or dict(getattr(canonical, "failure_json", None) or {}).get("error"),
+                )
             from app.db import get_file
             from app.services.content_store import get_content_store, pdf_content_key
             from app.services.document_conversion_service import enqueue_pdf_conversion
@@ -395,6 +439,7 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
                 data=data,
                 file_name=file.file_name if file else f"{request.document_id}.pdf",
                 force_rebuild=True,
+                retry_failed=False,
             )
             return make_tool_result(tool_name=tool_name, content="Document conversion is not ready.", context=context, started=started, artifacts={"readiness": "conversion_in_progress", "repair_scheduled": bool(context.embedding_model)}, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS])
         sections = await repo.get_sections(request.document_id, canonical.generation)
@@ -541,10 +586,13 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         else:
             chunks = [source_chunk]
         try:
-            _tokenizer_config, counter = resolve_embedding_tokenizer(context.embedding_model)
+            tokenizer_config, counter = resolve_embedding_tokenizer(context.embedding_model)
         except EmbeddingTokenizerUnavailableError:
             raise
         token_budget = request.token_budget
+        source_version = str(getattr(manifest, "source_version", "") or "")
+        if not source_version:
+            raise ValueError("context manifest version metadata is incomplete")
         ordered_chunks = sorted(chunks, key=lambda item: int(item.chunk_order or 0))
         anchor_index = next((index for index, item in enumerate(ordered_chunks) if item.chunk_id == source_chunk.chunk_id), None)
         if anchor_index is None:
@@ -564,8 +612,12 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         offset = int(cursor.get("segment_index", 0))
         if request.cursor and (
             str(cursor.get("manifest_id")) != manifest_id
+            or str(cursor.get("generation")) != str(canonical.generation)
+            or str(cursor.get("source_version")) != source_version
             or str(cursor.get("anchor_chunk_id")) != str(source_chunk.chunk_id)
             or str(cursor.get("expansion")) != request.expansion
+            or int(cursor.get("token_budget", -1)) != int(token_budget)
+            or str(cursor.get("tokenizer_fingerprint")) != str(tokenizer_config.fingerprint)
         ):
             raise ValueError("context continuation cursor does not match the requested evidence")
         total_segments = len(segments)
@@ -593,7 +645,16 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
             consumed += 1
         content = "\n\n".join(parts)
         next_cursor = (
-            _context_cursor(manifest_id, str(source_chunk.chunk_id), request.expansion, offset + consumed)
+            _context_cursor(
+                manifest_id=manifest_id,
+                generation=str(canonical.generation),
+                source_version=source_version,
+                anchor_chunk_id=str(source_chunk.chunk_id),
+                expansion=request.expansion,
+                token_budget=token_budget,
+                tokenizer_fingerprint=tokenizer_config.fingerprint,
+                segment_index=offset + consumed,
+            )
             if offset + consumed < total_segments else None
         )
         artifacts = {

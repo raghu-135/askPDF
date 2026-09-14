@@ -740,11 +740,13 @@ async def index_document_for_thread(
             # A published manifest must never be mutated in place. If its
             # exact vector set is incomplete, stage a fresh manifest and keep
             # the old one published until the replacement is verified.
-            if retrieval_manifest is not None and retrieval_manifest.published_at is not None:
+            if retrieval_manifest is not None and retrieval_manifest.published_at is not None and retrieval_manifest.is_current:
                 retrieval_manifest = await get_canonical_document_repo().replace_manifest(
                     file_hash=file_hash,
                     embedding_model=embedding_model,
                     generation=retrieval_manifest.generation,
+                    extraction_fingerprint=retrieval_manifest.extraction_fingerprint,
+                    source_version=retrieval_manifest.source_version,
                     chunking_fingerprint=retrieval_manifest.chunking_fingerprint,
                     chunks=retrieval_projection,
                 )
@@ -795,6 +797,9 @@ async def index_document_for_thread(
                             "source_id": stable_source_id(file_hash, retrieval_manifest.generation, str(item.get("chunk_id"))),
                             "manifest_id": retrieval_manifest.manifest_id,
                             "generation": retrieval_manifest.generation,
+                            "extraction_fingerprint": retrieval_manifest.extraction_fingerprint,
+                            "source_version": retrieval_manifest.source_version,
+                            "chunking_fingerprint": retrieval_manifest.chunking_fingerprint,
                             "tags": list(item.get("tags") or []),
                             "tag_provenance": dict(item.get("tag_provenance") or {}),
                             "source_spans": list(item.get("source_spans") or []),
@@ -859,6 +864,9 @@ async def index_document_for_thread(
                         "source_id": stable_source_id(file_hash, retrieval_manifest.generation, str(projection.get("chunk_id"))),
                         "manifest_id": retrieval_manifest.manifest_id,
                         "generation": retrieval_manifest.generation,
+                        "extraction_fingerprint": projection_metadata.get("extraction_fingerprint"),
+                        "source_version": projection_metadata.get("source_version"),
+                        "chunking_fingerprint": projection_metadata.get("chunking_fingerprint"),
                         "tags": list(projection.get("tags") or []),
                         "tag_provenance": dict(projection.get("tag_provenance") or {}),
                         "source_spans": list(projection.get("source_spans") or []),
@@ -897,11 +905,6 @@ async def index_document_for_thread(
             )
 
             if retrieval_manifest is not None:
-                prior_manifest_ids = await get_canonical_document_repo().get_published_manifest_ids(
-                    file_hash,
-                    embedding_model,
-                    exclude_manifest_id=retrieval_manifest.manifest_id,
-                )
                 expected_source_ids = list(retrieval_manifest.expected_source_ids or [])
                 if indexed_count != len(expected_source_ids) or not await db_client.has_file_indexed_chunks(
                     file_hash,
@@ -910,13 +913,28 @@ async def index_document_for_thread(
                     manifest_id=retrieval_manifest.manifest_id,
                 ):
                     raise RuntimeError("staged vector identity verification failed")
-                published = await get_canonical_document_repo().publish_manifest(
+                publication = await get_canonical_document_repo().publish_manifest(
                     retrieval_manifest.manifest_id,
                     vector_count=indexed_count,
                 )
-                if not published:
+                if publication.stale:
+                    await update_indexing_status(
+                        file_hash=file_hash,
+                        status=ProcessStatus.PENDING.value,
+                        embedding_model=embedding_model,
+                        thread_id=thread_id if persist_thread_state else None,
+                        started_at=started_at,
+                        finished_at=iso_utc_z(),
+                        error="staged document generation is no longer current",
+                    )
+                    return {
+                        "status": "stale",
+                        "reason": "document_generation_superseded",
+                        "message": "staged document generation is no longer current",
+                    }
+                if not publication.published:
                     raise RuntimeError("could not publish staged manifest")
-                for prior_manifest_id in prior_manifest_ids:
+                for prior_manifest_id in publication.superseded_manifest_ids:
                     try:
                         await db_client.delete_document_vectors_by_manifest(prior_manifest_id, embedding_model)
                         await get_canonical_document_repo().delete_manifest(prior_manifest_id)

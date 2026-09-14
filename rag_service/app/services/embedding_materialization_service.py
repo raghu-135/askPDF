@@ -35,6 +35,10 @@ STALE_JOB_AFTER_SECONDS = 15 * 60
 MAX_JOB_ATTEMPTS = 5
 DEPENDENCY_REQUEUE_DELAY_SECONDS = 2
 
+
+class PermanentEmbeddingDependencyError(RuntimeError):
+    """A dependency failed permanently; do not consume another worker cycle."""
+
 def _wake() -> None:
     # The worker polls durable state. Avoid a process-global asyncio.Event because
     # TestClient and multi-worker deployments may use different event loops.
@@ -243,6 +247,7 @@ async def reconcile_thread_embedding_targets(
     document_count = 0
     vector_db = get_vector_db()
     from app.services.document_projection_service import (
+        DocumentConversionFailedError,
         DocumentConversionPendingError,
         ensure_retrieval_projection,
         evaluate_retrieval_readiness,
@@ -259,6 +264,8 @@ async def reconcile_thread_embedding_targets(
                 )
             except DocumentConversionPendingError:
                 pass
+            except DocumentConversionFailedError as exc:
+                raise PermanentEmbeddingDependencyError(str(exc)) from exc
             document_count += 1
             continue
         if readiness.get("ready"):
@@ -372,6 +379,20 @@ async def fail_embedding_job(job: EmbeddingJob, error: Exception) -> None:
                 row.updated_at = now
 
 
+async def fail_embedding_job_terminal(job: EmbeddingJob, error: Exception) -> None:
+    """Mark a job terminal without making it eligible for another retry."""
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(EmbeddingJob, job.id, with_for_update=True)
+            if row and row.status == JOB_RUNNING and row.source_version == job.source_version:
+                row.status = JOB_FAILED
+                row.attempts = MAX_JOB_ATTEMPTS
+                row.error = str(error)[:2000]
+                row.claimed_at = None
+                row.available_at = utc_now()
+                row.updated_at = utc_now()
+
+
 async def defer_document_embedding_job(
     job: EmbeddingJob,
     *,
@@ -413,6 +434,7 @@ async def process_embedding_job(job: EmbeddingJob) -> None:
     if job.resource_type == RESOURCE_DOCUMENT:
         from app.rag.indexer import index_document_for_thread
         from app.services.document_projection_service import (
+            DocumentConversionFailedError,
             DocumentConversionPendingError,
             ensure_retrieval_projection,
             evaluate_document_freshness,
@@ -431,6 +453,8 @@ async def process_embedding_job(job: EmbeddingJob) -> None:
                 )
             except DocumentConversionPendingError:
                 pass
+            except DocumentConversionFailedError as exc:
+                raise PermanentEmbeddingDependencyError(str(exc)) from exc
             await defer_document_embedding_job(
                 job,
                 reason="waiting for canonical document conversion",
@@ -503,7 +527,10 @@ async def drain_embedding_jobs(*, limit: int = 10) -> int:
             await complete_embedding_job(job)
         except Exception as exc:
             logger.warning("Embedding job failed | id=%s type=%s resource=%s: %s", job.id, job.resource_type, job.resource_id, exc)
-            await fail_embedding_job(job, exc)
+            if isinstance(exc, PermanentEmbeddingDependencyError):
+                await fail_embedding_job_terminal(job, exc)
+            else:
+                await fail_embedding_job(job, exc)
     return len(jobs)
 
 
