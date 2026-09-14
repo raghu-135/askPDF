@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v2"
-CANONICAL_SCHEMA_VERSION = "docling-canonical-v1"
-RETRIEVAL_CHUNKING_VERSION = "sentence-pack-v3"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v3"
+CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
+RETRIEVAL_CHUNKING_VERSION = "sentence-pack-v4"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
     "page_footer",
@@ -106,9 +106,9 @@ def _text_for_raw_item(item: Mapping[str, Any]) -> str:
             if table_caption:
                 lines.append(table_caption)
             if structure["headers"]:
-                lines.append("Table headers: " + " | ".join(structure["headers"]))
+                lines.append("Table headers: " + " | ".join(value or f"Column {index + 1}" for index, value in enumerate(structure["headers"])))
             for index, row in enumerate(structure["rows"], start=1):
-                lines.append(f"Row {index}: " + " | ".join(row))
+                lines.append(f"Row {index}: " + _table_row_render(structure["headers"], row, index, structure.get("cells") or []))
             return "\n".join(lines).strip()
         if table_caption:
             return table_caption
@@ -125,39 +125,118 @@ def _cell_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _table_row_render(
+    headers: Sequence[str],
+    row: Sequence[str],
+    row_index: int,
+    cells: Sequence[Mapping[str, Any]],
+) -> str:
+    """Render explicit header/value pairs while respecting merged cells."""
+    width = max(
+        len(headers),
+        len(row),
+        max(
+            (
+                int(cell.get("col", 0)) + int(cell.get("col_span", 1))
+                for cell in cells
+                if int(cell.get("row", -1)) <= row_index < int(cell.get("row", -1)) + int(cell.get("row_span", 1))
+            ),
+            default=0,
+        ),
+    )
+    values = [str(row[index]).strip() if index < len(row) else "" for index in range(width)]
+    labels = [str(headers[index]).strip() or f"Column {index + 1}" for index in range(width)]
+    rendered: list[str] = []
+    covered: set[int] = set()
+    for index in range(width):
+        if index in covered:
+            continue
+        merged = next(
+            (
+                cell for cell in cells
+                if int(cell.get("row", -1)) <= row_index < int(cell.get("row", -1)) + int(cell.get("row_span", 1))
+                and int(cell.get("col", -1)) == index
+            ),
+            None,
+        )
+        if merged is not None:
+            span = max(1, int(merged.get("col_span", 1)))
+            label = " / ".join(labels[index:index + span])
+            value = str(merged.get("text") or values[index]).strip()
+            rendered.append(f"{label}: {value}")
+            covered.update(range(index, min(width, index + span)))
+            continue
+        rendered.append(f"{labels[index]}: {values[index]}")
+    return " | ".join(rendered)
+
+
 def _table_structure_for_raw_item(item: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize common Docling table exports into headers and row values."""
+    """Normalize table exports into a rectangular, position-preserving grid."""
     data = item.get("data") if isinstance(item.get("data"), Mapping) else {}
     headers = [_cell_text(value) for value in (data.get("headers") or item.get("headers") or [])]
-    headers = [value for value in headers if value]
     rows: list[list[str]] = []
+    cells: list[dict[str, Any]] = []
     grid = data.get("grid") or data.get("rows") or data.get("table")
     if isinstance(grid, list) and all(isinstance(row, (list, tuple)) for row in grid):
         normalized = [[_cell_text(value) for value in row] for row in grid]
-        normalized = [[value for value in row] for row in normalized if any(row)]
         if normalized and not headers:
-            headers = [value for value in normalized.pop(0) if value]
-        rows.extend(normalized)
+            headers = list(normalized.pop(0))
+        rows = normalized
+        for row_index, row in enumerate(rows, start=1):
+            for col_index, value in enumerate(row):
+                cells.append({"row": row_index, "col": col_index, "row_span": 1, "col_span": 1, "text": value})
     else:
-        cells = data.get("table_cells") or data.get("cells") or []
-        by_row: dict[int, dict[int, str]] = {}
-        for cell in cells if isinstance(cells, list) else []:
+        raw_cells = data.get("table_cells") or data.get("cells") or []
+        for cell in raw_cells if isinstance(raw_cells, list) else []:
             if not isinstance(cell, Mapping):
                 continue
             try:
                 row_index = int(cell.get("row_index", cell.get("row", 0)))
                 col_index = int(cell.get("col_index", cell.get("column", 0)))
+                row_span = max(1, int(cell.get("row_span", 1)))
+                col_span = max(1, int(cell.get("col_span", 1)))
             except (TypeError, ValueError):
                 continue
-            by_row.setdefault(row_index, {})[col_index] = _cell_text(cell)
-        for row_index in sorted(by_row):
-            values = by_row[row_index]
-            row = [values[index] for index in sorted(values)]
-            if row and not headers and row_index == min(by_row):
-                headers = [value for value in row if value]
-            elif any(row):
-                rows.append(row)
-    return {"headers": headers, "rows": rows}
+            cells.append({
+                "row": row_index,
+                "col": col_index,
+                "row_span": row_span,
+                "col_span": col_span,
+                "text": _cell_text(cell),
+                "column_header": bool(cell.get("column_header")),
+                "row_header": bool(cell.get("row_header")),
+            })
+        if cells and not headers:
+            header_row = min(int(cell["row"]) for cell in cells)
+            header_cells = [cell for cell in cells if int(cell["row"]) == header_row]
+            header_width = max((int(cell["col"]) + int(cell.get("col_span", 1)) for cell in header_cells), default=0)
+            headers = ["" for _ in range(header_width)]
+            for cell in header_cells:
+                headers[int(cell["col"])] = str(cell["text"] or "")
+            cells = [
+                {**cell, "row": int(cell["row"]) - header_row}
+                for cell in cells
+                if int(cell["row"]) != header_row
+            ]
+        if cells:
+            height = max(int(cell["row"]) + int(cell.get("row_span", 1)) - 1 for cell in cells)
+            width = max(int(cell["col"]) + int(cell.get("col_span", 1)) for cell in cells)
+            rows = [["" for _ in range(width)] for _ in range(height)]
+            for cell in cells:
+                row_index = int(cell["row"])
+                col_index = int(cell["col"])
+                target_row = row_index - 1
+                if 0 <= target_row < height and col_index < width:
+                    rows[target_row][col_index] = str(cell.get("text") or "")
+
+    width = max(
+        len(headers),
+        max((len(row) for row in rows), default=0),
+        max((int(cell.get("col", 0)) + int(cell.get("col_span", 1)) for cell in cells), default=0),
+    )
+    headers = [*headers, *("" for _ in range(max(0, width - len(headers))))]
+    rows = [[*row, *("" for _ in range(max(0, width - len(row))))] for row in rows]
+    return {"headers": headers, "rows": rows, "cells": cells}
 
 
 def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
@@ -217,6 +296,7 @@ def build_canonical_payload(
                 "pages": pages,
                 "provenance": raw.get("prov") or [],
                 "parent_ref": _ref_value(raw.get("parent")),
+                "paragraph_ref": _ref_value(raw.get("paragraph") or raw.get("paragraph_ref")),
                 "raw": dict(raw),
                 "table_structure": _table_structure_for_raw_item(raw) if label == "table" else None,
             }
@@ -226,6 +306,8 @@ def build_canonical_payload(
     for item in elements:
         parent_ref = item.get("parent_ref")
         item["parent_element_id"] = element_ids_by_ref.get(parent_ref) if parent_ref else None
+        paragraph_ref = item.get("paragraph_ref")
+        item["paragraph_id"] = element_ids_by_ref.get(paragraph_ref) if paragraph_ref else None
 
     return {
         "schema_version": CANONICAL_SCHEMA_VERSION,
@@ -284,28 +366,33 @@ def derive_hierarchy(payload: Mapping[str, Any]) -> tuple[list[dict[str, Any]], 
     return sections, elements
 
 
+class SentencePipelineUnavailableError(RuntimeError):
+    """Raised when the configured sentence model cannot be loaded."""
+
+
 @lru_cache(maxsize=1)
 def _sentence_nlp() -> Any:
     try:
         import spacy
-
-        try:
-            nlp = spacy.load("en_core_web_sm")
-        except Exception:
-            nlp = spacy.blank("en")
+        nlp = spacy.load("en_core_web_sm")
         if "sentencizer" not in nlp.pipe_names and "parser" not in nlp.pipe_names and "senter" not in nlp.pipe_names:
             nlp.add_pipe("sentencizer")
         return nlp
-    except Exception:
-        return None
+    except Exception as exc:
+        raise SentencePipelineUnavailableError(
+            "spaCy model 'en_core_web_sm' is required and must load successfully"
+        ) from exc
+
+
+def sentence_pipeline_identity() -> str:
+    """Return an identity only after the configured model has loaded."""
+    _sentence_nlp()
+    return "en_core_web_sm:loaded"
 
 
 def _default_sentence_split(text: str) -> list[str]:
     nlp = _sentence_nlp()
-    if nlp is not None:
-        return [sentence.text.strip() for sentence in nlp(text) if sentence.text.strip()]
-    # Minimal test environments may not include spaCy; production images do.
-    return [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+|\n+", text.strip()) if part.strip()]
+    return [sentence.text.strip() for sentence in nlp(text) if sentence.text.strip()]
 
 
 def _raw_value(value: Any) -> Any:
@@ -325,6 +412,28 @@ def reading_element_policy(element: Mapping[str, Any]) -> bool:
         return False
     parent_ref = str(element.get("parent_ref") or raw.get("parent") or "").casefold()
     return "picture" not in parent_ref
+
+
+def _element_tags(element: Mapping[str, Any], element_type: str) -> tuple[list[str], dict[str, str]]:
+    raw = element.get("raw") if isinstance(element.get("raw"), Mapping) else {}
+    candidates = [(element_type, "docling_label")]
+    label = str(element.get("label") or "").strip()
+    if label and label != element_type:
+        candidates.append((label, "docling_label"))
+    content_layer = str(_raw_value(raw.get("content_layer")) or "").strip()
+    if content_layer:
+        candidates.append((f"content_layer:{content_layer}", "docling_content_layer"))
+    if element_type in {"title", "section_header", "chapter_header"}:
+        candidates.append(("heading", "canonical_structure"))
+    if element_type == "table":
+        candidates.append(("tabular", "canonical_structure"))
+    tags: list[str] = []
+    provenance: dict[str, str] = {}
+    for tag, source in candidates:
+        if tag and tag not in provenance:
+            tags.append(tag)
+            provenance[tag] = source
+    return tags, provenance
 
 
 def project_sentences(
@@ -347,18 +456,23 @@ def project_sentences(
         if not text:
             continue
         element_type = str(element.get("element_type") or element.get("label") or "text")
+        tags, tag_provenance = _element_tags(element, element_type)
         table_id = element.get("element_id") if element_type == "table" else None
-        paragraph_id = element.get("parent_element_id") or element.get("element_id")
+        # A generic parent is usually a Docling group/section, not a paragraph.
+        # Keep each text element as an independent packing boundary unless the
+        # canonical payload contains an explicit paragraph relation.
+        paragraph_id = element.get("paragraph_id") or element.get("paragraph_ref") or element.get("element_id")
         table_structure = element.get("table_structure") if element_type == "table" else None
         table_rows: list[tuple[str, str | None]] = []
         if isinstance(table_structure, Mapping):
-            headers = [str(value).strip() for value in table_structure.get("headers") or [] if str(value).strip()]
+            headers = [str(value).strip() for value in table_structure.get("headers") or []]
+            cells = [dict(value) for value in table_structure.get("cells") or [] if isinstance(value, Mapping)]
             for row_index, row in enumerate(table_structure.get("rows") or [], start=1):
-                values = [str(value).strip() for value in row if str(value).strip()]
-                if not values:
+                values = [str(value).strip() for value in row]
+                if not any(values) and not cells:
                     continue
-                header_text = " | ".join(headers)
-                row_text = " | ".join(values)
+                header_text = " | ".join(value or f"Column {index + 1}" for index, value in enumerate(headers))
+                row_text = _table_row_render(headers, values, row_index, cells)
                 rendered = f"Table headers: {header_text}\nRow {row_index}: {row_text}" if header_text else f"Row {row_index}: {row_text}"
                 table_rows.append((rendered, f"{element.get('element_id')}:row:{row_index}"))
         projected = table_rows or [(sentence, None) for sentence in splitter(text)]
@@ -388,7 +502,8 @@ def project_sentences(
                     "paragraph_id": paragraph_id,
                     "table_id": table_id,
                     "table_row_id": table_row_id,
-                    "tags": [element_type],
+                    "tags": tags,
+                    "tag_provenance": tag_provenance,
                     "heading_path": list(element.get("heading_path") or []),
                     "alignment_precision": "coarse",
                     "bboxes": [],
@@ -408,39 +523,34 @@ class TokenCounter:
     split_with_spans: Callable[[str, int], Sequence[tuple[str, int, int]]] | None = None
 
 
-def whitespace_token_counter() -> TokenCounter:
-    def count(text: str) -> int:
-        return len(text.split())
-
-    def split(text: str, limit: int) -> Sequence[str]:
-        words = text.split()
-        return [" ".join(words[index:index + limit]) for index in range(0, len(words), max(1, limit))]
-
-    def split_with_spans(text: str, limit: int) -> Sequence[tuple[str, int, int]]:
-        words = list(re.finditer(r"\S+", text))
-        output: list[tuple[str, int, int]] = []
-        for index in range(0, len(words), max(1, limit)):
-            selected = words[index:index + max(1, limit)]
-            if not selected:
-                continue
-            start, end = selected[0].start(), selected[-1].end()
-            output.append((text[start:end], start, end))
-        return output
-
-    return TokenCounter(count=count, split=split, split_with_spans=split_with_spans)
-
-
-def _short_context(heading_path: Sequence[str], counter: TokenCounter) -> str:
-    labels: list[str] = []
-    used = 0
-    for heading in reversed([str(value).strip() for value in heading_path if str(value).strip()]):
-        candidate = heading if not labels else f"{heading} > " + " > ".join(reversed(labels))
-        size = counter.count(candidate)
-        if used + size > STRUCTURAL_CONTEXT_TOKEN_LIMIT:
+def _context_prefix(document_title: str | None, heading_path: Sequence[str], counter: TokenCounter) -> str:
+    """Build a bounded prefix that always carries document identity."""
+    title = str(document_title or "Untitled document").strip() or "Untitled document"
+    title_budget = max(1, STRUCTURAL_CONTEXT_TOKEN_LIMIT - counter.count("Document: "))
+    title_parts = list(counter.split(title, title_budget))
+    title_fragment = title_parts[0] if title_parts else ""
+    while title_fragment and counter.count(f"Document: {title_fragment}") > STRUCTURAL_CONTEXT_TOKEN_LIMIT:
+        low, high = 1, len(title_fragment) - 1
+        best = ""
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = title_fragment[:middle].rstrip()
+            if candidate and counter.count(f"Document: {candidate}") <= STRUCTURAL_CONTEXT_TOKEN_LIMIT:
+                best = candidate
+                low = middle + 1
+            else:
+                high = middle - 1
+        title_fragment = best
+    if not title_fragment:
+        raise ValueError("tokenizer cannot fit a document title in the structural context budget")
+    prefix = f"Document: {title_fragment}"
+    clean_path = [str(value).strip() for value in heading_path if str(value).strip()]
+    for start in range(len(clean_path)):
+        candidate = f"{prefix}\nSection: {' > '.join(clean_path[start:])}"
+        if counter.count(candidate) <= STRUCTURAL_CONTEXT_TOKEN_LIMIT:
+            prefix = candidate
             break
-        labels.append(heading)
-        used = size
-    return " > ".join(reversed(labels))
+    return prefix
 
 
 def pack_retrieval_chunks(
@@ -450,6 +560,7 @@ def pack_retrieval_chunks(
     embedding_token_limit: int = DEFAULT_EMBEDDING_TOKEN_LIMIT,
     max_sentences: int = CHUNK_MAX_SENTENCES,
     document_identity: str | None = None,
+    document_title: str | None = None,
 ) -> list[dict[str, Any]]:
     """Pack adjacent sentences without crossing structural boundaries.
 
@@ -457,7 +568,9 @@ def pack_retrieval_chunks(
     embedding budget is split independently; it is never combined with other
     sentences before splitting.
     """
-    counter = token_counter or whitespace_token_counter()
+    if token_counter is None:
+        raise ValueError("an exact embedding token counter is required")
+    counter = token_counter
     if embedding_token_limit <= 0:
         raise ValueError("embedding_token_limit must be positive")
     chunks: list[dict[str, Any]] = []
@@ -472,8 +585,7 @@ def pack_retrieval_chunks(
         if not items or not body.strip():
             return
         first = items[0]
-        context = _short_context(first.get("heading_path") or [], counter)
-        prefix = f"Document section: {context}\n" if context else ""
+        prefix = _context_prefix(document_title, first.get("heading_path") or [], counter) + "\n"
         available = embedding_token_limit - counter.count(prefix)
         if available <= 0:
             raise ValueError("embedding token budget is exhausted by structural context")
@@ -485,6 +597,13 @@ def pack_retrieval_chunks(
         pages = sorted({int(page) for item in items for page in (item.get("pages") or []) if isinstance(page, int) and page > 0})
         spans = [dict(span) for span in (source_spans or [span for item in items for span in (item.get("source_spans") or [])])]
         tags = sorted({str(tag) for item in items for tag in (item.get("tags") or [item.get("element_type") or item.get("label")]) if tag})
+        tag_provenance: dict[str, str] = {}
+        for item in items:
+            provenance = item.get("tag_provenance")
+            provenance = provenance if isinstance(provenance, Mapping) else {}
+            for tag in (item.get("tags") or [item.get("element_type") or item.get("label")]):
+                if tag:
+                    tag_provenance.setdefault(str(tag), str(provenance.get(str(tag), "canonical_structure")))
         chunks.append({
             "chunk_id": stable_identity("chunk", document_identity or "document", sentence_ids, piece_index),
             "chunk_order": len(chunks),
@@ -498,6 +617,7 @@ def pack_retrieval_chunks(
             "pages": pages,
             "heading_path": list(first.get("heading_path") or []),
             "tags": tags,
+            "tag_provenance": tag_provenance,
             "token_count": counter.count(text),
         })
 
@@ -506,8 +626,7 @@ def pack_retrieval_chunks(
         if not group:
             return
         first = group[0]
-        context = _short_context(first.get("heading_path") or [], counter)
-        prefix = f"Document section: {context}\n" if context else ""
+        prefix = _context_prefix(document_title, first.get("heading_path") or [], counter) + "\n"
         available = embedding_token_limit - counter.count(prefix)
         if available <= 0:
             raise ValueError("embedding token budget is exhausted by structural context")
@@ -596,13 +715,12 @@ def pack_retrieval_chunks(
         if group and (structural_change or len(group) >= max_sentences):
             flush()
         if group:
-            context = _short_context(group[0].get("heading_path") or [], counter)
-            prefix = f"Document section: {context}\n" if context else ""
+            prefix = _context_prefix(document_title, group[0].get("heading_path") or [], counter) + "\n"
             candidate = " ".join([*(str(item.get("text") or "").strip() for item in group), str(sentence.get("text") or "").strip()]).strip()
             if counter.count(prefix) + counter.count(candidate) > embedding_token_limit:
                 flush()
         if not group and counter.count(str(sentence.get("text") or "").strip()) + counter.count(
-            f"Document section: {_short_context(sentence.get('heading_path') or [], counter)}\n" if _short_context(sentence.get("heading_path") or [], counter) else ""
+            _context_prefix(document_title, sentence.get("heading_path") or [], counter) + "\n"
         ) > embedding_token_limit:
             group.append(sentence)
             flush()
@@ -633,5 +751,6 @@ __all__ = [
     "stable_fingerprint",
     "stable_identity",
     "stable_source_id",
-    "whitespace_token_counter",
+    "SentencePipelineUnavailableError",
+    "sentence_pipeline_identity",
 ]

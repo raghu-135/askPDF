@@ -3,9 +3,19 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import document_projection_service
+from app.services.document_pipeline import CANONICAL_SCHEMA_VERSION, EXTRACTION_PIPELINE_VERSION
 from app.tools.context import ToolInvocationContext
 from app.tools.contracts import SearchKnowledgeRequest
 from app.tools import retrieval_knowledge
+
+
+@pytest.fixture(autouse=True)
+def _test_sentence_pipeline_identity(monkeypatch):
+    monkeypatch.setattr(
+        document_projection_service,
+        "sentence_pipeline_identity",
+        lambda: "en_core_web_sm:test-double",
+    )
 
 
 @pytest.mark.asyncio
@@ -19,10 +29,10 @@ async def test_readiness_does_not_consider_an_unrelated_published_manifest(monke
         source_metadata_json={
             "_file_hash": "file-a",
             "_extraction_contract_fingerprint": document_projection_service._current_extraction_contract_fingerprint(),
-            "_extraction_pipeline_version": "docling-pdf-v2",
+            "_extraction_pipeline_version": EXTRACTION_PIPELINE_VERSION,
         },
         document_json={
-            "schema_version": "docling-canonical-v1",
+            "schema_version": CANONICAL_SCHEMA_VERSION,
             "docling": {},
             "elements": [],
             "sections": [],
@@ -48,6 +58,9 @@ async def test_readiness_does_not_consider_an_unrelated_published_manifest(monke
 
         async def get_manifest(self, *_args, **_kwargs):
             return manifest
+
+        async def get_chunks(self, *_args, **_kwargs):
+            return []
 
     class VectorDb:
         async def has_file_indexed_chunks(self, *_args, **_kwargs):
@@ -75,9 +88,9 @@ async def test_readiness_uses_persisted_manifest_without_materializing(monkeypat
         source_metadata_json={
             "_file_hash": "file-a",
             "_extraction_contract_fingerprint": document_projection_service._current_extraction_contract_fingerprint(),
-            "_extraction_pipeline_version": "docling-pdf-v2",
+            "_extraction_pipeline_version": EXTRACTION_PIPELINE_VERSION,
         },
-        document_json={"schema_version": "docling-canonical-v1", "docling": {}, "elements": [], "sections": []},
+        document_json={"schema_version": CANONICAL_SCHEMA_VERSION, "docling": {}, "elements": [], "sections": []},
     )
     config = SimpleNamespace(fingerprint="tokenizer-a", identity="tokenizer-a", revision=None, effective_input_limit=512)
     expected = ["source-a"]
@@ -88,9 +101,11 @@ async def test_readiness_uses_persisted_manifest_without_materializing(monkeypat
         superseded_at=None,
         generation=canonical.generation,
         expected_chunk_count=1,
+        expected_chunk_ids=["chunk-a"],
         expected_source_ids=expected,
         vector_count=1,
         manifest_id="manifest-a",
+        embedding_model="model-a",
         chunking_fingerprint=document_projection_service.retrieval_chunking_fingerprint(canonical, "model-a", config.fingerprint),
         file_hash="file-a",
     )
@@ -101,6 +116,16 @@ async def test_readiness_uses_persisted_manifest_without_materializing(monkeypat
 
         async def get_manifest(self, *_args, **_kwargs):
             return manifest
+
+        async def get_chunks(self, *_args, **_kwargs):
+            return [SimpleNamespace(
+                chunk_id="chunk-a",
+                source_id="source-a",
+                manifest_id="manifest-a",
+                file_hash="file-a",
+                embedding_model="model-a",
+                generation=canonical.generation,
+            )]
 
     class VectorDb:
         async def has_file_indexed_chunks(self, *_args, **_kwargs):
@@ -131,9 +156,9 @@ async def test_stale_reading_cache_is_rejected_before_serving(monkeypatch):
         source_metadata_json={
             "_file_hash": "file-a",
             "_extraction_contract_fingerprint": document_projection_service._current_extraction_contract_fingerprint(),
-            "_extraction_pipeline_version": "docling-pdf-v2",
+            "_extraction_pipeline_version": EXTRACTION_PIPELINE_VERSION,
         },
-        document_json={"schema_version": "docling-canonical-v1", "docling": {}, "elements": [], "sections": []},
+        document_json={"schema_version": CANONICAL_SCHEMA_VERSION, "docling": {}, "elements": [], "sections": []},
     )
     monkeypatch.setattr(document_projection_service, "get_canonical_document_repo", lambda: SimpleNamespace(get=lambda _hash: _get_value(canonical)))
     monkeypatch.setattr(
@@ -153,11 +178,33 @@ async def _get_value(value):
     return value
 
 
+def test_manifest_validation_rejects_equal_count_rows_from_another_manifest():
+    manifest = SimpleNamespace(
+        manifest_id="new-manifest",
+        file_hash="file-a",
+        generation="generation-a",
+        expected_chunk_count=2,
+        expected_chunk_ids=["new-1", "new-2"],
+        expected_source_ids=["src-new-1", "src-new-2"],
+    )
+    rows = [
+        SimpleNamespace(chunk_id="old-1", source_id="src-old-1", manifest_id="old-manifest", file_hash="file-a", embedding_model="model-a"),
+        SimpleNamespace(chunk_id="old-2", source_id="src-old-2", manifest_id="old-manifest", file_hash="file-a", embedding_model="model-a"),
+    ]
+    canonical = SimpleNamespace(file_hash="file-a")
+    assert document_projection_service._manifest_rows_complete(manifest, rows, canonical, "model-a") is False
+
+
 def test_canonical_schema_version_invalidates_extraction_fingerprint(monkeypatch):
     try:
         from app.services import document_conversion_service
     except ImportError as exc:
         pytest.skip(f"Docling runtime is unavailable in this host environment: {exc}")
+    monkeypatch.setattr(
+        document_conversion_service,
+        "sentence_pipeline_identity",
+        lambda: "en_core_web_sm:test-double",
+    )
     original = document_conversion_service.current_extraction_fingerprint(b"fixture-pdf")
     monkeypatch.setattr(document_conversion_service, "CANONICAL_SCHEMA_VERSION", "docling-canonical-v-next")
     changed = document_conversion_service.current_extraction_fingerprint(b"fixture-pdf")

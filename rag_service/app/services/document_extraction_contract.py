@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 from importlib.metadata import PackageNotFoundError, version as package_version
 
@@ -35,9 +34,7 @@ def extraction_configuration(*, sentence_model: str | None = None) -> dict[str, 
         "docling_core": _installed("docling-core"),
         "pdfplumber": _installed("pdfplumber"),
         "spacy": _installed("spacy"),
-        "sentence_model": sentence_model or (
-            "en_core_web_sm" if importlib.util.find_spec("en_core_web_sm") else "spacy-fallback"
-        ),
+        "sentence_model": sentence_model or "en_core_web_sm:configured",
     }
 
 

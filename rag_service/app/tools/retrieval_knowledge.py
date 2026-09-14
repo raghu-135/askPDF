@@ -14,7 +14,7 @@ from app.rag.retrieval import bounded_retrieval_text
 from app.tools.contracts import InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
-from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
 
 
 def _cursor_offset(value: str | None) -> int:
@@ -29,6 +29,31 @@ def _cursor_offset(value: str | None) -> int:
 
 def _cursor(offset: int) -> str:
     return base64.urlsafe_b64encode(json.dumps({"offset": max(0, offset)}, separators=(",", ":")).encode()).decode()
+
+
+def _context_cursor(manifest_id: str, anchor_chunk_id: str, expansion: str, segment_index: int) -> str:
+    payload = {
+        "version": 1,
+        "kind": "read_context",
+        "manifest_id": manifest_id,
+        "anchor_chunk_id": anchor_chunk_id,
+        "expansion": expansion,
+        "segment_index": max(0, segment_index),
+    }
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+
+
+def _context_cursor_payload(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {"segment_index": 0}
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(value.encode("ascii")).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("invalid context continuation cursor") from exc
+    if not isinstance(decoded, dict) or decoded.get("kind") != "read_context" or decoded.get("version") != 1:
+        raise ValueError("invalid context continuation cursor")
+    decoded["segment_index"] = max(0, int(decoded.get("segment_index", 0)))
+    return decoded
 
 
 _PAGE_REFERENCE_RE = re.compile(r"\bpages?\s+(\d+)(?:\s*(?:-|–|to)\s*(\d+))?\b", re.IGNORECASE)
@@ -86,6 +111,7 @@ def _source_from_chunk(chunk: Any, *, score: Any = None, role: str = "evidence")
         "tags": list(metadata.get("tags") or get("tags", []) or []),
         "tag_provenance": dict(metadata.get("tag_provenance") or {}),
         "heading_path": list(metadata.get("heading_path") or get("heading_path", []) or []),
+        "manifest_id": get("manifest_id"),
         "score": score,
         "evidence_role": role,
     }
@@ -357,6 +383,7 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         repo = get_canonical_document_repo()
         selected = []
         source_section_files: set[str] = set()
+        source_anchors = []
         repair_scheduled = False
         for file_hash in file_hashes:
             from app.services.document_projection_service import evaluate_document_freshness
@@ -365,7 +392,8 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                 context.embedding_model,
                 require_manifest=True,
             )
-            if not freshness.get("canonical_ready") or not freshness.get("manifest_ready"):
+            manifest = freshness.get("manifest")
+            if not freshness.get("canonical_ready") or not freshness.get("manifest_ready") or manifest is None:
                 if context.embedding_model:
                     from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
                     await ensure_embedding_job(
@@ -379,14 +407,20 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     repair_scheduled = True
                 continue
             canonical = await repo.get(file_hash)
+            manifest_id = str(manifest.manifest_id)
             candidates = []
             if request.source_id.startswith("src_"):
-                candidates = await repo.get_chunks_by_source_id(request.source_id, context.embedding_model, file_hash=file_hash)
+                candidates = await repo.get_chunks_by_source_id(
+                    request.source_id,
+                    context.embedding_model,
+                    file_hash=file_hash,
+                    manifest_id=manifest_id,
+                )
             if not candidates:
                 candidates = await repo.get_chunks(
                     file_hash,
                     context.embedding_model,
-                    generation=canonical.generation if canonical and canonical.status == "completed" else None,
+                    manifest_id=manifest_id,
                 )
             if canonical and canonical.status == "completed":
                 section_ids = {
@@ -396,10 +430,10 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                 if request.source_id in section_ids:
                     source_section_files.add(file_hash)
                     selected.extend(candidates)
+                    source_anchors.append(next(iter(candidates), None))
                     continue
-            selected.extend(
-                item
-                for item in candidates
+            matches = [
+                item for item in candidates
                 if (
                     item.source_id == request.source_id
                     or item.chunk_id == request.source_id
@@ -407,15 +441,17 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     or item.section_id == request.source_id
                     or item.table_id == request.source_id
                 )
-            )
+            ]
+            selected.extend(matches)
+            source_anchors.append(next(iter(matches), None))
         if not selected and repair_scheduled:
             return make_tool_result(tool_name=tool_name, content="Document context is being repaired.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "repair_in_progress", "repair_scheduled": True})
         if not selected:
             return make_tool_result(tool_name=tool_name, content="The requested source is not available in this thread.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
-        source_chunk = selected[0]
+        source_chunk = next((item for item in source_anchors if item is not None), selected[0])
         canonical = await repo.get(source_chunk.file_hash)
-        generation = canonical.generation if canonical and canonical.status == "completed" else None
-        source_generation = str((source_chunk.metadata_json or {}).get("generation") or generation or "") or None
+        manifest_id = str(source_chunk.manifest_id)
+        source_generation = canonical.generation if canonical and canonical.status == "completed" else ""
         source_is_section = bool(source_section_files) or any(item.section_id == request.source_id for item in selected)
         source_is_table = any(item.table_id == request.source_id for item in selected)
         if (request.expansion == "section" or (request.expansion == "chunk" and source_is_section)) and (source_is_section or source_chunk.section_id):
@@ -423,31 +459,44 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
             section_ids = set(
                 await repo.get_descendant_section_ids(
                     source_chunk.file_hash,
-                    source_generation or "",
+                    source_generation,
                     section_id,
                 )
             ) if source_is_section else {section_id}
-            chunks = await repo.get_chunks(source_chunk.file_hash, context.embedding_model, generation=source_generation, section_ids=section_ids)
+            chunks = await repo.get_chunks(source_chunk.file_hash, context.embedding_model, manifest_id=manifest_id, section_ids=section_ids)
         elif (request.expansion == "table" or (request.expansion == "chunk" and source_is_table)) and source_chunk.table_id:
             table_id = request.source_id if source_is_table else source_chunk.table_id
-            chunks = await repo.get_chunks(source_chunk.file_hash, context.embedding_model, generation=source_generation, table_id=table_id)
+            chunks = await repo.get_chunks(source_chunk.file_hash, context.embedding_model, manifest_id=manifest_id, table_id=table_id)
         else:
             chunks = [source_chunk]
-        from app.services.document_pipeline import whitespace_token_counter
         try:
             _tokenizer_config, counter = resolve_embedding_tokenizer(context.embedding_model)
-        except Exception:
-            # Reading remains available for models whose embedding tokenizer is
-            # not configured; the embedding limit never caps response context.
-            counter = whitespace_token_counter()
+        except EmbeddingTokenizerUnavailableError:
+            raise
         token_budget = request.token_budget
+        ordered_chunks = sorted(chunks, key=lambda item: int(item.chunk_order or 0))
+        anchor_index = next((index for index, item in enumerate(ordered_chunks) if item.chunk_id == source_chunk.chunk_id), None)
+        if anchor_index is None:
+            raise ValueError("requested evidence is not present in the selected manifest")
+        expansion_order = [ordered_chunks[anchor_index]]
+        for distance in range(1, len(ordered_chunks)):
+            for index in (anchor_index - distance, anchor_index + distance):
+                if 0 <= index < len(ordered_chunks):
+                    expansion_order.append(ordered_chunks[index])
         segments: list[tuple[Any, str]] = []
-        for chunk in chunks:
+        for chunk in expansion_order:
             body = str(chunk.body_text or "").strip()
             if not body:
                 continue
             segments.extend((chunk, segment) for segment in counter.split(body, token_budget))
-        offset = _cursor_offset(request.cursor)
+        cursor = _context_cursor_payload(request.cursor)
+        offset = int(cursor.get("segment_index", 0))
+        if request.cursor and (
+            str(cursor.get("manifest_id")) != manifest_id
+            or str(cursor.get("anchor_chunk_id")) != str(source_chunk.chunk_id)
+            or str(cursor.get("expansion")) != request.expansion
+        ):
+            raise ValueError("context continuation cursor does not match the requested evidence")
         total_segments = len(segments)
         segments = segments[offset:]
         parts: list[str] = []
@@ -460,10 +509,14 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                 break
             parts.append(body)
             used = counter.count(candidate)
-            sources.append(_source_from_chunk(chunk, role="evidence" if index == 0 and offset == 0 else "surrounding_context"))
+            evidence = chunk.chunk_id == source_chunk.chunk_id or chunk.source_id == source_chunk.source_id
+            sources.append(_source_from_chunk(chunk, role="evidence" if evidence else "surrounding_context"))
             consumed += 1
         content = "\n\n".join(parts)
-        next_cursor = _cursor(offset + consumed) if offset + consumed < total_segments else None
+        next_cursor = (
+            _context_cursor(manifest_id, str(source_chunk.chunk_id), request.expansion, offset + consumed)
+            if offset + consumed < total_segments else None
+        )
         artifacts = {
             "document_sources": sources,
             "expansion": request.expansion,
@@ -475,6 +528,8 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         }
         warnings = [ToolWarningCode.RESPONSE_TRUNCATED] if artifacts["truncated"] else []
         return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=sources, artifacts=artifacts, warnings=warnings)
+    except EmbeddingTokenizerUnavailableError as exc:
+        return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=str(exc), code="embedding_tokenizer_unavailable", evidence_gap=True)
     except PermissionError as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=str(exc), code="document_scope_forbidden", evidence_gap=True)
     except Exception as exc:

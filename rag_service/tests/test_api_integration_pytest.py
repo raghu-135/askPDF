@@ -51,6 +51,7 @@ class TestAPIIntegration:
         thread_response = await client.post("/api/threads", json={"name": "PDF integration thread"})
         assert thread_response.status_code == 200
         thread_id = thread_response.json()["id"]
+        embedding_model = thread_response.json()["embedding_model"]
 
         async def fake_index_document_for_thread(
             *, thread_id, file_hash, embedding_model, **_kwargs
@@ -81,6 +82,21 @@ class TestAPIIntegration:
         file_hash = upload["file_hash"]
         assert upload["sentences"] is None
         assert file_hash
+
+        # Conversion is now owned by the durable worker. Process the queued
+        # job explicitly in this API test, then run the model-specific index
+        # boundary that the request-owned background task would normally reach.
+        from app.services.file_processing_service import _background_index
+        from app.workers.document_conversion_worker import drain_conversion_jobs
+        assert await drain_conversion_jobs() == 1
+        await _background_index(
+            file_hash,
+            thread_id,
+            embedding_model,
+            pdf_path.name,
+            "",
+            {},
+        )
 
         status_response = await client.get(f"/api/threads/{thread_id}/files/{file_hash}/status")
         assert status_response.status_code == 200, status_response.text

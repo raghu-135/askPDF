@@ -14,6 +14,7 @@ from app.services.document_pipeline import (
     is_valid_canonical_payload,
     pack_retrieval_chunks,
     project_sentences,
+    sentence_pipeline_identity,
     stable_fingerprint,
 )
 from app.services.document_extraction_contract import extraction_configuration
@@ -26,6 +27,19 @@ def retrieval_chunking_fingerprint(canonical: Any, embedding_model: str, tokeniz
         embedding_model,
         tokenizer_fingerprint,
         RETRIEVAL_CHUNKING_VERSION,
+        _document_title(canonical),
+    )
+
+
+def _document_title(canonical: Any, fallback: str | None = None) -> str:
+    payload = canonical.document_json if isinstance(getattr(canonical, "document_json", None), dict) else {}
+    source_metadata = dict(getattr(canonical, "source_metadata_json", None) or {})
+    return str(
+        source_metadata.get("original_title")
+        or payload.get("filename")
+        or getattr(canonical, "file_name", None)
+        or fallback
+        or "Untitled document"
     )
 
 
@@ -43,7 +57,7 @@ def _current_extraction_contract_fingerprint() -> str:
     return stable_fingerprint(
         EXTRACTION_PIPELINE_VERSION,
         CANONICAL_SCHEMA_VERSION,
-        extraction_configuration(),
+        extraction_configuration(sentence_model=sentence_pipeline_identity()),
         True,
     )
 
@@ -78,6 +92,7 @@ def _metadata_for_canonical(canonical: Any, embedding_model: str | None = None, 
         "repair_source_version": _repair_source_version(
             str(getattr(canonical, "file_hash", "")), canonical, fingerprint
         ),
+        "document_title": _document_title(canonical),
     }
 
 
@@ -98,7 +113,32 @@ def _chunk_from_row(row: Any) -> dict[str, Any]:
         "token_count": metadata.get("token_count"),
         "source_spans": list(metadata.get("source_spans") or []),
         "tags": list(metadata.get("tags") or []),
+        "tag_provenance": dict(metadata.get("tag_provenance") or {}),
     }
+
+
+def _manifest_rows_complete(manifest: Any, rows: list[Any], canonical: Any, embedding_model: str) -> bool:
+    if (
+        str(getattr(manifest, "file_hash", "")) != str(canonical.file_hash)
+        or str(getattr(manifest, "embedding_model", "")) != str(embedding_model)
+        or str(getattr(manifest, "generation", "")) != str(canonical.generation)
+    ):
+        return False
+    expected_chunks = [str(value) for value in (getattr(manifest, "expected_chunk_ids", None) or [])]
+    expected_sources = [str(value) for value in (getattr(manifest, "expected_source_ids", None) or [])]
+    if len(rows) != int(getattr(manifest, "expected_chunk_count", -1)):
+        return False
+    if [str(row.chunk_id) for row in rows] != expected_chunks:
+        return False
+    if [str(row.source_id) for row in rows] != expected_sources:
+        return False
+    return all(
+        str(getattr(row, "manifest_id", "")) == str(manifest.manifest_id)
+        and str(getattr(row, "file_hash", "")) == str(canonical.file_hash)
+        and str(getattr(row, "embedding_model", "")) == str(embedding_model)
+        and str(getattr(row, "generation", getattr(manifest, "generation", ""))) == str(manifest.generation)
+        for row in rows
+    )
 
 
 async def evaluate_document_freshness(
@@ -163,6 +203,7 @@ async def evaluate_document_freshness(
         manifest = await repo.get_manifest(file_hash, embedding_model, canonical.generation, fingerprint)
         result["manifest"] = manifest
         expected = list(getattr(manifest, "expected_source_ids", None) or []) if manifest else []
+        manifest_rows = await repo.get_chunks(file_hash, embedding_model, manifest_id=manifest.manifest_id) if manifest else []
         manifest_ready = bool(
             manifest
             and manifest.status == "completed"
@@ -171,6 +212,7 @@ async def evaluate_document_freshness(
             and manifest.generation == canonical.generation
             and manifest.chunking_fingerprint == fingerprint
             and manifest.expected_chunk_count == len(expected)
+            and _manifest_rows_complete(manifest, manifest_rows, canonical, embedding_model)
         )
         result["manifest_ready"] = manifest_ready
         if verify_vectors and manifest_ready:
@@ -214,7 +256,7 @@ async def ensure_retrieval_projection(
     source_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
     """Return a complete chunk manifest, lazily repairing canonical data if needed."""
-    from app.services.document_conversion_service import convert_pdf_and_project
+    from app.services.document_conversion_service import enqueue_pdf_conversion
 
     repo = get_canonical_document_repo()
     canonical = await repo.get(file_hash)
@@ -227,22 +269,23 @@ async def ensure_retrieval_projection(
         if data is None:
             raise FileNotFoundError(f"PDF content not found for {file_hash}")
         file = await get_file(file_hash)
-        parsed = await convert_pdf_and_project(
+        await enqueue_pdf_conversion(
             file_hash=file_hash,
             data=data,
             file_name=file_name or (file.file_name if file else f"{file_hash}.pdf"),
-            source_metadata=source_metadata,
         )
-        canonical = await repo.get(file_hash)
-        if canonical is None or canonical.status != "completed":
-            raise RuntimeError("canonical conversion did not publish a completed document")
-        freshness = await evaluate_document_freshness(file_hash, embedding_model, require_manifest=True)
+        raise RuntimeError("document conversion is queued for the independent conversion worker")
 
     config, counter = resolve_embedding_tokenizer(embedding_model)
     existing_manifest = freshness.get("manifest")
-    if freshness.get("canonical_ready") and existing_manifest is not None and existing_manifest.status == "completed":
-        existing_rows = await repo.get_chunks(file_hash, embedding_model, generation=canonical.generation)
-        if len(existing_rows) == int(existing_manifest.expected_chunk_count or 0):
+    if (
+        freshness.get("canonical_ready")
+        and existing_manifest is not None
+        and existing_manifest.status == "completed"
+        and existing_manifest.vector_status != "failed"
+    ):
+        existing_rows = await repo.get_chunks(file_hash, embedding_model, manifest_id=existing_manifest.manifest_id)
+        if _manifest_rows_complete(existing_manifest, existing_rows, canonical, embedding_model):
             return (
                 existing_manifest,
                 [_chunk_from_row(row) for row in existing_rows],
@@ -266,17 +309,24 @@ async def ensure_retrieval_projection(
         token_counter=counter,
         embedding_token_limit=config.effective_input_limit,
         document_identity=f"{file_hash}:{canonical.generation}",
+        document_title=_document_title(canonical, file_name),
     )
     fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, config.fingerprint)
     manifest = await repo.get_manifest(file_hash, embedding_model, canonical.generation, fingerprint)
-    if manifest is not None and manifest.status == "completed":
-        existing_rows = await repo.get_chunks(file_hash, embedding_model, generation=canonical.generation)
-        if len(existing_rows) == int(manifest.expected_chunk_count or 0):
+    if manifest is not None and manifest.status == "completed" and manifest.vector_status != "failed":
+        existing_rows = await repo.get_chunks(file_hash, embedding_model, manifest_id=manifest.manifest_id)
+        if _manifest_rows_complete(manifest, existing_rows, canonical, embedding_model):
             return manifest, [_chunk_from_row(row) for row in existing_rows], _metadata_for_canonical(canonical, embedding_model, config)
     if (
         manifest is None
         or manifest.status not in {"completed", "running"}
         or manifest.expected_chunk_ids != [str(item["chunk_id"]) for item in chunks]
+        or not _manifest_rows_complete(
+            manifest,
+            await repo.get_chunks(file_hash, embedding_model, manifest_id=manifest.manifest_id),
+            canonical,
+            embedding_model,
+        )
         or (manifest.status == "completed" and manifest.vector_status == "failed")
     ):
         manifest = await repo.replace_manifest(
@@ -286,26 +336,7 @@ async def ensure_retrieval_projection(
             chunking_fingerprint=fingerprint,
             chunks=chunks,
         )
-    metadata = {
-        "generation": canonical.generation,
-        "extraction_fingerprint": canonical.extraction_fingerprint,
-        "chunking_fingerprint": fingerprint,
-        "tokenizer": config.identity,
-        "tokenizer_revision": config.revision,
-        "effective_input_limit": config.effective_input_limit,
-        "sentence_count": len(sentences),
-        "page_count": len({page for sentence in sentences for page in (sentence.get("pages") or []) if page}),
-        # Document-wide structural metadata is for inspection only. Chunk
-        # filtering uses the per-chunk tags persisted by the repository.
-        "element_types": sorted({str(item.get("element_type")) for item in payload.get("elements") or []}),
-        "repair_source_version": stable_fingerprint(
-            "document-repair-v1",
-            file_hash,
-            canonical.generation,
-            canonical.extraction_fingerprint,
-            fingerprint,
-        ),
-    }
+    metadata = _metadata_for_canonical(canonical, embedding_model, config)
     return manifest, chunks, metadata
 
 

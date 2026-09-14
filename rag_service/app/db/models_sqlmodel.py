@@ -1275,10 +1275,6 @@ class DocumentChunkManifest(SQLModel, table=True):
     completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     __table_args__ = (
-        UniqueConstraint(
-            "file_hash", "embedding_model", "generation", "chunking_fingerprint",
-            name="uq_document_chunk_manifests_target",
-        ),
         CheckConstraint(
             "status in ('pending', 'running', 'completed', 'failed')",
             name="ck_document_chunk_manifests_status",

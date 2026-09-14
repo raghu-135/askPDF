@@ -11,6 +11,10 @@ from typing import Any, Sequence
 from app.services.document_pipeline import TokenCounter
 
 
+class EmbeddingTokenizerUnavailableError(RuntimeError):
+    """Raised when the exact tokenizer required by an embedding model is unavailable."""
+
+
 def _split_oversized_fragment(text: str, limit: int, count) -> list[str]:
     """Split an unbroken token at tokenizer-safe character boundaries."""
     fragment = str(text)
@@ -147,28 +151,14 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
 
         return config, TokenCounter(count=count, split=split)
     except Exception as exc:
-        if os.environ.get("EMBEDDING_TOKENIZER_ALLOW_FALLBACK", "false").lower() != "true":
-            raise ValueError(
-                f"Tokenizer '{config.identity}' is unavailable locally for embedding model '{model}'. "
-                "Install/cache the tokenizer or explicitly set EMBEDDING_TOKENIZER_ALLOW_FALLBACK=true only for development tests."
-            ) from exc
-        words = lambda text: len(config.format_document_input(str(text)).split())
-        def fallback_split(text: str, limit: int) -> Sequence[str]:
-            parts = str(text).split()
-            output: list[str] = []
-            current: list[str] = []
-            for part in parts:
-                candidate = " ".join([*current, part])
-                if current and words(candidate) > limit:
-                    output.append(" ".join(current))
-                    current = [part]
-                else:
-                    current.append(part)
-            if current:
-                output.append(" ".join(current))
-            return output
-
-        return config, TokenCounter(count=words, split=fallback_split)
+        raise EmbeddingTokenizerUnavailableError(
+            f"Tokenizer '{config.identity}' is unavailable locally for embedding model '{model}'"
+        ) from exc
 
 
-__all__ = ["EmbeddingTokenizerConfig", "resolve_embedding_tokenizer", "_split_oversized_fragment"]
+__all__ = [
+    "EmbeddingTokenizerConfig",
+    "EmbeddingTokenizerUnavailableError",
+    "resolve_embedding_tokenizer",
+    "_split_oversized_fragment",
+]

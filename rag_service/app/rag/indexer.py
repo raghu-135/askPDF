@@ -41,7 +41,7 @@ from app.time_utils import iso_utc_z
 from app.services.content_store import get_content_store, pdf_content_key
 from app.services.document_projection_service import ensure_retrieval_projection
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
-from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint, stable_source_id, whitespace_token_counter
+from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint, stable_source_id
 from app.services.embedding_tokenizer import resolve_embedding_tokenizer
 
 logger = logging.getLogger(__name__)
@@ -770,6 +770,7 @@ async def index_document_for_thread(
                             "manifest_id": retrieval_manifest.manifest_id,
                             "generation": retrieval_manifest.generation,
                             "tags": list(item.get("tags") or []),
+                            "tag_provenance": dict(item.get("tag_provenance") or {}),
                             "source_spans": list(item.get("source_spans") or []),
                         },
                     }
@@ -827,6 +828,7 @@ async def index_document_for_thread(
                         "manifest_id": retrieval_manifest.manifest_id,
                         "generation": retrieval_manifest.generation,
                         "tags": list(projection.get("tags") or []),
+                        "tag_provenance": dict(projection.get("tag_provenance") or {}),
                         "source_spans": list(projection.get("source_spans") or []),
                     })
                 chunk_metadatas.append(chunk_metadata)

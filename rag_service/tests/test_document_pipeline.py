@@ -1,10 +1,12 @@
+import pytest
+
 from app.services.document_pipeline import (
     TokenCounter,
     build_canonical_payload,
     derive_hierarchy,
     pack_retrieval_chunks,
     stable_source_id,
-    whitespace_token_counter,
+    CANONICAL_SCHEMA_VERSION,
 )
 from app.services.embedding_tokenizer import EmbeddingTokenizerConfig
 
@@ -28,10 +30,10 @@ def test_pack_fills_embedding_budget_and_preserves_context_and_ids():
         {"id": 4, "text": "four", "section_id": "s1", "heading_path": ["Root", "Child"], "source_element_ids": ["e4"], "pages": [3]},
         {"id": 5, "text": "五 unicode", "section_id": "s2", "heading_path": ["Other"], "source_element_ids": ["e5"], "pages": [4]},
     ]
-    chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=8)
+    chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=16)
     assert chunks[0]["sentence_ids"] == ["1", "2", "3"]
     assert chunks[-1]["section_id"] == "s2"
-    assert all(chunk["token_count"] <= 8 for chunk in chunks)
+    assert all(chunk["token_count"] <= 16 for chunk in chunks)
     assert "Child" in chunks[0]["contextualized_text"]
     assert "one two three" in chunks[0]["body_text"]
     assert "four" in " ".join(chunk["body_text"] for chunk in chunks if chunk["section_id"] == "s1")
@@ -44,15 +46,15 @@ def test_pack_keeps_table_boundaries_while_grouping_text_elements():
         {"id": 3, "text": "header", "section_id": "s", "table_id": "table-1", "source_element_ids": ["table-1"]},
         {"id": 4, "text": "row", "section_id": "s", "table_id": "table-1", "source_element_ids": ["table-1"]},
     ]
-    chunks = pack_retrieval_chunks(sentences, token_counter=_counter())
+    chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=32)
     assert [chunk["sentence_ids"] for chunk in chunks] == [["1", "2"], ["3", "4"]]
 
 
 def test_long_sentence_splits_deterministically_but_keeps_original_identity():
     sentence = {"id": "long", "text": "a b c d e f g h", "section_id": "s", "source_element_ids": ["element"], "pages": [1]}
-    chunks = pack_retrieval_chunks([sentence], token_counter=_counter(), embedding_token_limit=4)
+    chunks = pack_retrieval_chunks([sentence], token_counter=_counter(), embedding_token_limit=10)
     assert [chunk["sentence_ids"] for chunk in chunks] == [["long"], ["long"]]
-    assert all(chunk["token_count"] <= 4 for chunk in chunks)
+    assert all(chunk["token_count"] <= 10 for chunk in chunks)
     assert [chunk["chunk_order"] for chunk in chunks] == [0, 1]
 
 
@@ -86,7 +88,7 @@ def test_stable_canonical_projection_shape_is_json_compatible():
             return {"texts": [{"self_ref": "#/texts/0", "label": "text", "text": "Hello", "prov": []}], "body": {"children": [{"$ref": "#/texts/0"}]}}
 
     payload = build_canonical_payload(FakeDocument(), filename="input.pdf", source_metadata={"original_url": "https://example.test"})
-    assert payload["schema_version"] == "docling-canonical-v1"
+    assert payload["schema_version"] == CANONICAL_SCHEMA_VERSION
     assert payload["elements"][0]["element_id"]
     assert payload["source_metadata"]["original_url"].startswith("https://")
 
@@ -106,8 +108,49 @@ def test_table_projection_is_row_and_header_aware():
 
     payload = build_canonical_payload(FakeDocument(), filename="table.pdf", document_identity="file")
     element = payload["elements"][0]
-    assert element["text"] == "Table headers: Name | Score\nRow 1: Ada | 10"
-    assert element["table_structure"] == {"headers": ["Name", "Score"], "rows": [["Ada", "10"]]}
+    assert element["text"] == "Table headers: Name | Score\nRow 1: Name: Ada | Score: 10"
+    assert element["table_structure"]["headers"] == ["Name", "Score"]
+    assert element["table_structure"]["rows"] == [["Ada", "10"]]
+
+
+def test_table_projection_preserves_empty_positions_and_explicit_associations():
+    class FakeDocument:
+        def export_to_dict(self):
+            return {
+                "tables": [{
+                    "self_ref": "#/tables/0",
+                    "label": "table",
+                    "data": {"grid": [["Product", "Price", "Quantity"], ["Widget", "", "5"]]},
+                    "prov": [],
+                }],
+                "body": {"children": [{"$ref": "#/tables/0"}]},
+            }
+
+    element = build_canonical_payload(FakeDocument(), filename="table.pdf")["elements"][0]
+    assert element["table_structure"]["rows"] == [["Widget", "", "5"]]
+    assert "Product: Widget | Price:  | Quantity: 5" in element["text"]
+
+
+def test_table_projection_preserves_merged_column_associations():
+    class FakeDocument:
+        def export_to_dict(self):
+            return {
+                "tables": [{
+                    "self_ref": "#/tables/0",
+                    "label": "table",
+                    "data": {"table_cells": [
+                        {"row": 0, "column": 0, "text": "Period"},
+                        {"row": 0, "column": 1, "text": "Value"},
+                        {"row": 1, "column": 0, "text": "Q1", "col_span": 2},
+                    ]},
+                    "prov": [],
+                }],
+                "body": {"children": [{"$ref": "#/tables/0"}]},
+            }
+
+    element = build_canonical_payload(FakeDocument(), filename="table.pdf")["elements"][0]
+    assert element["table_structure"]["cells"][0]["col_span"] == 2
+    assert "Period / Value: Q1" in element["text"]
 
 
 def test_document_identity_prevents_cross_file_element_and_chunk_collisions():
@@ -119,12 +162,45 @@ def test_document_identity_prevents_cross_file_element_and_chunk_collisions():
     second = build_canonical_payload(FakeDocument(), filename="input.pdf", document_identity="file-b")
     assert first["elements"][0]["element_id"] != second["elements"][0]["element_id"]
     sentence = {"id": 0, "text": "Same", "section_id": None, "source_element_ids": ["e"]}
-    first_chunk = pack_retrieval_chunks([sentence], document_identity="file-a")
-    second_chunk = pack_retrieval_chunks([sentence], document_identity="file-b")
+    first_chunk = pack_retrieval_chunks([sentence], token_counter=_counter(), document_identity="file-a")
+    second_chunk = pack_retrieval_chunks([sentence], token_counter=_counter(), document_identity="file-b")
     assert first_chunk[0]["chunk_id"] != second_chunk[0]["chunk_id"]
-    model_a_chunk = pack_retrieval_chunks([sentence], document_identity="file-a:generation")
-    model_b_chunk = pack_retrieval_chunks([sentence], document_identity="file-a:generation")
+    model_a_chunk = pack_retrieval_chunks([sentence], token_counter=_counter(), document_identity="file-a:generation")
+    model_b_chunk = pack_retrieval_chunks([sentence], token_counter=_counter(), document_identity="file-a:generation")
     assert model_a_chunk[0]["chunk_id"] == model_b_chunk[0]["chunk_id"]
+
+
+def test_contextual_prefix_contains_document_title_and_is_bounded():
+    sentence = {"id": "s", "text": "evidence", "section_id": "section", "heading_path": ["Results"]}
+    first = pack_retrieval_chunks(
+        [sentence], token_counter=_counter(), embedding_token_limit=20,
+        document_identity="file-a", document_title="Annual Report A",
+    )[0]
+    second = pack_retrieval_chunks(
+        [sentence], token_counter=_counter(), embedding_token_limit=20,
+        document_identity="file-b", document_title="Annual Report B",
+    )[0]
+    assert "Document: Annual Report A" in first["contextualized_text"]
+    assert "Document: Annual Report B" in second["contextualized_text"]
+    assert first["contextualized_text"] != second["contextualized_text"]
+    assert first["token_count"] <= 20
+
+
+def test_document_title_is_part_of_chunking_identity():
+    from types import SimpleNamespace
+    from app.services.document_projection_service import retrieval_chunking_fingerprint
+
+    base = SimpleNamespace(
+        generation="generation-1",
+        document_json={"filename": "canonical.pdf"},
+        source_metadata_json={"original_title": "Report A"},
+    )
+    other = SimpleNamespace(
+        generation="generation-1",
+        document_json={"filename": "canonical.pdf"},
+        source_metadata_json={"original_title": "Report B"},
+    )
+    assert retrieval_chunking_fingerprint(base, "model", "tokenizer") != retrieval_chunking_fingerprint(other, "model", "tokenizer")
 
 
 def test_overflow_keeps_each_sentence_provenance_and_precise_fragment_spans():
@@ -140,7 +216,7 @@ def test_overflow_keeps_each_sentence_provenance_and_precise_fragment_spans():
             {"element_id": "e2", "start": 14, "end": 39},
         ],
     }
-    chunks = pack_retrieval_chunks([sentence], token_counter=whitespace_token_counter(), embedding_token_limit=4)
+    chunks = pack_retrieval_chunks([sentence], token_counter=_counter(), embedding_token_limit=8)
     assert all(chunk["sentence_ids"] == ["long"] for chunk in chunks)
     assert chunks[0]["source_element_ids"] == ["e1", "e2"]
     assert chunks[1]["source_element_ids"] == ["e2"]
@@ -153,10 +229,22 @@ def test_paragraph_boundaries_and_chunk_tags_are_preserved():
         {"id": 1, "text": "prose", "section_id": "s", "paragraph_id": "p1", "element_type": "text", "tags": ["text"], "source_element_ids": ["e1"]},
         {"id": 2, "text": "table row", "section_id": "s", "paragraph_id": "table", "table_id": "table", "element_type": "table", "tags": ["table"], "source_element_ids": ["e2"]},
     ]
-    chunks = pack_retrieval_chunks(sentences)
+    chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=32)
     assert [chunk["sentence_ids"] for chunk in chunks] == [["1"], ["2"]]
     assert chunks[0]["tags"] == ["text"]
     assert chunks[1]["tags"] == ["table"]
+
+
+def test_shared_generic_parent_does_not_merge_paragraphs():
+    from app.services.document_pipeline import project_sentences
+
+    payload = {"elements": [
+        {"element_id": "e1", "element_type": "text", "text": "First.", "parent_element_id": "group"},
+        {"element_id": "e2", "element_type": "text", "text": "Second.", "parent_element_id": "group"},
+    ]}
+    sentences = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
+    chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=32)
+    assert [chunk["sentence_ids"] for chunk in chunks] == [["0"], ["1"]]
 
 
 def test_source_ids_are_schema_safe_and_model_independent():
@@ -194,7 +282,7 @@ def test_oversized_nonfirst_sentence_translates_fragment_offsets_to_element_coor
         "source_element_ids": ["element"],
         "source_spans": [{"element_id": "element", "start": 100, "end": 128}],
     }
-    chunks = pack_retrieval_chunks([{"id": "first", "text": "intro", "section_id": "s", "paragraph_id": "p1"}, sentence], token_counter=whitespace_token_counter(), embedding_token_limit=3)
+    chunks = pack_retrieval_chunks([{"id": "first", "text": "intro", "section_id": "s", "paragraph_id": "p1"}, sentence], token_counter=_counter(), embedding_token_limit=7)
     second_chunks = [chunk for chunk in chunks if chunk["sentence_ids"] == ["second"]]
     assert len(second_chunks) == 2
     assert second_chunks[0]["source_spans"][0]["start"] == 100
@@ -214,3 +302,36 @@ def test_embedding_document_and_query_formatting_are_explicit():
     assert config.format_document_input("body") == "document: body </document>"
     assert config.format_query_input("body") == "query: body </query>"
     assert config.fingerprint.endswith(":query: : </query>")
+
+
+def test_tokenizer_failure_never_uses_whitespace_fallback(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
+
+    class BrokenAutoTokenizer:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            raise OSError("fixture tokenizer unavailable")
+
+    monkeypatch.setenv("LOCAL_EMBEDDING_MODEL", "model-a")
+    monkeypatch.setenv("LOCAL_EMBEDDING_TOKENIZER", "fixture-tokenizer")
+    monkeypatch.setenv("LOCAL_EMBEDDING_INPUT_LIMIT", "32")
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=BrokenAutoTokenizer))
+    resolve_embedding_tokenizer.cache_clear()
+    with pytest.raises(EmbeddingTokenizerUnavailableError):
+        resolve_embedding_tokenizer("model-a")
+
+
+def test_sentence_model_failure_never_switches_to_another_splitter(monkeypatch):
+    import spacy
+    from app.services import document_pipeline
+    from app.services.document_pipeline import SentencePipelineUnavailableError
+
+    def broken_load(_name):
+        raise OSError("fixture sentence model unavailable")
+
+    monkeypatch.setattr(spacy, "load", broken_load)
+    document_pipeline._sentence_nlp.cache_clear()
+    with pytest.raises(SentencePipelineUnavailableError):
+        document_pipeline.sentence_pipeline_identity()

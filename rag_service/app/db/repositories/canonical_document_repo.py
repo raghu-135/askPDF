@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Iterable, Optional
 import uuid
 
@@ -34,7 +34,83 @@ class CanonicalDocumentRepository:
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash))
             return result.scalar_one_or_none()
 
-    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900, force_rebuild: bool = False) -> str | None:
+    async def ensure_conversion_job(self, *, file_hash: str, generation: str, extraction_fingerprint: str) -> DocumentProcessingJob:
+        """Enqueue one durable conversion target without executing conversion in the request."""
+        session = await self._owned_session()
+        async with session.begin():
+            job = (await session.execute(select(DocumentProcessingJob).where(
+                DocumentProcessingJob.file_hash == file_hash,
+                DocumentProcessingJob.job_kind == "conversion",
+                DocumentProcessingJob.embedding_model == "",
+                DocumentProcessingJob.generation == generation,
+                DocumentProcessingJob.extraction_fingerprint == extraction_fingerprint,
+                DocumentProcessingJob.chunking_fingerprint == "",
+            ).with_for_update())).scalars().first()
+            if job is None:
+                job = DocumentProcessingJob(
+                    file_hash=file_hash,
+                    job_kind="conversion",
+                    generation=generation,
+                    extraction_fingerprint=extraction_fingerprint,
+                    status="pending",
+                    available_at=utc_now(),
+                )
+                session.add(job)
+            elif job.status == "failed":
+                job.status = "pending"
+                job.available_at = utc_now()
+                job.error = None
+                job.updated_at = utc_now()
+            await session.flush()
+            return job
+
+    async def claim_conversion_jobs(self, *, limit: int = 10, stale_after_seconds: int = 900) -> list[DocumentProcessingJob]:
+        now = utc_now()
+        stale_cutoff = now - timedelta(seconds=stale_after_seconds)
+        session = await self._owned_session()
+        async with session.begin():
+            await session.execute(update(DocumentProcessingJob).where(
+                DocumentProcessingJob.job_kind == "conversion",
+                DocumentProcessingJob.status == "running",
+                DocumentProcessingJob.claimed_at < stale_cutoff,
+            ).values(status="pending", available_at=now, claimed_at=None, claim_token=None, updated_at=now))
+            jobs = list((await session.execute(select(DocumentProcessingJob).where(
+                DocumentProcessingJob.job_kind == "conversion",
+                DocumentProcessingJob.status.in_(("pending", "failed")),
+                DocumentProcessingJob.available_at <= now,
+                DocumentProcessingJob.attempts < 5,
+            ).order_by(DocumentProcessingJob.available_at, DocumentProcessingJob.created_at, DocumentProcessingJob.id).limit(max(1, int(limit))).with_for_update(skip_locked=True))).scalars().all())
+            for job in jobs:
+                job.status = "running"
+                job.attempts = int(job.attempts or 0) + 1
+                job.claimed_at = now
+                job.claim_token = uuid.uuid4().hex
+                job.updated_at = now
+                job.error = None
+            await session.flush()
+            return jobs
+
+    async def fail_conversion_job(self, job_id: str, error: Exception) -> bool:
+        now = utc_now()
+        session = await self._owned_session()
+        async with session.begin():
+            row = (await session.execute(select(DocumentProcessingJob).where(
+                DocumentProcessingJob.id == job_id,
+                DocumentProcessingJob.job_kind == "conversion",
+                DocumentProcessingJob.status == "running",
+            ).with_for_update())).scalar_one_or_none()
+            if row is None:
+                return False
+            delay = min(300, 2 ** max(0, int(row.attempts or 1)))
+            row.status = "failed"
+            row.error = str(error)[:2000]
+            row.claimed_at = None
+            row.available_at = now + timedelta(seconds=delay)
+            row.updated_at = now
+            await session.flush()
+            return True
+
+    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900, force_rebuild: bool = False, claim_token: str | None = None) -> str | None:
         """Return a claim token, or None when another/current result owns work."""
         session = await self._owned_session()
         async with session.begin():
@@ -55,7 +131,8 @@ class CanonicalDocumentRepository:
                     job.claim_token = None
                     job.completed_at = row.completed_at or now
                 return None
-            if row is not None and row.status == "running":
+            worker_claim = bool(claim_token and job is not None and job.status == "running" and job.claim_token == claim_token)
+            if row is not None and row.status == "running" and not worker_claim:
                 age = (now - (row.claimed_at or row.created_at)).total_seconds() if (row.claimed_at or row.created_at) else 0
                 if age < stale_after_seconds:
                     return None
@@ -65,10 +142,11 @@ class CanonicalDocumentRepository:
                     extraction_fingerprint=fingerprint,
                 )
                 session.add(job)
-            job.status = "running"
-            claim_token = uuid.uuid4().hex
-            job.claim_token = claim_token
-            job.attempts = int(job.attempts or 0) + 1
+            if not worker_claim:
+                job.status = "running"
+                claim_token = claim_token or uuid.uuid4().hex
+                job.claim_token = claim_token
+                job.attempts = int(job.attempts or 0) + 1
             job.claimed_at = now
             job.error = None
             job.updated_at = now
@@ -164,18 +242,27 @@ class CanonicalDocumentRepository:
     async def fail_conversion(self, file_hash: str, error: dict[str, Any], claim_token: str | None = None) -> bool:
         session = await self._owned_session()
         async with session.begin():
+            now = utc_now()
             query = update(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash, CanonicalDocument.status == "running")
             if claim_token is not None:
                 query = query.where(CanonicalDocument.claim_token == claim_token)
             result = await session.execute(query.values(status="failed", failure_json=error, completed_at=None, claim_token=None, claimed_at=None))
-            job_query = update(DocumentProcessingJob).where(
+            job_query = select(DocumentProcessingJob).where(
                 DocumentProcessingJob.file_hash == file_hash,
                 DocumentProcessingJob.job_kind == "conversion",
                 DocumentProcessingJob.status == "running",
-            )
+            ).with_for_update()
             if claim_token is not None:
                 job_query = job_query.where(DocumentProcessingJob.claim_token == claim_token)
-            await session.execute(job_query.values(status="failed", error=str(error)[:2000], claimed_at=None, claim_token=None, updated_at=utc_now()))
+            jobs = (await session.execute(job_query)).scalars().all()
+            for job in jobs:
+                delay = min(300, 2 ** max(0, int(job.attempts or 1)))
+                job.status = "failed"
+                job.error = str(error)[:2000]
+                job.claimed_at = None
+                job.claim_token = None
+                job.available_at = now + timedelta(seconds=delay)
+                job.updated_at = now
             return bool(result.rowcount)
 
     async def get_sections(self, file_hash: str, generation: str | None = None) -> list[DocumentSection]:
@@ -268,7 +355,7 @@ class CanonicalDocumentRepository:
                         "token_count": item.get("token_count"),
                         "source_spans": list(item.get("source_spans") or []),
                         "tags": list(item.get("tags") or []),
-                        "tag_provenance": {str(tag): "docling_label" for tag in item.get("tags") or []},
+                        "tag_provenance": dict(item.get("tag_provenance") or {}),
                     },
                 ))
             manifest.status = "completed"
@@ -362,13 +449,17 @@ class CanonicalDocumentRepository:
                 DocumentChunkManifest.vector_status == "completed",
                 DocumentChunkManifest.published_at.is_not(None),
                 DocumentChunkManifest.superseded_at.is_(None),
-            ).order_by(DocumentChunkManifest.published_at.desc())
+            )
             return (await session.execute(query)).scalars().first()
 
-    async def get_chunks(self, file_hash: str, embedding_model: str, *, generation: str | None = None, section_id: str | None = None, section_ids: set[str] | None = None, table_id: str | None = None, chunk_ids: set[str] | None = None) -> list[DocumentChunk]:
+    async def get_chunks(self, file_hash: str, embedding_model: str, *, generation: str | None = None, manifest_id: str | None = None, section_id: str | None = None, section_ids: set[str] | None = None, table_id: str | None = None, chunk_ids: set[str] | None = None) -> list[DocumentChunk]:
         session = await self._owned_session()
         async with session.begin():
-            query = select(DocumentChunk).join(DocumentChunkManifest, DocumentChunk.manifest_id == DocumentChunkManifest.manifest_id).where(DocumentChunk.file_hash == file_hash, DocumentChunk.embedding_model == embedding_model, DocumentChunkManifest.status == "completed", DocumentChunkManifest.published_at.is_not(None), DocumentChunkManifest.superseded_at.is_(None)).order_by(DocumentChunk.chunk_order)
+            query = select(DocumentChunk).join(DocumentChunkManifest, DocumentChunk.manifest_id == DocumentChunkManifest.manifest_id).where(DocumentChunk.file_hash == file_hash, DocumentChunk.embedding_model == embedding_model)
+            if manifest_id:
+                query = query.where(DocumentChunk.manifest_id == manifest_id)
+            else:
+                query = query.where(DocumentChunkManifest.status == "completed", DocumentChunkManifest.published_at.is_not(None), DocumentChunkManifest.superseded_at.is_(None))
             if generation:
                 query = query.where(DocumentChunkManifest.generation == generation)
             if section_ids:
@@ -379,22 +470,27 @@ class CanonicalDocumentRepository:
                 query = query.where(DocumentChunk.table_id == table_id)
             if chunk_ids:
                 query = query.where(DocumentChunk.chunk_id.in_(chunk_ids))
-            return list((await session.execute(query)).scalars().all())
+            return list((await session.execute(query.order_by(DocumentChunk.chunk_order, DocumentChunk.chunk_id))).scalars().all())
 
-    async def get_chunks_by_source_id(self, source_id: str, embedding_model: str, file_hash: str | None = None) -> list[DocumentChunk]:
+    async def get_chunks_by_source_id(self, source_id: str, embedding_model: str, file_hash: str | None = None, manifest_id: str | None = None) -> list[DocumentChunk]:
         session = await self._owned_session()
         async with session.begin():
             query = select(DocumentChunk).join(DocumentChunkManifest, DocumentChunk.manifest_id == DocumentChunkManifest.manifest_id).where(
                 DocumentChunk.source_id == source_id,
                 DocumentChunk.embedding_model == embedding_model,
-                DocumentChunkManifest.status == "completed",
-                DocumentChunkManifest.vector_status == "completed",
-                DocumentChunkManifest.published_at.is_not(None),
-                DocumentChunkManifest.superseded_at.is_(None),
-            ).order_by(DocumentChunkManifest.published_at.desc())
+            )
+            if manifest_id:
+                query = query.where(DocumentChunk.manifest_id == manifest_id)
+            else:
+                query = query.where(
+                    DocumentChunkManifest.status == "completed",
+                    DocumentChunkManifest.vector_status == "completed",
+                    DocumentChunkManifest.published_at.is_not(None),
+                    DocumentChunkManifest.superseded_at.is_(None),
+                )
             if file_hash:
                 query = query.where(DocumentChunk.file_hash == file_hash)
-            return list((await session.execute(query)).scalars().all())
+            return list((await session.execute(query.order_by(DocumentChunkManifest.published_at.desc(), DocumentChunk.chunk_order))).scalars().all())
 
 
 _repository: CanonicalDocumentRepository | None = None

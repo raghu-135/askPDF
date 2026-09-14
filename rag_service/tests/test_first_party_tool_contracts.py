@@ -13,6 +13,7 @@ from app.tools.retrieval_knowledge import read_context, search_knowledge as neut
 from app.tools.retrieval_timeline import search_thread_events as neutral_events
 from app.tools.thread_shape import invoke_thread_shape
 from app.tools.thread_shape import ThreadShapeRequest
+from app.services.document_pipeline import TokenCounter
 
 
 def _config(**overrides):
@@ -226,6 +227,8 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
     chunk = SimpleNamespace(
         source_id="src-chunk",
         chunk_id="chunk-1",
+        manifest_id="manifest-file-1",
+        chunk_order=0,
         file_hash="file-1",
         embedding_model="embed-1",
         generation="generation-1",
@@ -253,11 +256,26 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
 
     async def fresh_document(*_args, **_kwargs):
-        return {"canonical_ready": True, "manifest_ready": True, "ready": True}
+        return {
+            "canonical_ready": True,
+            "manifest_ready": True,
+            "ready": True,
+            "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
+        }
 
     monkeypatch.setattr(
         "app.services.document_projection_service.evaluate_document_freshness",
         fresh_document,
+    )
+    monkeypatch.setattr(
+        "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
+        lambda _model: (
+            SimpleNamespace(),
+            TokenCounter(
+                count=lambda value: len(str(value).split()),
+                split=lambda value, limit: [" ".join(str(value).split()[index:index + limit]) for index in range(0, len(str(value).split()), limit)],
+            ),
+        ),
     )
 
     class Services:
@@ -273,6 +291,74 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
     assert payload["artifacts"]["token_count"] == 700
     assert payload["artifacts"]["truncated"] is False
     assert repo.get_chunks.await_args.kwargs["section_ids"] == {"root", "child"}
+
+
+@pytest.mark.asyncio
+async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
+    def make_chunk(order, source_id, text):
+        return SimpleNamespace(
+            source_id=source_id,
+            chunk_id=f"chunk-{order}",
+            manifest_id="manifest-file-1",
+            file_hash="file-1",
+            embedding_model="embed-1",
+            section_id="section-1",
+            table_id=None,
+            chunk_order=order,
+            body_text=text,
+            contextualized_text=text,
+            page_start=1,
+            page_end=1,
+            sentence_ids=[f"sentence-{order}"],
+            source_element_ids=[f"element-{order}"],
+            metadata_json={"pages": [1]},
+        )
+
+    chunks = [
+        make_chunk(0, "src-before", "before evidence"),
+        make_chunk(1, "src-hit", "requested evidence"),
+        make_chunk(2, "src-after", "after evidence"),
+    ]
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(status="completed", generation="generation-1")),
+        get_chunks_by_source_id=AsyncMock(return_value=[chunks[1]]),
+        get_chunks=AsyncMock(return_value=chunks),
+        get_sections=AsyncMock(return_value=[]),
+        get_descendant_section_ids=AsyncMock(return_value=["section-1"]),
+    )
+    monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
+    monkeypatch.setattr(
+        "app.services.document_projection_service.evaluate_document_freshness",
+        AsyncMock(return_value={
+            "canonical_ready": True,
+            "manifest_ready": True,
+            "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
+        }),
+    )
+    monkeypatch.setattr(
+        "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
+        lambda _model: (
+            SimpleNamespace(),
+            TokenCounter(
+                count=lambda value: len(str(value).split()),
+                split=lambda value, limit: [" ".join(str(value).split()[index:index + limit]) for index in range(0, len(str(value).split()), limit)],
+            ),
+        ),
+    )
+
+    class Services:
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+
+    raw = await read_context(
+        ReadContextRequest(source_id="src-hit", expansion="section", token_budget=20),
+        _context(), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="read_context")
+
+    assert payload["ok"] is True
+    assert payload["content"].startswith("requested evidence")
+    assert payload["artifacts"]["document_sources"][0]["evidence_role"] == "evidence"
+    assert all(source["manifest_id"] == "manifest-file-1" for source in payload["artifacts"]["document_sources"])
 
 
 def test_search_knowledge_rejects_path_and_url_identifiers():

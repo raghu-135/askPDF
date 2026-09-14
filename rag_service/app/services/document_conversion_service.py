@@ -19,6 +19,7 @@ from app.services.document_pipeline import (
     project_sentences,
     stable_fingerprint,
     stable_identity,
+    sentence_pipeline_identity,
 )
 from app.services.document_extraction_contract import extraction_configuration
 from app.services.parsing_service import parse_with_docling, parse_with_pdfplumber
@@ -79,8 +80,19 @@ def current_extraction_contract_fingerprint(*, merge_multi_bbox: bool = True) ->
     return stable_fingerprint(
         EXTRACTION_PIPELINE_VERSION,
         CANONICAL_SCHEMA_VERSION,
-        extraction_configuration(),
+        extraction_configuration(sentence_model=sentence_pipeline_identity()),
         merge_multi_bbox,
+    )
+
+
+async def enqueue_pdf_conversion(*, file_hash: str, data: bytes, file_name: str, merge_multi_bbox: bool = True):
+    """Persist a conversion target; execution belongs to the conversion worker."""
+    fingerprint = current_extraction_fingerprint(data, merge_multi_bbox=merge_multi_bbox)
+    generation = stable_identity("conversion", file_hash, fingerprint)
+    return await get_canonical_document_repo().ensure_conversion_job(
+        file_hash=file_hash,
+        generation=generation,
+        extraction_fingerprint=fingerprint,
     )
 
 
@@ -131,6 +143,7 @@ async def convert_pdf_and_project(
     file_name: str,
     source_metadata: Mapping[str, Any] | None = None,
     merge_multi_bbox: bool = True,
+    claim_token: str | None = None,
 ) -> dict[str, Any]:
     """Convert once, persist the canonical representation, and return reading data."""
     source = dict(source_metadata or {})
@@ -152,6 +165,7 @@ async def convert_pdf_and_project(
         fingerprint,
         generation,
         force_rebuild=bool(existing and existing.status == "completed" and not existing_payload_valid),
+        claim_token=claim_token,
     )
     if not claim_token:
         existing = await repo.get(file_hash)
