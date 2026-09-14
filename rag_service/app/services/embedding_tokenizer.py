@@ -11,6 +11,34 @@ from typing import Any, Sequence
 from app.services.document_pipeline import TokenCounter
 
 
+def _split_oversized_fragment(text: str, limit: int, count) -> list[str]:
+    """Split an unbroken token at tokenizer-safe character boundaries."""
+    fragment = str(text)
+    if not fragment:
+        return []
+    if limit <= 0:
+        raise ValueError("token limit must be positive")
+    if count(fragment) <= limit:
+        return [fragment]
+    pieces: list[str] = []
+    start = 0
+    while start < len(fragment):
+        low, high = start + 1, len(fragment)
+        best = start
+        while low <= high:
+            middle = (low + high) // 2
+            if count(fragment[start:middle]) <= limit:
+                best = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        if best == start:
+            raise ValueError("tokenizer cannot represent a single character within the input budget")
+        pieces.append(fragment[start:best])
+        start = best
+    return pieces
+
+
 @dataclass(frozen=True)
 class EmbeddingTokenizerConfig:
     identity: str
@@ -85,6 +113,12 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
             output: list[str] = []
             current: list[str] = []
             for word in words:
+                if count(word) > limit:
+                    if current:
+                        output.append(" ".join(current))
+                        current = []
+                    output.extend(_split_oversized_fragment(word, limit, count))
+                    continue
                 candidate = " ".join([*current, word])
                 if current and count(candidate) > limit:
                     output.append(" ".join(current))
@@ -103,13 +137,12 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
                 "Install/cache the tokenizer or explicitly set EMBEDDING_TOKENIZER_ALLOW_FALLBACK=true only for development tests."
             ) from exc
         words = lambda text: len(str(text).split())
-        return config, TokenCounter(
-            count=words,
-            split=lambda text, limit: [
-                " ".join(str(text).split()[i:i + max(1, limit)])
-                for i in range(0, len(str(text).split()), max(1, limit))
-            ],
-        )
+        def fallback_split(text: str, limit: int) -> Sequence[str]:
+            parts = str(text).split()
+            width = max(1, limit)
+            return [" ".join(parts[index:index + width]) for index in range(0, len(parts), width)]
+
+        return config, TokenCounter(count=words, split=fallback_split)
 
 
-__all__ = ["EmbeddingTokenizerConfig", "resolve_embedding_tokenizer"]
+__all__ = ["EmbeddingTokenizerConfig", "resolve_embedding_tokenizer", "_split_oversized_fragment"]

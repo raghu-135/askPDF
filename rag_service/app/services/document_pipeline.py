@@ -332,6 +332,7 @@ def project_sentences(
                     "page": (element.get("pages") or [None])[0],
                     "pages": list(element.get("pages") or []),
                     "source_element_ids": [element["element_id"]],
+                    "source_element_refs": [element.get("source_ref")] if element.get("source_ref") else [],
                     "source_spans": [{"element_id": element["element_id"], "start": start, "end": start + len(sentence_text)}],
                     "section_id": element.get("section_id"),
                     "paragraph_id": paragraph_id,
@@ -482,6 +483,27 @@ def pack_retrieval_chunks(
                     end = start + len(piece)
                     pieces.append((piece, start, end))
                     cursor = end
+            bounded_pieces: list[tuple[str, int, int]] = []
+            for piece, start, end in pieces:
+                if counter.count(f"{prefix}{piece}") <= embedding_token_limit:
+                    bounded_pieces.append((piece, start, end))
+                    continue
+                cursor = 0
+                while cursor < len(piece):
+                    low, high = cursor + 1, len(piece)
+                    best = cursor
+                    while low <= high:
+                        middle = (low + high) // 2
+                        if counter.count(f"{prefix}{piece[cursor:middle]}") <= embedding_token_limit:
+                            best = middle
+                            low = middle + 1
+                        else:
+                            high = middle - 1
+                    if best == cursor:
+                        raise ValueError("tokenizer cannot fit a fragment with its structural context")
+                    bounded_pieces.append((piece[cursor:best], start + cursor, start + best))
+                    cursor = best
+            pieces = bounded_pieces
             for piece_index, (piece, start, end) in enumerate(pieces):
                 original_spans = list(item.get("source_spans") or [])
                 fragment_spans: list[dict[str, Any]] = []

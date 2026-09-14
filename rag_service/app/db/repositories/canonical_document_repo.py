@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
+import uuid
 
 from sqlalchemy import delete, select, update
 
@@ -33,8 +34,8 @@ class CanonicalDocumentRepository:
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash))
             return result.scalar_one_or_none()
 
-    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900) -> bool:
-        """Claim conversion unless completed for the same fingerprint or actively running."""
+    async def claim_conversion(self, file_hash: str, fingerprint: str, generation: str, *, stale_after_seconds: int = 900) -> str | None:
+        """Return a claim token, or None when another/current result owns work."""
         session = await self._owned_session()
         async with session.begin():
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash).with_for_update())
@@ -51,12 +52,13 @@ class CanonicalDocumentRepository:
             if row is not None and row.extraction_fingerprint == fingerprint and row.status == "completed":
                 if job is not None and job.status != "completed":
                     job.status = "completed"
+                    job.claim_token = None
                     job.completed_at = row.completed_at or now
-                return False
+                return None
             if row is not None and row.status == "running":
-                age = (now - row.created_at).total_seconds() if row.created_at else 0
+                age = (now - (row.claimed_at or row.created_at)).total_seconds() if (row.claimed_at or row.created_at) else 0
                 if age < stale_after_seconds:
-                    return False
+                    return None
             if job is None:
                 job = DocumentProcessingJob(
                     file_hash=file_hash, job_kind="conversion", generation=generation,
@@ -64,6 +66,8 @@ class CanonicalDocumentRepository:
                 )
                 session.add(job)
             job.status = "running"
+            claim_token = uuid.uuid4().hex
+            job.claim_token = claim_token
             job.attempts = int(job.attempts or 0) + 1
             job.claimed_at = now
             job.error = None
@@ -80,17 +84,36 @@ class CanonicalDocumentRepository:
                 row.failure_json = None
                 row.completed_at = None
                 row.created_at = now
+            row.claim_token = claim_token
+            row.claimed_at = now
             await session.flush()
+            return claim_token
+
+    async def renew_conversion_claim(self, file_hash: str, claim_token: str) -> bool:
+        session = await self._owned_session()
+        async with session.begin():
+            now = utc_now()
+            result = await session.execute(
+                update(CanonicalDocument)
+                .where(CanonicalDocument.file_hash == file_hash, CanonicalDocument.status == "running", CanonicalDocument.claim_token == claim_token)
+                .values(claim_token=claim_token, claimed_at=now)
+            )
+            if not result.rowcount:
+                return False
+            await session.execute(
+                update(DocumentProcessingJob)
+                .where(DocumentProcessingJob.file_hash == file_hash, DocumentProcessingJob.job_kind == "conversion", DocumentProcessingJob.status == "running", DocumentProcessingJob.claim_token == claim_token)
+                .values(claimed_at=now, updated_at=now)
+            )
             return True
 
-    async def complete_conversion(self, *, file_hash: str, generation: str, fingerprint: str, docling_version: str, document_json: dict[str, Any], source_metadata: dict[str, Any], sections: Iterable[dict[str, Any]], elements: Iterable[dict[str, Any]]) -> bool:
+    async def complete_conversion(self, *, file_hash: str, claim_token: str, generation: str, fingerprint: str, docling_version: str, document_json: dict[str, Any], source_metadata: dict[str, Any], sections: Iterable[dict[str, Any]], elements: Iterable[dict[str, Any]]) -> bool:
         session = await self._owned_session()
         async with session.begin():
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash).with_for_update())
             row = result.scalar_one_or_none()
-            if row is None:
-                row = CanonicalDocument(file_hash=file_hash, generation=generation, extraction_fingerprint=fingerprint)
-                session.add(row)
+            if row is None or row.status != "running" or row.claim_token != claim_token:
+                return False
             row.generation = generation
             row.extraction_fingerprint = fingerprint
             row.docling_version = docling_version
@@ -98,6 +121,8 @@ class CanonicalDocumentRepository:
             row.source_metadata_json = source_metadata
             row.failure_json = None
             row.status = "completed"
+            row.claim_token = None
+            row.claimed_at = None
             row.completed_at = utc_now()
             job = (await session.execute(select(DocumentProcessingJob).where(
                 DocumentProcessingJob.file_hash == file_hash,
@@ -105,10 +130,12 @@ class CanonicalDocumentRepository:
                 DocumentProcessingJob.generation == generation,
                 DocumentProcessingJob.extraction_fingerprint == fingerprint,
                 DocumentProcessingJob.chunking_fingerprint == "",
+                DocumentProcessingJob.claim_token == claim_token,
             ).with_for_update())).scalars().first()
             if job is not None:
                 job.status = "completed"
                 job.claimed_at = None
+                job.claim_token = None
                 job.completed_at = row.completed_at
                 job.updated_at = row.completed_at
             await session.execute(delete(DocumentSection).where(DocumentSection.file_hash == file_hash))
@@ -134,15 +161,21 @@ class CanonicalDocumentRepository:
             await session.flush()
             return True
 
-    async def fail_conversion(self, file_hash: str, error: dict[str, Any]) -> bool:
+    async def fail_conversion(self, file_hash: str, error: dict[str, Any], claim_token: str | None = None) -> bool:
         session = await self._owned_session()
         async with session.begin():
-            result = await session.execute(update(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash).values(status="failed", failure_json=error, completed_at=None))
-            await session.execute(update(DocumentProcessingJob).where(
+            query = update(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash, CanonicalDocument.status == "running")
+            if claim_token is not None:
+                query = query.where(CanonicalDocument.claim_token == claim_token)
+            result = await session.execute(query.values(status="failed", failure_json=error, completed_at=None, claim_token=None, claimed_at=None))
+            job_query = update(DocumentProcessingJob).where(
                 DocumentProcessingJob.file_hash == file_hash,
                 DocumentProcessingJob.job_kind == "conversion",
                 DocumentProcessingJob.status == "running",
-            ).values(status="failed", error=str(error)[:2000], claimed_at=None, updated_at=utc_now()))
+            )
+            if claim_token is not None:
+                job_query = job_query.where(DocumentProcessingJob.claim_token == claim_token)
+            await session.execute(job_query.values(status="failed", error=str(error)[:2000], claimed_at=None, claim_token=None, updated_at=utc_now()))
             return bool(result.rowcount)
 
     async def get_sections(self, file_hash: str, generation: str | None = None) -> list[DocumentSection]:

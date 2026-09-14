@@ -1095,6 +1095,7 @@ class DocumentProcessingJob(SQLModel, table=True):
     generation: str
     extraction_fingerprint: str
     chunking_fingerprint: str = ""
+    claim_token: Optional[str] = Field(default=None, index=True)
     status: str = Field(default="pending", index=True)
     attempts: int = Field(default=0)
     error: Optional[str] = None
@@ -1137,6 +1138,8 @@ class CanonicalDocument(SQLModel, table=True):
     )
     generation: str = Field(index=True)
     extraction_fingerprint: str = Field(index=True)
+    claim_token: Optional[str] = Field(default=None, index=True)
+    claimed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
     docling_version: str = Field(default="unknown")
     status: str = Field(default="pending", index=True)
     document_json: Dict[str, Any] = Field(

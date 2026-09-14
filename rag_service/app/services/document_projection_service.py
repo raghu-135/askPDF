@@ -45,6 +45,18 @@ async def ensure_retrieval_projection(
         canonical = await repo.get(file_hash)
         if canonical is None or canonical.status != "completed":
             raise RuntimeError("canonical conversion did not publish a completed document")
+    # Retrieval repair can perform conversion without the upload/parser task.
+    # Keep the File JSON cache consumed by reading endpoints in sync with the
+    # canonical generation on every projection path.
+    from app.services.file_processing_service import publish_reading_projection
+    await publish_reading_projection(
+        file_hash,
+        {
+            "generation": canonical.generation,
+            "extraction_fingerprint": canonical.extraction_fingerprint,
+            "sentences": (canonical.document_json or {}).get("reading_projection", []),
+        },
+    )
     config, counter = resolve_embedding_tokenizer(embedding_model)
     payload = canonical.document_json or {}
     sentences = project_sentences(payload)

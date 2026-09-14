@@ -115,6 +115,20 @@ def test_coordinate_alignment_preserves_unmatched_canonical_ocr_sentence():
     assert [item["text"] for item in aligned] == ["Selectable text.", "OCR-only text."]
     assert aligned[0]["alignment_precision"] == "exact"
     assert aligned[1]["alignment_precision"] == "coarse"
+
+
+def test_coordinate_alignment_rejects_shared_word_from_unrelated_page():
+    from app.services.document_conversion_service import _align_coordinates
+
+    aligned = _align_coordinates(
+        [{"text": "The shared word appears here.", "pages": [2], "label": "text", "bboxes": []}],
+        [{"text": "shared", "page": 1, "label": "text", "bboxes": [{"page": 1, "x0": 1}]}],
+    )
+
+    assert aligned[0]["alignment_precision"] == "coarse"
+    assert aligned[0]["bboxes"] == []
+
+
 def test_combined_parsing(sample_pdf_data, sample_filename):
     """Test the combined parsing service."""
     result = extract_text_with_coordinates(sample_pdf_data, sample_filename)

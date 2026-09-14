@@ -534,6 +534,10 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, merge_multi_b
                     start_id=len(all_sentences)
                 )
             
+            source_ref = str(getattr(dl_item, "self_ref", "") or "")
+            for sentence in sentences:
+                if source_ref:
+                    sentence["source_ref"] = source_ref
             all_sentences.extend(sentences)
     
     # Write pdfplumber parsed output to test folder if requested

@@ -26,6 +26,7 @@ from app.db import (
     add_file_to_project,
     create_or_get_file,
     get_file_parsed_sentences,
+    update_file_parsed_sentences,
     get_file_status,
     update_indexing_status,
     update_parsing_status,
@@ -37,6 +38,38 @@ from app.services.content_store import get_content_store, pdf_content_key
 from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
+
+
+async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]) -> bool:
+    """Publish canonical reading data to the File cache used by read endpoints."""
+    repo = get_canonical_document_repo()
+    canonical = await repo.get(file_hash)
+    if canonical is None or canonical.status != "completed":
+        return False
+    sentences = parsed_data.get("sentences") if isinstance(parsed_data, dict) else None
+    generation = parsed_data.get("generation") if isinstance(parsed_data, dict) else None
+    fingerprint = parsed_data.get("extraction_fingerprint") if isinstance(parsed_data, dict) else None
+    document_json = canonical.document_json if isinstance(canonical.document_json, dict) else {}
+    if not isinstance(sentences, list):
+        sentences = document_json.get("reading_projection")
+    if not isinstance(sentences, list):
+        from app.services.document_pipeline import project_sentences
+        sentences = project_sentences(document_json)
+    payload = {
+        "version": "2.0",
+        "sentences": sentences,
+        "generation": str(generation or canonical.generation),
+        "extraction_fingerprint": str(fingerprint or canonical.extraction_fingerprint),
+    }
+    current = await get_file_parsed_sentences(file_hash)
+    if (
+        isinstance(current, dict)
+        and current.get("generation") == payload["generation"]
+        and current.get("extraction_fingerprint") == payload["extraction_fingerprint"]
+        and isinstance(current.get("sentences"), list)
+    ):
+        return True
+    return await update_file_parsed_sentences(file_hash, json.dumps(payload))
 
 
 def _default_file_status(file_hash: str) -> Dict[str, Any]:
@@ -196,10 +229,26 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
 
     current_status = await get_file_status(file_hash)
     parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
+    canonical = await get_canonical_document_repo().get(file_hash)
+    parsed = await get_file_parsed_sentences(file_hash)
 
     if ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-        parsed = await get_file_parsed_sentences(file_hash)
-        if parsed and parsed.get("sentences"):
+        if (
+            canonical
+            and canonical.status == "completed"
+            and isinstance(parsed, dict)
+            and parsed.get("generation") == canonical.generation
+            and parsed.get("extraction_fingerprint") == canonical.extraction_fingerprint
+            and isinstance(parsed.get("sentences"), list)
+            and parsed.get("sentences")
+        ):
+            return
+        if canonical and canonical.status == "completed":
+            await publish_reading_projection(file_hash, {
+                "generation": canonical.generation,
+                "extraction_fingerprint": canonical.extraction_fingerprint,
+                "sentences": (canonical.document_json or {}).get("reading_projection", []),
+            })
             return
 
     started_at = iso_utc_z()
@@ -236,6 +285,7 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
         )
 
         if success:
+            await publish_reading_projection(file_hash, parsed_data)
             logger.info(
                 "Background conversion completed for %s - %s sentences stored atomically",
                 file_hash,

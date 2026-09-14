@@ -47,6 +47,7 @@ async def ensure_embedding_job(
     scope_id: str,
     embedding_model: str,
     source_version: str,
+    requeue_completed: bool = False,
     session=None,
 ) -> EmbeddingJob:
     """Create or refresh one durable target without duplicating it."""
@@ -81,6 +82,17 @@ async def ensure_embedding_job(
             active.add(row)
         elif row.source_version != values["source_version"]:
             row.source_version = values["source_version"]
+            row.status = JOB_PENDING
+            row.attempts = 0
+            row.error = None
+            row.available_at = utc_now()
+            row.claimed_at = None
+            row.completed_at = None
+            row.updated_at = utc_now()
+        elif requeue_completed and row.status == JOB_COMPLETED:
+            # Readiness is checked against the persisted manifest and vector
+            # set, not merely this durable row.  A completed row can therefore
+            # become runnable again after vector loss or projection repair.
             row.status = JOB_PENDING
             row.attempts = 0
             row.error = None
@@ -221,6 +233,7 @@ async def reconcile_thread_embedding_targets(
             scope_id=thread_id,
             embedding_model=embedding_model,
             source_version=f"{file_hash}:retrieval-v2",
+            requeue_completed=True,
         )
         document_count += 1
 

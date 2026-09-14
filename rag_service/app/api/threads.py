@@ -609,6 +609,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 scope_id=thread_id,
                 embedding_model=thread.embedding_model,
                 source_version=f"{target_file_hash}:retrieval-v2",
+                requeue_completed=True,
             )
 
         # Track files list for stats query

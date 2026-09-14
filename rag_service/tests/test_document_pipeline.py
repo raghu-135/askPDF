@@ -55,6 +55,16 @@ def test_long_sentence_splits_deterministically_but_keeps_original_identity():
     assert [chunk["chunk_order"] for chunk in chunks] == [0, 1]
 
 
+def test_long_unbroken_token_is_subdivided_to_the_token_budget():
+    from app.services.embedding_tokenizer import _split_oversized_fragment
+
+    count = lambda value: len(value)
+    pieces = _split_oversized_fragment("x" * 23, 7, count)
+
+    assert "".join(pieces) == "x" * 23
+    assert all(count(piece) <= 7 for piece in pieces)
+
+
 def test_hierarchy_keeps_flat_headings_when_no_depth_is_available():
     payload = {
         "elements": [
