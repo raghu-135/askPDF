@@ -9,7 +9,11 @@ from app.agent.tool_contract import ToolWarningCode, normalize_tool_result
 from app.tools.context import ToolInvocationContext
 from app.tools.contracts import DocumentSearchRequest, ReadContextRequest, SearchKnowledgeRequest, TimelineRequest
 from app.tools.retrieval_conversation import search_thread_conversation_history as neutral_history
-from app.tools.retrieval_knowledge import read_context, search_knowledge as neutral_knowledge
+from app.tools.retrieval_knowledge import (
+    _source_from_chunk,
+    read_context,
+    search_knowledge as neutral_knowledge,
+)
 from app.tools.retrieval_timeline import search_thread_events as neutral_events
 from app.tools.thread_shape import invoke_thread_shape
 from app.tools.thread_shape import ThreadShapeRequest
@@ -53,9 +57,10 @@ def _context(**overrides):
 
 
 def _patch_ready_manifest(monkeypatch):
-    async def ready(file_hash, _embedding_model):
+    async def ready(file_hash, _embedding_model, **_kwargs):
         return {
             "ready": True,
+            "source_version": f"ready-{file_hash}",
             "manifest": SimpleNamespace(
                 file_hash=file_hash,
                 manifest_id=f"manifest-{file_hash}",
@@ -107,7 +112,11 @@ async def test_search_knowledge_returns_sources_and_artifacts_contract(monkeypat
     _patch_ready_manifest(monkeypatch)
     fake_db = SimpleNamespace(
         search_knowledge_sources=AsyncMock(
-            return_value=[{"file_hash": "file-1", "chunk_id": 1, "score": 0.9, "text": "seed"}]
+            return_value=[{
+                "file_hash": "file-1", "chunk_id": 1, "source_id": "src-1", "score": 0.9,
+                "text": "seed", "manifest_id": "manifest-file-1", "generation": "generation-1",
+                "metadata": {"extraction_fingerprint": "extract-1"},
+            }]
         ),
     )
     class Services:
@@ -131,7 +140,7 @@ async def test_search_knowledge_returns_sources_and_artifacts_contract(monkeypat
     )
     assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
     assert fake_db.search_knowledge_sources.call_args.kwargs["filters"]["manifest_ids"] == ["manifest-file-1"]
-    assert payload["artifacts"]["matches"][0]["source_id"] == "1"
+    assert payload["artifacts"]["matches"][0]["source_id"] == "src-1"
 
 
 @pytest.mark.asyncio
@@ -142,9 +151,16 @@ async def test_search_knowledge_chunk_level_returns_body_text_over_structural_co
             return_value=[{
                 "file_hash": "file-1",
                 "chunk_id": 1,
+                "source_id": "src-1",
                 "score": 0.9,
                 "text": "Document section: Introduction\\nstructural context",
-                "metadata": {"body_text": "The paper evaluates evidence-grounded research artifacts.", "pages": [3]},
+                "manifest_id": "manifest-file-1",
+                "generation": "generation-1",
+                "metadata": {
+                    "body_text": "The paper evaluates evidence-grounded research artifacts.",
+                    "pages": [3],
+                    "extraction_fingerprint": "extract-1",
+                },
             }]
         ),
     )
@@ -170,7 +186,11 @@ async def test_search_knowledge_chunk_level_returns_body_text_over_structural_co
 async def test_search_knowledge_enforces_document_ownership(monkeypatch):
     _patch_ready_manifest(monkeypatch)
     fake_db = SimpleNamespace(
-        search_knowledge_sources=AsyncMock(return_value=[{"file_hash": "owned", "chunk_id": 0, "text": "seed"}]),
+        search_knowledge_sources=AsyncMock(return_value=[{
+            "file_hash": "owned", "chunk_id": 0, "source_id": "src-owned", "text": "seed",
+            "manifest_id": "manifest-owned", "generation": "generation-1",
+            "metadata": {"extraction_fingerprint": "extract-1"},
+        }]),
     )
     class Services:
         async def embed(self, _model, _query): return [0.1, 0.2]
@@ -198,7 +218,7 @@ async def test_search_knowledge_enforces_document_ownership(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_knowledge_does_not_query_unpublished_materialization(monkeypatch):
-    readiness = AsyncMock(return_value={"ready": False, "reason": "manifest_incomplete"})
+    readiness = AsyncMock(return_value={"ready": False, "reason": "manifest_incomplete", "source_version": "repair-file-1"})
     monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
     monkeypatch.setattr("app.services.embedding_materialization_service.ensure_embedding_job", AsyncMock())
     embed = AsyncMock(return_value=[0.1, 0.2])
@@ -240,9 +260,15 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
         page_end=1,
         sentence_ids=["sentence-1"],
         source_element_ids=["element-1"],
-        metadata_json={"pages": [1], "generation": "generation-1"},
+        metadata_json={
+            "pages": [1],
+            "generation": "generation-1",
+            "extraction_fingerprint": "extract-1",
+        },
     )
-    canonical = SimpleNamespace(status="completed", generation="generation-1")
+    canonical = SimpleNamespace(
+        status="completed", generation="generation-1", extraction_fingerprint="extract-1"
+    )
     repo = SimpleNamespace(
         get=AsyncMock(return_value=canonical),
         get_chunks=AsyncMock(side_effect=[[chunk], [chunk]]),
@@ -260,6 +286,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
             "canonical_ready": True,
             "manifest_ready": True,
             "ready": True,
+            "source_version": "ready-file-1",
             "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
         }
 
@@ -311,7 +338,7 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
             page_end=1,
             sentence_ids=[f"sentence-{order}"],
             source_element_ids=[f"element-{order}"],
-            metadata_json={"pages": [1]},
+            metadata_json={"pages": [1], "extraction_fingerprint": "extract-1"},
         )
 
     chunks = [
@@ -320,7 +347,9 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
         make_chunk(2, "src-after", "after evidence"),
     ]
     repo = SimpleNamespace(
-        get=AsyncMock(return_value=SimpleNamespace(status="completed", generation="generation-1")),
+        get=AsyncMock(return_value=SimpleNamespace(
+            status="completed", generation="generation-1", extraction_fingerprint="extract-1"
+        )),
         get_chunks_by_source_id=AsyncMock(return_value=[chunks[1]]),
         get_chunks=AsyncMock(return_value=chunks),
         get_sections=AsyncMock(return_value=[]),
@@ -332,8 +361,14 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
         AsyncMock(return_value={
             "canonical_ready": True,
             "manifest_ready": True,
+            "ready": True,
+            "source_version": "ready-file-1",
             "manifest": SimpleNamespace(manifest_id="manifest-file-1"),
         }),
+    )
+    monkeypatch.setattr(
+        "app.services.embedding_materialization_service.get_document_embedding_job",
+        AsyncMock(return_value=SimpleNamespace(status="completed", source_version="ready-file-1")),
     )
     monkeypatch.setattr(
         "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
@@ -365,6 +400,17 @@ def test_search_knowledge_rejects_path_and_url_identifiers():
     for value in ("../secret.pdf", "/tmp/file", "https://example.com/file"):
         with pytest.raises(ValidationError):
             SearchKnowledgeRequest(query="q", document_id=value)
+
+
+def test_citation_requires_generation_manifest_and_extraction_identity():
+    with pytest.raises(ValueError, match="citation metadata is incomplete"):
+        _source_from_chunk({
+            "file_hash": "file-1",
+            "source_id": "src-1",
+            "manifest_id": "manifest-file-1",
+            "text": "evidence",
+            "metadata": {"extraction_fingerprint": "extract-1"},
+        })
 
 
 @pytest.mark.asyncio

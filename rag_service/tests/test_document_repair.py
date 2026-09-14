@@ -78,6 +78,48 @@ async def test_readiness_does_not_consider_an_unrelated_published_manifest(monke
 
 
 @pytest.mark.asyncio
+async def test_missing_tokenizer_fails_before_repair_scheduling(monkeypatch):
+    from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
+
+    def fail_tokenizer(_model):
+        raise EmbeddingTokenizerUnavailableError("configure tokenizer")
+
+    async def fail_if_called(**_kwargs):
+        raise AssertionError("tokenizer failure must not schedule an embedding job")
+
+    monkeypatch.setattr(
+        document_projection_service,
+        "resolve_embedding_tokenizer",
+        fail_tokenizer,
+    )
+    monkeypatch.setattr(
+        "app.services.embedding_materialization_service.ensure_embedding_job",
+        fail_if_called,
+    )
+
+    with pytest.raises(EmbeddingTokenizerUnavailableError, match="configure tokenizer"):
+        await document_projection_service.evaluate_retrieval_readiness(
+            "file-a", "model-a", thread_id="thread-a"
+        )
+
+
+def test_retrieval_source_version_changes_with_manifest_inputs():
+    canonical = SimpleNamespace(
+        generation="generation-a",
+        extraction_fingerprint="extraction-a",
+    )
+    first = document_projection_service.retrieval_source_version(
+        "file-a", canonical, "model-a", "chunking-a"
+    )
+    assert first == document_projection_service.retrieval_source_version(
+        "file-a", canonical, "model-a", "chunking-a"
+    )
+    assert first != document_projection_service.retrieval_source_version(
+        "file-a", canonical, "model-a", "chunking-b"
+    )
+
+
+@pytest.mark.asyncio
 async def test_readiness_uses_persisted_manifest_without_materializing(monkeypatch):
     canonical = SimpleNamespace(
         file_hash="file-a",
@@ -220,8 +262,8 @@ def test_page_normalization_expands_compact_ranges():
 async def test_search_enqueues_repair_and_reports_indexing_in_progress(monkeypatch):
     queued = []
 
-    async def readiness(_file_hash, _model):
-        return {"ready": False, "reason": "manifest_incomplete", "repair_source_version": "repair-a"}
+    async def readiness(_file_hash, _model, **_kwargs):
+        return {"ready": False, "reason": "manifest_incomplete", "source_version": "repair-a", "repair_source_version": "repair-a"}
 
     async def enqueue(**kwargs):
         queued.append(kwargs)
@@ -271,8 +313,8 @@ async def test_ready_empty_search_reports_no_relevant_content(monkeypatch):
             return VectorDb()
 
     manifest = SimpleNamespace(file_hash="file-a", generation="generation-a", manifest_id="manifest-a")
-    async def readiness(_file_hash, _model):
-        return {"ready": True, "manifest": manifest, "metadata": {}, "repair_source_version": "repair-a"}
+    async def readiness(_file_hash, _model, **_kwargs):
+        return {"ready": True, "manifest": manifest, "metadata": {}, "source_version": "ready-a", "repair_source_version": "ready-a"}
 
     monkeypatch.setattr(document_projection_service, "evaluate_retrieval_readiness", readiness)
     result = await retrieval_knowledge.search_knowledge(
@@ -321,8 +363,8 @@ async def test_document_discovery_uses_file_identity_and_title(monkeypatch):
 
     monkeypatch.setattr(retrieval_knowledge, "get_canonical_document_repo", lambda: CanonicalRepo())
     monkeypatch.setattr("app.db.get_file", lambda _file_hash: _get_file(File()))
-    async def readiness(_file_hash, _model):
-        return {"ready": True, "manifest": SimpleNamespace(file_hash="file-a", generation="g", manifest_id="m"), "metadata": {}}
+    async def readiness(_file_hash, _model, **_kwargs):
+        return {"ready": True, "manifest": SimpleNamespace(file_hash="file-a", generation="g", manifest_id="m"), "metadata": {}, "source_version": "ready-a"}
     monkeypatch.setattr(document_projection_service, "evaluate_retrieval_readiness", readiness)
 
     result = await retrieval_knowledge.search_knowledge(

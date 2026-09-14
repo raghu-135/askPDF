@@ -115,6 +115,26 @@ async def ensure_embedding_job(
     return row
 
 
+async def get_document_embedding_job(
+    *,
+    file_hash: str,
+    thread_id: str,
+    embedding_model: str,
+) -> EmbeddingJob | None:
+    """Read the per-thread document job used as the retrieval version pointer."""
+    async with async_session_maker() as session:
+        return (
+            await session.execute(
+                select(EmbeddingJob).where(
+                    EmbeddingJob.resource_type == RESOURCE_DOCUMENT,
+                    EmbeddingJob.resource_id == str(file_hash),
+                    EmbeddingJob.scope_id == str(thread_id),
+                    EmbeddingJob.embedding_model == str(embedding_model),
+                )
+            )
+        ).scalar_one_or_none()
+
+
 async def ensure_global_representation_job(
     memory: Memory,
     embedding_model: str,
@@ -232,7 +252,7 @@ async def reconcile_thread_embedding_targets(
             resource_id=file_hash,
             scope_id=thread_id,
             embedding_model=embedding_model,
-            source_version=readiness.get("repair_source_version") or hashlib.sha256(f"document-repair-v1:{file_hash}:{embedding_model}".encode()).hexdigest(),
+            source_version=readiness["source_version"],
             requeue_completed=True,
         )
         document_count += 1
@@ -353,6 +373,7 @@ async def process_embedding_job(job: EmbeddingJob) -> None:
             thread_id=job.scope_id,
             file_hash=job.resource_id,
             embedding_model=job.embedding_model,
+            expected_source_version=job.source_version,
         )
         if result.get("status") not in {"success", "completed"}:
             raise RuntimeError(result.get("message", "Document indexing failed"))

@@ -166,8 +166,26 @@ async def _document_processing_payload(file_hash: str, embedding_model: str) -> 
                 canonical.generation,
                 chunking_fingerprint,
             )
-        except Exception:
-            manifest = None
+        except Exception as exc:
+            from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
+            if isinstance(exc, EmbeddingTokenizerUnavailableError):
+                return {
+                    "conversion": {
+                        "status": canonical.status,
+                        "generation": canonical.generation,
+                        "failure": canonical.failure_json,
+                    },
+                    "reading": {"status": ProcessStatus.COMPLETED.value if canonical.status == "completed" else canonical.status},
+                    "projection": {
+                        "status": EmbeddingReadinessStatus.BLOCKED.value,
+                        "vector_status": "blocked",
+                        "vector_count": 0,
+                        "expected_chunk_count": 0,
+                        "manifest_id": None,
+                        "error": {"code": "embedding_tokenizer_unavailable", "message": str(exc)},
+                    },
+                }
+            raise
     return {
         "conversion": {
             "status": canonical.status,

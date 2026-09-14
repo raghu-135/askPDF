@@ -68,6 +68,9 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
         embeddings=[[0.1, 0.2]],
         metadatas=[
             {
+                "manifest_id": "manifest-1",
+                "generation": "generation-1",
+                "source_id": "src-source-1",
                 "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 "document_indexed_at": "2026-06-25T19:01:00Z",
                 "page_start": 3,

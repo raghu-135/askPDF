@@ -611,6 +611,7 @@ async def index_document_for_thread(
     metadata: Optional[Dict[str, Any]] = None,
     markdown_content: Optional[str] = None,
     persist_thread_state: bool = True,
+    expected_source_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Index a document into the vector database.
@@ -674,6 +675,8 @@ async def index_document_for_thread(
                     source_metadata=metadata,
                 )
                 metadata.update(projection_metadata)
+                if expected_source_version and str(projection_metadata.get("source_version")) != str(expected_source_version):
+                    raise RuntimeError("document retrieval version changed before indexing")
                 if projection_metadata.get("tokenizer"):
                     tokenizer_config, _ = resolve_embedding_tokenizer(embedding_model)
                     document_formatter = tokenizer_config.format_document_input
@@ -737,9 +740,20 @@ async def index_document_for_thread(
             # 1. Get chunks - use markdown for web sources, PDF for uploaded files
             if markdown_content:
                 logger.info(f"Using markdown content for web source indexing: {file_hash}")
+                web_generation = stable_fingerprint("web-markdown-v1", file_hash, markdown_content)
+                web_manifest_id = f"web_manifest_{web_generation}"
+                web_extraction_fingerprint = stable_fingerprint("web-extraction-v1", file_hash, markdown_content)
                 parsed_chunks = [
-                    {"text": chunk, "metadata": {}}
-                    for chunk in parse_markdown_to_chunks(markdown_content)
+                    {
+                        "text": chunk,
+                        "metadata": {
+                            "source_id": stable_source_id(file_hash, web_generation, str(index)),
+                            "manifest_id": web_manifest_id,
+                            "generation": web_generation,
+                            "extraction_fingerprint": web_extraction_fingerprint,
+                        },
+                    }
+                    for index, chunk in enumerate(parse_markdown_to_chunks(markdown_content))
                 ]
                 document_metadata: Dict[str, Any] = {}
                 chunks = _chunk_texts(parsed_chunks)

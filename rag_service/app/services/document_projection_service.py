@@ -18,7 +18,7 @@ from app.services.document_pipeline import (
     stable_fingerprint,
 )
 from app.services.document_extraction_contract import extraction_configuration
-from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
 
 
 def retrieval_chunking_fingerprint(canonical: Any, embedding_model: str, tokenizer_fingerprint: str) -> str:
@@ -43,12 +43,32 @@ def _document_title(canonical: Any, fallback: str | None = None) -> str:
     )
 
 
-def _repair_source_version(file_hash: str, canonical: Any = None, chunking_fingerprint: str = "") -> str:
+def conversion_source_version(file_hash: str) -> str:
+    """Version a conversion repair from current code and the source identity."""
     return stable_fingerprint(
-        "document-repair-v2",
+        "document-conversion-v3",
         file_hash,
-        getattr(canonical, "generation", "conversion"),
-        getattr(canonical, "extraction_fingerprint", ""),
+        _current_extraction_contract_fingerprint(),
+    )
+
+
+def retrieval_source_version(
+    file_hash: str,
+    canonical: Any,
+    embedding_model: str,
+    chunking_fingerprint: str,
+) -> str:
+    """Return the exact version a thread/document/model pointer must hold."""
+    generation = str(getattr(canonical, "generation", "") or "")
+    extraction_fingerprint = str(getattr(canonical, "extraction_fingerprint", "") or "")
+    if not generation or not extraction_fingerprint or not chunking_fingerprint:
+        raise ValueError("canonical retrieval version metadata is incomplete")
+    return stable_fingerprint(
+        "document-retrieval-v3",
+        file_hash,
+        generation,
+        extraction_fingerprint,
+        embedding_model,
         chunking_fingerprint,
     )
 
@@ -75,6 +95,11 @@ def _metadata_for_canonical(canonical: Any, embedding_model: str | None = None, 
     fingerprint = ""
     if embedding_model and config is not None:
         fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, config.fingerprint)
+    source_version = (
+        retrieval_source_version(str(canonical.file_hash), canonical, embedding_model, fingerprint)
+        if embedding_model and fingerprint
+        else conversion_source_version(str(canonical.file_hash))
+    )
     return {
         "generation": canonical.generation,
         "extraction_fingerprint": canonical.extraction_fingerprint,
@@ -89,9 +114,8 @@ def _metadata_for_canonical(canonical: Any, embedding_model: str | None = None, 
             for item in payload.get("elements") or []
             if isinstance(item, dict) and item.get("element_type")
         }),
-        "repair_source_version": _repair_source_version(
-            str(getattr(canonical, "file_hash", "")), canonical, fingerprint
-        ),
+        "source_version": source_version,
+        "repair_source_version": source_version,
         "document_title": _document_title(canonical),
     }
 
@@ -148,6 +172,7 @@ async def evaluate_document_freshness(
     require_reading: bool = False,
     require_manifest: bool = False,
     verify_vectors: bool = False,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
     """Check persisted document state without reading or projecting the PDF."""
     repo = get_canonical_document_repo()
@@ -160,7 +185,8 @@ async def evaluate_document_freshness(
         "manifest_ready": not require_manifest,
         "vectors_ready": not verify_vectors,
         "manifest": None,
-        "repair_source_version": _repair_source_version(file_hash),
+        "source_version": conversion_source_version(file_hash),
+        "repair_source_version": conversion_source_version(file_hash),
     }
     if canonical is None or canonical.status != "completed":
         result.update(reason="conversion_incomplete", ready=False)
@@ -175,7 +201,8 @@ async def evaluate_document_freshness(
         and source_metadata.get("_extraction_pipeline_version") == EXTRACTION_PIPELINE_VERSION
     )
     result["canonical_ready"] = canonical_ready
-    result["repair_source_version"] = _repair_source_version(file_hash, canonical)
+    result["source_version"] = conversion_source_version(file_hash)
+    result["repair_source_version"] = conversion_source_version(file_hash)
     if not canonical_ready:
         result.update(reason="canonical_stale", ready=False)
         return result
@@ -196,10 +223,14 @@ async def evaluate_document_freshness(
     if embedding_model and (require_manifest or verify_vectors):
         try:
             config, _counter = resolve_embedding_tokenizer(embedding_model)
+        except EmbeddingTokenizerUnavailableError:
+            raise
         except Exception as exc:
             result.update(reason="tokenizer_unavailable", error=str(exc), ready=False)
             return result
         fingerprint = retrieval_chunking_fingerprint(canonical, embedding_model, config.fingerprint)
+        result["source_version"] = retrieval_source_version(file_hash, canonical, embedding_model, fingerprint)
+        result["repair_source_version"] = result["source_version"]
         manifest = await repo.get_manifest(file_hash, embedding_model, canonical.generation, fingerprint)
         result["manifest"] = manifest
         expected = list(getattr(manifest, "expected_source_ids", None) or []) if manifest else []
@@ -238,13 +269,35 @@ async def evaluate_document_freshness(
     else:
         result["metadata"] = _metadata_for_canonical(canonical)
 
+    thread_ready = True
+    thread_job = None
+    thread_reason = None
+    if thread_id and result.get("source_version"):
+        from app.services.embedding_materialization_service import get_document_embedding_job
+        thread_job = await get_document_embedding_job(
+            file_hash=file_hash,
+            thread_id=thread_id,
+            embedding_model=embedding_model or "",
+        )
+        if thread_job is None:
+            thread_ready = False
+            thread_reason = "thread_version_missing"
+        elif str(thread_job.source_version) != str(result["source_version"]):
+            thread_ready = False
+            thread_reason = "thread_version_stale"
+        elif thread_job.status != "completed":
+            thread_ready = False
+            thread_reason = f"thread_job_{thread_job.status}"
+    result["thread_ready"] = thread_ready
+    result["thread_job"] = thread_job
     result["ready"] = bool(
         result["canonical_ready"]
         and result["reading_ready"]
         and result["manifest_ready"]
         and result["vectors_ready"]
+        and thread_ready
     )
-    result["reason"] = "ready" if result["ready"] else "manifest_incomplete"
+    result["reason"] = "ready" if result["ready"] else (thread_reason or "manifest_incomplete")
     return result
 
 
@@ -273,6 +326,7 @@ async def ensure_retrieval_projection(
             file_hash=file_hash,
             data=data,
             file_name=file_name or (file.file_name if file else f"{file_hash}.pdf"),
+            force_rebuild=True,
         )
         raise RuntimeError("document conversion is queued for the independent conversion worker")
 
@@ -340,24 +394,37 @@ async def ensure_retrieval_projection(
     return manifest, chunks, metadata
 
 
-async def evaluate_retrieval_readiness(file_hash: str, embedding_model: str) -> dict[str, Any]:
+async def evaluate_retrieval_readiness(
+    file_hash: str,
+    embedding_model: str,
+    *,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
     """Evaluate canonical, manifest, and vector readiness as one contract."""
+    # Retrieval readiness is never repairable without the exact tokenizer. Do
+    # this before inspecting stale canonical state so a missing configuration
+    # cannot enqueue background work that is guaranteed to fail.
+    resolve_embedding_tokenizer(embedding_model)
     freshness = await evaluate_document_freshness(
         file_hash,
         embedding_model,
         require_manifest=True,
         verify_vectors=True,
+        thread_id=thread_id,
     )
     canonical = freshness.get("canonical")
     metadata = freshness.get("metadata") or {}
     manifest = freshness.get("manifest")
     return {
+        **freshness,
         "ready": bool(freshness.get("ready")),
         "reason": freshness.get("reason"),
         "manifest": manifest,
         "metadata": metadata,
         "error": freshness.get("error"),
-        "repair_source_version": _repair_source_version(file_hash, canonical, metadata.get("chunking_fingerprint", "")),
+        "source_version": freshness.get("source_version"),
+        "repair_source_version": freshness.get("source_version"),
+        "thread_job": freshness.get("thread_job"),
     }
 
 
@@ -365,5 +432,7 @@ __all__ = [
     "ensure_retrieval_projection",
     "evaluate_document_freshness",
     "evaluate_retrieval_readiness",
+    "conversion_source_version",
+    "retrieval_source_version",
     "retrieval_chunking_fingerprint",
 ]

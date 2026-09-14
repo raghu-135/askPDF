@@ -34,7 +34,14 @@ class CanonicalDocumentRepository:
             result = await session.execute(select(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash))
             return result.scalar_one_or_none()
 
-    async def ensure_conversion_job(self, *, file_hash: str, generation: str, extraction_fingerprint: str) -> DocumentProcessingJob:
+    async def ensure_conversion_job(
+        self,
+        *,
+        file_hash: str,
+        generation: str,
+        extraction_fingerprint: str,
+        force_rebuild: bool = False,
+    ) -> DocumentProcessingJob:
         """Enqueue one durable conversion target without executing conversion in the request."""
         session = await self._owned_session()
         async with session.begin():
@@ -56,10 +63,14 @@ class CanonicalDocumentRepository:
                     available_at=utc_now(),
                 )
                 session.add(job)
-            elif job.status == "failed":
+            elif job.status == "failed" or (force_rebuild and job.status == "completed"):
                 job.status = "pending"
+                job.attempts = 0
                 job.available_at = utc_now()
                 job.error = None
+                job.claimed_at = None
+                job.claim_token = None
+                job.completed_at = None
                 job.updated_at = utc_now()
             await session.flush()
             return job
@@ -143,6 +154,8 @@ class CanonicalDocumentRepository:
                 )
                 session.add(job)
             if not worker_claim:
+                if force_rebuild and job.status in {"completed", "failed"}:
+                    job.attempts = 0
                 job.status = "running"
                 claim_token = claim_token or uuid.uuid4().hex
                 job.claim_token = claim_token

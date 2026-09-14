@@ -107,8 +107,13 @@ def _text_for_raw_item(item: Mapping[str, Any]) -> str:
                 lines.append(table_caption)
             if structure["headers"]:
                 lines.append("Table headers: " + " | ".join(value or f"Column {index + 1}" for index, value in enumerate(structure["headers"])))
-            for index, row in enumerate(structure["rows"], start=1):
-                lines.append(f"Row {index}: " + _table_row_render(structure["headers"], row, index, structure.get("cells") or []))
+            data_index = 0
+            header_rows = set(structure.get("header_rows") or [])
+            for row_index, row in enumerate(structure["rows"]):
+                if row_index in header_rows:
+                    continue
+                data_index += 1
+                lines.append(f"Row {data_index}: " + _table_row_render(structure["headers"], row, row_index, structure.get("cells") or []))
             return "\n".join(lines).strip()
         if table_caption:
             return table_caption
@@ -171,72 +176,63 @@ def _table_row_render(
 
 
 def _table_structure_for_raw_item(item: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize table exports into a rectangular, position-preserving grid."""
+    """Normalize native Docling table cells without inventing structure."""
     data = item.get("data") if isinstance(item.get("data"), Mapping) else {}
-    headers = [_cell_text(value) for value in (data.get("headers") or item.get("headers") or [])]
-    rows: list[list[str]] = []
-    cells: list[dict[str, Any]] = []
-    grid = data.get("grid") or data.get("rows") or data.get("table")
-    if isinstance(grid, list) and all(isinstance(row, (list, tuple)) for row in grid):
-        normalized = [[_cell_text(value) for value in row] for row in grid]
-        if normalized and not headers:
-            headers = list(normalized.pop(0))
-        rows = normalized
-        for row_index, row in enumerate(rows, start=1):
-            for col_index, value in enumerate(row):
-                cells.append({"row": row_index, "col": col_index, "row_span": 1, "col_span": 1, "text": value})
+    if isinstance(data.get("table_cells"), list):
+        raw_cells = list(data["table_cells"])
+    elif isinstance(data.get("grid"), list):
+        raw_cells = [cell for row in data["grid"] if isinstance(row, list) for cell in row]
     else:
-        raw_cells = data.get("table_cells") or data.get("cells") or []
-        for cell in raw_cells if isinstance(raw_cells, list) else []:
-            if not isinstance(cell, Mapping):
-                continue
-            try:
-                row_index = int(cell.get("row_index", cell.get("row", 0)))
-                col_index = int(cell.get("col_index", cell.get("column", 0)))
-                row_span = max(1, int(cell.get("row_span", 1)))
-                col_span = max(1, int(cell.get("col_span", 1)))
-            except (TypeError, ValueError):
-                continue
-            cells.append({
-                "row": row_index,
-                "col": col_index,
-                "row_span": row_span,
-                "col_span": col_span,
-                "text": _cell_text(cell),
-                "column_header": bool(cell.get("column_header")),
-                "row_header": bool(cell.get("row_header")),
-            })
-        if cells and not headers:
-            header_row = min(int(cell["row"]) for cell in cells)
-            header_cells = [cell for cell in cells if int(cell["row"]) == header_row]
-            header_width = max((int(cell["col"]) + int(cell.get("col_span", 1)) for cell in header_cells), default=0)
-            headers = ["" for _ in range(header_width)]
-            for cell in header_cells:
-                headers[int(cell["col"])] = str(cell["text"] or "")
-            cells = [
-                {**cell, "row": int(cell["row"]) - header_row}
-                for cell in cells
-                if int(cell["row"]) != header_row
-            ]
-        if cells:
-            height = max(int(cell["row"]) + int(cell.get("row_span", 1)) - 1 for cell in cells)
-            width = max(int(cell["col"]) + int(cell.get("col_span", 1)) for cell in cells)
-            rows = [["" for _ in range(width)] for _ in range(height)]
-            for cell in cells:
-                row_index = int(cell["row"])
-                col_index = int(cell["col"])
-                target_row = row_index - 1
-                if 0 <= target_row < height and col_index < width:
-                    rows[target_row][col_index] = str(cell.get("text") or "")
+        raw_cells = []
 
-    width = max(
-        len(headers),
-        max((len(row) for row in rows), default=0),
-        max((int(cell.get("col", 0)) + int(cell.get("col_span", 1)) for cell in cells), default=0),
-    )
-    headers = [*headers, *("" for _ in range(max(0, width - len(headers))))]
-    rows = [[*row, *("" for _ in range(max(0, width - len(row))))] for row in rows]
-    return {"headers": headers, "rows": rows, "cells": cells}
+    cells: list[dict[str, Any]] = []
+    for raw_cell in raw_cells:
+        if not isinstance(raw_cell, Mapping):
+            raise ValueError("Docling table grid contains a non-native cell")
+        try:
+            row_start = int(raw_cell["start_row_offset_idx"])
+            row_end = int(raw_cell["end_row_offset_idx"])
+            col_start = int(raw_cell["start_col_offset_idx"])
+            col_end = int(raw_cell["end_col_offset_idx"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Docling table cell is missing native offset coordinates") from exc
+        if row_start < 0 or col_start < 0 or row_end <= row_start or col_end <= col_start:
+            raise ValueError("Docling table cell has invalid native offset coordinates")
+        cells.append({
+            "row": row_start,
+            "col": col_start,
+            "row_end": row_end,
+            "col_end": col_end,
+            "row_span": row_end - row_start,
+            "col_span": col_end - col_start,
+            "text": _cell_text(raw_cell),
+            "column_header": bool(raw_cell.get("column_header")),
+            "row_header": bool(raw_cell.get("row_header")),
+            "row_section": bool(raw_cell.get("row_section")),
+        })
+
+    width = max(int(data.get("num_cols") or 0), max((cell["col_end"] for cell in cells), default=0))
+    height = max(int(data.get("num_rows") or 0), max((cell["row_end"] for cell in cells), default=0))
+    rows = [["" for _ in range(width)] for _ in range(height)]
+    for cell in cells:
+        rows[cell["row"]][cell["col"]] = cell["text"]
+
+    header_rows = sorted({row for cell in cells if cell["column_header"] for row in range(cell["row"], cell["row_end"])})
+    headers = ["" for _ in range(width)]
+    for cell in cells:
+        if not cell["column_header"]:
+            continue
+        for col in range(cell["col"], cell["col_end"]):
+            headers[col] = "/".join(part for part in (headers[col], cell["text"]) if part)
+
+    return {
+        "headers": headers,
+        "rows": rows,
+        "cells": cells,
+        "header_rows": header_rows,
+        "num_rows": height,
+        "num_cols": width,
+    }
 
 
 def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:

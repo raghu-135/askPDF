@@ -85,14 +85,37 @@ def current_extraction_contract_fingerprint(*, merge_multi_bbox: bool = True) ->
     )
 
 
-async def enqueue_pdf_conversion(*, file_hash: str, data: bytes, file_name: str, merge_multi_bbox: bool = True):
+async def enqueue_pdf_conversion(
+    *,
+    file_hash: str,
+    data: bytes,
+    file_name: str,
+    merge_multi_bbox: bool = True,
+    force_rebuild: bool = False,
+):
     """Persist a conversion target; execution belongs to the conversion worker."""
     fingerprint = current_extraction_fingerprint(data, merge_multi_bbox=merge_multi_bbox)
     generation = stable_identity("conversion", file_hash, fingerprint)
-    return await get_canonical_document_repo().ensure_conversion_job(
+    repo = get_canonical_document_repo()
+    existing = await repo.get(file_hash)
+    same_target_invalid = bool(
+        existing
+        and existing.status == "completed"
+        and existing.extraction_fingerprint == fingerprint
+        and (
+            not is_valid_canonical_payload(existing.document_json)
+            or dict(existing.source_metadata_json or {}).get("_file_hash") != file_hash
+            or dict(existing.source_metadata_json or {}).get("_extraction_contract_fingerprint")
+            != current_extraction_contract_fingerprint(merge_multi_bbox=merge_multi_bbox)
+            or dict(existing.source_metadata_json or {}).get("_extraction_pipeline_version")
+            != EXTRACTION_PIPELINE_VERSION
+        )
+    )
+    return await repo.ensure_conversion_job(
         file_hash=file_hash,
         generation=generation,
         extraction_fingerprint=fingerprint,
+        force_rebuild=force_rebuild or same_target_invalid,
     )
 
 
@@ -159,7 +182,15 @@ async def convert_pdf_and_project(
     generation = stable_identity("conversion", file_hash, fingerprint)
     repo = get_canonical_document_repo()
     existing = await repo.get(file_hash)
-    existing_payload_valid = bool(existing and is_valid_canonical_payload(existing.document_json))
+    existing_metadata = dict(existing.source_metadata_json or {}) if existing else {}
+    existing_payload_valid = bool(
+        existing
+        and is_valid_canonical_payload(existing.document_json)
+        and existing_metadata.get("_file_hash") == file_hash
+        and existing_metadata.get("_extraction_contract_fingerprint")
+        == current_extraction_contract_fingerprint(merge_multi_bbox=merge_multi_bbox)
+        and existing_metadata.get("_extraction_pipeline_version") == EXTRACTION_PIPELINE_VERSION
+    )
     claim_token = await repo.claim_conversion(
         file_hash,
         fingerprint,

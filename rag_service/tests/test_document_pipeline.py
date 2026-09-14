@@ -93,64 +93,66 @@ def test_stable_canonical_projection_shape_is_json_compatible():
     assert payload["source_metadata"]["original_url"].startswith("https://")
 
 
-def test_table_projection_is_row_and_header_aware():
-    class FakeDocument:
-        def export_to_dict(self):
-            return {
-                "tables": [{
-                    "self_ref": "#/tables/0",
-                    "label": "table",
-                    "data": {"grid": [["Name", "Score"], ["Ada", "10"]]},
-                    "prov": [],
-                }],
-                "body": {"children": [{"$ref": "#/tables/0"}]},
-            }
+def _native_table_document():
+    from docling_core.types.doc import DoclingDocument, TableCell, TableData
 
-    payload = build_canonical_payload(FakeDocument(), filename="table.pdf", document_identity="file")
-    element = payload["elements"][0]
-    assert element["text"] == "Table headers: Name | Score\nRow 1: Name: Ada | Score: 10"
-    assert element["table_structure"]["headers"] == ["Name", "Score"]
-    assert element["table_structure"]["rows"] == [["Ada", "10"]]
+    def cell(text, row, col, *, row_span=1, col_span=1, column_header=False, row_header=False):
+        return TableCell(
+            text=text,
+            start_row_offset_idx=row,
+            end_row_offset_idx=row + row_span,
+            start_col_offset_idx=col,
+            end_col_offset_idx=col + col_span,
+            column_header=column_header,
+            row_header=row_header,
+        )
 
-
-def test_table_projection_preserves_empty_positions_and_explicit_associations():
-    class FakeDocument:
-        def export_to_dict(self):
-            return {
-                "tables": [{
-                    "self_ref": "#/tables/0",
-                    "label": "table",
-                    "data": {"grid": [["Product", "Price", "Quantity"], ["Widget", "", "5"]]},
-                    "prov": [],
-                }],
-                "body": {"children": [{"$ref": "#/tables/0"}]},
-            }
-
-    element = build_canonical_payload(FakeDocument(), filename="table.pdf")["elements"][0]
-    assert element["table_structure"]["rows"] == [["Widget", "", "5"]]
-    assert "Product: Widget | Price:  | Quantity: 5" in element["text"]
+    document = DoclingDocument(name="native-table")
+    document.add_table(data=TableData(
+        num_rows=4,
+        num_cols=3,
+        table_cells=[
+            cell("Metric", 0, 0, column_header=True),
+            cell("2024", 0, 1, column_header=True),
+            cell("2025", 0, 2, column_header=True),
+            cell("Revenue", 1, 0, row_header=True),
+            cell("10", 1, 1),
+            cell("12", 1, 2),
+            cell("Total", 2, 0, col_span=3, row_header=True),
+            cell("Footer", 3, 0, col_span=3),
+        ],
+    ))
+    return document
 
 
-def test_table_projection_preserves_merged_column_associations():
-    class FakeDocument:
-        def export_to_dict(self):
-            return {
-                "tables": [{
-                    "self_ref": "#/tables/0",
-                    "label": "table",
-                    "data": {"table_cells": [
-                        {"row": 0, "column": 0, "text": "Period"},
-                        {"row": 0, "column": 1, "text": "Value"},
-                        {"row": 1, "column": 0, "text": "Q1", "col_span": 2},
-                    ]},
-                    "prov": [],
-                }],
-                "body": {"children": [{"$ref": "#/tables/0"}]},
-            }
+def test_table_projection_uses_native_docling_headers_and_positions():
+    element = build_canonical_payload(
+        _native_table_document(), filename="table.pdf", document_identity="file"
+    )["elements"][0]
+    structure = element["table_structure"]
+    assert structure["headers"] == ["Metric", "2024", "2025"]
+    assert structure["header_rows"] == [0]
+    assert structure["rows"][1] == ["Revenue", "10", "12"]
+    assert structure["cells"][6]["col_span"] == 3
+    assert "Metric: Revenue | 2024: 10 | 2025: 12" in element["text"]
 
-    element = build_canonical_payload(FakeDocument(), filename="table.pdf")["elements"][0]
-    assert element["table_structure"]["cells"][0]["col_span"] == 2
-    assert "Period / Value: Q1" in element["text"]
+
+def test_table_projection_does_not_invent_headers_for_native_cells():
+    from docling_core.types.doc import DoclingDocument, TableCell, TableData
+
+    document = DoclingDocument(name="no-header-table")
+    document.add_table(data=TableData(
+        num_rows=1,
+        num_cols=2,
+        table_cells=[
+            TableCell(text="A", start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=1),
+            TableCell(text="B", start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=1, end_col_offset_idx=2),
+        ],
+    ))
+    structure = build_canonical_payload(document, filename="table.pdf")["elements"][0]["table_structure"]
+    assert structure["headers"] == ["", ""]
+    assert structure["header_rows"] == []
+    assert structure["rows"] == [["A", "B"]]
 
 
 def test_document_identity_prevents_cross_file_element_and_chunk_collisions():

@@ -57,16 +57,15 @@ async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]
     generation = parsed_data.get("generation") if isinstance(parsed_data, dict) else None
     fingerprint = parsed_data.get("extraction_fingerprint") if isinstance(parsed_data, dict) else None
     document_json = canonical.document_json if isinstance(canonical.document_json, dict) else {}
-    if not isinstance(sentences, list):
-        sentences = document_json.get("reading_projection")
-    if not isinstance(sentences, list):
-        from app.services.document_pipeline import project_sentences
-        sentences = project_sentences(document_json)
+    if not isinstance(sentences, list) or not generation or not fingerprint:
+        raise ValueError("reading projection must include sentences, generation, and extraction_fingerprint")
+    if str(generation) != str(canonical.generation) or str(fingerprint) != str(canonical.extraction_fingerprint):
+        raise ValueError("reading projection version does not match canonical document")
     payload = {
         "version": "2.0",
         "sentences": sentences,
-        "generation": str(generation or canonical.generation),
-        "extraction_fingerprint": str(fingerprint or canonical.extraction_fingerprint),
+        "generation": str(generation),
+        "extraction_fingerprint": str(fingerprint),
     }
     current = await get_file_parsed_sentences(file_hash)
     if (
@@ -257,15 +256,6 @@ async def _background_index(
         canonical = await get_canonical_document_repo().get(file_hash)
         if canonical is None or canonical.status != "completed":
             await _enqueue_pdf_conversion(file_hash, file_name)
-            from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
-            await ensure_embedding_job(
-                resource_type=RESOURCE_DOCUMENT,
-                resource_id=file_hash,
-                scope_id=thread_id,
-                embedding_model=embedding_model,
-                source_version=file_hash,
-                requeue_completed=True,
-            )
             await update_indexing_status(
                 file_hash=file_hash,
                 status=ProcessStatus.PENDING.value,

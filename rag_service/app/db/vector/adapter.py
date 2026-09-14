@@ -438,6 +438,11 @@ class WeaviateAdapter:
             raise ValueError("chunk_ids must have the same length as texts")
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
+            manifest_id = str(md.get("manifest_id") or "").strip()
+            generation = str(md.get("generation") or "").strip()
+            source_id = str(md.get("source_id") or "").strip()
+            if not manifest_id or not generation or not source_id:
+                raise ValueError("document vector metadata requires manifest_id, generation, and source_id")
             md_for_storage = {
                 k: v
                 for k, v in md.items()
@@ -452,11 +457,11 @@ class WeaviateAdapter:
                 "embedding_model": embedding_model,
                 "source_kind": source_kind,
                 "file_hash": file_hash,
-                "manifest_id": str(md.get("manifest_id") or ""),
-                "generation": str(md.get("generation") or ""),
+                "manifest_id": manifest_id,
+                "generation": generation,
                 "chunk_id": i,
-                "chunk_identity": str(md.get("source_id") or (chunk_ids[i] if chunk_ids is not None else i)),
-                "source_id": str(md.get("source_id") or (chunk_ids[i] if chunk_ids is not None else i)),
+                "chunk_identity": source_id,
+                "source_id": source_id,
                 "tags": [str(tag) for tag in (md.get("tags") or [])],
                 "section_id": md.get("section_id") or "",
                 "table_id": md.get("table_id") or "",
@@ -474,7 +479,7 @@ class WeaviateAdapter:
                 {
                     "vector": vector,
                     "properties": properties,
-                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:document:{embedding_model}:{file_hash}:{md.get('manifest_id') or 'legacy'}:{md.get('source_id') or (chunk_ids[i] if chunk_ids is not None else i)}")),
+                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:document:{embedding_model}:{file_hash}:{manifest_id}:{source_id}")),
                 }
             )
         # Use model-aware collection manager
@@ -922,15 +927,20 @@ class WeaviateAdapter:
         results: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
+            source_id = str(p.get("source_id") or "").strip()
+            manifest_id = str(p.get("manifest_id") or "").strip()
+            generation = str(p.get("generation") or "").strip()
+            if not source_id or not manifest_id or not generation:
+                raise VectorDBQueryError("document vector metadata is incomplete")
             metadata = _parse_metadata(p.get("metadata_json"))
             result = {
                 "text": p.get("text", ""),
                 "file_hash": p.get("file_hash"),
                 "chunk_id": p.get("chunk_id"),
                 "chunk_identity": p.get("chunk_identity"),
-                "source_id": p.get("source_id") or p.get("chunk_identity"),
-                "manifest_id": p.get("manifest_id"),
-                "generation": p.get("generation"),
+                "source_id": source_id,
+                "manifest_id": manifest_id,
+                "generation": generation,
                 "section_id": p.get("section_id") or metadata.get("section_id"),
                 "table_id": p.get("table_id") or metadata.get("table_id"),
                 "type": p.get("type", "knowledge_source"),

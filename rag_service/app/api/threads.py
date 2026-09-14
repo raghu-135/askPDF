@@ -596,6 +596,18 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 "embedding_model_ready": False,
             }
 
+        from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
+        try:
+            resolve_embedding_tokenizer(thread.embedding_model)
+        except EmbeddingTokenizerUnavailableError as exc:
+            return {
+                "thread_id": thread_id,
+                "status": EmbeddingReadinessStatus.BLOCKED.value,
+                "stats": _empty_thread_stats(),
+                "embedding_model_ready": True,
+                "error": {"code": "embedding_tokenizer_unavailable", "message": str(exc)},
+            }
+
         db = get_vector_db()
         from app.services.document_projection_service import evaluate_retrieval_readiness
         from app.services.embedding_materialization_service import ensure_embedding_job, RESOURCE_DOCUMENT
@@ -608,7 +620,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 resource_id=target_file_hash,
                 scope_id=thread_id,
                 embedding_model=thread.embedding_model,
-                source_version=readiness.get("repair_source_version") or f"{target_file_hash}:{thread.embedding_model}:document-repair-v1",
+                source_version=readiness["source_version"],
                 requeue_completed=True,
             )
 
@@ -635,18 +647,26 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
             if ProcessStatus.is_completed(indexing_status):
                 if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
-                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model)
+                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
                     await schedule_pdf_repair(file_hash, readiness)
                     status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
                 else:
                     status = EmbeddingReadinessStatus.READY.value
             elif ProcessStatus.is_failed(indexing_status):
-                status = EmbeddingReadinessStatus.NOT_READY.value
+                # A failed historical job may be stale rather than terminal.
+                # Re-evaluate the authoritative document/model version so a
+                # newly detected version can be repaired deterministically.
+                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
+                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
+                    await schedule_pdf_repair(file_hash, readiness)
+                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
+                else:
+                    status = EmbeddingReadinessStatus.NOT_READY.value
             elif ProcessStatus.is_running(indexing_status):
                 status = EmbeddingReadinessStatus.NOT_READY.value
             else:
                 if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
-                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model)
+                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
                     await schedule_pdf_repair(file_hash, readiness)
                     status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
                 else:
@@ -668,7 +688,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
                     file_ready = ProcessStatus.is_completed(indexing_status)
                     if file_ready and str(getattr(f, "source_type", "pdf")) == "pdf":
-                        readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model)
+                        readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model, thread_id=thread_id)
                         await schedule_pdf_repair(f.file_hash, readiness)
                         file_ready = bool(readiness.get("ready"))
                     if not file_ready:

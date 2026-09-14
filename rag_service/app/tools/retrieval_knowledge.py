@@ -88,15 +88,36 @@ def _normalise_pages(value: Any) -> list[int]:
     return sorted(pages)
 
 
-def _source_from_chunk(chunk: Any, *, score: Any = None, role: str = "evidence") -> dict[str, Any]:
+def _source_from_chunk(
+    chunk: Any,
+    *,
+    score: Any = None,
+    role: str = "evidence",
+    generation: str | None = None,
+    manifest_id: str | None = None,
+    extraction_fingerprint: str | None = None,
+) -> dict[str, Any]:
     metadata = dict(getattr(chunk, "metadata_json", None) or {}) if not isinstance(chunk, dict) else dict(chunk.get("metadata") or {})
     get = chunk.get if isinstance(chunk, dict) else lambda key, default=None: getattr(chunk, key, default)
     pages = _normalise_pages(metadata.get("pages") or get("pages", []))
     chunk_id = str(get("chunk_id", "") or "")
-    source_id = str(get("source_id", "") or get("chunk_identity", "") or "")
-    if not source_id and not isinstance(chunk, dict):
-        source_id = _stable_chunk_source_id(chunk, str(get("embedding_model", "") or ""))
-    source_id = source_id or chunk_id
+    source_id = str(get("source_id", "") or "")
+    if not source_id:
+        raise ValueError("chunk source identity is missing")
+    generation = str(
+        generation or get("generation", "") or metadata.get("generation") or ""
+    )
+    manifest_id = str(
+        manifest_id or get("manifest_id", "") or metadata.get("manifest_id") or ""
+    )
+    extraction_fingerprint = str(
+        extraction_fingerprint
+        or get("extraction_fingerprint", "")
+        or metadata.get("extraction_fingerprint")
+        or ""
+    )
+    if not generation or not manifest_id or not extraction_fingerprint:
+        raise ValueError("chunk citation metadata is incomplete")
     body = str(metadata.get("body_text") or get("body_text", get("text", "")) or "")
     return {
         "source_id": source_id,
@@ -121,7 +142,9 @@ def _stable_chunk_source_id(chunk: Any, embedding_model: str) -> str:
     chunk_id = str(getattr(chunk, "chunk_id", "") or "")
     file_hash = str(getattr(chunk, "file_hash", "") or "")
     from app.services.document_pipeline import stable_source_id
-    generation = str(getattr(chunk, "generation", "") or "legacy")
+    generation = str(getattr(chunk, "generation", "") or "")
+    if not file_hash or not generation or not chunk_id:
+        raise ValueError("chunk citation metadata is incomplete")
     return stable_source_id(file_hash, generation, chunk_id)
 
 
@@ -149,18 +172,26 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         ready_manifests = []
         repair_scheduled = False
         from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
-        from app.services.document_pipeline import stable_fingerprint
         for file_hash in file_hashes:
-            readiness = await evaluate_retrieval_readiness(file_hash, context.embedding_model)
+            readiness = await evaluate_retrieval_readiness(
+                file_hash,
+                context.embedding_model,
+                thread_id=context.thread_id,
+            )
             if readiness.get("ready") and readiness.get("manifest") is not None:
                 ready_manifests.append(readiness["manifest"])
             else:
+                job = readiness.get("thread_job")
+                if job is not None and job.status == "failed" and readiness.get("reason") == "thread_job_failed":
+                    raise RuntimeError(
+                        f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
+                    )
                 await ensure_embedding_job(
                     resource_type=RESOURCE_DOCUMENT,
                     resource_id=file_hash,
                     scope_id=context.thread_id,
                     embedding_model=context.embedding_model,
-                    source_version=readiness.get("repair_source_version") or stable_fingerprint("document-repair-v1", file_hash, context.embedding_model),
+                    source_version=readiness["source_version"],
                     requeue_completed=True,
                 )
                 repair_scheduled = True
@@ -240,6 +271,9 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                     "score": 0.0,
                     "file_hash": file_hash,
                     "section_id": metadata.get("section_id") if request.level == "section" else None,
+                    "manifest_id": item.get("manifest_id") or metadata.get("manifest_id"),
+                    "generation": item.get("generation") or metadata.get("generation"),
+                    "extraction_fingerprint": metadata.get("extraction_fingerprint"),
                     "heading_path": metadata.get("heading_path") or [],
                     "pages": set(),
                     "source_element_ids": set(),
@@ -292,6 +326,11 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                         section_cache[cache_key] = sections
                     section = next((value for value in sections if value.section_id == section_id), None)
                     title = section.title if section else section_id
+                generation = str(item.get("generation") or "").strip()
+                manifest_id = str(item.get("manifest_id") or "").strip()
+                extraction_fingerprint = str(item.get("extraction_fingerprint") or "").strip()
+                if not generation or not manifest_id or not extraction_fingerprint:
+                    raise ValueError("document citation metadata is incomplete")
                 source = {
                     "source_id": str(section_id if request.level == "section" and section_id else file_hash),
                     "file_hash": file_hash,
@@ -302,6 +341,9 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                     "source_element_ids": sorted(item.get("source_element_ids") or []),
                     "score": item.get("score"),
                     "evidence_role": "discovery",
+                    "manifest_id": manifest_id,
+                    "generation": generation,
+                    "extraction_fingerprint": extraction_fingerprint,
                 }
                 sources.append(source)
                 content_parts.append(f"[Discovery: {title}]\n{title}")
@@ -315,6 +357,16 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             "truncated": truncated,
         }
         return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=sources, artifacts=artifacts, warnings=[ToolWarningCode.RESPONSE_TRUNCATED] if truncated else [])
+    except EmbeddingTokenizerUnavailableError as exc:
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=exc,
+            context=context,
+            started=started,
+            user_message=str(exc),
+            code="embedding_tokenizer_unavailable",
+            evidence_gap=True,
+        )
     except PermissionError as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started, user_message=str(exc), code="document_scope_forbidden", evidence_gap=True)
     except Exception as exc:
@@ -333,16 +385,18 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
         freshness = await evaluate_document_freshness(request.document_id, context.embedding_model)
         canonical = freshness.get("canonical")
         if not freshness.get("canonical_ready"):
-            if context.embedding_model:
-                from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
-                await ensure_embedding_job(
-                    resource_type=RESOURCE_DOCUMENT,
-                    resource_id=request.document_id,
-                    scope_id=context.thread_id,
-                    embedding_model=context.embedding_model,
-                    source_version=freshness.get("repair_source_version") or request.document_id,
-                    requeue_completed=True,
-                )
+            from app.db import get_file
+            from app.services.content_store import get_content_store, pdf_content_key
+            from app.services.document_conversion_service import enqueue_pdf_conversion
+            file = await get_file(request.document_id)
+            store = get_content_store()
+            data = await store.read(pdf_content_key(request.document_id))
+            await enqueue_pdf_conversion(
+                file_hash=request.document_id,
+                data=data,
+                file_name=file.file_name if file else f"{request.document_id}.pdf",
+                force_rebuild=True,
+            )
             return make_tool_result(tool_name=tool_name, content="Document conversion is not ready.", context=context, started=started, artifacts={"readiness": "conversion_in_progress", "repair_scheduled": bool(context.embedding_model)}, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS])
         sections = await repo.get_sections(request.document_id, canonical.generation)
         if request.section_id:
@@ -380,6 +434,9 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         if not context.thread_id or not context.embedding_model:
             return make_tool_result(tool_name=tool_name, content="No thread context found.", context=context, started=started, warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT])
         lookup, file_hashes = await _scoped_files(context, services=services)
+        # Context reads depend on the same exact tokenizer as indexing. Resolve
+        # it before any stale-document repair can be queued.
+        resolve_embedding_tokenizer(context.embedding_model)
         repo = get_canonical_document_repo()
         selected = []
         source_section_files: set[str] = set()
@@ -391,20 +448,25 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                 file_hash,
                 context.embedding_model,
                 require_manifest=True,
+                thread_id=context.thread_id,
             )
             manifest = freshness.get("manifest")
-            if not freshness.get("canonical_ready") or not freshness.get("manifest_ready") or manifest is None:
-                if context.embedding_model:
-                    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
-                    await ensure_embedding_job(
-                        resource_type=RESOURCE_DOCUMENT,
-                        resource_id=file_hash,
-                        scope_id=context.thread_id,
-                        embedding_model=context.embedding_model,
-                        source_version=freshness.get("repair_source_version") or file_hash,
-                        requeue_completed=True,
+            if not freshness.get("ready") or manifest is None:
+                job = freshness.get("thread_job")
+                if job is not None and job.status == "failed" and freshness.get("reason") == "thread_job_failed":
+                    raise RuntimeError(
+                        f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
                     )
-                    repair_scheduled = True
+                from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+                await ensure_embedding_job(
+                    resource_type=RESOURCE_DOCUMENT,
+                    resource_id=file_hash,
+                    scope_id=context.thread_id,
+                    embedding_model=context.embedding_model,
+                    source_version=freshness["source_version"],
+                    requeue_completed=True,
+                )
+                repair_scheduled = True
                 continue
             canonical = await repo.get(file_hash)
             manifest_id = str(manifest.manifest_id)
@@ -428,16 +490,26 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     for section in await repo.get_sections(file_hash, canonical.generation)
                 }
                 if request.source_id in section_ids:
+                    descendant_ids = set(
+                        await repo.get_descendant_section_ids(
+                            file_hash,
+                            canonical.generation,
+                            request.source_id,
+                        )
+                    )
+                    section_candidates = [
+                        item for item in candidates
+                        if str(item.section_id or "") in descendant_ids
+                    ]
                     source_section_files.add(file_hash)
-                    selected.extend(candidates)
-                    source_anchors.append(next(iter(candidates), None))
+                    selected.extend(section_candidates)
+                    source_anchors.append(next(iter(section_candidates), None))
                     continue
             matches = [
                 item for item in candidates
                 if (
                     item.source_id == request.source_id
                     or item.chunk_id == request.source_id
-                    or _stable_chunk_source_id(item, context.embedding_model) == request.source_id
                     or item.section_id == request.source_id
                     or item.table_id == request.source_id
                 )
@@ -510,7 +582,15 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
             parts.append(body)
             used = counter.count(candidate)
             evidence = chunk.chunk_id == source_chunk.chunk_id or chunk.source_id == source_chunk.source_id
-            sources.append(_source_from_chunk(chunk, role="evidence" if evidence else "surrounding_context"))
+            sources.append(
+                _source_from_chunk(
+                    chunk,
+                    role="evidence" if evidence else "surrounding_context",
+                    generation=canonical.generation,
+                    manifest_id=manifest_id,
+                    extraction_fingerprint=canonical.extraction_fingerprint,
+                )
+            )
             consumed += 1
         content = "\n\n".join(parts)
         next_cursor = (

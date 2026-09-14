@@ -337,7 +337,11 @@ class TestProductionErrorHandling:
                 file_hash="test-file-1",
                 texts=["test chunk 1"],
                 embeddings=[[0.1] * 384],
-                metadatas=[{}]
+                metadatas=[{
+                    "manifest_id": "manifest-1",
+                    "generation": "generation-1",
+                    "source_id": "src-source-1",
+                }]
             )
             
             # Second indexing should fail due to dimension validation

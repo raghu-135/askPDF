@@ -89,36 +89,45 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
         raise ValueError("embedding model is required")
 
     local_model = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
-    settings: dict[str, Any]
-    if model == local_model:
-        settings = {
-            "tokenizer": os.environ.get("LOCAL_EMBEDDING_TOKENIZER", model),
-            "revision": os.environ.get("LOCAL_EMBEDDING_TOKENIZER_REVISION") or None,
-            "effective_input_limit": int(os.environ.get("LOCAL_EMBEDDING_INPUT_LIMIT", "512")),
-            "prefix": os.environ.get("LOCAL_EMBEDDING_FORMAT_PREFIX", ""),
-            "suffix": os.environ.get("LOCAL_EMBEDDING_FORMAT_SUFFIX", ""),
-        }
-    else:
-        settings = _external_mapping().get(model) or {}
-        if not settings:
-            raise ValueError(
-                f"No tokenizer configuration is registered for external embedding model '{model}'. "
-                "Set EMBEDDING_TOKENIZER_CONFIG_JSON with tokenizer, effective_input_limit, and formatting."
-            )
+    try:
+        settings: dict[str, Any]
+        if model == local_model:
+            settings = {
+                "tokenizer": os.environ.get("LOCAL_EMBEDDING_TOKENIZER", model),
+                "revision": os.environ.get("LOCAL_EMBEDDING_TOKENIZER_REVISION") or None,
+                "effective_input_limit": int(os.environ.get("LOCAL_EMBEDDING_INPUT_LIMIT", "512")),
+                "prefix": os.environ.get("LOCAL_EMBEDDING_FORMAT_PREFIX", ""),
+                "suffix": os.environ.get("LOCAL_EMBEDDING_FORMAT_SUFFIX", ""),
+            }
+        else:
+            settings = _external_mapping().get(model) or {}
+            if not settings:
+                raise ValueError(
+                    f"No tokenizer configuration is registered for external embedding model '{model}'. "
+                    "Set EMBEDDING_TOKENIZER_CONFIG_JSON with tokenizer, effective_input_limit, and formatting."
+                )
 
-    identity = str(settings.get("tokenizer") or settings.get("identity") or "").strip()
-    limit = int(settings.get("effective_input_limit") or settings.get("input_limit") or 0)
-    if not identity or limit <= 0:
-        raise ValueError(f"Tokenizer configuration for '{model}' must include tokenizer and positive effective_input_limit")
-    config = EmbeddingTokenizerConfig(
-        identity=identity,
-        revision=str(settings.get("revision") or "").strip() or None,
-        effective_input_limit=limit,
-        required_prefix=str(settings.get("prefix") or ""),
-        required_suffix=str(settings.get("suffix") or ""),
-        query_prefix=(str(settings["query_prefix"]) if "query_prefix" in settings else None),
-        query_suffix=(str(settings["query_suffix"]) if "query_suffix" in settings else None),
-    )
+        identity = str(settings.get("tokenizer") or settings.get("identity") or "").strip()
+        limit = int(settings.get("effective_input_limit") or settings.get("input_limit") or 0)
+        if not identity or limit <= 0:
+            raise ValueError(
+                f"Tokenizer configuration for '{model}' must include tokenizer and positive effective_input_limit"
+            )
+        config = EmbeddingTokenizerConfig(
+            identity=identity,
+            revision=str(settings.get("revision") or "").strip() or None,
+            effective_input_limit=limit,
+            required_prefix=str(settings.get("prefix") or ""),
+            required_suffix=str(settings.get("suffix") or ""),
+            query_prefix=(str(settings["query_prefix"]) if "query_prefix" in settings else None),
+            query_suffix=(str(settings["query_suffix"]) if "query_suffix" in settings else None),
+        )
+    except EmbeddingTokenizerUnavailableError:
+        raise
+    except Exception as exc:
+        raise EmbeddingTokenizerUnavailableError(
+            f"Tokenizer configuration is unavailable for embedding model '{model}'"
+        ) from exc
 
     try:
         from transformers import AutoTokenizer
