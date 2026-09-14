@@ -35,6 +35,8 @@ def upgrade() -> None:
         _jsonb("document_json"),
         _jsonb("source_metadata_json"),
         _jsonb("failure_json", nullable=True, default=None),
+        sa.Column("claim_token", sa.String(), nullable=True),
+        sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["file_hash"], ["files.file_hash"], ondelete="CASCADE"),
@@ -56,6 +58,7 @@ def upgrade() -> None:
         sa.Column("generation", sa.String(), nullable=False),
         sa.Column("extraction_fingerprint", sa.String(), nullable=False),
         sa.Column("chunking_fingerprint", sa.String(), nullable=False, server_default=""),
+        sa.Column("claim_token", sa.String(), nullable=True),
         sa.Column("status", sa.String(), nullable=False, server_default="pending"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("error", sa.Text(), nullable=True),
@@ -129,12 +132,14 @@ def upgrade() -> None:
         sa.Column("vector_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("expected_chunk_count", sa.Integer(), nullable=False, server_default="0"),
         _jsonb("expected_chunk_ids", default="'[]'::jsonb"),
+        _jsonb("expected_source_ids", default="'[]'::jsonb"),
         _jsonb("failure_json", nullable=True, default=None),
+        sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("superseded_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["file_hash"], ["files.file_hash"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("manifest_id"),
-        sa.UniqueConstraint("file_hash", "embedding_model", "generation", "chunking_fingerprint", name="uq_document_chunk_manifests_target"),
         sa.CheckConstraint("status in ('pending', 'running', 'completed', 'failed')", name="ck_document_chunk_manifests_status"),
         sa.CheckConstraint("vector_status in ('missing', 'running', 'completed', 'failed')", name="ck_document_chunk_manifests_vector_status"),
         sa.CheckConstraint("expected_chunk_count >= 0", name="ck_document_chunk_manifests_count"),
@@ -145,6 +150,7 @@ def upgrade() -> None:
         "document_chunks",
         sa.Column("chunk_id", sa.String(), nullable=False),
         sa.Column("manifest_id", sa.String(), nullable=False),
+        sa.Column("source_id", sa.String(), nullable=False),
         sa.Column("file_hash", sa.String(), nullable=False),
         sa.Column("embedding_model", sa.String(), nullable=False),
         sa.Column("chunk_order", sa.Integer(), nullable=False, server_default="0"),
@@ -158,11 +164,16 @@ def upgrade() -> None:
         sa.Column("page_end", sa.Integer(), nullable=True),
         _jsonb("metadata_json"),
         sa.ForeignKeyConstraint(["manifest_id"], ["document_chunk_manifests.manifest_id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("chunk_id"),
+        sa.PrimaryKeyConstraint("manifest_id", "chunk_id"),
         sa.UniqueConstraint("manifest_id", "chunk_order", name="uq_document_chunks_order"),
+        sa.UniqueConstraint("manifest_id", "source_id", name="uq_document_chunks_source"),
     )
     op.create_index("idx_document_chunks_file_model_order", "document_chunks", ["file_hash", "embedding_model", "chunk_order"])
     op.create_index("idx_document_chunks_section", "document_chunks", ["file_hash", "section_id", "chunk_order"])
+    op.create_index("idx_canonical_documents_claim_token", "canonical_documents", ["claim_token"])
+    op.create_index("idx_document_processing_jobs_claim_token", "document_processing_jobs", ["claim_token"])
+    op.create_index("idx_document_chunk_manifests_published", "document_chunk_manifests", ["file_hash", "embedding_model", "published_at"])
+    op.create_index("idx_document_chunks_source_id", "document_chunks", ["source_id"])
 
 
 def downgrade() -> None:
@@ -171,6 +182,10 @@ def downgrade() -> None:
     op.drop_table("document_processing_jobs")
     op.drop_index("idx_document_chunks_section", table_name="document_chunks")
     op.drop_index("idx_document_chunks_file_model_order", table_name="document_chunks")
+    op.drop_index("idx_document_chunks_source_id", table_name="document_chunks")
+    op.drop_index("idx_document_chunk_manifests_published", table_name="document_chunk_manifests")
+    op.drop_index("idx_document_processing_jobs_claim_token", table_name="document_processing_jobs")
+    op.drop_index("idx_canonical_documents_claim_token", table_name="canonical_documents")
     op.drop_table("document_chunks")
     op.drop_index("idx_document_chunk_manifests_ready", table_name="document_chunk_manifests")
     op.drop_table("document_chunk_manifests")

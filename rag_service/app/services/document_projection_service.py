@@ -21,6 +21,14 @@ from app.services.document_extraction_contract import extraction_configuration
 from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
 
 
+class DocumentConversionPendingError(RuntimeError):
+    """Raised when retrieval is requested before canonical conversion is ready."""
+
+    def __init__(self, file_hash: str):
+        self.file_hash = str(file_hash)
+        super().__init__(f"document conversion is pending for {self.file_hash}")
+
+
 def retrieval_chunking_fingerprint(canonical: Any, embedding_model: str, tokenizer_fingerprint: str) -> str:
     return stable_fingerprint(
         canonical.generation,
@@ -132,6 +140,11 @@ def _chunk_from_row(row: Any) -> dict[str, Any]:
         "source_element_ids": list(row.source_element_ids or []),
         "section_id": row.section_id,
         "table_id": row.table_id,
+        "table_row_id": metadata.get("table_row_id"),
+        "table_row_ids": list(metadata.get("table_row_ids") or []),
+        "table_headers": list(metadata.get("table_headers") or []),
+        "table_cell_ids": list(metadata.get("table_cell_ids") or []),
+        "synthetic_span": bool(metadata.get("synthetic_span")),
         "pages": pages,
         "heading_path": list(metadata.get("heading_path") or []),
         "token_count": metadata.get("token_count"),
@@ -185,7 +198,7 @@ async def evaluate_document_freshness(
         "manifest_ready": not require_manifest,
         "vectors_ready": not verify_vectors,
         "manifest": None,
-        "source_version": conversion_source_version(file_hash),
+        "source_version": None,
         "repair_source_version": conversion_source_version(file_hash),
     }
     if canonical is None or canonical.status != "completed":
@@ -201,7 +214,7 @@ async def evaluate_document_freshness(
         and source_metadata.get("_extraction_pipeline_version") == EXTRACTION_PIPELINE_VERSION
     )
     result["canonical_ready"] = canonical_ready
-    result["source_version"] = conversion_source_version(file_hash)
+    result["source_version"] = None
     result["repair_source_version"] = conversion_source_version(file_hash)
     if not canonical_ready:
         result.update(reason="canonical_stale", ready=False)
@@ -328,7 +341,7 @@ async def ensure_retrieval_projection(
             file_name=file_name or (file.file_name if file else f"{file_hash}.pdf"),
             force_rebuild=True,
         )
-        raise RuntimeError("document conversion is queued for the independent conversion worker")
+        raise DocumentConversionPendingError(file_hash)
 
     config, counter = resolve_embedding_tokenizer(embedding_model)
     existing_manifest = freshness.get("manifest")
@@ -432,6 +445,7 @@ __all__ = [
     "ensure_retrieval_projection",
     "evaluate_document_freshness",
     "evaluate_retrieval_readiness",
+    "DocumentConversionPendingError",
     "conversion_source_version",
     "retrieval_source_version",
     "retrieval_chunking_fingerprint",

@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.services import document_projection_service
+from app.services import embedding_materialization_service
 from app.services.document_pipeline import CANONICAL_SCHEMA_VERSION, EXTRACTION_PIPELINE_VERSION
 from app.tools.context import ToolInvocationContext
 from app.tools.contracts import SearchKnowledgeRequest
@@ -263,7 +265,7 @@ async def test_search_enqueues_repair_and_reports_indexing_in_progress(monkeypat
     queued = []
 
     async def readiness(_file_hash, _model, **_kwargs):
-        return {"ready": False, "reason": "manifest_incomplete", "source_version": "repair-a", "repair_source_version": "repair-a"}
+        return {"ready": False, "canonical_ready": True, "reason": "manifest_incomplete", "source_version": "repair-a", "repair_source_version": "repair-a"}
 
     async def enqueue(**kwargs):
         queued.append(kwargs)
@@ -295,7 +297,53 @@ async def test_search_enqueues_repair_and_reports_indexing_in_progress(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_document_embedding_waits_for_conversion_without_charging_retry(monkeypatch):
+    job = SimpleNamespace(
+        id="job-1",
+        resource_type="document",
+        resource_id="file-a",
+        scope_id="thread-a",
+        embedding_model="model-a",
+        source_version="conversion-version",
+    )
+    pending = document_projection_service.DocumentConversionPendingError("file-a")
+    freshness = {"canonical_ready": False, "source_version": None}
+    monkeypatch.setattr(document_projection_service, "evaluate_document_freshness", AsyncMock(return_value=freshness))
+    monkeypatch.setattr(document_projection_service, "ensure_retrieval_projection", AsyncMock(side_effect=pending))
+    deferred = AsyncMock()
+    monkeypatch.setattr(embedding_materialization_service, "defer_document_embedding_job", deferred)
+    await embedding_materialization_service.process_embedding_job(job)
+    deferred.assert_awaited_once_with(job, reason="waiting for canonical document conversion")
+
+
+@pytest.mark.asyncio
+async def test_document_embedding_refreshes_stale_thread_version_without_indexing(monkeypatch):
+    job = SimpleNamespace(
+        id="job-1",
+        resource_type="document",
+        resource_id="file-a",
+        scope_id="thread-a",
+        embedding_model="model-a",
+        source_version="old-version",
+    )
+    monkeypatch.setattr(
+        document_projection_service,
+        "evaluate_document_freshness",
+        AsyncMock(return_value={"canonical_ready": True, "source_version": "new-version"}),
+    )
+    deferred = AsyncMock()
+    monkeypatch.setattr(embedding_materialization_service, "defer_document_embedding_job", deferred)
+    await embedding_materialization_service.process_embedding_job(job)
+    deferred.assert_awaited_once_with(
+        job,
+        source_version="new-version",
+        reason="document retrieval target refreshed",
+    )
+
+
+@pytest.mark.asyncio
 async def test_ready_empty_search_reports_no_relevant_content(monkeypatch):
+    captured = {}
     class Services:
         async def document_lookup(self, _thread_id):
             return {"file-a": {}}
@@ -309,16 +357,17 @@ async def test_ready_empty_search_reports_no_relevant_content(monkeypatch):
         def vector_db(self):
             class VectorDb:
                 async def search_knowledge_sources(self, **_kwargs):
+                    captured.update(_kwargs)
                     return []
             return VectorDb()
 
     manifest = SimpleNamespace(file_hash="file-a", generation="generation-a", manifest_id="manifest-a")
     async def readiness(_file_hash, _model, **_kwargs):
-        return {"ready": True, "manifest": manifest, "metadata": {}, "source_version": "ready-a", "repair_source_version": "ready-a"}
+        return {"ready": True, "canonical_ready": True, "manifest": manifest, "metadata": {}, "source_version": "ready-a", "repair_source_version": "ready-a"}
 
     monkeypatch.setattr(document_projection_service, "evaluate_retrieval_readiness", readiness)
     result = await retrieval_knowledge.search_knowledge(
-        SearchKnowledgeRequest(query="missing page", filters={"pages": [99]}),
+        SearchKnowledgeRequest(query="Which section refers to page 10?"),
         ToolInvocationContext(thread_id="thread-a", embedding_model="model-a"),
         services=Services(),
     )
@@ -326,6 +375,8 @@ async def test_ready_empty_search_reports_no_relevant_content(monkeypatch):
     assert result.ok is True
     assert result.warnings == ["no_relevant_content"]
     assert "indexing_in_progress" not in result.warnings
+    assert result.artifacts["readiness"] == "ready"
+    assert captured["pages"] == []
 
 
 @pytest.mark.asyncio
@@ -357,14 +408,21 @@ async def test_document_discovery_uses_file_identity_and_title(monkeypatch):
                         "file_hash": "file-a",
                         "score": 0.9,
                         "text": "context",
-                        "metadata": {"section_id": "section-a", "pages": "12-14", "source_element_ids": ["element-a"]},
+                        "metadata": {
+                            "section_id": "section-a",
+                            "pages": "12-14",
+                            "source_element_ids": ["element-a"],
+                            "generation": "g",
+                            "manifest_id": "m",
+                            "extraction_fingerprint": "x",
+                        },
                     }]
             return VectorDb()
 
     monkeypatch.setattr(retrieval_knowledge, "get_canonical_document_repo", lambda: CanonicalRepo())
     monkeypatch.setattr("app.db.get_file", lambda _file_hash: _get_file(File()))
     async def readiness(_file_hash, _model, **_kwargs):
-        return {"ready": True, "manifest": SimpleNamespace(file_hash="file-a", generation="g", manifest_id="m"), "metadata": {}, "source_version": "ready-a"}
+        return {"ready": True, "canonical_ready": True, "manifest": SimpleNamespace(file_hash="file-a", generation="g", manifest_id="m"), "metadata": {}, "source_version": "ready-a"}
     monkeypatch.setattr(document_projection_service, "evaluate_retrieval_readiness", readiness)
 
     result = await retrieval_knowledge.search_knowledge(

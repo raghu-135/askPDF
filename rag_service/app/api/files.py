@@ -139,6 +139,7 @@ async def _reset_incomplete_document_for_retry(file_hash: str) -> None:
         await repo.fail_conversion(
             file_hash,
             {"code": "retry_requested", "message": "Retry requested after interrupted conversion"},
+            claim_token=canonical.claim_token,
         )
     await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
 
@@ -519,6 +520,47 @@ async def get_file_status_endpoint(
             thread_id=thread_id if direct_association else None,
         )
         status["document_processing"] = await _document_processing_payload(file_hash, embedding_model)
+        if str(getattr(file, "source_type", "pdf")) == "pdf":
+            from app.services.document_projection_service import (
+                DocumentConversionPendingError,
+                ensure_retrieval_projection,
+                evaluate_retrieval_readiness,
+            )
+            from app.services.embedding_materialization_service import (
+                RESOURCE_DOCUMENT,
+                ensure_embedding_job,
+            )
+            from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
+
+            try:
+                readiness = await evaluate_retrieval_readiness(
+                    file_hash,
+                    embedding_model,
+                    thread_id=thread_id,
+                )
+            except EmbeddingTokenizerUnavailableError:
+                readiness = None
+            if readiness is not None and not readiness.get("ready"):
+                if not readiness.get("canonical_ready"):
+                    try:
+                        await ensure_retrieval_projection(
+                            file_hash=file_hash,
+                            embedding_model=embedding_model,
+                            file_name=getattr(file, "file_name", None),
+                        )
+                    except DocumentConversionPendingError:
+                        pass
+                elif not readiness.get("source_version"):
+                    raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
+                else:
+                    await ensure_embedding_job(
+                        resource_type=RESOURCE_DOCUMENT,
+                        resource_id=file_hash,
+                        scope_id=thread_id,
+                        embedding_model=embedding_model,
+                        source_version=readiness["source_version"],
+                        requeue_completed=True,
+                    )
         parsing_status = (status.get("parsing") or {}).get("status", ProcessStatus.UNKNOWN.value)
         if not ProcessStatus.is_completed(parsing_status):
             parsed_data = await get_file_parsed_sentences(file_hash)

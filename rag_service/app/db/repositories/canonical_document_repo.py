@@ -101,7 +101,7 @@ class CanonicalDocumentRepository:
             await session.flush()
             return jobs
 
-    async def fail_conversion_job(self, job_id: str, error: Exception) -> bool:
+    async def fail_conversion_job(self, job_id: str, claim_token: str, error: Exception) -> bool:
         now = utc_now()
         session = await self._owned_session()
         async with session.begin():
@@ -109,6 +109,7 @@ class CanonicalDocumentRepository:
                 DocumentProcessingJob.id == job_id,
                 DocumentProcessingJob.job_kind == "conversion",
                 DocumentProcessingJob.status == "running",
+                DocumentProcessingJob.claim_token == claim_token,
             ).with_for_update())).scalar_one_or_none()
             if row is None:
                 return False
@@ -252,21 +253,22 @@ class CanonicalDocumentRepository:
             await session.flush()
             return True
 
-    async def fail_conversion(self, file_hash: str, error: dict[str, Any], claim_token: str | None = None) -> bool:
+    async def fail_conversion(self, file_hash: str, error: dict[str, Any], claim_token: str) -> bool:
         session = await self._owned_session()
         async with session.begin():
             now = utc_now()
-            query = update(CanonicalDocument).where(CanonicalDocument.file_hash == file_hash, CanonicalDocument.status == "running")
-            if claim_token is not None:
-                query = query.where(CanonicalDocument.claim_token == claim_token)
+            query = update(CanonicalDocument).where(
+                CanonicalDocument.file_hash == file_hash,
+                CanonicalDocument.status == "running",
+                CanonicalDocument.claim_token == claim_token,
+            )
             result = await session.execute(query.values(status="failed", failure_json=error, completed_at=None, claim_token=None, claimed_at=None))
             job_query = select(DocumentProcessingJob).where(
                 DocumentProcessingJob.file_hash == file_hash,
                 DocumentProcessingJob.job_kind == "conversion",
                 DocumentProcessingJob.status == "running",
             ).with_for_update()
-            if claim_token is not None:
-                job_query = job_query.where(DocumentProcessingJob.claim_token == claim_token)
+            job_query = job_query.where(DocumentProcessingJob.claim_token == claim_token)
             jobs = (await session.execute(job_query)).scalars().all()
             for job in jobs:
                 delay = min(300, 2 ** max(0, int(job.attempts or 1)))
@@ -367,6 +369,12 @@ class CanonicalDocumentRepository:
                         "heading_path": list(item.get("heading_path") or []),
                         "token_count": item.get("token_count"),
                         "source_spans": list(item.get("source_spans") or []),
+                        "table_row_id": item.get("table_row_id"),
+                        "table_row_ids": list(item.get("table_row_ids") or []),
+                        "table_headers": list(item.get("table_headers") or []),
+                        "table_cell_ids": list(item.get("table_cell_ids") or []),
+                        "synthetic_span": bool(item.get("synthetic_span")),
+                        "alignment_precision": item.get("alignment_precision"),
                         "tags": list(item.get("tags") or []),
                         "tag_provenance": dict(item.get("tag_provenance") or {}),
                     },

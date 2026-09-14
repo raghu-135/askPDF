@@ -65,7 +65,7 @@ async def drain_conversion_jobs(*, limit: int = 10) -> int:
                 exc,
                 exc_info=True,
             )
-            await repo.fail_conversion_job(job.id, exc)
+            await repo.fail_conversion_job(job.id, job.claim_token, exc)
     return len(jobs)
 
 

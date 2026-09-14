@@ -609,12 +609,33 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             }
 
         db = get_vector_db()
-        from app.services.document_projection_service import evaluate_retrieval_readiness
+        from app.services.document_projection_service import (
+            DocumentConversionPendingError,
+            ensure_retrieval_projection,
+            evaluate_retrieval_readiness,
+        )
         from app.services.embedding_materialization_service import ensure_embedding_job, RESOURCE_DOCUMENT
 
-        async def schedule_pdf_repair(target_file_hash: str, readiness: dict) -> None:
+        async def schedule_pdf_repair(
+            target_file_hash: str,
+            readiness: dict,
+            *,
+            file_name: str | None = None,
+        ) -> None:
             if readiness.get("ready"):
                 return
+            if not readiness.get("canonical_ready"):
+                try:
+                    await ensure_retrieval_projection(
+                        file_hash=target_file_hash,
+                        embedding_model=thread.embedding_model,
+                        file_name=file_name,
+                    )
+                except DocumentConversionPendingError:
+                    pass
+                return
+            if not readiness.get("source_version"):
+                raise RuntimeError(f"retrieval version is unavailable for {target_file_hash}")
             await ensure_embedding_job(
                 resource_type=RESOURCE_DOCUMENT,
                 resource_id=target_file_hash,
@@ -645,32 +666,20 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 thread_id=thread_id,
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
-            if ProcessStatus.is_completed(indexing_status):
-                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
-                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
-                    await schedule_pdf_repair(file_hash, readiness)
-                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
-                else:
-                    status = EmbeddingReadinessStatus.READY.value
-            elif ProcessStatus.is_failed(indexing_status):
-                # A failed historical job may be stale rather than terminal.
-                # Re-evaluate the authoritative document/model version so a
-                # newly detected version can be repaired deterministically.
-                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
-                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
-                    await schedule_pdf_repair(file_hash, readiness)
-                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
-                else:
-                    status = EmbeddingReadinessStatus.NOT_READY.value
-            elif ProcessStatus.is_running(indexing_status):
-                status = EmbeddingReadinessStatus.NOT_READY.value
+            if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
+                # Conversion and retrieval readiness are authoritative.  Run
+                # this gate even while file_status is pending so conversion
+                # completion can create the exact embedding target without
+                # requiring a second access or a stale status transition.
+                readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
+                await schedule_pdf_repair(
+                    file_hash,
+                    readiness,
+                    file_name=getattr(file_record, "file_name", None),
+                )
+                status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
             else:
-                if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
-                    readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
-                    await schedule_pdf_repair(file_hash, readiness)
-                    status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
-                else:
-                    status = EmbeddingReadinessStatus.NOT_READY.value
+                status = EmbeddingReadinessStatus.READY.value if ProcessStatus.is_completed(indexing_status) else EmbeddingReadinessStatus.NOT_READY.value
         else:
             # Check all files in thread using file_status
             files = await get_thread_files(thread_id)
@@ -687,9 +696,13 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     )
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
                     file_ready = ProcessStatus.is_completed(indexing_status)
-                    if file_ready and str(getattr(f, "source_type", "pdf")) == "pdf":
+                    if str(getattr(f, "source_type", "pdf")) == "pdf":
                         readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model, thread_id=thread_id)
-                        await schedule_pdf_repair(f.file_hash, readiness)
+                        await schedule_pdf_repair(
+                            f.file_hash,
+                            readiness,
+                            file_name=getattr(f, "file_name", None),
+                        )
                         file_ready = bool(readiness.get("ready"))
                     if not file_ready:
                         all_indexed = False

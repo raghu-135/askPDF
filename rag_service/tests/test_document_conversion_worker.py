@@ -40,7 +40,7 @@ async def test_conversion_worker_processes_and_publishes_durable_job(monkeypatch
 
 @pytest.mark.asyncio
 async def test_conversion_worker_records_retryable_failure(monkeypatch):
-    job = SimpleNamespace(id="job-1", file_hash="file-1", attempts=1)
+    job = SimpleNamespace(id="job-1", file_hash="file-1", attempts=1, claim_token="claim-1")
     repo = SimpleNamespace(
         claim_conversion_jobs=AsyncMock(return_value=[job]),
         fail_conversion_job=AsyncMock(),
@@ -51,6 +51,7 @@ async def test_conversion_worker_records_retryable_failure(monkeypatch):
     assert await worker.drain_conversion_jobs(limit=1) == 1
     repo.fail_conversion_job.assert_awaited_once()
     assert repo.fail_conversion_job.await_args.args[0] == "job-1"
+    assert repo.fail_conversion_job.await_args.args[1] == "claim-1"
 
 
 @pytest.mark.asyncio

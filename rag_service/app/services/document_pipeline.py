@@ -459,7 +459,7 @@ def project_sentences(
         # canonical payload contains an explicit paragraph relation.
         paragraph_id = element.get("paragraph_id") or element.get("paragraph_ref") or element.get("element_id")
         table_structure = element.get("table_structure") if element_type == "table" else None
-        table_rows: list[tuple[str, str | None]] = []
+        table_rows: list[dict[str, Any]] = []
         if isinstance(table_structure, Mapping):
             headers = [str(value).strip() for value in table_structure.get("headers") or []]
             cells = [dict(value) for value in table_structure.get("cells") or [] if isinstance(value, Mapping)]
@@ -469,18 +469,30 @@ def project_sentences(
                     continue
                 header_text = " | ".join(value or f"Column {index + 1}" for index, value in enumerate(headers))
                 row_text = _table_row_render(headers, values, row_index, cells)
-                rendered = f"Table headers: {header_text}\nRow {row_index}: {row_text}" if header_text else f"Row {row_index}: {row_text}"
-                table_rows.append((rendered, f"{element.get('element_id')}:row:{row_index}"))
-        projected = table_rows or [(sentence, None) for sentence in splitter(text)]
+                row_prefix = f"Table headers: {header_text}\nRow {row_index}: " if header_text else f"Row {row_index}: "
+                row_cells = [
+                    f"{element.get('element_id')}:cell:{cell_index}"
+                    for cell_index, cell in enumerate(cells)
+                    if int(cell.get("row", -1)) <= row_index - 1 < int(cell.get("row", -1)) + int(cell.get("row_span", 1))
+                ]
+                table_rows.append({
+                    "text": f"{row_prefix}{row_text}",
+                    "table_row_id": f"{element.get('element_id')}:row:{row_index}",
+                    "table_headers": header_text,
+                    "table_row_prefix": row_prefix,
+                    "table_row_body": row_text,
+                    "table_cell_ids": row_cells,
+                })
+        projected = table_rows or [{"text": sentence, "table_row_id": None} for sentence in splitter(text)]
         search_cursor = 0
-        for local_index, (sentence_text, table_row_id) in enumerate(projected):
+        for local_index, item in enumerate(projected):
+            sentence_text = item["text"]
+            table_row_id = item.get("table_row_id")
             sentence_text = str(sentence_text).strip()
             if not sentence_text:
                 continue
             start = text.find(sentence_text, search_cursor)
-            if start < 0:
-                start = 0
-            else:
+            if start >= 0:
                 search_cursor = start + len(sentence_text)
             sentence_id = len(sentences)
             sentences.append(
@@ -493,15 +505,22 @@ def project_sentences(
                     "pages": list(element.get("pages") or []),
                     "source_element_ids": [element["element_id"]],
                     "source_element_refs": [element.get("source_ref")] if element.get("source_ref") else [],
-                    "source_spans": [{"element_id": element["element_id"], "start": start, "end": start + len(sentence_text)}],
+                    "source_spans": (
+                        [{"element_id": element["element_id"], "start": start, "end": start + len(sentence_text)}]
+                        if start >= 0 else []
+                    ),
                     "section_id": element.get("section_id"),
                     "paragraph_id": paragraph_id,
                     "table_id": table_id,
                     "table_row_id": table_row_id,
+                    "table_headers": item.get("table_headers"),
+                    "table_row_prefix": item.get("table_row_prefix"),
+                    "table_row_body": item.get("table_row_body"),
+                    "table_cell_ids": list(item.get("table_cell_ids") or []),
                     "tags": tags,
                     "tag_provenance": tag_provenance,
                     "heading_path": list(element.get("heading_path") or []),
-                    "alignment_precision": "coarse",
+                    "alignment_precision": "synthetic" if table_row_id and start < 0 else "coarse",
                     "bboxes": [],
                     "bbox": None,
                     "page_width": None,
@@ -591,7 +610,32 @@ def pack_retrieval_chunks(
         sentence_ids = [str(item.get("id")) for item in items]
         source_elements = sorted({str(value) for item in items for value in (item.get("source_element_ids") or [])})
         pages = sorted({int(page) for item in items for page in (item.get("pages") or []) if isinstance(page, int) and page > 0})
-        spans = [dict(span) for span in (source_spans or [span for item in items for span in (item.get("source_spans") or [])])]
+        spans = [
+            dict(span)
+            for span in (
+                source_spans
+                if source_spans is not None
+                else [span for item in items for span in (item.get("source_spans") or [])]
+            )
+        ]
+        table_row_ids = sorted({
+            str(item.get("table_row_id"))
+            for item in items
+            if item.get("table_row_id")
+        })
+        table_cell_ids = sorted({
+            str(cell_id)
+            for item in items
+            for cell_id in (item.get("table_cell_ids") or [])
+            if cell_id
+        })
+        table_headers = sorted({
+            str(item.get("table_headers"))
+            for item in items
+            if item.get("table_headers")
+        })
+        synthetic_span = any(item.get("alignment_precision") == "synthetic" for item in items)
+        identity = table_row_ids or sentence_ids
         tags = sorted({str(tag) for item in items for tag in (item.get("tags") or [item.get("element_type") or item.get("label")]) if tag})
         tag_provenance: dict[str, str] = {}
         for item in items:
@@ -601,7 +645,7 @@ def pack_retrieval_chunks(
                 if tag:
                     tag_provenance.setdefault(str(tag), str(provenance.get(str(tag), "canonical_structure")))
         chunks.append({
-            "chunk_id": stable_identity("chunk", document_identity or "document", sentence_ids, piece_index),
+            "chunk_id": stable_identity("chunk", document_identity or "document", identity, sentence_ids, piece_index),
             "chunk_order": len(chunks),
             "body_text": body,
             "contextualized_text": text,
@@ -610,6 +654,12 @@ def pack_retrieval_chunks(
             "source_spans": spans,
             "section_id": first.get("section_id"),
             "table_id": first.get("table_id"),
+            "table_row_id": table_row_ids[0] if len(table_row_ids) == 1 else None,
+            "table_row_ids": table_row_ids,
+            "table_headers": table_headers,
+            "table_cell_ids": table_cell_ids,
+            "synthetic_span": synthetic_span,
+            "alignment_precision": "synthetic" if synthetic_span else first.get("alignment_precision", "coarse"),
             "pages": pages,
             "heading_path": list(first.get("heading_path") or []),
             "tags": tags,
@@ -635,6 +685,46 @@ def pack_retrieval_chunks(
             if len(group) != 1:
                 raise ValueError("chunk packer attempted to split multiple sentences")
             item = group[0]
+            if item.get("table_row_id"):
+                row_prefix = str(item.get("table_row_prefix") or "")
+                row_body = str(item.get("table_row_body") or "").strip()
+                row_available = available - counter.count(row_prefix)
+                if not row_body or row_available <= 0:
+                    raise ValueError("table row cannot fit with repeated headers and structural context")
+                pieces = list(counter.split(row_body, row_available))
+                bounded_row_pieces: list[str] = []
+                for row_piece in pieces:
+                    if counter.count(f"{prefix}{row_prefix}{row_piece}") <= embedding_token_limit:
+                        bounded_row_pieces.append(row_piece)
+                        continue
+                    cursor = 0
+                    while cursor < len(row_piece):
+                        low, high = cursor + 1, len(row_piece)
+                        best = cursor
+                        while low <= high:
+                            middle = (low + high) // 2
+                            candidate = row_piece[cursor:middle]
+                            if counter.count(f"{prefix}{row_prefix}{candidate}") <= embedding_token_limit:
+                                best = middle
+                                low = middle + 1
+                            else:
+                                high = middle - 1
+                        if best == cursor:
+                            raise ValueError("table row fragment cannot fit with repeated headers")
+                        bounded_row_pieces.append(row_piece[cursor:best])
+                        cursor = best
+                for piece_index, row_piece in enumerate(bounded_row_pieces):
+                    fragment = dict(item)
+                    fragment["source_spans"] = []
+                    fragment["alignment_precision"] = "synthetic"
+                    emit(
+                        [fragment],
+                        f"{row_prefix}{row_piece}",
+                        piece_index,
+                        source_spans=[],
+                    )
+                group = []
+                return
             splitter = counter.split_with_spans
             if splitter is not None:
                 pieces = list(splitter(body, available))

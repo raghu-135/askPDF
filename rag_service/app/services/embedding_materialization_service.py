@@ -33,6 +33,7 @@ JOB_COMPLETED = "completed"
 JOB_FAILED = "failed"
 STALE_JOB_AFTER_SECONDS = 15 * 60
 MAX_JOB_ATTEMPTS = 5
+DEPENDENCY_REQUEUE_DELAY_SECONDS = 2
 
 def _wake() -> None:
     # The worker polls durable state. Avoid a process-global asyncio.Event because
@@ -241,12 +242,29 @@ async def reconcile_thread_embedding_targets(
         documents = [file for file in documents if str(file.file_hash) in wanted]
     document_count = 0
     vector_db = get_vector_db()
-    from app.services.document_projection_service import evaluate_retrieval_readiness
+    from app.services.document_projection_service import (
+        DocumentConversionPendingError,
+        ensure_retrieval_projection,
+        evaluate_retrieval_readiness,
+    )
     for file in documents:
         file_hash = str(file.file_hash)
         readiness = await evaluate_retrieval_readiness(file_hash, embedding_model)
+        if not readiness.get("canonical_ready"):
+            try:
+                await ensure_retrieval_projection(
+                    file_hash=file_hash,
+                    embedding_model=embedding_model,
+                    file_name=getattr(file, "file_name", None),
+                )
+            except DocumentConversionPendingError:
+                pass
+            document_count += 1
+            continue
         if readiness.get("ready"):
             continue
+        if not readiness.get("source_version"):
+            raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
         await ensure_embedding_job(
             resource_type=RESOURCE_DOCUMENT,
             resource_id=file_hash,
@@ -354,6 +372,31 @@ async def fail_embedding_job(job: EmbeddingJob, error: Exception) -> None:
                 row.updated_at = now
 
 
+async def defer_document_embedding_job(
+    job: EmbeddingJob,
+    *,
+    source_version: str | None = None,
+    reason: str,
+) -> bool:
+    """Return a dependency-stale document job to pending without a retry."""
+    now = utc_now()
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(EmbeddingJob, job.id, with_for_update=True)
+            if row is None or row.status != JOB_RUNNING or row.source_version != job.source_version:
+                return False
+            if source_version:
+                row.source_version = str(source_version)
+            row.status = JOB_PENDING
+            row.attempts = max(0, int(row.attempts or 0) - 1)
+            row.error = reason[:2000]
+            row.available_at = now + timedelta(seconds=DEPENDENCY_REQUEUE_DELAY_SECONDS)
+            row.claimed_at = None
+            row.completed_at = None
+            row.updated_at = now
+            return True
+
+
 async def process_embedding_job(job: EmbeddingJob) -> None:
     if job.resource_type == RESOURCE_GLOBAL_MEMORY:
         from app.services.memory_representation_service import index_global_representation
@@ -369,12 +412,58 @@ async def process_embedding_job(job: EmbeddingJob) -> None:
         return
     if job.resource_type == RESOURCE_DOCUMENT:
         from app.rag.indexer import index_document_for_thread
+        from app.services.document_projection_service import (
+            DocumentConversionPendingError,
+            ensure_retrieval_projection,
+            evaluate_document_freshness,
+        )
+
+        freshness = await evaluate_document_freshness(
+            job.resource_id,
+            job.embedding_model,
+            require_manifest=True,
+        )
+        if not freshness.get("canonical_ready"):
+            try:
+                await ensure_retrieval_projection(
+                    file_hash=job.resource_id,
+                    embedding_model=job.embedding_model,
+                )
+            except DocumentConversionPendingError:
+                pass
+            await defer_document_embedding_job(
+                job,
+                reason="waiting for canonical document conversion",
+            )
+            return
+        current_source_version = freshness.get("source_version")
+        if not current_source_version:
+            raise RuntimeError(f"retrieval version is unavailable for {job.resource_id}")
+        if str(current_source_version) != str(job.source_version):
+            await defer_document_embedding_job(
+                job,
+                source_version=str(current_source_version),
+                reason="document retrieval target refreshed",
+            )
+            return
         result = await index_document_for_thread(
             thread_id=job.scope_id,
             file_hash=job.resource_id,
             embedding_model=job.embedding_model,
             expected_source_version=job.source_version,
         )
+        if result.get("status") in {"stale", "pending"}:
+            refreshed = await evaluate_document_freshness(
+                job.resource_id,
+                job.embedding_model,
+                require_manifest=True,
+            )
+            await defer_document_embedding_job(
+                job,
+                source_version=refreshed.get("source_version"),
+                reason=str(result.get("reason") or result.get("message") or "document dependency changed"),
+            )
+            return
         if result.get("status") not in {"success", "completed"}:
             raise RuntimeError(result.get("message", "Document indexing failed"))
         return

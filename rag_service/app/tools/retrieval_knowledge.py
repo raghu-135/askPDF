@@ -56,21 +56,6 @@ def _context_cursor_payload(value: str | None) -> dict[str, Any]:
     return decoded
 
 
-_PAGE_REFERENCE_RE = re.compile(r"\bpages?\s+(\d+)(?:\s*(?:-|–|to)\s*(\d+))?\b", re.IGNORECASE)
-
-
-def _explicit_page_filter(query: str) -> list[int]:
-    """Resolve explicit page references before semantic ranking can hide them."""
-    pages: set[int] = set()
-    for start, end in _PAGE_REFERENCE_RE.findall(str(query or "")):
-        first = int(start)
-        last = int(end or start)
-        if last < first:
-            first, last = last, first
-        pages.update(range(first, min(last, first + 99) + 1))
-    return sorted(pages)
-
-
 def _normalise_pages(value: Any) -> list[int]:
     values = [value] if isinstance(value, str) else list(value or []) if isinstance(value, (list, tuple, set)) else []
     pages: set[int] = set()
@@ -168,7 +153,11 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         if not file_hashes:
             return make_tool_result(tool_name=tool_name, content="No documents are linked to this thread yet.", context=context, started=started, warnings=[ToolWarningCode.NO_THREAD_DOCUMENTS])
         repo = get_canonical_document_repo()
-        from app.services.document_projection_service import evaluate_retrieval_readiness
+        from app.services.document_projection_service import (
+            DocumentConversionPendingError,
+            ensure_retrieval_projection,
+            evaluate_retrieval_readiness,
+        )
         ready_manifests = []
         repair_scheduled = False
         from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
@@ -178,6 +167,16 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                 context.embedding_model,
                 thread_id=context.thread_id,
             )
+            if not readiness.get("canonical_ready"):
+                try:
+                    await ensure_retrieval_projection(
+                        file_hash=file_hash,
+                        embedding_model=context.embedding_model,
+                    )
+                except DocumentConversionPendingError:
+                    pass
+                repair_scheduled = True
+                continue
             if readiness.get("ready") and readiness.get("manifest") is not None:
                 ready_manifests.append(readiness["manifest"])
             else:
@@ -210,7 +209,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                     )
                 )
         query_vector = await services.embed(context.embedding_model, request.query)
-        requested_pages = list(request.filters.pages) or _explicit_page_filter(request.query)
+        requested_pages = list(request.filters.pages)
         candidate_limit = min(1000, max(100, request.max_results * 20))
         raw = await services.vector_db().search_knowledge_sources(
             thread_id=context.thread_id, query_vector=query_vector, embedding_model=context.embedding_model,

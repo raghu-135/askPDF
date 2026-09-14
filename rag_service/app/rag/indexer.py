@@ -39,7 +39,11 @@ from app.models.llm_server_client import (
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
 from app.services.content_store import get_content_store, pdf_content_key
-from app.services.document_projection_service import ensure_retrieval_projection
+from app.services.document_projection_service import (
+    DocumentConversionPendingError,
+    ensure_retrieval_projection,
+    evaluate_document_freshness,
+)
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint, stable_source_id
 from app.services.embedding_tokenizer import resolve_embedding_tokenizer
@@ -47,6 +51,14 @@ from app.services.embedding_tokenizer import resolve_embedding_tokenizer
 logger = logging.getLogger(__name__)
 
 _document_index_locks: Dict[str, asyncio.Lock] = {}
+
+
+class DocumentVersionChangedError(RuntimeError):
+    """Raised when the document target changes during one indexing attempt."""
+
+    def __init__(self, current_source_version: str | None):
+        self.current_source_version = current_source_version
+        super().__init__("document retrieval version changed before indexing completed")
 
 
 def _int_page(value: Any) -> Optional[int]:
@@ -676,7 +688,7 @@ async def index_document_for_thread(
                 )
                 metadata.update(projection_metadata)
                 if expected_source_version and str(projection_metadata.get("source_version")) != str(expected_source_version):
-                    raise RuntimeError("document retrieval version changed before indexing")
+                    raise DocumentVersionChangedError(str(projection_metadata.get("source_version") or "") or None)
                 if projection_metadata.get("tokenizer"):
                     tokenizer_config, _ = resolve_embedding_tokenizer(embedding_model)
                     document_formatter = tokenizer_config.format_document_input
@@ -786,6 +798,12 @@ async def index_document_for_thread(
                             "tags": list(item.get("tags") or []),
                             "tag_provenance": dict(item.get("tag_provenance") or {}),
                             "source_spans": list(item.get("source_spans") or []),
+                            "table_row_id": item.get("table_row_id"),
+                            "table_row_ids": list(item.get("table_row_ids") or []),
+                            "table_headers": list(item.get("table_headers") or []),
+                            "table_cell_ids": list(item.get("table_cell_ids") or []),
+                            "synthetic_span": bool(item.get("synthetic_span")),
+                            "alignment_precision": item.get("alignment_precision"),
                         },
                     }
                     for item in retrieval_projection
@@ -844,6 +862,12 @@ async def index_document_for_thread(
                         "tags": list(projection.get("tags") or []),
                         "tag_provenance": dict(projection.get("tag_provenance") or {}),
                         "source_spans": list(projection.get("source_spans") or []),
+                        "table_row_id": projection.get("table_row_id"),
+                        "table_row_ids": list(projection.get("table_row_ids") or []),
+                        "table_headers": list(projection.get("table_headers") or []),
+                        "table_cell_ids": list(projection.get("table_cell_ids") or []),
+                        "synthetic_span": bool(projection.get("synthetic_span")),
+                        "alignment_precision": projection.get("alignment_precision"),
                     })
                 chunk_metadatas.append(chunk_metadata)
 
@@ -911,6 +935,15 @@ async def index_document_for_thread(
                 page_count = _page_count_from_chunks(parsed_chunks)
                 if page_count is not None:
                     metadata["page_count"] = page_count
+            if expected_source_version:
+                current_freshness = await evaluate_document_freshness(
+                    file_hash,
+                    embedding_model,
+                    require_manifest=True,
+                )
+                current_source_version = current_freshness.get("source_version")
+                if str(current_source_version or "") != str(expected_source_version):
+                    raise DocumentVersionChangedError(current_source_version)
             finished_at = iso_utc_z()
             logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
 
@@ -942,6 +975,43 @@ async def index_document_for_thread(
                 "chunks_count": indexed_count
             }
 
+    except DocumentConversionPendingError as e:
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=embedding_model,
+            thread_id=thread_id if persist_thread_state else None,
+            started_at=started_at,
+            finished_at=iso_utc_z(),
+            error=str(e),
+        )
+        return {"status": "pending", "reason": "document_conversion_pending", "message": str(e)}
+    except DocumentVersionChangedError as e:
+        if retrieval_manifest is not None:
+            try:
+                await get_canonical_document_repo().mark_vector_status(
+                    retrieval_manifest.manifest_id,
+                    "failed",
+                    failure={"code": "document_version_changed", "message": str(e)},
+                )
+                await db_client.delete_document_vectors_by_manifest(retrieval_manifest.manifest_id, embedding_model)
+            except Exception:
+                logger.exception("Failed to clean stale vector materialization for %s", file_hash)
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=embedding_model,
+            thread_id=thread_id if persist_thread_state else None,
+            started_at=started_at,
+            finished_at=iso_utc_z(),
+            error=str(e),
+        )
+        return {
+            "status": "stale",
+            "reason": "document_version_changed",
+            "current_source_version": e.current_source_version,
+            "message": str(e),
+        }
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
         if retrieval_manifest is not None:

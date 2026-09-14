@@ -486,7 +486,7 @@ class TestThreadEndpoints:
         thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
         file_record = SimpleNamespace(file_hash="file-1", source_type="pdf")
         db = SimpleNamespace(get_thread_stats=AsyncMock(return_value={"documents": {}}))
-        readiness = {"ready": False, "source_version": "current-version"}
+        readiness = {"ready": False, "canonical_ready": True, "source_version": "current-version"}
 
         with (
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),

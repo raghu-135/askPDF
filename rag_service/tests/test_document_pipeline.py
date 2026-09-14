@@ -5,6 +5,7 @@ from app.services.document_pipeline import (
     build_canonical_payload,
     derive_hierarchy,
     pack_retrieval_chunks,
+    project_sentences,
     stable_source_id,
     CANONICAL_SCHEMA_VERSION,
 )
@@ -153,6 +154,40 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
     assert structure["headers"] == ["", ""]
     assert structure["header_rows"] == []
     assert structure["rows"] == [["A", "B"]]
+
+
+def test_oversized_table_rows_repeat_headers_and_preserve_synthetic_provenance():
+    payload = {
+        "elements": [{
+            "element_id": "table-1",
+            "element_type": "table",
+            "label": "table",
+            "text": "canonical table text",
+            "pages": [4],
+            "table_structure": {
+                "headers": ["Metric", "Value"],
+                "rows": [["Revenue", "one two three four five six seven eight nine ten eleven twelve"]],
+                "cells": [],
+            },
+        }]
+    }
+
+    sentences = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
+    assert sentences[0]["table_row_id"] == "table-1:row:1"
+    assert sentences[0]["source_spans"] == []
+    assert sentences[0]["alignment_precision"] == "synthetic"
+
+    chunks = pack_retrieval_chunks(
+        sentences,
+        token_counter=_counter(),
+        embedding_token_limit=12,
+        document_identity="file:generation",
+    )
+    assert len(chunks) > 1
+    assert all("Table headers: Metric | Value" in chunk["body_text"] for chunk in chunks)
+    assert all(chunk["table_row_id"] == "table-1:row:1" for chunk in chunks)
+    assert all(chunk["source_spans"] == [] for chunk in chunks)
+    assert len({chunk["chunk_id"] for chunk in chunks}) == len(chunks)
 
 
 def test_document_identity_prevents_cross_file_element_and_chunk_collisions():

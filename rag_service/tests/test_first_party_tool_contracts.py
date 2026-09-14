@@ -60,6 +60,7 @@ def _patch_ready_manifest(monkeypatch):
     async def ready(file_hash, _embedding_model, **_kwargs):
         return {
             "ready": True,
+            "canonical_ready": True,
             "source_version": f"ready-{file_hash}",
             "manifest": SimpleNamespace(
                 file_hash=file_hash,
@@ -218,7 +219,7 @@ async def test_search_knowledge_enforces_document_ownership(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_knowledge_does_not_query_unpublished_materialization(monkeypatch):
-    readiness = AsyncMock(return_value={"ready": False, "reason": "manifest_incomplete", "source_version": "repair-file-1"})
+    readiness = AsyncMock(return_value={"ready": False, "canonical_ready": True, "reason": "manifest_incomplete", "source_version": "repair-file-1"})
     monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
     monkeypatch.setattr("app.services.embedding_materialization_service.ensure_embedding_job", AsyncMock())
     embed = AsyncMock(return_value=[0.1, 0.2])
