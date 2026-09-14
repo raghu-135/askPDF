@@ -153,10 +153,12 @@ async def queue_file_processing(
 
     parsed_data = await get_file_parsed_sentences(file_hash)
     canonical = await get_canonical_document_repo().get(file_hash)
-    if canonical and canonical.status == "completed":
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, require_reading=True)
+    if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif parsed_data and isinstance(parsed_data.get("sentences"), list):
+    elif source_type != FileSourceType.PDF.value and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
@@ -208,10 +210,12 @@ async def queue_project_file_processing(
         )
     parsed_data = await get_file_parsed_sentences(file_hash)
     canonical = await get_canonical_document_repo().get(file_hash)
-    if canonical and canonical.status == "completed":
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, require_reading=True)
+    if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif parsed_data and isinstance(parsed_data.get("sentences"), list):
+    elif source_type != FileSourceType.PDF.value and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):

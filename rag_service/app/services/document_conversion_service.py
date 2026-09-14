@@ -20,7 +20,8 @@ from app.services.document_pipeline import (
     stable_fingerprint,
     stable_identity,
 )
-from app.services.parsing_service import extraction_configuration, parse_with_docling, parse_with_pdfplumber
+from app.services.document_extraction_contract import extraction_configuration
+from app.services.parsing_service import parse_with_docling, parse_with_pdfplumber
 
 
 logger = logging.getLogger(__name__)
@@ -67,10 +68,15 @@ def _verified_text_match(target: str, candidate: str) -> bool:
 
 def current_extraction_fingerprint(data: bytes, *, merge_multi_bbox: bool = True) -> str:
     """Build the cache key from content, parser settings, and package versions."""
-    import docling
-
     return stable_fingerprint(
         hashlib.sha256(data).hexdigest(),
+        current_extraction_contract_fingerprint(merge_multi_bbox=merge_multi_bbox),
+    )
+
+
+def current_extraction_contract_fingerprint(*, merge_multi_bbox: bool = True) -> str:
+    """Fingerprint parser/schema inputs without reading a PDF."""
+    return stable_fingerprint(
         EXTRACTION_PIPELINE_VERSION,
         CANONICAL_SCHEMA_VERSION,
         extraction_configuration(),
@@ -129,6 +135,12 @@ async def convert_pdf_and_project(
     """Convert once, persist the canonical representation, and return reading data."""
     source = dict(source_metadata or {})
     source.setdefault("original_title", file_name)
+    source.setdefault("_file_hash", file_hash)
+    source.setdefault(
+        "_extraction_contract_fingerprint",
+        current_extraction_contract_fingerprint(merge_multi_bbox=merge_multi_bbox),
+    )
+    source.setdefault("_extraction_pipeline_version", EXTRACTION_PIPELINE_VERSION)
     fingerprint = current_extraction_fingerprint(data, merge_multi_bbox=merge_multi_bbox)
     import docling
     generation = stable_identity("conversion", file_hash, fingerprint)
@@ -256,4 +268,9 @@ async def convert_pdf_and_project(
             pass
 
 
-__all__ = ["conversion_filename", "convert_pdf_and_project", "current_extraction_fingerprint"]
+__all__ = [
+    "conversion_filename",
+    "convert_pdf_and_project",
+    "current_extraction_contract_fingerprint",
+    "current_extraction_fingerprint",
+]

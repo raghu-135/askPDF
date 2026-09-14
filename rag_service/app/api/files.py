@@ -328,7 +328,13 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str, background_tasks
 
     # Retrieve parsed sentences from database
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data:
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(
+        file_hash,
+        thread.embedding_model,
+        require_reading=True,
+    )
+    if parsed_data and freshness.get("reading_ready") and freshness.get("canonical_ready"):
         sentences = parsed_data.get("sentences", [])
         return {
             "sentences": sentences,
@@ -402,7 +408,7 @@ async def check_pdf_exists_endpoint(thread_id: str, file_hash: str):
 
 
 @router.get("/threads/{thread_id}/files/{file_hash}/sentences")
-async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
+async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str, background_tasks: BackgroundTasks):
     """
     Retrieve parsed sentences for a file from database.
     Returns the JSON object with version and sentences array.
@@ -419,6 +425,20 @@ async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
             return DEFAULT_SENTENCES_JSON
 
         parsed_data = await get_file_parsed_sentences(file_hash)
+        from app.services.document_projection_service import evaluate_document_freshness
+        freshness = await evaluate_document_freshness(file_hash, thread.embedding_model, require_reading=True)
+        if parsed_data and not (freshness.get("canonical_ready") and freshness.get("reading_ready")):
+            file = await get_file(file_hash)
+            if file:
+                await queue_file_processing(
+                    background_tasks,
+                    thread,
+                    file_hash,
+                    file.file_name,
+                    file.file_path,
+                    file.source_type,
+                )
+            return DEFAULT_SENTENCES_JSON
         # Return data even if sentences is null (parsing pending) - never 404
         if parsed_data is None:
             # File exists but no parsing record yet - return default (matches DB init)
@@ -771,6 +791,10 @@ async def get_project_pdf_data_endpoint(project_id: str, file_hash: str, backgro
         file.source_type,
     )
     parsed_data = await get_file_parsed_sentences(file_hash) or {}
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, project.embedding_model, require_reading=True)
+    if not freshness.get("canonical_ready") or not freshness.get("reading_ready"):
+        parsed_data = {}
     return {
         "sentences": parsed_data.get("sentences") or [],
         "download_url": f"/projects/{project_id}/files/{file_hash}/download",
@@ -797,9 +821,22 @@ async def check_project_pdf_exists_endpoint(project_id: str, file_hash: str):
 
 
 @router.get("/projects/{project_id}/files/{file_hash}/sentences")
-async def get_project_sentences_endpoint(project_id: str, file_hash: str):
-    await _require_project_file(project_id, file_hash)
-    return await get_file_parsed_sentences(file_hash) or DEFAULT_SENTENCES_JSON
+async def get_project_sentences_endpoint(project_id: str, file_hash: str, background_tasks: BackgroundTasks):
+    project, file = await _require_project_file(project_id, file_hash)
+    parsed_data = await get_file_parsed_sentences(file_hash)
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, project.embedding_model, require_reading=True)
+    if parsed_data and not (freshness.get("canonical_ready") and freshness.get("reading_ready")):
+        await queue_project_file_processing(
+            background_tasks,
+            project,
+            file_hash,
+            file.file_name,
+            file.file_path,
+            file.source_type,
+        )
+        return DEFAULT_SENTENCES_JSON
+    return parsed_data or DEFAULT_SENTENCES_JSON
 
 
 @router.get("/projects/{project_id}/files/{file_hash}/status")

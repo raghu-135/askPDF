@@ -53,8 +53,9 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     config.set_main_option("script_location", str(service_root / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert set(scripts.get_heads()) == {"f9e4a7c2d1b0"}
+    assert set(scripts.get_heads()) == {"fa1b2c3d4e5f"}
     assert scripts.get_revision("f9e4a7c2d1b0").down_revision == "f8d2e4b6c1a3"
+    assert scripts.get_revision("fa1b2c3d4e5f").down_revision == "f9e4a7c2d1b0"
     assert scripts.get_revision("b2d8e4f6a1c3").down_revision == "a9c7e1f3b5d2"
     assert scripts.get_revision("a9c7e1f3b5d2").down_revision == "a8d3f1c6e4b2"
     assert scripts.get_revision("a8d3f1c6e4b2").down_revision == "e7c4a1b9d2f6"

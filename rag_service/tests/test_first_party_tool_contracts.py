@@ -252,6 +252,14 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
 
+    async def fresh_document(*_args, **_kwargs):
+        return {"canonical_ready": True, "manifest_ready": True, "ready": True}
+
+    monkeypatch.setattr(
+        "app.services.document_projection_service.evaluate_document_freshness",
+        fresh_document,
+    )
+
     class Services:
         async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
 

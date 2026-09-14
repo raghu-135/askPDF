@@ -47,11 +47,20 @@ def _explicit_page_filter(query: str) -> list[int]:
 
 
 def _normalise_pages(value: Any) -> list[int]:
-    if isinstance(value, str):
-        return [int(item) for item in re.findall(r"\d+", value)]
-    if isinstance(value, (list, tuple, set)):
-        return [int(item) for item in value if str(item).isdigit()]
-    return []
+    values = [value] if isinstance(value, str) else list(value or []) if isinstance(value, (list, tuple, set)) else []
+    pages: set[int] = set()
+    for item in values:
+        if isinstance(item, int) or (isinstance(item, str) and item.strip().isdigit()):
+            page = int(item)
+            if page > 0:
+                pages.add(page)
+            continue
+        for start, end in re.findall(r"(\d+)\s*(?:-|–|to)\s*(\d+)", str(item), re.IGNORECASE):
+            first, last = sorted((int(start), int(end)))
+            pages.update(range(first, min(last, first + 999) + 1))
+        if not re.search(r"\d+\s*(?:-|–|to)\s*\d+", str(item)):
+            pages.update(int(part) for part in re.findall(r"\d+", str(item)) if int(part) > 0)
+    return sorted(pages)
 
 
 def _source_from_chunk(chunk: Any, *, score: Any = None, role: str = "evidence") -> dict[str, Any]:
@@ -162,7 +171,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             },
         )
         if not raw:
-            return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "indexing", "repair_scheduled": repair_scheduled})
+            return make_tool_result(tool_name=tool_name, content="No relevant content matched the requested document filters.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT], artifacts={"readiness": "ready", "repair_scheduled": repair_scheduled})
         if context.use_reranker and raw:
             raw = await services.rerank(request.query, raw)
         if request.section_id:
@@ -196,14 +205,22 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             groups: dict[str, dict[str, Any]] = {}
             for item in raw:
                 metadata = item.get("metadata") or {}
-                key = item.get("file_hash") if request.level == "document" else (
-                    request.section_id if request.section_id else metadata.get("section_id") or item.get("file_hash")
-                )
-                if not key:
+                file_hash = str(item.get("file_hash") or "")
+                section_key = request.section_id if request.section_id else metadata.get("section_id") or file_hash
+                key = file_hash if request.level == "document" else f"{file_hash}:{section_key}"
+                if not file_hash or not section_key or not key:
                     continue
-                group = groups.setdefault(str(key), {"score": 0.0, "file_hash": item.get("file_hash"), "section_id": metadata.get("section_id"), "heading_path": metadata.get("heading_path") or [], "pages": set(), "source_element_ids": set(), "text": item.get("text", "")})
+                group = groups.setdefault(str(key), {
+                    "score": 0.0,
+                    "file_hash": file_hash,
+                    "section_id": metadata.get("section_id") if request.level == "section" else None,
+                    "heading_path": metadata.get("heading_path") or [],
+                    "pages": set(),
+                    "source_element_ids": set(),
+                    "text": item.get("text", ""),
+                })
                 group["score"] = max(float(group["score"] or 0), float(item.get("rerank_score", item.get("score", 0)) or 0))
-                group["pages"].update((metadata.get("pages") or item.get("pages") or []))
+                group["pages"].update(_normalise_pages(metadata.get("pages") or item.get("pages") or []))
                 group["source_element_ids"].update(metadata.get("source_element_ids") or [])
             matches = sorted(groups.values(), key=lambda item: item["score"], reverse=True)[:request.max_results]
 
@@ -224,15 +241,42 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                 content_parts.append(f"[Source {source['source_id']} | pages {source.get('page_start') or '?'}]\n{evidence_text}")
         else:
             section_cache: dict[tuple[str, str], Any] = {}
+            file_cache: dict[str, Any] = {}
             for item in matches:
                 file_hash = str(item.get("file_hash") or "")
                 section_id = request.section_id if request.level == "section" and request.section_id else item.get("section_id")
-                title = file_hash
+                if file_hash not in file_cache:
+                    from app.db import get_file
+                    file_cache[file_hash] = await get_file(file_hash)
+                file_record = file_cache[file_hash]
+                canonical = await repo.get(file_hash)
+                source_metadata = dict(getattr(canonical, "source_metadata_json", None) or {}) if canonical else {}
+                payload = getattr(canonical, "document_json", None) if canonical else {}
+                title = (
+                    getattr(file_record, "file_name", None)
+                    or source_metadata.get("original_title")
+                    or (payload or {}).get("filename")
+                    or file_hash
+                )
                 if request.level == "section" and section_id:
-                    sections = await repo.get_sections(file_hash)
+                    cache_key = (file_hash, str(section_id))
+                    sections = section_cache.get(cache_key)
+                    if sections is None:
+                        sections = await repo.get_sections(file_hash)
+                        section_cache[cache_key] = sections
                     section = next((value for value in sections if value.section_id == section_id), None)
                     title = section.title if section else section_id
-                source = {"source_id": str(section_id or file_hash), "file_hash": file_hash, "parent_id": None, "section_id": section_id, "title": title, "pages": sorted(item.get("pages") or []), "source_element_ids": sorted(item.get("source_element_ids") or []), "score": item.get("score"), "evidence_role": "discovery"}
+                source = {
+                    "source_id": str(section_id if request.level == "section" and section_id else file_hash),
+                    "file_hash": file_hash,
+                    "parent_id": None,
+                    "section_id": section_id if request.level == "section" else None,
+                    "title": title,
+                    "pages": _normalise_pages(item.get("pages") or []),
+                    "source_element_ids": sorted(item.get("source_element_ids") or []),
+                    "score": item.get("score"),
+                    "evidence_role": "discovery",
+                }
                 sources.append(source)
                 content_parts.append(f"[Discovery: {title}]\n{title}")
         content, truncated = bounded_retrieval_text(content_parts)
@@ -259,9 +303,21 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
             return make_tool_result(tool_name=tool_name, content="No thread context found.", context=context, started=started, warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT])
         await _scoped_files(context, request.document_id)
         repo = get_canonical_document_repo()
-        canonical = await repo.get(request.document_id)
-        if canonical is None or canonical.status != "completed":
-            return make_tool_result(tool_name=tool_name, content="Document conversion is not ready.", context=context, started=started, artifacts={"readiness": "conversion_in_progress"}, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS])
+        from app.services.document_projection_service import evaluate_document_freshness
+        freshness = await evaluate_document_freshness(request.document_id, context.embedding_model)
+        canonical = freshness.get("canonical")
+        if not freshness.get("canonical_ready"):
+            if context.embedding_model:
+                from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+                await ensure_embedding_job(
+                    resource_type=RESOURCE_DOCUMENT,
+                    resource_id=request.document_id,
+                    scope_id=context.thread_id,
+                    embedding_model=context.embedding_model,
+                    source_version=freshness.get("repair_source_version") or request.document_id,
+                    requeue_completed=True,
+                )
+            return make_tool_result(tool_name=tool_name, content="Document conversion is not ready.", context=context, started=started, artifacts={"readiness": "conversion_in_progress", "repair_scheduled": bool(context.embedding_model)}, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS])
         sections = await repo.get_sections(request.document_id, canonical.generation)
         if request.section_id:
             descendant_ids = set(await repo.get_descendant_section_ids(request.document_id, canonical.generation, request.section_id))
@@ -301,7 +357,27 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         repo = get_canonical_document_repo()
         selected = []
         source_section_files: set[str] = set()
+        repair_scheduled = False
         for file_hash in file_hashes:
+            from app.services.document_projection_service import evaluate_document_freshness
+            freshness = await evaluate_document_freshness(
+                file_hash,
+                context.embedding_model,
+                require_manifest=True,
+            )
+            if not freshness.get("canonical_ready") or not freshness.get("manifest_ready"):
+                if context.embedding_model:
+                    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+                    await ensure_embedding_job(
+                        resource_type=RESOURCE_DOCUMENT,
+                        resource_id=file_hash,
+                        scope_id=context.thread_id,
+                        embedding_model=context.embedding_model,
+                        source_version=freshness.get("repair_source_version") or file_hash,
+                        requeue_completed=True,
+                    )
+                    repair_scheduled = True
+                continue
             canonical = await repo.get(file_hash)
             candidates = []
             if request.source_id.startswith("src_"):
@@ -332,6 +408,8 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     or item.table_id == request.source_id
                 )
             )
+        if not selected and repair_scheduled:
+            return make_tool_result(tool_name=tool_name, content="Document context is being repaired.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "repair_in_progress", "repair_scheduled": True})
         if not selected:
             return make_tool_result(tool_name=tool_name, content="The requested source is not available in this thread.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
         source_chunk = selected[0]
