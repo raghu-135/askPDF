@@ -90,10 +90,13 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         )
         task_context = context.task_context
         from app.services.tool_approval import invocation_policies
+        approval_task_id = str(request.task_id) if request.task_id else None
         approval_policy = invocation_policies(
-            config, permissions=task_context.permissions if task_context is not None else None,
+            config,
+            permissions=task_context.permissions if task_context is not None else None,
+            task_id=approval_task_id,
         )
-        task_id = str(request.task_id or request.run_id)
+        token_task_id = approval_task_id or str(request.run_id)
         limits = dict(task_context.limits or {}) if task_context is not None else {}
         ttl_seconds = execution_context_ttl_seconds(limits)
         token = issue_execution_context_token(
@@ -104,9 +107,15 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 context_window=int(config.get("context_window") or 32_768),
                 use_web_search=bool(config.get("use_web_search")),
                 use_reranker=use_reranker,
-                extensions={"task_id": task_id, "llm_model": config.get("llm_model"), "tool_approval_policy": approval_policy},
+                extensions={
+                    "task_id": token_task_id,
+                    "approval_task_id": approval_task_id,
+                    "runtime": "langgraph",
+                    "llm_model": config.get("llm_model"),
+                    "tool_approval_policy": approval_policy,
+                },
             ),
-            task_id=task_id,
+            task_id=token_task_id,
             allowed_tools=allowed_tools,
             ttl_seconds=ttl_seconds,
             runtime="langgraph",

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+LANGGRAPH_TOOL_APPROVAL_RESPONSE = "run.resume"
+HERMES_TOOL_APPROVAL_RESPONSE = "run.approval.respond"
+
 
 class ApprovalMode(str, Enum):
     ALLOW = "allow"
@@ -39,6 +42,19 @@ class ToolApprovalPolicy:
 
     def to_dict(self) -> dict[str, str]:
         return {"mode": self.mode.value, "scope": self.scope.value}
+
+
+def tool_approval_response_operation(runtime: str) -> str:
+    """Map a runtime identity to the native continuation used after a tool gate."""
+    if str(runtime or "").strip().lower() == "hermes":
+        return HERMES_TOOL_APPROVAL_RESPONSE
+    return LANGGRAPH_TOOL_APPROVAL_RESPONSE
+
+
+def stable_invocation_id(identity: Mapping[str, Any]) -> str:
+    """Deterministic invocation identity for MCP retries after a human pause."""
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def invocation_digest(tool_name: str, arguments: Mapping[str, Any]) -> str:

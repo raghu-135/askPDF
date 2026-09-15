@@ -1,9 +1,14 @@
 """Bridge MCP human-gated tools to the pinned Hermes native approval API."""
 
 import base64
+import hashlib
 import json
-from uuid import uuid4
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+
+def _stable_invocation_id(identity: Mapping[str, Any]) -> str:
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 APPROVAL_RULE_PREFIX = "askpdf_tool:"
 
@@ -20,9 +25,19 @@ def decode_approval_request(event: dict[str, Any]) -> dict[str, Any] | None:
     return request
 
 
-def wrap_mcp_handler(handler: Callable[..., str], request_approval: Callable[..., dict[str, Any]]) -> Callable[..., str]:
+def wrap_mcp_handler(
+    handler: Callable[..., str],
+    request_approval: Callable[..., dict[str, Any]],
+    *,
+    tool_name: str | None = None,
+) -> Callable[..., str]:
     def invoke(arguments: dict[str, Any], **kwargs: Any) -> str:
-        arguments = {**arguments, "_askpdf_invocation_id": str(uuid4())}
+        payload_args = {
+            key: value for key, value in dict(arguments or {}).items()
+            if key != "_askpdf_invocation_id"
+        }
+        invocation_id = _stable_invocation_id({"tool": tool_name or "", "arguments": payload_args})
+        arguments = {**payload_args, "_askpdf_invocation_id": invocation_id}
         raw = handler(arguments, **kwargs)
         payload = json.loads(raw)
         structured = payload.get("structuredContent") or {}

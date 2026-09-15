@@ -31,7 +31,7 @@ import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipConte
 import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
 import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
-import { transformSentences } from "../lib/bbox-derivation";
+import { isParsedSentencePayload, transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
@@ -358,6 +358,9 @@ export default function Home() {
 
   // Handle parsing completion - update tab with fetched sentences
   const handleParsingComplete = async (fileHash: string, sentences: any[]) => {
+    if (!Array.isArray(sentences)) {
+      return;
+    }
     const transformedSentences = transformSentences(sentences);
     setPdfTabs(prev => prev.map(tab => {
       if (tab.fileHash === fileHash) {
@@ -402,7 +405,7 @@ export default function Home() {
           ? { scope: 'thread', id: activeThread.id }
           : { scope: 'project', id: activeProject!.id };
         const parsedData = await getParsedSentencesForTarget(activeTab.fileHash, target);
-        if (parsedData?.sentences !== null && Array.isArray(parsedData.sentences) && parsedData.sentences.length > 0) {
+        if (isParsedSentencePayload(parsedData?.sentences)) {
           // Parsing complete - sentences is an array
           handleParsingComplete(activeTab.fileHash, parsedData.sentences);
           if (pollInterval) {

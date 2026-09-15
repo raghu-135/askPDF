@@ -13,7 +13,15 @@ import json
 
 from sqlmodel import select
 from app.db.models_sqlmodel import File, ThreadFile, ProcessStatus
-from app.db.repositories.file_repo_sqlmodel import FileRepository
+from app.db.repositories.file_repo_sqlmodel import DEFAULT_SENTENCES_JSON, FileRepository
+from app.db import DEFAULT_SENTENCES_JSON as PUBLIC_DEFAULT_SENTENCES_JSON
+
+
+def test_default_sentences_payload_is_an_object_with_pending_sentences():
+    """The sentences API must return an object, not a JSON string, while parsing is pending."""
+    assert PUBLIC_DEFAULT_SENTENCES_JSON is DEFAULT_SENTENCES_JSON
+    assert isinstance(DEFAULT_SENTENCES_JSON, dict)
+    assert DEFAULT_SENTENCES_JSON["sentences"] is None
 
 
 class TestFileRepository:

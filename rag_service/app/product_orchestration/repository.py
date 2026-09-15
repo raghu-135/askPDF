@@ -633,10 +633,14 @@ class AgentWorkflowRepository:
             if run is None:
                 return False
             interrupt = dict(run.pending_interrupt_json or {})
+            restorable = (
+                interrupt.get("type") == "tool_approval"
+                or interrupt.get("response_operation") == "run.approval.respond"
+            )
             if (
                 run.status != RUN_STATUS_RUNNING
                 or interrupt.get("status") != INTERRUPT_STATUS_RESUMED
-                or interrupt.get("response_operation") != "run.approval.respond"
+                or not restorable
                 or not terminal_decision_matches(interrupt, action=action, interrupt_id=interrupt_id)
             ):
                 return False

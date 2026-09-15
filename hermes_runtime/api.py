@@ -242,6 +242,44 @@ def _sse(event: Mapping[str, Any], result: Mapping[str, Any] | None = None) -> s
     return sse_encode(event, result=result)
 
 
+def _failed_runtime_result(
+    error: Mapping[str, Any],
+    continuation: Mapping[str, Any] | None,
+    *,
+    boundary_delta: Mapping[str, Any] | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    delta = dict(boundary_delta or {})
+    if not delta:
+        event_id = f"{run_id or 'hermes'}:failed"
+        delta = {
+            "event_id": event_id,
+            "attempt_id": f"{run_id or 'hermes'}:attempt:1",
+            "operation_id": "hermes_session",
+            "idempotency_key": f"task-delta:{event_id}",
+            "observed_task_version": 0,
+            "observed_plan_revision": 0,
+            "plan_changes": [],
+            "todo_changes": [],
+            "subagent_changes": [],
+        }
+    result: dict[str, Any] = {
+        "status": "failed",
+        "error": dict(error),
+        "orchestration_delta": {
+            **delta,
+            "budget_usage": {},
+            "artifacts": [],
+            "pending_interrupt": {"operation": "clear"},
+            "result": {"status": "failed", "error": dict(error)},
+            "correction_outcomes": [],
+        },
+    }
+    if continuation is not None:
+        result["continuation"] = continuation
+    return result
+
+
 def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
     """Copy a durable record and restore its upstream binding into the request."""
     payload = copy.deepcopy(dict(record.get("payload") or {}))
@@ -534,7 +572,11 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         terminal=True,
                         continuation=continuation or None,
                     )
-                    store.finalize(run_id, _sse(event, {"status": "failed", "error": error}), status="failed")
+                    store.finalize(
+                        run_id,
+                        _sse(event, _failed_runtime_result(error, continuation, run_id=run_id)),
+                        status="failed",
+                    )
                     continue
                 if not restored:
                     continue
@@ -1367,7 +1409,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         error = _error("hermes_upstream_protocol_error", "Hermes closed the event stream without a terminal event", retryable=True)
                         event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
                         terminal_seen = True
-                        yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+                        yield _sse(event, _failed_runtime_result(error, continuation, boundary_delta=boundary_delta))
         except HTTPException as exc:
             if terminal_seen:
                 return
@@ -1411,7 +1453,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 )
             event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
-            yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+            yield _sse(event, _failed_runtime_result(error, continuation, boundary_delta=boundary_delta))
         except httpx.HTTPError as exc:
             if terminal_seen:
                 return
@@ -1463,7 +1505,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             )
             event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
             terminal_seen = True
-            yield _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+            yield _sse(event, _failed_runtime_result(error, continuation, boundary_delta=boundary_delta))
         finally:
             # Approval is a resumable boundary. Keep the credential-bearing
             # profile active until a terminal result, cancellation, or expiry.
@@ -1530,7 +1572,14 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     terminal=True,
                     continuation=continuation if isinstance(continuation, Mapping) else None,
                 )
-                frame = _sse(event, {"status": "failed", "error": error, "continuation": continuation})
+                frame = _sse(
+                    event,
+                    _failed_runtime_result(
+                        error,
+                        continuation if isinstance(continuation, Mapping) else None,
+                        run_id=run_id,
+                    ),
+                )
                 try:
                     state["store"].finalize(run_id, frame, status="failed")
                 except Exception:
@@ -1570,7 +1619,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 sequence = state["store"].next_sequence(run_id)
                 frame = _sse(
                     _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True),
-                    {"status": "failed", "error": error},
+                    _failed_runtime_result(error, None, run_id=run_id),
                 )
                 try:
                     state["store"].finalize(run_id, frame, status="failed")

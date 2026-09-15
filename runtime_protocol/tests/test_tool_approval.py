@@ -20,7 +20,16 @@ class ToolApprovalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decision_scope("unexpected", ToolApprovalPolicy(ApprovalMode.ASK))
 
-    def test_digest_binds_exact_arguments_and_is_key_order_independent(self):
+    def test_runtime_response_operations_are_explicit(self):
+        from runtime_protocol.tool_approval import (
+            tool_approval_response_operation, stable_invocation_id,
+        )
+        self.assertEqual(tool_approval_response_operation("hermes"), "run.approval.respond")
+        self.assertEqual(tool_approval_response_operation("langgraph"), "run.resume")
+        self.assertEqual(
+            stable_invocation_id({"tool": "search_web", "arguments": {"q": 1}}),
+            stable_invocation_id({"arguments": {"q": 1}, "tool": "search_web"}),
+        )
         self.assertEqual(invocation_digest("tool", {"a": 1, "b": 2}), invocation_digest("tool", {"b": 2, "a": 1}))
         self.assertNotEqual(invocation_digest("tool", {"a": 1}), invocation_digest("tool", {"a": 2}))
         self.assertNotEqual(invocation_digest("tool", {}), invocation_digest("other", {}))

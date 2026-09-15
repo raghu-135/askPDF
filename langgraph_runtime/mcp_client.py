@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -20,6 +19,7 @@ from langgraph.func import task
 from langgraph.config import get_config
 
 from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from runtime_protocol.tool_approval import stable_invocation_id
 from runtime_protocol.tool_contract import normalize_tool_result
 
 
@@ -236,7 +236,7 @@ async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | N
         "tool": name,
         "arguments": arguments,
     }
-    invocation_id = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    invocation_id = stable_invocation_id(identity)
     gated_arguments = {**arguments, "_askpdf_invocation_id": invocation_id}
     raw = await _call_transport(name, gated_arguments, config)
     payload = json.loads(raw)

@@ -114,6 +114,7 @@ def _install() -> None:
         return wrap_mcp_handler(
             handler,
             request_tool_approval,
+            tool_name=tool_name,
         )
 
     mcp_tool._make_tool_handler = make_tool_handler

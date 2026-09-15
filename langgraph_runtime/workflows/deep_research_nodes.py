@@ -33,6 +33,7 @@ from langgraph_runtime.workflows.deep_research_execution import (
 )
 from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchSubagentResult
 from langgraph_runtime.models.llm import execution_model_client, get_llm
+from langgraph_runtime.models.retry import is_retryable_model_error
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.runtime_support.evidence import inherited_evidence_packets, tool_result_evidence
 from langgraph_runtime.runtime_support.task_results import (
@@ -279,6 +280,16 @@ def _todo_payload(todo: Any) -> Dict[str, Any]:
     return payload
 
 
+def _provider_json_schema_rejected(exc: BaseException) -> bool:
+    """Gemini/OpenRouter often reject json_schema with a non-retryable 400."""
+    retryable, _reason = is_retryable_model_error(str(exc))
+    if retryable:
+        return False
+    status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    return status in {400, 404, 422} or "invalid_argument" in text or "error code: 400" in text
+
+
 def _response_text(response: Any) -> str:
     # ``with_structured_output(..., include_raw=True)`` returns a mapping with
     # both the provider response and the parsed Pydantic value.  Keep the
@@ -389,21 +400,32 @@ async def _call_model(
                     details={"exception_type": type(exc).__name__},
                 ) from exc
             invoke = structured_model.ainvoke
-        async with services.execution_span(enabled=meter_research):
-            response = await run_cancellable(
-                invoke_llm_for_node(
-                    invoke,
-                    messages,
-                    state=state,
-                    config=config,
-                    node=node,
-                    started=started,
-                    retry_observer=observer,
-                    retry_attempts=attempts,
-                    model_name=model_name,
-                ),
-                services.cancellation,
-            )
+
+        async def _invoke_structured(current_invoke):
+            async with services.execution_span(enabled=meter_research):
+                return await run_cancellable(
+                    invoke_llm_for_node(
+                        current_invoke,
+                        messages,
+                        state=state,
+                        config=config,
+                        node=node,
+                        started=started,
+                        retry_observer=observer,
+                        retry_attempts=attempts,
+                        model_name=model_name,
+                    ),
+                    services.cancellation,
+                )
+
+        try:
+            response = await _invoke_structured(invoke)
+        except (ChatRunCancellationRequested, GraphBubbleUp, AgentRuntimeError):
+            raise
+        except Exception as exc:
+            if strategy != "provider_json_schema" or structured_schema is None or not _provider_json_schema_rejected(exc):
+                raise
+            response = await _invoke_structured(model.ainvoke)
     finally:
         # The execution-scoped provider client is owned by the adapter.
         pass

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import time
+from dataclasses import replace
 from typing import Any, Mapping
 
 from app.tools.context import ToolInvocationContext
@@ -192,6 +193,8 @@ def decode_execution_context_grant(
         runtime = str(payload.get("runtime") or "").strip().lower()
         if runtime not in {"hermes", "langgraph"}:
             raise ExecutionContextTokenError("malformed")
+        extensions["runtime"] = runtime
+        decoded = replace(decoded, extensions=extensions)
         if runtime == "hermes":
             try:
                 configured_context = hermes_model_context_length(required=True)
