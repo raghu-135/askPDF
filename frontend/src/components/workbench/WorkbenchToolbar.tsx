@@ -1,5 +1,14 @@
 import React, { useId } from 'react';
-import { Box, FormControl, InputLabel, Select, type SxProps, type Theme } from '@mui/material';
+import {
+  Autocomplete,
+  Box,
+  FormControl,
+  InputLabel,
+  Select,
+  TextField,
+  type SxProps,
+  type Theme,
+} from '@mui/material';
 
 function sxList(sx?: SxProps<Theme>) {
   return Array.isArray(sx) ? sx : sx ? [sx] : [];
@@ -120,5 +129,64 @@ export function WorkbenchSelect({
         {children}
       </Select>
     </FormControl>
+  );
+}
+
+export function WorkbenchAutocomplete({
+  label,
+  value,
+  options,
+  disabled = false,
+  minWidth = 220,
+  'aria-label': ariaLabel,
+  sx,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  disabled?: boolean;
+  minWidth?: number;
+  'aria-label'?: string;
+  sx?: SxProps<Theme>;
+  onChange: (value: string) => void;
+}) {
+  const resolvedOptions = value && !options.includes(value) ? [value, ...options] : options;
+  const selected = value || null;
+
+  return (
+    <Autocomplete
+      size="small"
+      options={resolvedOptions}
+      value={selected}
+      disabled={disabled}
+      disableClearable={Boolean(selected)}
+      autoHighlight
+      openOnFocus
+      selectOnFocus
+      handleHomeEndKeys
+      onChange={(_, next) => onChange(next || '')}
+      noOptionsText="No matches"
+      sx={[{ flex: `0 0 ${minWidth}px`, minWidth, maxWidth: minWidth * 1.6 }, ...sxList(sx)]}
+      slotProps={{
+        popper: {
+          sx: { minWidth },
+        },
+        listbox: {
+          sx: { maxHeight: 360 },
+        },
+      }}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label={label}
+          aria-label={ariaLabel}
+          size="small"
+          sx={{
+            '& .MuiOutlinedInput-root': workbenchControlOutlineSx,
+          }}
+        />
+      )}
+    />
   );
 }

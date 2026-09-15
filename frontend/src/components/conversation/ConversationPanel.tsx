@@ -3,7 +3,6 @@ import {
   Box,
   IconButton,
   List,
-  MenuItem,
   Paper,
   TextField,
   Tooltip,
@@ -12,7 +11,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { SxProps, Theme } from '@mui/material/styles';
 import {
-  WorkbenchSelect,
+  WorkbenchAutocomplete,
   WorkbenchToolbar,
   workbenchControlOutlineSx,
 } from '../workbench/WorkbenchToolbar';
@@ -158,14 +157,13 @@ export function ConversationHeader({
           slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
         />
       </Tooltip>
-      <WorkbenchSelect
+      <WorkbenchAutocomplete
         label="Select LLM"
         value={model}
+        options={models}
         disabled={disabled}
         onChange={handleModelChange}
-      >
-        {models.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
-      </WorkbenchSelect>
+      />
       {afterModelControls}
       {trailingActions}
     </WorkbenchToolbar>
