@@ -22,6 +22,7 @@ from app.db.models_sqlmodel import (
     Thread,
     File,
     ChatTurn,
+    ThreadCanvas,
     ThreadFile,
     AgentWorkflow,
     AgentRun,

@@ -22,7 +22,8 @@ The Compose topology and service ports are defined in docker-compose.yml.
 
 The frontend is a client-heavy Next.js application. The main workspace is
 assembled in frontend/src/pages/index.tsx. Chat, thread/project navigation,
-PDF viewing, memory management, workflow building, traces, and deep-research
+PDF viewing, memory management, workflow building, traces, research canvases,
+and deep-research
 panels are implemented under frontend/src/components.
 
 The frontend normally calls the Next server proxy at /api/backend. The proxy

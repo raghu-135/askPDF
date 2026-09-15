@@ -983,6 +983,7 @@ export interface Message {
   agent_workflow_id?: string;
   agent_route?: string;
   agent_route_reason?: string;
+  canvas_ref?: { id: string; title: string } | null;
 }
 
 export interface AgentTraceEvent {

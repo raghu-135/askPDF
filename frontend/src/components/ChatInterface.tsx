@@ -19,6 +19,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
     deriveConversationSentences,
@@ -112,6 +113,7 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import type { CanvasRef } from '../lib/canvas-spec';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -128,6 +130,7 @@ interface ChatMessage extends Message {
     agent_route?: string;
     agent_route_reason?: string;
     pending_human_review?: boolean;
+    canvas_ref?: CanvasRef | null;
 }
 
 type LiveChatExecution = {
@@ -391,6 +394,7 @@ type ChatMessageItemProps = {
     onEditQuestion: (msg: ChatMessage, event: React.MouseEvent) => void;
     onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
     onOpenAgentRun: (msg: ChatMessage) => void;
+    onOpenCanvas?: (canvas: CanvasRef) => void;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
 };
 
@@ -413,6 +417,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     onEditQuestion,
     onDeleteMessage,
     onOpenAgentRun,
+    onOpenCanvas,
     formatAgentWorkflowLabel,
 }: ChatMessageItemProps) {
     const theme = useTheme();
@@ -532,6 +537,19 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </Button>
                     </Box>
                 )}
+                {msg.canvas_ref && onOpenCanvas && (
+                    <Box sx={{ mb: 1 }}>
+                        <Button
+                            size="small"
+                            variant="text"
+                            startIcon={<DashboardOutlinedIcon fontSize="small" />}
+                            onClick={() => onOpenCanvas(msg.canvas_ref!)}
+                            sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
+                        >
+                            Open canvas
+                        </Button>
+                    </Box>
+                )}
                 {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
                     <Box sx={{ mb: 1 }}>
                         <details>
@@ -642,6 +660,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
@@ -680,6 +699,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     autoScroll = true,
     isPanelResizing = false,
     onOpenTrace,
+    onOpenCanvas,
     onOpenMemoryReview,
     testRuntime,
 }) => {
@@ -1001,6 +1021,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 agent_workflow_id: m.agent_workflow_id ?? m.metadata?.agent_workflow_id,
                 agent_route: m.agent_route ?? m.metadata?.agent_route,
                 agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
+                canvas_ref: m.canvas_ref,
             }));
             const temporary = testRuntime?.session.messages.map((message) => (
                 builderTestMessageToChatMessage(message, testRuntime.baseWorkflowId)
@@ -2684,6 +2705,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     onEditQuestion={handleEditQuestion}
                                     onDeleteMessage={handleDeleteMessage}
                                     onOpenAgentRun={handleOpenAgentRun}
+                                    onOpenCanvas={onOpenCanvas}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}
                                 />
                             </Box>

@@ -51,6 +51,7 @@ class TestMessageEndpoints:
         with (
             patch("app.api.messages.get_thread", new_callable=AsyncMock, return_value=thread),
             patch("app.api.messages.get_thread_messages", new_callable=AsyncMock, return_value=[assistant]),
+            patch("app.api.messages.CanvasService.refs_by_turn", new_callable=AsyncMock, return_value={}),
         ):
             data = await messages_api.get_thread_messages_endpoint("thread-1")
 
