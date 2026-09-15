@@ -199,6 +199,7 @@ export interface Thread {
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
   created_at: string;
+  last_activity_at?: string | null;
   message_count?: number;
   file_count?: number;
 }
@@ -212,6 +213,7 @@ interface RawThread {
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
   created_at: string;
+  last_activity_at?: string | null;
   message_count?: number;
   file_count?: number;
 }
@@ -225,6 +227,7 @@ const mapThread = (raw: RawThread): Thread => ({
   thread_metadata: raw.thread_metadata,
   documents_meta: raw.documents_meta,
   created_at: raw.created_at,
+  last_activity_at: raw.last_activity_at || raw.created_at,
   message_count: raw.message_count,
   file_count: raw.file_count,
 });

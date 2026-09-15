@@ -63,6 +63,39 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert services["rag-service"]["env_file"][0]["path"] == ".env"
 
 
+def test_main_compose_generates_service_secrets_before_app_start():
+    services = _compose("docker-compose.yml")["services"]
+    init = services["env-secrets"]
+    assert init["image"] == "python:3.11-slim"
+    assert "/work/scripts/fill_env_secrets.py" in init["command"]
+    assert "/secrets/runtime.env" in init["command"]
+    for name in (
+        "frontend",
+        "rag-service",
+        "langgraph-runtime",
+        "hermes-config-init",
+        "hermes",
+        "hermes-runtime",
+    ):
+        assert services[name]["depends_on"]["env-secrets"]["condition"] == "service_completed_successfully"
+        volumes = services[name].get("volumes") or []
+        assert any(str(volume).endswith("env_secrets:/secrets:ro") or str(volume) == "env_secrets:/secrets:ro" for volume in volumes)
+        assert any("docker_load_env_secrets.sh" in str(volume) for volume in volumes)
+    assert services["hermes"]["entrypoint"][-1] == "/opt/hermes/docker/entrypoint-dispatch.sh"
+    assert "ASKPDF_CLEAR_ENV=LANGGRAPH_RUNTIME_BINDING_SECRET,HERMES_API_TOKEN" in set(
+        services["rag-service"]["environment"]
+    )
+    for name, command in {
+        "frontend": ["node", "server.js"],
+        "rag-service": ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+        "langgraph-runtime": ["uvicorn", "langgraph_runtime.main:app", "--host", "0.0.0.0", "--port", "8100"],
+        "hermes-config-init": ["python", "-m", "hermes_runtime.profile_manager"],
+        "hermes": ["gateway"],
+        "hermes-runtime": ["uvicorn", "hermes_runtime.main:app", "--host", "0.0.0.0", "--port", "8200"],
+    }.items():
+        assert services[name]["command"] == command, name
+
+
 def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
     services = _compose("docker-compose.dev.yml")["services"]
     assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"

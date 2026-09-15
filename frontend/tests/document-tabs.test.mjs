@@ -6,6 +6,7 @@ import {
   buildHomeWorkspaceTabs,
   buildProjectWorkspaceTabs,
   isBrowserWorkspaceActive,
+  projectWorkspaceLandingTabId,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
 
@@ -53,10 +54,15 @@ test('home workspace opens instructions first and memory explicitly', () => {
   assert.deepEqual(tabs.map((tab) => tab.id), ['home-tab', 'memory-tab']);
 });
 
-test('project workspace includes memory, browser, and shared documents without debug trace', () => {
+test('project workspace opens overview first and keeps browser off the landing tab', () => {
   const tabs = buildProjectWorkspaceTabs([document]);
-  assert.deepEqual(tabs.map((tab) => tab.kind), ['memory', 'browser', 'document']);
-  assert.deepEqual(tabs.map((tab) => tab.id), ['memory-tab', 'browser-tab', 'file-1']);
+  assert.deepEqual(tabs.map((tab) => tab.kind), ['project', 'memory', 'browser', 'document']);
+  assert.deepEqual(tabs.map((tab) => tab.id), ['project-tab', 'memory-tab', 'browser-tab', 'file-1']);
+});
+
+test('project landing prefers the first document and falls back to overview', () => {
+  assert.equal(projectWorkspaceLandingTabId([document]), 'file-1');
+  assert.equal(projectWorkspaceLandingTabId([]), 'project-tab');
 });
 
 test('browser workspace is inactive after switching to a PDF tab', () => {

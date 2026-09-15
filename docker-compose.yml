@@ -1,3 +1,10 @@
+x-env-secrets-entrypoint: &env-secrets-entrypoint
+  ["/bin/sh", "/opt/askpdf/docker_load_env_secrets.sh"]
+
+x-env-secret-mounts: &env-secret-mounts
+  - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+  - env_secrets:/secrets:ro
+
 services:
   frontend:
     build:
@@ -17,7 +24,12 @@ services:
     env_file:
       - path: .env
         required: true
+    entrypoint: *env-secrets-entrypoint
+    command: ["node", "server.js"]
+    volumes: *env-secret-mounts
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       rag-service:
         condition: service_healthy
     healthcheck:
@@ -54,10 +66,15 @@ services:
       - AGENT_RUNTIME_EXECUTION_DATABASE_URL=
       - LANGGRAPH_RUNTIME_BINDING_SECRET=
       - HERMES_API_TOKEN=
+      - ASKPDF_CLEAR_ENV=LANGGRAPH_RUNTIME_BINDING_SECRET,HERMES_API_TOKEN
     env_file:
       - path: .env
         required: true
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       postgresql:
         condition: service_healthy
       db-migrate:
@@ -67,6 +84,8 @@ services:
       langgraph-runtime:
         condition: service_healthy
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - ./rag_service:/app
       - ./data:/data
       - pdf_data:/static
@@ -141,7 +160,12 @@ services:
       - DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS must be set}
       - DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS must be set}
       - DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS must be set}
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "langgraph_runtime.main:app", "--host", "0.0.0.0", "--port", "8100"]
+    volumes: *env-secret-mounts
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
       runtime-db-migrate:
@@ -170,7 +194,13 @@ services:
       - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
+    entrypoint: *env-secrets-entrypoint
+    depends_on:
+      env-secrets:
+        condition: service_completed_successfully
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - hermes_data:/opt/data
 
   hermes:
@@ -190,13 +220,21 @@ services:
       - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
+    entrypoint:
+      - /bin/sh
+      - /opt/askpdf/docker_load_env_secrets.sh
+      - /opt/hermes/docker/entrypoint-dispatch.sh
     command: ["gateway"]
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
       rag-service:
         condition: service_started
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - hermes_data:/opt/data
       - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
     healthcheck:
@@ -267,7 +305,11 @@ services:
       - DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS=${DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS:?DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS must be set in .env}
       - DEEP_AGENT_HERMES_MAX_EVENT_COUNT=${DEEP_AGENT_HERMES_MAX_EVENT_COUNT:?DEEP_AGENT_HERMES_MAX_EVENT_COUNT must be set in .env}
     env_file: []
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "hermes_runtime.main:app", "--host", "0.0.0.0", "--port", "8200"]
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       hermes:
         condition: service_healthy
       rag-service:
@@ -278,8 +320,35 @@ services:
       timeout: 5s
       retries: 12
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - hermes_runtime_state:/var/lib/hermes
       - hermes_data:/opt/data
+
+  env-secrets:
+    image: python:3.11-slim
+    working_dir: /work
+    environment:
+      - LANGGRAPH_RUNTIME_TOKEN=${LANGGRAPH_RUNTIME_TOKEN:-}
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=${LANGGRAPH_RUNTIME_BINDING_SECRET:-}
+      - MCP_EXECUTION_CONTEXT_SECRET=${MCP_EXECUTION_CONTEXT_SECRET:-}
+      - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:-}
+      - HERMES_RUNTIME_TOKEN=${HERMES_RUNTIME_TOKEN:-}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:-}
+    volumes:
+      - .:/work
+      - env_secrets:/secrets
+    command:
+      - python
+      - /work/scripts/fill_env_secrets.py
+      - --env
+      - /work/.env
+      - --example
+      - /work/.env.example
+      - --export
+      - /secrets/runtime.env
+      - --ready
+      - /secrets/ready
 
   runtime-checkpoint-db-init:
     image: postgres:16-alpine
@@ -417,3 +486,4 @@ volumes:
   browser_captures:
   hermes_runtime_state:
   hermes_data:
+  env_secrets:

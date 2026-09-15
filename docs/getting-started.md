@@ -11,10 +11,11 @@
 Copy the example environment file:
 
     cp .env.example .env
-    python3 scripts/fill_env_secrets.py
 
-That replaces the `replace-with-...` service secrets (admin token, runtime
-tokens, MCP context secret). It does not invent `OPENAI_API_KEY`.
+`docker compose up` runs a one-shot `env-secrets` job (same pattern as
+`db-migrate`) that replaces the `replace-with-...` service secrets (admin
+token, runtime tokens, MCP context secret) and writes them into the stack.
+It does not invent `OPENAI_API_KEY`. You do not need Python on the host.
 
 At minimum, set the LLM provider block in `.env`:
 

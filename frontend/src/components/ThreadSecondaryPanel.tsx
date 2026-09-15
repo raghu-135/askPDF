@@ -12,6 +12,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import FolderCopyIcon from '@mui/icons-material/FolderCopy';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
@@ -39,6 +40,8 @@ export default function ThreadSecondaryPanel({
   onProjectDeleted,
   onThreadForked,
   onBackToProject,
+  onBackToProjects,
+  onHeaderStateChange,
   renderConversation,
   renderSelectedTitle,
   selectedActions,
@@ -59,11 +62,17 @@ export default function ThreadSecondaryPanel({
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
   onBackToProject: () => void;
+  onBackToProjects?: () => void;
+  onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
   renderConversation?: (thread: Thread) => React.ReactNode;
   renderSelectedTitle?: (thread: Thread) => React.ReactNode;
   selectedActions?: React.ReactNode;
 }) {
   const [headerState, setHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
+  const handleHeaderStateChange = (state: ThreadSidebarHeaderState | null) => {
+    setHeaderState(state);
+    onHeaderStateChange?.(state);
+  };
   const parentLabel = threadProject?.name || (activeThread?.project_id ? 'Project' : 'Threads');
 
   const renderListActions = () => {
@@ -234,6 +243,18 @@ export default function ThreadSecondaryPanel({
               gap: 1,
             }}
           >
+            {activeProject && onBackToProjects && (
+              <Tooltip title="All projects">
+                <IconButton
+                  size="small"
+                  aria-label="All projects"
+                  onClick={onBackToProjects}
+                  sx={{ p: 0.25 }}
+                >
+                  <ArrowBackIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {activeProject
               ? <FolderOutlinedIcon fontSize="small" color="primary" />
               : <FolderCopyIcon fontSize="small" color="primary" />}
@@ -292,7 +313,7 @@ export default function ThreadSecondaryPanel({
               onProjectDeleted={onProjectDeleted}
               onThreadForked={onThreadForked}
               hideHeader
-              onHeaderStateChange={setHeaderState}
+              onHeaderStateChange={handleHeaderStateChange}
               darkMode={darkMode}
               selectionOnly={selectionOnly}
             />

@@ -59,6 +59,7 @@ export type DocumentWorkspaceTab = {
 
 export type BrowserWorkspaceTab = { kind: 'browser'; id: 'browser-tab'; label: string };
 export type HomeWorkspaceTab = { kind: 'home'; id: 'home-tab'; label: string };
+export type ProjectWorkspaceTab = { kind: 'project'; id: 'project-tab'; label: string };
 export type MemoryWorkspaceTab = { kind: 'memory'; id: 'memory-tab'; label: string };
 export type CanvasWorkspaceTab = { kind: 'canvas'; id: 'canvas-tab'; label: string; issueCount?: number };
 export type ResearchCanvasWorkspaceTab = { kind: 'research_canvas'; id: 'research-canvas-tab'; label: string; count?: number };
@@ -70,7 +71,7 @@ export type TraceWorkspaceTab = {
   status?: 'idle' | 'running' | 'failed' | 'review';
   count?: number;
 };
-export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | ResearchCanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
+export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | ProjectWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | ResearchCanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
 
 const statusColor = (status?: TraceWorkspaceTab['status']) => {
   if (status === 'failed') return 'error';
@@ -211,6 +212,24 @@ export default React.memo(function WorkspaceTabs({
                 <Tab
                   aria-label="Home"
                   label={tab.label}
+                  sx={{
+                    ...commonTabSx,
+                    minWidth: active ? undefined : 44,
+                    px: active ? 1.5 : 1,
+                  }}
+                />
+              </Tooltip>
+            );
+          }
+          if (tab.kind === 'project') {
+            const active = tab.id === activeTabId;
+            return (
+              <Tooltip key={tab.id} title="Project">
+                <Tab
+                  aria-label="Project"
+                  icon={<FolderIcon fontSize="small" />}
+                  iconPosition="start"
+                  label={active ? tab.label : undefined}
                   sx={{
                     ...commonTabSx,
                     minWidth: active ? undefined : 44,

@@ -1,11 +1,12 @@
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
-import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
+import { PROJECT_OVERVIEW_TAB_ID, isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import ResearchCanvasWorkspace from './ResearchCanvasWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
+import ProjectOverview from './ProjectOverview';
 import type { Project, Thread } from '../../lib/api';
 import type { MemoryManagerIntent } from '../../lib/memory-manager';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
@@ -35,7 +36,14 @@ export default function ThreadWorkspaceContent({
   activeProject = null,
   projectInventoryVersion = 0,
   curatorRefreshVersion = 0,
+  inventoryLoading = false,
+  hasProjects = false,
   onOpenMemoryCurator,
+  onCreateProject,
+  onCreateThread,
+  onCapturePage,
+  onRequestUpload,
+  documentCount = 0,
   emptyTitle,
   emptyDescription,
   activeCanvasId = null,
@@ -64,7 +72,14 @@ export default function ThreadWorkspaceContent({
   activeProject?: Project | null;
   projectInventoryVersion?: number;
   curatorRefreshVersion?: number;
+  inventoryLoading?: boolean;
+  hasProjects?: boolean;
   onOpenMemoryCurator?: (intent: MemoryManagerIntent) => void;
+  onCreateProject?: () => void;
+  onCreateThread?: () => void;
+  onCapturePage?: () => void;
+  onRequestUpload?: () => void;
+  documentCount?: number;
   emptyTitle: string;
   emptyDescription: string;
   activeCanvasId?: string | null;
@@ -75,7 +90,28 @@ export default function ThreadWorkspaceContent({
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
       {activeTabId === 'home-tab' ? (
-        <HomeInstructions darkMode={darkMode} />
+        <HomeInstructions
+          darkMode={darkMode}
+          inventoryLoading={inventoryLoading}
+          hasProjects={hasProjects}
+          onCreateProject={onCreateProject}
+        />
+      ) : activeTabId === PROJECT_OVERVIEW_TAB_ID ? (
+        isLoading ? (
+          <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit' }}>
+            <CircularProgress color={darkMode ? 'inherit' : 'primary'} />
+            <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
+          </Box>
+        ) : (
+          <ProjectOverview
+            projectName={activeProject?.name || 'Project'}
+            documentCount={documentCount}
+            darkMode={darkMode}
+            onCreateThread={onCreateThread || (() => undefined)}
+            onCapturePage={onCapturePage || (() => undefined)}
+            onRequestUpload={onRequestUpload || (() => undefined)}
+          />
+        )
       ) : activeTabId === RESEARCH_CANVAS_TAB_ID ? (
         <ResearchCanvasWorkspace
           threadId={threadId ?? null}

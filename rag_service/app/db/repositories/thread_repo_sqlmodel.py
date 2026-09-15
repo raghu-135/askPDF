@@ -160,7 +160,7 @@ class ThreadRepository:
                     file_count.label("file_count"),
                     last_message_at.label("last_message_at")
                 )
-                .order_by(func.coalesce(last_message_at, Thread.created_at).desc())
+                .order_by(func.coalesce(last_message_at, Thread.updated_at, Thread.created_at).desc())
             )
 
             threads = []
@@ -175,6 +175,7 @@ class ThreadRepository:
                     "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "documents_meta": thread.documents_meta if thread.documents_meta else {},
                     "created_at": thread.created_at,
+                    "last_activity_at": row[3] or thread.updated_at or thread.created_at,
                     "message_count": row[1] or 0,
                     "file_count": row[2] or 0
                 })

@@ -37,6 +37,8 @@ export const traceWorkspaceStatus = (
   return 'idle';
 };
 
+export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
+
 export const isBrowserWorkspaceActive = ({
   activeTabId,
   isBrowserActive,
@@ -83,10 +85,15 @@ export const buildDocumentWorkspaceTabs = ({
 };
 
 export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): WorkspaceTab[] => [
+  { kind: 'project', id: PROJECT_OVERVIEW_TAB_ID, label: 'Project' },
   { kind: 'memory', id: 'memory-tab', label: 'Memory' },
   { kind: 'browser', id: 'browser-tab', label: 'Browser' },
   ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
 ];
+
+export const projectWorkspaceLandingTabId = (
+  documents: readonly Pick<PdfTab, 'id'>[],
+): string => documents[0]?.id || PROJECT_OVERVIEW_TAB_ID;
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
   { kind: 'home', id: 'home-tab', label: 'Home' },

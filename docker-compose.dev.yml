@@ -154,6 +154,8 @@ services:
     command: >
       sh -lc "if [ ! -x node_modules/.bin/next ] || [ package-lock.json -nt node_modules/.package-lock.json ] || [ ! -d node_modules/@tanstack/react-virtual ] || [ ! -d node_modules/@next/bundle-analyzer ]; then npm ci --no-audit --no-fund; fi; npm run dev"
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - ./frontend:/app
       - /app/node_modules
       - frontend_next:/app/.next

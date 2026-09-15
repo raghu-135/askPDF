@@ -103,9 +103,11 @@ system. Keep the control-plane port private unless all resource APIs are
 explicitly principal-scoped.
 
 Local service secrets (`ASKPDF_ADMIN_TOKEN`, runtime tokens, MCP context
-secret) must be unique random strings of at least 32 characters. Generate them
-with `python3 scripts/fill_env_secrets.py` after copying `.env.example`. Do not
-leave the `replace-with-` placeholders in `.env`.
+secret) must be unique random strings of at least 32 characters. The Compose
+`env-secrets` job generates them from `replace-with-` placeholders on startup
+and loads them into app containers. Leave the placeholders in `.env` if you
+want Compose to fill them; already-set values are kept. Do not use documented
+placeholder prefixes in production.
 
 ## Compose deployment
 
@@ -116,5 +118,6 @@ does publish Weaviate (`8080`, `50051`) and PostgreSQL (`5432`) on all host
 interfaces, and browser capture on `127.0.0.1:8090`.
 
 Database migrations run through the product migration service. LangGraph has a
-separate runtime migration and checkpoint database. See [Data model](data-model.md)
+separate runtime migration and checkpoint database. Service-secret generation
+runs through `env-secrets` before those app containers start. See [Data model](data-model.md)
 and [Runtime operations](runtimes/operations.md).

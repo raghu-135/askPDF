@@ -79,6 +79,8 @@ import {
 } from '../lib/project-lifecycle';
 import {
   sidebarDeletionTarget,
+  sidebarGroupsForProject,
+  sortSidebarGroupsByActivity,
   threadsEligibleForProjectDeletion,
 } from '../lib/sidebar-deletion';
 import ThreadReferenceChip from './ThreadReferenceChip';
@@ -97,7 +99,9 @@ export interface ThreadSidebarHeaderState {
   allItemsSelected: boolean;
   someItemsSelected: boolean;
   isBulkDeleting: boolean;
+  isLoading: boolean;
   openCreateProjectDialog: () => void;
+  openCreateThreadDialog: () => void;
   enterSelectionMode: () => void;
   clearSelection: () => void;
   deleteSelected: () => void;
@@ -231,8 +235,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       current.threads.push(thread);
       groups.set(key, current);
     }
-    return Array.from(groups.values());
-  }, [projects, projectsById, threads]);
+    return sortSidebarGroupsByActivity(
+      sidebarGroupsForProject(Array.from(groups.values()), activeProjectId),
+    );
+  }, [activeProjectId, projects, projectsById, threads]);
   const virtualThreadRows = useMemo(() => (
     groupedThreads.flatMap((group) => [
       { kind: 'group' as const, id: `group-${group.project?.id || 'unassigned'}`, group },
@@ -332,6 +338,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setNewProjectName('');
       setNewProjectDescription('');
       setNewProjectReadsUserMemory(false);
+      onProjectSelect?.(project);
     } catch (error) {
       console.error('Failed to create project:', error);
     } finally {
@@ -667,7 +674,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
     try {
       const updated = await updateThread(threadId, editingName.trim());
-      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, name: updated.name } : t));
+      setThreads((prev) => prev.map((t) => (
+        t.id === threadId
+          ? { ...t, name: updated.name, last_activity_at: new Date().toISOString() }
+          : t
+      )));
       setEditingThreadId(null);
       setEditingName('');
     } catch (error) {
@@ -796,7 +807,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     allItemsSelected,
     someItemsSelected,
     isBulkDeleting,
+    isLoading: loading,
     openCreateProjectDialog: selectionOnly ? () => undefined : handleOpenCreateProjectDialog,
+    openCreateThreadDialog: selectionOnly
+      ? () => undefined
+      : () => handleOpenCreateThreadDialog(activeProjectId || undefined, Boolean(activeProjectId)),
     enterSelectionMode: selectionOnly ? () => undefined : enterThreadSelectionMode,
     clearSelection: clearThreadSelection,
     deleteSelected: deletionTarget === 'projects'
@@ -811,9 +826,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     enterThreadSelectionMode,
     handleBulkDeleteThreads,
     handleOpenCreateProjectDialog,
+    handleOpenCreateThreadDialog,
     handleRequestBulkDeleteProjects,
     handleToggleAllItemsChecked,
     isBulkDeleting,
+    loading,
     isSelectionMode,
     selectedCount,
     someItemsSelected,

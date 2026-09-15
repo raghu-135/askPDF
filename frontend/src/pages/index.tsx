@@ -17,8 +17,9 @@ import PdfUploader from "../components/PdfUploader";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
+import type { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
 import MemoryManagerPanel from "../components/MemoryManagerPanel";
-import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
+import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, PROJECT_OVERVIEW_TAB_ID, projectWorkspaceLandingTabId, type PdfTab } from "../lib/document-tabs";
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
@@ -77,6 +78,7 @@ export default function Home() {
   memoryManagerDirtyRef.current = memoryManagerDirty;
   const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
   const [lastNonMemoryTabByContext, setLastNonMemoryTabByContext] = useState<Record<string, string>>({});
+  const [sidebarHeaderState, setSidebarHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
 
   // Browser tab state
   const [showBrowserTab, setShowBrowserTab] = useState(false);
@@ -116,7 +118,8 @@ export default function Home() {
   const fallbackNonMemoryTab = useCallback(() => {
     const firstDocument = pdfTabs[0]?.id;
     if (firstDocument) return firstDocument;
-    if (activeThread || activeProject) return 'browser-tab';
+    if (activeProject) return PROJECT_OVERVIEW_TAB_ID;
+    if (activeThread) return 'browser-tab';
     return 'home-tab';
   }, [activeProject, activeThread, pdfTabs]);
 
@@ -194,13 +197,13 @@ export default function Home() {
     clearTraces();
     setActiveCanvasId(null);
     setIsBrowserActive(false);
-    setActiveTabId('browser-tab');
+    setActiveTabId(PROJECT_OVERVIEW_TAB_ID);
     setIsPdfLoading(true);
     setProjectModelReady(null);
     try {
       const tabs = await loadProjectTabs(project);
       setPdfTabs(tabs);
-      setActiveTabId(tabs[0]?.id || 'browser-tab');
+      setActiveTabId(projectWorkspaceLandingTabId(tabs));
       setIsBrowserActive(false);
     } catch (error) {
       console.error('Failed to open project knowledge:', error);
@@ -876,7 +879,20 @@ export default function Home() {
               activeProject={activeProject}
               projectInventoryVersion={sidebarVersion}
               curatorRefreshVersion={memoryRefreshVersion}
+              inventoryLoading={sidebarHeaderState?.isLoading ?? true}
+              hasProjects={(sidebarHeaderState?.projectCount ?? 0) > 0}
               onOpenMemoryCurator={handleOpenMemoryCurator}
+              onCreateProject={sidebarHeaderState?.openCreateProjectDialog}
+              onCreateThread={sidebarHeaderState?.openCreateThreadDialog}
+              onCapturePage={() => {
+                setActiveTabId('browser-tab');
+                setIsBrowserActive(true);
+              }}
+              onRequestUpload={() => {
+                const input = document.getElementById('pdf-upload-input');
+                if (input instanceof HTMLInputElement) input.click();
+              }}
+              documentCount={pdfTabs.length}
               emptyTitle="Welcome to AskPDF"
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />
@@ -907,6 +923,8 @@ export default function Home() {
               onProjectDeleted={handleProjectDeleted}
               onThreadForked={handleThreadForked}
               onBackToProject={handleBackToProject}
+              onBackToProjects={handleOpenHome}
+              onHeaderStateChange={setSidebarHeaderState}
               darkMode={pdfDarkMode}
               renderSelectedTitle={(thread) => (
                 <Tooltip
