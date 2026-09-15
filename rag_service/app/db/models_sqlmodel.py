@@ -207,10 +207,6 @@ class Thread(SQLModel, table=True):
         back_populates="thread",
         sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
     )
-    canvases: List["ThreadCanvas"] = Relationship(
-        back_populates="thread",
-        sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
-    )
     files: List["File"] = Relationship(
         back_populates="threads",
         link_model=ThreadFile,
@@ -305,47 +301,10 @@ class ChatTurn(SQLModel, table=True):
 
     # Relationships
     thread: Optional["Thread"] = Relationship(back_populates="chat_turns")
-    canvases: List["ThreadCanvas"] = Relationship(back_populates="chat_turn")
 
     __table_args__ = (
         Index("idx_chat_turn_thread_created", "thread_id", "created_at"),
         Index("idx_chat_turn_agent_run_sequence", "agent_run_id", "agent_run_sequence"),
-    )
-
-
-class ThreadCanvas(SQLModel, table=True):
-    """Thread-owned research canvas document rendered beside chat."""
-    __tablename__ = "thread_canvases"
-
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    thread_id: str = Field(
-        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True, nullable=False)
-    )
-    chat_turn_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String, ForeignKey("chat_turns.id", ondelete="SET NULL"), index=True),
-    )
-    title: str
-    spec_json: Dict[str, Any] = Field(
-        default_factory=dict,
-        sa_column=Column(JSONB, nullable=False),
-    )
-    supersedes_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String, ForeignKey("thread_canvases.id", ondelete="SET NULL"), index=True),
-    )
-    idempotency_key: Optional[str] = Field(default=None, index=True)
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now()),
-    )
-
-    thread: Optional["Thread"] = Relationship(back_populates="canvases")
-    chat_turn: Optional["ChatTurn"] = Relationship(back_populates="canvases")
-
-    __table_args__ = (
-        UniqueConstraint("thread_id", "idempotency_key", name="uq_thread_canvases_idempotency"),
-        Index("idx_thread_canvas_thread_created", "thread_id", "created_at"),
     )
 
 
@@ -728,8 +687,23 @@ class AgentTaskArtifact(SQLModel, table=True):
     __tablename__ = "agent_task_artifacts"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
-    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    task_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    agent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    thread_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    chat_turn_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("chat_turns.id", ondelete="SET NULL"), index=True, nullable=True),
+    )
+    idempotency_key: Optional[str] = Field(default=None, index=True)
     todo_id: Optional[str] = Field(default=None, index=True)
     subagent_run_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("agent_task_subagent_runs.id", ondelete="SET NULL"), index=True))
     ownership_key: str = Field(index=True)
@@ -750,11 +724,26 @@ class AgentTaskArtifact(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
 
     __table_args__ = (
-        CheckConstraint("kind in ('tool_output','intermediate_report','context_summary','final_report')", name="ck_agent_task_artifacts_kind"),
+        CheckConstraint(
+            "kind in ('tool_output','intermediate_report','context_summary','final_report','research_canvas')",
+            name="ck_agent_task_artifacts_kind",
+        ),
+        CheckConstraint(
+            "(task_id IS NOT NULL AND agent_run_id IS NOT NULL) OR (kind = 'research_canvas' AND thread_id IS NOT NULL)",
+            name="ck_agent_task_artifacts_owner",
+        ),
         CheckConstraint("validity in ('valid','invalid','deleted') and sensitivity in ('private','sensitive')", name="ck_agent_task_artifacts_state"),
         CheckConstraint("byte_size >= 0 and version >= 1", name="ck_agent_task_artifacts_values"),
         CheckConstraint("length(btrim(ownership_key)) > 0", name="ck_agent_task_artifacts_ownership_key"),
         UniqueConstraint("agent_run_id", "ownership_key", "sha256", "kind", name="uq_agent_task_artifact_content"),
+        Index(
+            "uq_agent_task_artifact_thread_idempotency",
+            "thread_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL AND kind = 'research_canvas'"),
+        ),
+        Index("idx_agent_task_artifact_thread_kind_created", "thread_id", "kind", "created_at"),
         Index(
             "uq_agent_task_artifacts_final_report",
             "agent_run_id",

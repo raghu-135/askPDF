@@ -37,10 +37,12 @@ The implementation is in rag_service/app/api/messages.py.
 ## Research canvases
 
 POST /api/threads/{thread_id}/canvases stores a versioned canvas_spec_v1 document
-on the thread. GET lists current canvases; GET by id returns one document.
-Revisions use supersedes_id. The renderer only accepts typed blocks (stat,
-table, callout, markdown, sources, dag). Agent emission is not wired yet; the
-API is the product contract.
+as a `research_canvas` artifact (`application/vnd.askpdf.canvas+json`) in the
+shared content store. Chat-only requests persist one without an AgentTask,
+the same way ChatTurn is a product projection. GET lists current canvases;
+GET by id returns one document. Revisions use supersedes_id. The renderer only
+accepts typed blocks (stat, table, callout, markdown, sources, dag). Agent
+emission is not wired yet; the API is the product contract.
 
 The implementation is in rag_service/app/models/canvas.py and
 rag_service/app/api/canvases.py.

@@ -538,17 +538,29 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                     </Box>
                 )}
                 {msg.canvas_ref && onOpenCanvas && (
-                    <Box sx={{ mb: 1 }}>
-                        <Button
-                            size="small"
-                            variant="text"
-                            startIcon={<DashboardOutlinedIcon fontSize="small" />}
-                            onClick={() => onOpenCanvas(msg.canvas_ref!)}
-                            sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
-                        >
-                            Open canvas
-                        </Button>
-                    </Box>
+                    <Paper
+                        variant="outlined"
+                        sx={{
+                            mb: 1,
+                            px: 1.25,
+                            py: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.25,
+                            borderRadius: 2,
+                            cursor: 'pointer',
+                        }}
+                        onClick={() => onOpenCanvas(msg.canvas_ref!)}
+                    >
+                        <DashboardOutlinedIcon fontSize="small" color="primary" />
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Research canvas</Typography>
+                            <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+                                {msg.canvas_ref.title}
+                            </Typography>
+                        </Box>
+                        <Button size="small" sx={{ textTransform: 'none', flexShrink: 0 }}>Open</Button>
+                    </Paper>
                 )}
                 {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
                     <Box sx={{ mb: 1 }}>

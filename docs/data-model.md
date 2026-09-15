@@ -14,8 +14,10 @@ are derived or service-owned stores.
 - ThreadFile: thread/file association and thread-specific annotations.
 - ProjectFile: project-level knowledge association.
 - ChatTurn: one persisted interaction whose variable content is stored in JSONB.
-- ThreadCanvas: a chat-native research canvas document bound to a thread,
-  optionally to a chat turn, with supersession lineage.
+- AgentTaskArtifact: durable content-addressed objects, including task reports
+  and chat-native research canvases (`research_canvas`,
+  `application/vnd.askpdf.canvas+json`). Chat-only canvases are thread-owned
+  and do not require a deep-research task.
 
 Files and associations remain separate because one file can be reused across
 threads and projects. Annotations are association-specific, not globally

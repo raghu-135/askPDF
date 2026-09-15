@@ -397,10 +397,15 @@ async def list_artifacts_for_threads(thread_ids: Iterable[str]) -> list[AgentTas
     if not ids:
         return []
     async with async_session_maker() as session:
+        task_ids = select(AgentTask.id).where(AgentTask.thread_id.in_(ids))
         result = await session.execute(
-            select(AgentTaskArtifact)
-            .join(AgentTask, AgentTask.id == AgentTaskArtifact.task_id)
-            .where(AgentTask.thread_id.in_(ids), AgentTaskArtifact.validity != "deleted")
+            select(AgentTaskArtifact).where(
+                AgentTaskArtifact.validity != "deleted",
+                or_(
+                    AgentTaskArtifact.thread_id.in_(ids),
+                    AgentTaskArtifact.task_id.in_(task_ids),
+                ),
+            )
         )
         return list(result.scalars().all())
 
@@ -486,16 +491,24 @@ async def release_stale_task_leases(*, limit: int = 100) -> int:
             return len(rows)
 
 
-async def mark_artifact_deleted(task_id: str, artifact_id: str) -> None:
+async def mark_artifact_deleted(task_id: Optional[str], artifact_id: str) -> None:
     async with async_session_maker() as session:
         async with session.begin():
-            task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one_or_none()
             artifact = await session.get(AgentTaskArtifact, artifact_id)
-            if task is None or artifact is None or artifact.task_id != task_id or artifact.validity == "deleted":
+            if artifact is None or artifact.validity == "deleted":
+                return
+            if task_id:
+                task = (await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())).scalar_one_or_none()
+                if task is None or artifact.task_id != task_id:
+                    return
+                artifact.validity = "deleted"
+                artifact.deleted_at = utc_now()
+                await _append_event(session, task, "artifact.deleted", agent_run_id=artifact.agent_run_id, artifact_id=artifact.id, payload={"sha256": artifact.sha256})
+                return
+            if artifact.task_id is not None:
                 return
             artifact.validity = "deleted"
             artifact.deleted_at = utc_now()
-            await _append_event(session, task, "artifact.deleted", agent_run_id=artifact.agent_run_id, artifact_id=artifact.id, payload={"sha256": artifact.sha256})
 
 
 async def mark_artifact_invalid(task_id: str, artifact_id: str, *, reason: str) -> None:

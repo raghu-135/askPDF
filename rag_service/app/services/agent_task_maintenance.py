@@ -56,14 +56,17 @@ async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, in
         missing_artifacts = 0
         for artifact in live_artifacts[:bounded]:
             if not await store.exists(artifact.object_key):
+                if artifact.task_id is None:
+                    continue
                 await tasks.mark_artifact_invalid(artifact.task_id, artifact.id, reason="content_missing")
                 missing_artifacts += 1
 
         orphaned_content = 0
-        for key in (await store.list_keys("agent-tasks"))[:bounded]:
-            if key not in known_keys:
-                await store.delete(key)
-                orphaned_content += 1
+        for prefix in ("agent-tasks", "thread-artifacts"):
+            for key in (await store.list_keys(prefix))[:bounded]:
+                if key not in known_keys:
+                    await store.delete(key)
+                    orphaned_content += 1
 
         deleted_checkpoints = 0
         runtime_runs = await tasks.list_terminal_task_runtime_runs_before(

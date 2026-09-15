@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Box, CircularProgress, Tab, Tabs, Typography } from '@mui/material';
+import { Box, Chip, CircularProgress, Stack, Typography } from '@mui/material';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { listThreadCanvases } from '../../lib/canvas-api';
 import type { DocumentCanvasCitationTarget, ThreadCanvasRecord } from '../../lib/canvas-spec';
@@ -58,32 +58,47 @@ export default function ResearchCanvasWorkspace({
   }
 
   return (
-    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
-      <Tabs
-        value={active ? canvases.findIndex((canvas) => canvas.id === active.id) : false}
-        onChange={(_, index) => canvases[index] && onActiveCanvasChange(canvases[index].id)}
-        variant="scrollable"
-        scrollButtons="auto"
-        aria-label="Research canvases"
-        sx={{ minHeight: 38, borderBottom: 1, borderColor: 'divider' }}
-      >
-        {canvases.map((canvas) => (
-          <Tab key={canvas.id} label={canvas.title} sx={{ textTransform: 'none', minHeight: 38 }} />
-        ))}
-      </Tabs>
+    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: canvases.length > 1 ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
+      {canvases.length > 1 ? (
+        <Stack
+          direction="row"
+          spacing={1}
+          useFlexGap
+          flexWrap="wrap"
+          aria-label="Research canvases"
+          sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}
+        >
+          {canvases.map((canvas) => (
+            <Chip
+              key={canvas.id}
+              label={canvas.title}
+              color={active?.id === canvas.id ? 'primary' : 'default'}
+              variant={active?.id === canvas.id ? 'filled' : 'outlined'}
+              onClick={() => onActiveCanvasChange(canvas.id)}
+              sx={{ borderRadius: 1.5 }}
+            />
+          ))}
+        </Stack>
+      ) : null}
       <Box sx={{ minHeight: 0, overflow: 'auto' }}>
         {loading ? (
           <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress size={24} /></Box>
         ) : error ? (
           <Typography color="error" sx={{ p: 2 }}>{error}</Typography>
         ) : active ? (
-          <CanvasDocument spec={active.spec} onOpenDocumentCitation={onOpenDocumentCitation} />
+          <CanvasDocument
+            spec={active.spec}
+            createdAt={active.created_at}
+            onOpenDocumentCitation={onOpenDocumentCitation}
+          />
         ) : (
           <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 4, color: 'text.secondary', textAlign: 'center' }}>
-            <Box>
-              <DashboardOutlinedIcon sx={{ fontSize: 42, opacity: 0.45 }} />
-              <Typography variant="h6">No canvas yet</Typography>
-              <Typography variant="body2">Structured research canvases opened from chat will appear here.</Typography>
+            <Box sx={{ maxWidth: 420 }}>
+              <DashboardOutlinedIcon sx={{ fontSize: 48, opacity: 0.4 }} />
+              <Typography variant="h6" sx={{ mt: 1 }}>No canvas yet</Typography>
+              <Typography variant="body2">
+                When chat publishes a structured research canvas, it will land here as a durable document you can jump back to from sources and citations.
+              </Typography>
             </Box>
           </Box>
         )}

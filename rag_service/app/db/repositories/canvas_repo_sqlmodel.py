@@ -1,4 +1,4 @@
-"""Repository for thread-owned research canvases."""
+"""Repository for research-canvas artifacts."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.models_sqlmodel import ThreadCanvas
+from app.db.models_sqlmodel import AgentTaskArtifact
+from app.models.canvas import RESEARCH_CANVAS_ARTIFACT_KIND
 
 
 class CanvasRepository:
@@ -20,45 +21,57 @@ class CanvasRepository:
             return self._session
         return async_session_maker()
 
-    async def create(self, canvas: ThreadCanvas) -> ThreadCanvas:
+    async def create(self, artifact: AgentTaskArtifact) -> AgentTaskArtifact:
         session = await self._get_session()
         async with session.begin():
-            session.add(canvas)
+            session.add(artifact)
             await session.flush()
-            await session.refresh(canvas)
-            session.expunge(canvas)
-            return canvas
+            await session.refresh(artifact)
+            session.expunge(artifact)
+            return artifact
 
-    async def get(self, canvas_id: str) -> Optional[ThreadCanvas]:
-        session = await self._get_session()
-        async with session.begin():
-            result = await session.execute(select(ThreadCanvas).where(ThreadCanvas.id == canvas_id))
-            canvas = result.scalar_one_or_none()
-            if canvas is not None:
-                session.expunge(canvas)
-            return canvas
-
-    async def get_by_idempotency(self, thread_id: str, idempotency_key: str) -> Optional[ThreadCanvas]:
+    async def get(self, canvas_id: str) -> Optional[AgentTaskArtifact]:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadCanvas).where(
-                    ThreadCanvas.thread_id == thread_id,
-                    ThreadCanvas.idempotency_key == idempotency_key,
+                select(AgentTaskArtifact).where(
+                    AgentTaskArtifact.id == canvas_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.validity != "deleted",
                 )
             )
-            canvas = result.scalar_one_or_none()
-            if canvas is not None:
-                session.expunge(canvas)
-            return canvas
+            artifact = result.scalar_one_or_none()
+            if artifact is not None:
+                session.expunge(artifact)
+            return artifact
 
-    async def list_for_thread(self, thread_id: str, *, current_only: bool = True) -> list[ThreadCanvas]:
+    async def get_by_idempotency(self, thread_id: str, idempotency_key: str) -> Optional[AgentTaskArtifact]:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadCanvas)
-                .where(ThreadCanvas.thread_id == thread_id)
-                .order_by(ThreadCanvas.created_at.desc(), ThreadCanvas.id.desc())
+                select(AgentTaskArtifact).where(
+                    AgentTaskArtifact.thread_id == thread_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.idempotency_key == idempotency_key,
+                    AgentTaskArtifact.validity != "deleted",
+                )
+            )
+            artifact = result.scalar_one_or_none()
+            if artifact is not None:
+                session.expunge(artifact)
+            return artifact
+
+    async def list_for_thread(self, thread_id: str, *, current_only: bool = True) -> list[AgentTaskArtifact]:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(AgentTaskArtifact)
+                .where(
+                    AgentTaskArtifact.thread_id == thread_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.validity != "deleted",
+                )
+                .order_by(AgentTaskArtifact.created_at.desc(), AgentTaskArtifact.id.desc())
             )
             rows = list(result.scalars().all())
             for row in rows:

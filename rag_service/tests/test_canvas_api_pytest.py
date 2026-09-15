@@ -1,7 +1,12 @@
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
 
+from app.db.connection_sqlmodel import async_session_maker
+from app.db.models_sqlmodel import AgentTask, AgentTaskArtifact
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
+from app.models.canvas import RESEARCH_CANVAS_ARTIFACT_KIND, RESEARCH_CANVAS_MEDIA_TYPE
+from app.services.content_store import get_content_store
 
 
 class TestCanvasApi:
@@ -67,7 +72,25 @@ class TestCanvasApi:
         assert fetched.status_code == 200
         assert fetched.json()["spec"]["sections"][0]["blocks"][0]["type"] == "stat"
 
+        async with async_session_maker() as session:
+            artifact = (
+                await session.execute(select(AgentTaskArtifact).where(AgentTaskArtifact.id == canvas_id))
+            ).scalar_one()
+            task_count = int(
+                (await session.execute(select(func.count(AgentTask.id)))).scalar_one()
+            )
+        assert artifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND
+        assert artifact.media_type == RESEARCH_CANVAS_MEDIA_TYPE
+        assert artifact.task_id is None
+        assert artifact.agent_run_id is None
+        assert artifact.thread_id == thread_id
+        assert artifact.retention_until is None
+        assert task_count == 0
+        object_key = artifact.object_key
+        assert await get_content_store().exists(object_key)
+
         await client.delete(f"/api/threads/{thread_id}")
+        assert not await get_content_store().exists(object_key)
 
     @pytest.mark.asyncio
     async def test_supersede_and_message_projection(self, client):

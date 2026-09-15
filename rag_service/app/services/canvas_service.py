@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 from typing import Any, Optional
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models_sqlmodel import ThreadCanvas
+from app.db.models_sqlmodel import AgentTaskArtifact
 from app.db.repositories.canvas_repo_sqlmodel import CanvasRepository
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
-from app.models.canvas import CanvasCreateRequest, parse_canvas_spec
+from app.models.canvas import (
+    RESEARCH_CANVAS_ARTIFACT_KIND,
+    RESEARCH_CANVAS_MEDIA_TYPE,
+    CanvasCreateRequest,
+    parse_canvas_spec,
+)
+from app.services.content_store import get_content_store, thread_artifact_content_key
+from app.services.task_artifact_service import MAX_SINGLE_ARTIFACT_BYTES
 from app.time_utils import iso_utc_z
 
 
@@ -21,15 +31,33 @@ class CanvasValidationError(ValueError):
     pass
 
 
-def serialize_canvas(canvas: ThreadCanvas, *, current: bool) -> dict[str, Any]:
+def _canvas_title(artifact: AgentTaskArtifact, spec: dict[str, Any] | None = None) -> str:
+    summary = artifact.summary_json or {}
+    title = str(summary.get("title") or "").strip()
+    if title:
+        return title
+    if spec:
+        return str(spec.get("title") or "").strip()
+    return "Research canvas"
+
+
+def _ownership_key(*, chat_turn_id: Optional[str]) -> str:
+    if chat_turn_id:
+        return f"chat_turn:{chat_turn_id}"
+    return "thread"
+
+
+async def serialize_canvas(artifact: AgentTaskArtifact, *, current: bool) -> dict[str, Any]:
+    spec = parse_canvas_spec(json.loads((await get_content_store().read(artifact.object_key)).decode("utf-8")))
+    payload = spec.model_dump(mode="json")
     return {
-        "id": canvas.id,
-        "thread_id": canvas.thread_id,
-        "chat_turn_id": canvas.chat_turn_id,
-        "title": canvas.title,
-        "spec": canvas.spec_json,
-        "supersedes_id": canvas.supersedes_id,
-        "created_at": iso_utc_z(canvas.created_at),
+        "id": artifact.id,
+        "thread_id": artifact.thread_id,
+        "chat_turn_id": artifact.chat_turn_id,
+        "title": _canvas_title(artifact, payload),
+        "spec": payload,
+        "supersedes_id": artifact.supersedes_id,
+        "created_at": iso_utc_z(artifact.created_at),
         "current": current,
     }
 
@@ -58,7 +86,7 @@ class CanvasService:
             existing = await self._canvases.get_by_idempotency(thread_id, request.idempotency_key)
             if existing is not None:
                 current_ids = {item.id for item in await self._canvases.list_for_thread(thread_id)}
-                return serialize_canvas(existing, current=existing.id in current_ids)
+                return await serialize_canvas(existing, current=existing.id in current_ids)
 
         chat_turn_id = request.chat_turn_id
         if chat_turn_id:
@@ -78,23 +106,45 @@ class CanvasService:
             if successors:
                 raise CanvasValidationError("that canvas already has a successor")
 
-        canvas = ThreadCanvas(
+        body = json.dumps(spec.model_dump(mode="json"), separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(body) > MAX_SINGLE_ARTIFACT_BYTES:
+            raise CanvasValidationError("canvas exceeds the 10 MB per-object limit")
+        artifact_id = str(uuid.uuid4())
+        object_key = thread_artifact_content_key(thread_id, artifact_id)
+        digest = hashlib.sha256(body).hexdigest()
+        store = get_content_store()
+        await store.put(object_key, body, expected_sha256=digest)
+        artifact = AgentTaskArtifact(
+            id=artifact_id,
+            task_id=None,
+            agent_run_id=None,
             thread_id=thread_id,
             chat_turn_id=chat_turn_id,
-            title=spec.title,
-            spec_json=spec.model_dump(mode="json"),
-            supersedes_id=request.supersedes_id,
             idempotency_key=request.idempotency_key,
+            ownership_key=_ownership_key(chat_turn_id=chat_turn_id),
+            kind=RESEARCH_CANVAS_ARTIFACT_KIND,
+            object_key=object_key,
+            media_type=RESEARCH_CANVAS_MEDIA_TYPE,
+            byte_size=len(body),
+            sha256=digest,
+            provenance_json={"chat_turn_id": chat_turn_id} if chat_turn_id else {},
+            summary_json={"title": spec.title, "schema_version": spec.schema_version},
+            supersedes_id=request.supersedes_id,
+            retention_until=None,
         )
         try:
-            saved = await self._canvases.create(canvas)
+            saved = await self._canvases.create(artifact)
         except IntegrityError as exc:
+            await store.delete(object_key)
             if request.idempotency_key:
                 existing = await self._canvases.get_by_idempotency(thread_id, request.idempotency_key)
                 if existing is not None:
-                    return serialize_canvas(existing, current=True)
+                    return await serialize_canvas(existing, current=True)
             raise CanvasValidationError("canvas could not be stored") from exc
-        return serialize_canvas(saved, current=True)
+        except Exception:
+            await store.delete(object_key)
+            raise
+        return await serialize_canvas(saved, current=True)
 
     async def get(self, thread_id: str, canvas_id: str) -> dict[str, Any]:
         await self._require_thread(thread_id)
@@ -102,7 +152,10 @@ class CanvasService:
         if canvas is None or canvas.thread_id != thread_id:
             raise CanvasNotFoundError("Canvas not found")
         current_ids = {item.id for item in await self._canvases.list_for_thread(thread_id)}
-        return serialize_canvas(canvas, current=canvas.id in current_ids)
+        try:
+            return await serialize_canvas(canvas, current=canvas.id in current_ids)
+        except FileNotFoundError as exc:
+            raise CanvasNotFoundError("Canvas content is unavailable") from exc
 
     async def list_for_thread(self, thread_id: str, *, current_only: bool = True) -> list[dict[str, Any]]:
         await self._require_thread(thread_id)
@@ -110,13 +163,19 @@ class CanvasService:
         current_ids = {item.id for item in rows} if current_only else {
             item.id for item in await self._canvases.list_for_thread(thread_id)
         }
-        return [serialize_canvas(row, current=row.id in current_ids) for row in rows]
+        payloads = []
+        for row in rows:
+            try:
+                payloads.append(await serialize_canvas(row, current=row.id in current_ids))
+            except FileNotFoundError:
+                continue
+        return payloads
 
     async def refs_by_turn(self, thread_id: str) -> dict[str, dict[str, str]]:
         refs: dict[str, dict[str, str]] = {}
         for item in await self._canvases.list_for_thread(thread_id):
             if item.chat_turn_id and item.chat_turn_id not in refs:
-                refs[item.chat_turn_id] = {"id": item.id, "title": item.title}
+                refs[item.chat_turn_id] = {"id": item.id, "title": _canvas_title(item)}
         return refs
 
 

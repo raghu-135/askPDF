@@ -1,0 +1,24 @@
+# Parallel preview of this worktree. Does not replace docker-compose.yml.
+# Host ports are overridden so this can run beside another askPDF stack.
+# Usage:
+#   COMPOSE_PROFILES= docker compose -p askpdf-canvas -f docker-compose.yml -f docker-compose.preview.yml up --build
+services:
+  frontend:
+    ports: !override
+      - "3100:3000"
+  rag-service:
+    environment:
+      # Preview omits the Hermes profile; keep /ready from probing a missing runtime.
+      - COMPOSE_PROFILES=
+    ports: !override
+      - "127.0.0.1:18000:8000"
+  weaviate:
+    ports: !override
+      - "18080:8080"
+      - "15051:50051"
+  postgresql:
+    ports: !override
+      - "15432:5432"
+  browser-capture:
+    ports: !override
+      - "127.0.0.1:18090:3000"

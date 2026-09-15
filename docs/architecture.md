@@ -77,6 +77,7 @@ store execution/checkpoint state owned by their respective runtime.
       → runtime MCP tool calls
       → canonical runtime events
       → product ChatTurn projection
+      → optional research_canvas artifact in the content store
       → JSON response or SSE stream
 
 ### Long-running task flow

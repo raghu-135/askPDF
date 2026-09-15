@@ -11,6 +11,8 @@ from app.agent.evidence_contract import (
 )
 
 CANVAS_SPEC_VERSION = 1
+RESEARCH_CANVAS_ARTIFACT_KIND = "research_canvas"
+RESEARCH_CANVAS_MEDIA_TYPE = "application/vnd.askpdf.canvas+json"
 MAX_CANVAS_TITLE_CHARS = 160
 MAX_CANVAS_SUMMARY_CHARS = 400
 MAX_CANVAS_SECTIONS = 12
