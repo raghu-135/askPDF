@@ -19,18 +19,48 @@ configurable AI workflows.
 Prerequisites:
 
 - Docker and Docker Compose
-- An OpenAI-compatible local model server such as Docker Model Runner,
-  Ollama, or LM Studio
+- An OpenAI-compatible chat provider: LM Studio, Ollama, Docker Model Runner,
+  or a hosted API such as OpenRouter
 
 Set up the environment and start the stack:
 
     cp .env.example .env
-    # Edit .env and set LLM_API_URL and required secrets.
+    # Edit .env: LLM_API_URL plus LLM_AUTH_MODE (and OPENAI_API_KEY when required).
     docker compose up --build
 
 Open http://localhost:3000.
 
-The full setup, model requirements, and service-specific configuration are in
+### LLM provider authentication
+
+Chat and remote embeddings use one OpenAI-compatible base URL (`LLM_API_URL`).
+The model dropdown can list public catalogs without a key; **using** a model
+always goes through `/chat/completions` (and `/embeddings`) with the auth mode
+below. LangGraph uses the same variables.
+
+**Local / keyless** (LM Studio, Ollama, Docker Model Runner):
+
+    LLM_API_URL=http://host.docker.internal:1234/v1
+    LLM_AUTH_MODE=none
+    LLM_KEYLESS_PROVIDER=lmstudio
+    OPENAI_API_KEY=
+
+`LLM_KEYLESS_PROVIDER` must be `lmstudio`, `ollama`, or `local`. It is required
+when `LLM_AUTH_MODE=none` and ignored when auth is `required`.
+
+**Hosted / API key** (OpenRouter, OpenAI, and similar):
+
+    LLM_API_URL=https://openrouter.ai/api/v1
+    LLM_AUTH_MODE=required
+    LLM_KEYLESS_PROVIDER=
+    OPENAI_API_KEY=sk-or-replace-with-your-key
+
+Do not leave `LLM_KEYLESS_PROVIDER=lmstudio` as your only mental model of
+auth: with `LLM_AUTH_MODE=required` that value is unused; the Bearer token is
+what OpenRouter checks. A missing or unused key shows up in the UI as
+“Selected LLM model is unavailable.”
+
+Replace the other placeholder secrets in `.env` as well. Full setup, model
+requirements, and service-specific configuration are in
 [Getting started](docs/getting-started.md).
 
 ## Architecture
