@@ -28,7 +28,7 @@ from app.services.agent_task_runtime import (
 from app.services.agent_run_cancellation import require_task_cancellation, request_task_cancellation
 from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
-from app.services.agent_task_presentation import plan_diff, timeline_sources
+from app.services.agent_task_presentation import plan_diff, timeline_run_error, timeline_sources
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
 from app.auth import current_principal
@@ -923,8 +923,8 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             "published_chat_turn_id": final_provenance.get("published_chat_turn_id"),
         })
     if run.status == "failed":
-        run_error = dict(run.error_json or {})
-        safe_message = str(run_error.get("safe_message") or "Deep Research failed before producing a report.")
+        run_error = timeline_run_error(run)
+        safe_message = str(run_error.get("safe_message") or run_error.get("message") or "Deep Research failed before producing a report.")
         items.append({
             "id": f"failure:{run.id}",
             "type": "run_failure",

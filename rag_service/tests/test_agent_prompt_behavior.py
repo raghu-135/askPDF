@@ -29,7 +29,6 @@ def test_tool_catalog_and_instruction_keys_use_canonical_retrieval_names():
     assert catalog["search_thread_conversation_history"]["id"] == "thread_conversation_history"
     assert catalog["search_durable_memory"]["id"] == "durable_memory"
     assert catalog["search_thread_events"]["id"] == "thread_events"
-    assert catalog["publish_canvas"]["id"] == "research_canvas_publish"
 
     normalized = normalize_tool_instructions(
         {

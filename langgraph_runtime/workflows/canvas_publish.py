@@ -29,6 +29,22 @@ _PUBLISH_TOOL = ToolName.PUBLISH_CANVAS.value
 _FAKE_FENCE = re.compile(r"```(?:\w+)?\s*publish_canvas[\s\S]*?```", re.IGNORECASE)
 _FAKE_CALL = re.compile(r"publish_canvas\s*\([^)]*\)", re.IGNORECASE)
 _MAX_ROUNDS = 3
+_BLOCK_TYPES = frozenset({"stat", "table", "callout", "markdown", "sources", "dag"})
+_BLOCK_FIELDS = {
+    "stat": frozenset({"type", "value", "label", "tone"}),
+    "table": frozenset({"type", "caption", "headers", "rows"}),
+    "callout": frozenset({"type", "tone", "title", "body"}),
+    "markdown": frozenset({"type", "text"}),
+    "sources": frozenset({"type", "title", "citations"}),
+    "dag": frozenset({"type", "title", "nodes", "edges"}),
+}
+_TOOL_ARG_KEYS = frozenset({"spec", "supersedes_id", "idempotency_key"})
+_SPEC_COACHING = (
+    "publish_canvas requires spec as canvas_spec_v1: "
+    '{"schema_version": 1, "title": "...", "sections": [{"title": "...", "blocks": [...]}]}. '
+    "Allowed blocks: stat, table, callout, markdown, sources, dag. "
+    "Include a sources block with citations. Do not pass a single block as spec."
+)
 
 
 def strip_prose_publish_canvas(text: str) -> str:
@@ -46,15 +62,98 @@ def _tool_calls(response: Any) -> list[dict[str, Any]]:
     return [dict(call) for call in calls if str(call.get("name") or "") == _PUBLISH_TOOL]
 
 
-def _spec_from_args(args: Any) -> Any:
-    payload = dict(args or {})
-    spec = payload.get("spec")
-    if isinstance(spec, str):
-        try:
-            spec = json.loads(spec)
-        except json.JSONDecodeError:
-            return spec
+def _parse_json_object(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    return parsed
+
+
+def _citation_list(value: Mapping[str, Any]) -> list[Any] | None:
+    for key in ("citations", "sources", "items"):
+        candidate = value.get(key)
+        if isinstance(candidate, list):
+            return candidate
+    return None
+
+
+def _coerce_block(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return value
+    block = dict(value)
+    block_type = str(block.get("type") or "")
+    if not block_type and (block.get("text") or block.get("content")):
+        block_type = "markdown"
+        block["type"] = "markdown"
+    if block_type == "markdown" and "text" not in block and block.get("content"):
+        block["text"] = str(block.pop("content"))
+    if block_type == "sources" and "citations" not in block:
+        citations = _citation_list(block)
+        if citations is not None:
+            block["citations"] = citations
+    allowed = _BLOCK_FIELDS.get(block_type)
+    if allowed is None:
+        return block
+    return {key: block[key] for key in allowed if key in block}
+
+
+def _blocks_from_payload(body: Mapping[str, Any]) -> list[Any] | None:
+    block_type = str(body.get("type") or "")
+    citations = _citation_list(body) if block_type != "sources" else None
+    if block_type in _BLOCK_TYPES:
+        blocks = [_coerce_block(body)]
+        if citations:
+            blocks.append(_coerce_block({"type": "sources", "citations": citations}))
+        return blocks
+    if body.get("text") or body.get("content"):
+        blocks = [_coerce_block({**dict(body), "type": "markdown"})]
+        if citations:
+            blocks.append(_coerce_block({"type": "sources", "citations": citations}))
+        return blocks
+    return None
+
+
+def _canvas_envelope(*, title: str, summary: Any, blocks: list[Any]) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "schema_version": 1,
+        "title": (title or "Research canvas").strip()[:160] or "Research canvas",
+        "sections": [{"title": "Findings", "blocks": [_coerce_block(block) for block in blocks]}],
+    }
+    if isinstance(summary, str) and summary.strip():
+        spec["summary"] = summary.strip()[:400]
     return spec
+
+
+def normalize_publish_canvas_spec(args: Any) -> Any:
+    """Lift common model mistakes into canvas_spec_v1 before MCP validation."""
+
+    payload = dict(args or {}) if isinstance(args, Mapping) else {}
+    spec = _parse_json_object(payload.get("spec"))
+    if spec is None:
+        leftover = {key: value for key, value in payload.items() if key not in _TOOL_ARG_KEYS}
+        spec = leftover or None
+    spec = _parse_json_object(spec)
+    if isinstance(spec, list):
+        return _canvas_envelope(title=str(payload.get("title") or ""), summary=payload.get("summary"), blocks=spec)
+    if not isinstance(spec, Mapping):
+        return spec
+    body = dict(spec)
+    if isinstance(body.get("sections"), list):
+        return body
+    lifted = _blocks_from_payload(body)
+    if lifted is not None:
+        return _canvas_envelope(
+            title=str(payload.get("title") or body.get("title") or ""),
+            summary=body.get("summary"),
+            blocks=lifted,
+        )
+    blocks = body.get("blocks")
+    if isinstance(blocks, list):
+        return _canvas_envelope(title=str(body.get("title") or payload.get("title") or ""), summary=body.get("summary"), blocks=blocks)
+    return body
 
 
 def _tool_ok(result: Mapping[str, Any]) -> bool:
@@ -94,7 +193,7 @@ async def synthesize_with_canvas_publish(
     bound = llm.bind_tools([create_mcp_langchain_tool(_PUBLISH_TOOL)]) if emit_enabled else llm
 
     for _round in range(_MAX_ROUNDS):
-        model = llm if (published or failed_attempts or not emit_enabled) else bound
+        model = llm if (published or not emit_enabled) else bound
         last_response = await invoke_llm_for_node(
             model.ainvoke,
             conversation,
@@ -117,7 +216,7 @@ async def synthesize_with_canvas_publish(
                 conversation.append(ToolMessage(content="Canvas already published for this run.", tool_call_id=call_id))
                 continue
             args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
-            tool_input: dict[str, Any] = {"spec": _spec_from_args(args)}
+            tool_input: dict[str, Any] = {"spec": normalize_publish_canvas_spec(args)}
             key = canvas_idempotency_key(state)
             if key:
                 tool_input["idempotency_key"] = key
@@ -147,7 +246,10 @@ async def synthesize_with_canvas_publish(
                     "trace": {"tool_name": _PUBLISH_TOOL},
                 }
             append_tool_event_for_node(state, {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node}, tool_input=tool_input, config=tool_runtime)
-            conversation.append(ToolMessage(content=_tool_message_body(normalized), tool_call_id=call_id))
+            tool_body = _tool_message_body(normalized)
+            if not _tool_ok(normalized):
+                tool_body = f"{tool_body}\n{_SPEC_COACHING}"
+            conversation.append(ToolMessage(content=tool_body, tool_call_id=call_id))
             if _tool_ok(normalized):
                 published = True
             else:

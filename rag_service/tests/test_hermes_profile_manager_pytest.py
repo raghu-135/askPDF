@@ -69,6 +69,7 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     config = (tmp_path / name / "config.yaml").read_text()
     assert f"context_length: {value}" in config
     assert f'default: "model-{value}"' in config
+    assert 'provider: "custom"' in config
     assert "base_url: \"http://provider.test/v1\"" in config
     assert "api_server:\n    enabled: false" in config
     assert "title_generation:\n    enabled: false" in config

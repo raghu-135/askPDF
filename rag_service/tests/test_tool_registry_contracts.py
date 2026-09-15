@@ -95,24 +95,6 @@ def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("search_thread_events", "thread_events_worker")
     validate_tool_call_allowed("search_web", "web_worker")
     validate_tool_call_allowed("search_knowledge", "deep_research_subagent")
-    validate_tool_call_allowed("publish_canvas", "synthesizer")
-    validate_tool_call_allowed("publish_canvas", "direct_answer")
-    validate_tool_call_allowed("publish_canvas", "answer_reviser")
-    validate_tool_call_allowed("publish_canvas", "deep_task_synthesizer")
-
-    try:
-        validate_tool_call_allowed("publish_canvas", "retrieval_worker")
-    except ValueError as exc:
-        assert "publish_canvas is not allowed from caller node retrieval_worker" in str(exc)
-    else:
-        raise AssertionError("Expected disallowed caller node to raise")
-
-    try:
-        validate_tool_call_allowed("publish_canvas", "deep_research_subagent")
-    except ValueError as exc:
-        assert "publish_canvas is not allowed from caller node deep_research_subagent" in str(exc)
-    else:
-        raise AssertionError("Expected disallowed caller node to raise")
 
     try:
         validate_tool_call_allowed("search_knowledge", "thread_conversation_history_worker")

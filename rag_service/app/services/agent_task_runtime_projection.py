@@ -232,6 +232,13 @@ def _incomplete_disposition(run: AgentRun, task_result: Mapping[str, Any]) -> tu
     return policy, max_rounds, max(1, int(run.task_attempt or 1))
 
 
+def _runtime_error_payload(*candidates: Any) -> dict[str, Any]:
+    for candidate in candidates:
+        if isinstance(candidate, Mapping) and any(candidate.get(key) for key in ("code", "safe_message", "message")):
+            return dict(candidate)
+    return {}
+
+
 @_cleanup_projection_on_error
 async def apply_neutral_task_completion(
     *,
@@ -507,6 +514,8 @@ async def apply_neutral_task_completion(
                 failed = runtime_status == "failed" or disposition == "failed"
                 run.status = AgentRunStatus.CANCELLED.value if cancelled else AgentRunStatus.FAILED.value if failed else AgentRunStatus.COMPLETED.value
                 run.completed_at = now
+                if failed:
+                    replace_jsonb_field(run, "error_json", _runtime_error_payload(task_result.get("error")))
                 task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value if failed else AgentTaskStatus.COMPLETED.value
                 task.current_phase = task.status
                 task.terminal_reason = cancellation_reason(task, run) if cancelled else "incomplete_result_rejected" if disposition == "failed" and runtime_status == "completed" else runtime_status
@@ -1004,11 +1013,14 @@ async def apply_runtime_task_delta(
                 elif result_status in {"failed", "cancelled", "canceled"}:
                     now = utc_now()
                     cancelled = result_status in {"cancelled", "canceled"}
+                    error = _runtime_error_payload(result_envelope.get("error"), task_result.get("error"))
                     run.status = AgentRunStatus.CANCELLED.value if cancelled else AgentRunStatus.FAILED.value
                     run.completed_at = now
+                    if not cancelled:
+                        replace_jsonb_field(run, "error_json", error)
                     task.status = AgentTaskStatus.CANCELLED.value if cancelled else AgentTaskStatus.FAILED.value
                     task.current_phase = task.status
-                    task.terminal_reason = cancellation_reason(task, run) if cancelled else str((delta.result.get("error") or {}).get("code") or result_status)
+                    task.terminal_reason = cancellation_reason(task, run) if cancelled else str(error.get("code") or result_status)
                     task.completed_at = now
                     task.expires_at = None
                     task.lease_owner = None

@@ -27,12 +27,8 @@ NODE_THREAD_EVENTS_WORKER = WorkflowNodeType.THREAD_EVENTS_WORKER.value
 NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
 NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
-NODE_DIRECT_ANSWER = WorkflowNodeType.DIRECT_ANSWER.value
-NODE_SYNTHESIZER = WorkflowNodeType.SYNTHESIZER.value
-NODE_ANSWER_REVISER = WorkflowNodeType.ANSWER_REVISER.value
 NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
 NODE_DEEP_RESEARCH_SUBAGENT = WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value
-NODE_DEEP_TASK_SYNTHESIZER = WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value
 
 CAT_CONTEXT = NodeCategory.CONTEXT.value
 CAT_CONTROL = NodeCategory.CONTROL.value
@@ -42,7 +38,6 @@ CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
 CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
-CAT_ANSWER = NodeCategory.ANSWER.value
 
 CAP_CONTEXT_PREFETCH = NodeCapability.CONTEXT_PREFETCH.value
 CAP_ROUTE_INTENT = NodeCapability.ROUTE_INTENT.value
@@ -53,10 +48,6 @@ CAP_RETRIEVAL_DURABLE_MEMORY = NodeCapability.RETRIEVAL_DURABLE_MEMORY.value
 CAP_RETRIEVAL_THREAD_EVENTS = NodeCapability.RETRIEVAL_THREAD_EVENTS.value
 CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
 CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
-CAP_ANSWER_DIRECT = NodeCapability.ANSWER_DIRECT.value
-CAP_ANSWER_SYNTHESIZE = NodeCapability.ANSWER_SYNTHESIZE.value
-CAP_REVISE_ANSWER = NodeCapability.REVISE_ANSWER.value
-CAP_TASK_SYNTHESIZE = NodeCapability.TASK_SYNTHESIZE.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_THREAD_CONVERSATION_HISTORY = ToolContractId.THREAD_CONVERSATION_HISTORY.value
@@ -71,7 +62,6 @@ TOOL_SEMANTIC_SCHOLAR_RESEARCH = ToolContractId.SEMANTIC_SCHOLAR_RESEARCH.value
 TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
 TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
 TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
-TOOL_RESEARCH_CANVAS_PUBLISH = ToolContractId.RESEARCH_CANVAS_PUBLISH.value
 
 TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
 TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value
@@ -88,7 +78,6 @@ TOOL_NAME_SEMANTIC_SCHOLAR = ToolName.SEMANTIC_SCHOLAR.value
 TOOL_NAME_STACK_EXCHANGE = ToolName.STACK_EXCHANGE.value
 TOOL_NAME_YAHOO_FINANCE_NEWS = ToolName.YAHOO_FINANCE_NEWS.value
 TOOL_NAME_ASK_FOR_CLARIFICATION = ToolName.ASK_FOR_CLARIFICATION.value
-TOOL_NAME_PUBLISH_CANVAS = ToolName.PUBLISH_CANVAS.value
 
 
 TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
@@ -244,15 +233,6 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
         "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
-    },
-    TOOL_NAME_PUBLISH_CANVAS: {
-        "id": TOOL_RESEARCH_CANVAS_PUBLISH,
-        "category": CAT_ANSWER,
-        "allowed_caller_nodes": [NODE_SYNTHESIZER, NODE_DIRECT_ANSWER, NODE_ANSWER_REVISER, NODE_DEEP_TASK_SYNTHESIZER],
-        "allowed_node_types": [NODE_SYNTHESIZER, NODE_DIRECT_ANSWER, NODE_ANSWER_REVISER, NODE_DEEP_TASK_SYNTHESIZER],
-        "required_node_capabilities": [CAP_ANSWER_SYNTHESIZE, CAP_ANSWER_DIRECT, CAP_REVISE_ANSWER, CAP_TASK_SYNTHESIZE],
-        "artifact_keys": ["canvas"],
-        "warning_codes": [],
     },
     TOOL_NAME_ASK_FOR_CLARIFICATION: {
         "id": TOOL_CLARIFY_INTENT,
@@ -520,22 +500,6 @@ TOOL_FRIENDLY_CONFIG = {
         "description": "Search Yahoo Finance news for a public company ticker.",
         "default_prompt": "Use for recent public-company finance/business news only after you know the listed ticker. Input must be only the ticker symbol, such as AAPL, MSFT, or NVDA; do not pass a company name, natural-language sentence, exchange name, or private company. If the user gives only a company name, first call search_web with a query like \"Nvidia stock ticker\" to find the ticker, then call yahoo_finance_news with just that ticker. If no public ticker exists, do not call this tool. Use for news context, not investment advice, valuation, real-time quotes, or private-company research.",
     },
-    TOOL_NAME_PUBLISH_CANVAS: {
-        "id": TOOL_RESEARCH_CANVAS_PUBLISH,
-        "display_name": "Publish Canvas",
-        "description": "Publish a durable research canvas for this thread using the first-party canvas_spec_v1 document. Use after you have cited evidence; do not invent components or citations.",
-        "default_prompt": (
-            "Call publish_canvas when a structured comparison, timeline, or evidence map would help more than prose. "
-            "When layout skills are present, pick canvas_compare_papers, canvas_evidence_matrix, or canvas_timeline and reuse canvas_spec_v1 blocks only. "
-            "Pass only canvas_spec_v1 blocks (stat, table, callout, markdown, sources, dag). "
-            "Every canvas must include a sources block with citations that resolve: document file_hash values must be attached to this thread. "
-            "Do not emit unknown block types, scripts, or javascript URLs. After a successful publish, mention the canvas title in the answer."
-        ),
-        "mcp_server": "first_party_context",
-        "mcp_tool": "publish_canvas",
-        "mcp_enabled": True,
-        "contract_version": "1",
-    },
     TOOL_NAME_ASK_FOR_CLARIFICATION: {
         "id": TOOL_CLARIFY_INTENT,
         "display_name": "Clarify Intent",
@@ -637,7 +601,6 @@ for _tool_name in (
     TOOL_NAME_SEMANTIC_SCHOLAR,
     TOOL_NAME_STACK_EXCHANGE,
     TOOL_NAME_YAHOO_FINANCE_NEWS,
-    TOOL_NAME_PUBLISH_CANVAS,
 ):
     TOOL_FRIENDLY_CONFIG[_tool_name]["mcp_enabled"] = True
 

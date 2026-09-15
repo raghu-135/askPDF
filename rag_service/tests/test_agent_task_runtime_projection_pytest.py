@@ -726,3 +726,64 @@ async def test_projection_recovery_preserves_native_tool_interruption():
     assert recovered.interruption == pending
     assert recovered.orchestration_delta.pending_interrupt["value"] == recovered.interruption
     assert recovered.task_result is None
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_delta_persists_structured_error(test_session_maker, sample_thread):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    error = {
+        "code": "hermes_upstream_error",
+        "safe_message": "HTTP 404 — Not Found | OpenRouter",
+        "retryable": False,
+    }
+    delta = TaskOrchestrationDelta(
+        event_id=f"{run.id}:attempt:1:operation:start:result",
+        attempt_id=f"{run.id}:attempt:1",
+        operation_id="start",
+        idempotency_key=f"task-delta:{run.id}:fail",
+        observed_task_version=task.version,
+        observed_plan_revision=0,
+        pending_interrupt={"operation": "clear"},
+        result={
+            "status": "failed",
+            "warnings": [],
+            "incomplete_reasons": [],
+            "result_outcome": "failed",
+            "error": error,
+            "task_result": {
+                "status": "failed",
+                "text": "",
+                "warnings": [],
+                "gaps": [],
+                "error": error,
+            },
+        },
+    )
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=delta)
+    stored_run = await repository.get_task_run(task.id)
+    stored_task = await repository.get_task(task.id)
+    assert stored_run.status == "failed"
+    assert stored_run.error_json["code"] == "hermes_upstream_error"
+    assert "OpenRouter" in stored_run.error_json["safe_message"]
+    assert stored_task.terminal_reason == "hermes_upstream_error"
+
+
+def test_timeline_run_error_falls_back_to_debug_diagnostics():
+    from app.services.agent_task_presentation import timeline_run_error
+
+    run = SimpleNamespace(
+        error_json={},
+        debug_trace_json={
+            "diagnostics": {
+                "summary": {
+                    "code": "hermes_upstream_error",
+                    "message": "HTTP 404 — Not Found | OpenRouter",
+                    "retryable": False,
+                    "location": {"operation_id": "hermes_session"},
+                }
+            }
+        },
+    )
+    error = timeline_run_error(run)
+    assert error["code"] == "hermes_upstream_error"
+    assert "OpenRouter" in error["safe_message"]

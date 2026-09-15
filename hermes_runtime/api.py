@@ -1117,6 +1117,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "incomplete_reasons": gaps[:50],
                         "warnings": warnings[:50],
                         "result_outcome": result_outcome,
+                        "error": terminal_error,
                         "task_result": neutral_task_result,
                     },
                     "correction_outcomes": correction_outcomes,
