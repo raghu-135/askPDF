@@ -7,10 +7,43 @@ import pytest
 
 from app.models.llm_server_client import (
     ReasoningChatOpenAI,
+    _chat_probe_accepted,
     _response_invokes_tool,
     close_model_client,
     get_llm,
+    llm_provider_auth,
 )
+
+
+def test_provider_auth_sends_bearer_token_when_required(monkeypatch):
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-or-test-key")
+    api_key, headers = llm_provider_auth()
+    assert api_key == "sk-or-test-key"
+    assert headers == {"Authorization": "Bearer sk-or-test-key"}
+
+
+def test_provider_auth_omits_authorization_for_keyless_local_providers(monkeypatch):
+    monkeypatch.setenv("LLM_AUTH_MODE", "none")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    api_key, headers = llm_provider_auth()
+    assert api_key == "sk-no-key-required"
+    assert headers == {}
+
+
+def test_chat_probe_accepts_openrouter_alias_resolution_and_empty_first_token():
+    assert _chat_probe_accepted(
+        "~deepseek/deepseek-v4-flash-latest",
+        {
+            "model": "deepseek/deepseek-v4-flash-0731",
+            "choices": [{"message": {"role": "assistant", "content": None}, "finish_reason": "length"}],
+        },
+    )
+    assert _chat_probe_accepted(
+        "qwen/qwen3.8-27b",
+        {"model": "qwen/qwen3.8-27b", "choices": [{"message": {"role": "assistant", "content": ""}}]},
+    )
+    assert not _chat_probe_accepted("qwen/qwen3.8-27b", {"model": "qwen/qwen3.8-27b", "choices": []})
 
 
 def test_native_tool_probe_requires_an_actual_matching_tool_call():

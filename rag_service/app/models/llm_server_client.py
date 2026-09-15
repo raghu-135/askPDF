@@ -35,6 +35,26 @@ async def _managed_http_client(name: str):
 
     yield get_http_client(name)
 
+
+def llm_provider_auth() -> tuple[str, Dict[str, str]]:
+    """Return the OpenAI-compatible API key and request headers for LLM_API_URL.
+
+    LangGraph already branches on LLM_AUTH_MODE. Control-plane probes and
+    ChatOpenAI wrappers must use the same credential; OpenRouter rejects
+    unauthenticated /chat/completions even though /models is public.
+    """
+    auth_mode = os.getenv("LLM_AUTH_MODE", "").strip().lower()
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if auth_mode == "required":
+        if not api_key:
+            return "", {}
+        return api_key, {"Authorization": f"Bearer {api_key}"}
+    if auth_mode == "none":
+        return api_key or "sk-no-key-required", {}
+    if api_key:
+        return api_key, {"Authorization": f"Bearer {api_key}"}
+    return "sk-no-key-required", {}
+
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
     "reasoning_content",
@@ -261,7 +281,8 @@ async def fetch_available_models():
             llm_api_url = f"{llm_api_url}/v1"
 
         async with _managed_http_client("llm") as client:
-            resp = await client.get(f"{llm_api_url}/models")
+            _api_key, headers = llm_provider_auth()
+            resp = await client.get(f"{llm_api_url}/models", headers=headers or None)
             if resp.status_code == 200:
                 data = resp.json()
                 # OpenAI-compatible: models are in data['data']
@@ -341,11 +362,13 @@ def get_llm(
         if own_async_transport
         else get_http_client("llm")
     )
+    api_key, headers = llm_provider_auth()
     return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required",
+        api_key=api_key or "sk-no-key-required",
+        default_headers=headers or None,
         http_async_client=async_client,
     )
 
@@ -357,10 +380,12 @@ def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
         return get_local_embedding_model(model_name)
 
     from app.http_clients import get_http_client, register_owned_client
+    api_key, headers = llm_provider_auth()
     return OpenAIEmbeddings(
         model=model_name,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required",
+        api_key=api_key or "sk-no-key-required",
+        default_headers=headers or None,
         check_embedding_ctx_length=False,
         http_async_client=(
             register_owned_client(httpx.AsyncClient())
@@ -518,7 +543,8 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
 async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_name: str) -> bool:
     """Helper to check if a model ID exists in the /models endpoint."""
     try:
-        resp = await client.get(f"{base_url}/models", timeout=15.0)
+        _api_key, headers = llm_provider_auth()
+        resp = await client.get(f"{base_url}/models", headers=headers or None, timeout=15.0)
         if resp.status_code != 200:
             return False
         data = resp.json()
@@ -540,7 +566,8 @@ async def _probe_with_retry(
     """Helper to probe an endpoint with retry logic and exponential backoff."""
     for attempt in range(max_retries):
         try:
-            resp = await client.post(url, json=payload, timeout=30.0)
+            _api_key, headers = llm_provider_auth()
+            resp = await client.post(url, json=payload, headers=headers or None, timeout=30.0)
             logger.info(f"{probe_type} probe response status for {model_name}: {resp.status_code}")
             
             if validator(resp):
@@ -565,6 +592,33 @@ async def _probe_with_retry(
     return False
 
 
+def _chat_probe_accepted(requested_model: str, payload: object) -> bool:
+    """Return whether an OpenAI-compatible chat completion proves the model is live.
+
+    Hosted routers resolve aliases (``~org/model-latest`` → a dated snapshot) and
+    often return ``content: null`` on a 1-token ping. That is still a successful
+    probe. Reject only a missing or malformed completion.
+    """
+    if not isinstance(payload, dict):
+        return False
+    resp_model = str(payload.get("model") or "")
+    if resp_model and requested_model not in resp_model and resp_model not in requested_model:
+        logger.warning("Chat probe resolved model %s -> %s", requested_model, resp_model)
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return False
+    if message.get("content") is not None:
+        return True
+    if message.get("tool_calls"):
+        return True
+    if any(message.get(field) for field in _REASONING_RESPONSE_FIELDS):
+        return True
+    return choices[0].get("finish_reason") in {"stop", "length", "max_tokens", "eos"}
+
+
 async def check_chat_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is a chat model and is ready in the LLM API/server.
@@ -586,16 +640,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 if resp.status_code != 200:
                     return False
                 try:
-                    data = resp.json()
-                    
-                    # Verify integrity: if the model name in the response same as the requested model name?
-                    resp_model = data.get("model", "")
-                    if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.error(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
-                    # Verify it actually generated a message structure
-                    choices = data.get("choices", [])
-                    return bool(choices and choices[0].get("message", {}).get("content") is not None)
+                    return _chat_probe_accepted(model_name, resp.json())
                 except Exception:
                     return False
 
