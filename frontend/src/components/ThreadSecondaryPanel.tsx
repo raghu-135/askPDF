@@ -8,8 +8,8 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import ClearIcon from '@mui/icons-material/Clear';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
 import FolderCopyIcon from '@mui/icons-material/FolderCopy';
@@ -117,7 +117,7 @@ export default function ThreadSecondaryPanel({
               aria-label="Create new project"
               onClick={headerState.openCreateProjectDialog}
             >
-              <AddIcon fontSize="small" />
+              <CreateNewFolderIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>

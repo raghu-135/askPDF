@@ -35,6 +35,7 @@ import {
   Divider,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
@@ -1032,7 +1033,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 color="primary"
                 onClick={handleOpenCreateProjectDialog}
               >
-                <AddIcon fontSize="small" />
+                <CreateNewFolderIcon fontSize="small" />
               </IconButton>
             </Tooltip>}
           </Box>
@@ -1645,7 +1646,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           {!isThreadProjectLocked && (
             <Button
               size="small"
-              startIcon={<AddIcon />}
+              startIcon={<CreateNewFolderIcon />}
               onClick={() => {
                 setNewProjectReadsUserMemory(false);
                 setCreateProjectDialogOpen(true);
