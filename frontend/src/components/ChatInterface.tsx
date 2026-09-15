@@ -96,7 +96,7 @@ import {
     liveTraceStatusFromEvent,
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
-import { isValidTraceId } from '../lib/trace-tabs';
+import { isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
 import {
     ConversationComposer,
     ConversationHeader,
@@ -763,8 +763,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     ) => {
         if (!onOpenTrace || !isValidTraceId(snapshot.runId)) return;
         const requested = extras.messageId === workspaceTraceMessageIdRef.current;
-        const activate = extras.activate === true
-            || (requested && liveTraceActivatedRunRef.current !== snapshot.runId);
+        const activate = extras.activate === true || requested;
         if (activate) liveTraceActivatedRunRef.current = snapshot.runId;
         onOpenTrace({
             ...extras,
@@ -1843,7 +1842,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         void refreshLiveRunCapabilities();
                     }
                     const snapshot = traceStream.append(event, terminalStreamError, response?.status);
-                    if (event.event === 'run.started' && event.data?.run_id) {
+                    if (isValidTraceId(snapshot.runId)) {
                         setLiveExecution((current) => current?.messageId === tempAssistantMsg.id
                             ? { ...current, runId: snapshot.runId }
                             : current);
@@ -2386,27 +2385,27 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
         const runId = msg.agent_run_id || liveForMessage?.runId;
+        const tabId = traceTabIdForRun(runId, msg.id);
         setWorkspaceTraceMessageId(msg.id);
         workspaceTraceMessageIdRef.current = msg.id;
-        if (!runId || !isValidTraceId(runId) || !activeThread) return;
-
-        liveTraceActivatedRunRef.current = runId;
+        if (isValidTraceId(runId)) liveTraceActivatedRunRef.current = runId;
         onOpenTrace?.({
-            id: runId,
-            threadId: activeThread.id,
+            id: tabId,
+            threadId: activeThread?.id,
             messageId: msg.id,
             label: `${msg.agent_workflow_id || 'agent'}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
-            status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
+            status: liveForMessage?.running ? 'running' : (isValidTraceId(runId) ? agentRunDetails[runId]?.status : 'running'),
             routeReason: msg.agent_route_reason,
             traceRefs: msg.agent_trace_refs,
-            runDetails: agentRunDetails[runId],
+            runDetails: isValidTraceId(runId) ? agentRunDetails[runId] : undefined,
             liveTraceView: liveForMessage ? liveTraceView : undefined,
-            loading: Boolean(agentRunLoading[runId]),
-            error: liveForMessage?.error || agentRunErrors[runId],
+            loading: !isValidTraceId(runId) || Boolean(agentRunLoading[runId as string]),
+            error: liveForMessage?.error || (isValidTraceId(runId) ? agentRunErrors[runId] : undefined),
             running: Boolean(liveForMessage?.running),
             activate: true,
             onRunDetailsChange: handleAgentRunDetailsChange,
         });
+        if (!runId || !isValidTraceId(runId) || !activeThread) return;
         if (agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
@@ -2441,7 +2440,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!workspaceTraceMessageId || !onOpenTrace) return;
         const msg = messages.find((candidate) => candidate.id === workspaceTraceMessageId);
         if (!msg) {
-            if (!workspaceTraceMessageId.startsWith('temp-assistant-')) {
+            if (!workspaceTraceMessageId.startsWith('temp-assistant-') && !workspaceTraceMessageId.startsWith('test-assistant-')) {
                 workspaceTraceMessageIdRef.current = null;
                 setWorkspaceTraceMessageId(null);
             }
@@ -2450,21 +2449,21 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         workspaceTraceMessageIdRef.current = workspaceTraceMessageId;
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
         const runId = msg.agent_run_id || liveForMessage?.runId;
-        if (!runId || !isValidTraceId(runId)) return;
+        const tabId = traceTabIdForRun(runId, msg.id);
         onOpenTrace({
-            id: runId,
+            id: tabId,
             threadId: activeThread?.id,
             messageId: msg.id,
             label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
-            status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
+            status: liveForMessage?.running ? 'running' : (isValidTraceId(runId) ? agentRunDetails[runId]?.status : 'running'),
             routeReason: msg.agent_route_reason,
             traceRefs: msg.agent_trace_refs,
-            runDetails: agentRunDetails[runId],
+            runDetails: isValidTraceId(runId) ? agentRunDetails[runId] : undefined,
             liveTraceView: liveForMessage ? liveTraceView : undefined,
-            loading: Boolean(agentRunLoading[runId]),
-            error: liveForMessage?.error || agentRunErrors[runId],
+            loading: !isValidTraceId(runId) || Boolean(agentRunLoading[runId as string]),
+            error: liveForMessage?.error || (isValidTraceId(runId) ? agentRunErrors[runId] : undefined),
             running: Boolean(liveForMessage?.running),
-            activate: false,
+            activate: true,
             onRunDetailsChange: handleAgentRunDetailsChange,
         });
     }, [
