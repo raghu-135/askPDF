@@ -69,7 +69,7 @@ from app.db.connection_sqlmodel import (
 from app.db.status import get_scoped_indexing_status
 
 # Constants (from file_repo for backward compatibility)
-DEFAULT_SENTENCES_JSON = '{"version": "1.0", "sentences": []}'
+from app.db.repositories.file_repo_sqlmodel import DEFAULT_SENTENCES_JSON
 DEFAULT_FILE_STATUS = {
     "file_hash": "",
     "parsing": {"status": "unknown"},

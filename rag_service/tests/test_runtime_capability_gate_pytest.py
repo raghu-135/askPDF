@@ -47,6 +47,7 @@ class RecordingAdapter:
         self.unsupported = {operation.value if isinstance(operation, RuntimeOperationId) else str(operation) for operation in unsupported}
         self.calls = {"approval": 0, "cancel": 0, "continue": 0, "inspect_state": 0, "resume": 0, "send_followup": 0, "steer_live": 0}
         self.approval_failures = 0
+        self.resume_failures = 0
         self.deleted_continuations = 0
 
     async def capabilities(self, definition):
@@ -79,6 +80,9 @@ class RecordingAdapter:
 
     async def resume(self, request, *, interrupt, context, event_sink=None):
         self.calls["resume"] += 1
+        if self.resume_failures:
+            self.resume_failures -= 1
+            raise RuntimeError("runtime_resume_failed", "Resume submission failed")
         return None
 
     async def respond_to_approval(self, request, response):
@@ -340,6 +344,42 @@ async def test_task_runtime_approval_failure_can_be_retried(monkeypatch):
     assert adapter.calls["approval"] == 2
     assert adapter.calls["resume"] == 0
     queue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_langgraph_tool_approval_resume_failure_restores_pending(monkeypatch):
+    pending = {
+        "interrupt_id": "tool-1",
+        "status": "pending",
+        "type": "tool_approval",
+        "response_operation": RuntimeOperationId.RUN_RESUME.value,
+        "checkpoint_resume": True,
+    }
+    current = _run(status="awaiting_human", pending=pending)
+    resolved_interrupt = {
+        **pending,
+        "status": "resumed",
+        "decision": {"action": "approve", "interrupt_id": "tool-1"},
+    }
+    resolved_run = _run(status="running", pending=resolved_interrupt)
+    resolution = InterruptResolutionResult(run=resolved_run, outcome="resumed", interrupt=resolved_interrupt)
+    repository = FakeRepository(current, resolution)
+    adapter = RecordingAdapter()
+    adapter.resume_failures = 1
+    service = _patch_runtime(monkeypatch, adapter, repository)
+
+    with pytest.raises(RuntimeError, match="Resume submission failed"):
+        await service.resume_agent_run(
+            current.id,
+            interrupt_id="tool-1",
+            action="approve",
+            expected_thread_id=current.thread_id,
+            execution_event_sink=Sink(),
+        )
+
+    assert repository.restored == 1
+    assert adapter.calls["resume"] == 1
+    assert resolved_run.status == "running"
 
 
 @pytest.mark.asyncio

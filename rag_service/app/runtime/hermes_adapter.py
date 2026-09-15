@@ -50,11 +50,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         context: Any,
     ) -> AgentRuntimeRequest:
         task_context = getattr(context, "task_context", None)
-        if task_context is None:
-            return request
-        context_data = dict(getattr(task_context, "context_data", {}) or {})
-        data = {**context_data, **task_context.to_dict()}
-        limits = dict(getattr(task_context, "limits", {}) or {})
         spec = dict(getattr(context, "resolved_spec", {}) or {})
         config = dict(spec.get("config") or {})
         raw_profile = spec.get("managed_profile")
@@ -63,8 +58,20 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         raw_mcp = profile.get("mcp") if has_managed_profile else config.get("mcp")
         mcp = dict(raw_mcp) if isinstance(raw_mcp, Mapping) else {}
         allowed_tools = list(mcp.get("allowed_tool_ids") or [])
+        approval_task_id = str(
+            (task_context.task_id if task_context is not None else None) or request.task_id or ""
+        ) or None
+        if not approval_task_id or not allowed_tools:
+            return request
+        context_data = dict(getattr(task_context, "context_data", {}) or {}) if task_context is not None else {}
+        data = {**context_data, **(task_context.to_dict() if task_context is not None else {})}
+        limits = dict(getattr(task_context, "limits", {}) or {}) if task_context is not None else {}
         from app.services.tool_approval import invocation_policies
-        approval_policy = invocation_policies(config, permissions=task_context.permissions)
+        approval_policy = invocation_policies(
+            config,
+            permissions=task_context.permissions if task_context is not None else None,
+            task_id=approval_task_id,
+        )
         raw_model_policy = profile.get("model_policy") if has_managed_profile else config
         model_policy = dict(raw_model_policy) if isinstance(raw_model_policy, Mapping) else {}
         ttl_seconds = execution_context_ttl_seconds(
@@ -86,7 +93,9 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 use_web_search=mcp.get("runtime_profile") == "askpdf-deep-external",
                 use_reranker=True,
                 extensions={
-                    "task_id": task_context.task_id,
+                    "task_id": approval_task_id,
+                    "approval_task_id": approval_task_id,
+                    "runtime": "hermes",
                     "tool_approval_policy": approval_policy,
                     "llm_model": model_policy.get("model") or (None if has_managed_profile else config.get("llm_model")),
                     "correction_context_sha256": hashlib.sha256(json.dumps(
@@ -95,7 +104,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                     ).encode()).hexdigest(),
                 },
             ),
-            task_id=task_context.task_id,
+            task_id=approval_task_id,
             allowed_tools=allowed_tools,
             ttl_seconds=ttl_seconds,
         )

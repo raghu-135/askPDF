@@ -16,6 +16,7 @@ from langgraph_runtime.workflows.state import (
     task_result_packet_identity,
 )
 from langgraph_runtime.workflows import deep_research_nodes
+from langgraph_runtime.models.deep_research import DeepResearchPlanProposal
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested
 from langgraph_runtime.router_runtime import _invoke_graph_with_partial_state
@@ -578,3 +579,59 @@ async def test_failed_provisional_synthesis_rejects_internal_partial_acceptance(
             "deep_research_services_factory": runtime_execution_services_factory,
             "cancellation_checker": lambda: False,
         }})
+
+
+def test_provider_json_schema_rejected_detects_gemini_invalid_argument():
+    class Provider400(Exception):
+        status_code = 400
+
+    assert deep_research_nodes._provider_json_schema_rejected(
+        Provider400("Error code: 400 - INVALID_ARGUMENT")
+    )
+    assert not deep_research_nodes._provider_json_schema_rejected(Exception("Error code: 429"))
+
+
+@pytest.mark.asyncio
+async def test_call_model_falls_back_when_provider_rejects_json_schema(monkeypatch):
+    class Provider400(Exception):
+        status_code = 400
+
+    structured = SimpleNamespace(ainvoke=AsyncMock(side_effect=Provider400("INVALID_ARGUMENT")))
+    model = SimpleNamespace(
+        with_structured_output=lambda *args, **kwargs: structured,
+        ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"objective":"ok"}')),
+    )
+
+    class Span:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    services = SimpleNamespace(
+        consume_budget=AsyncMock(),
+        execution_span=lambda enabled=True: Span(),
+        cancellation=Token(),
+    )
+    monkeypatch.setattr(deep_research_nodes, "get_llm", lambda *args, **kwargs: model)
+    monkeypatch.setattr(deep_research_nodes, "execution_model_client", lambda _config: None)
+    monkeypatch.setattr(deep_research_nodes, "services_from_config", lambda *_args, **_kwargs: services)
+    monkeypatch.setattr(deep_research_nodes, "run_cancellable", lambda work, _token: work)
+
+    async def invoke_direct(func, messages, **kwargs):
+        return await func(messages)
+
+    monkeypatch.setattr(deep_research_nodes, "invoke_llm_for_node", invoke_direct)
+    text, _metadata = await deep_research_nodes._call_model(
+        {"llm_model": "google/gemini-3.1-flash-lite", "agent_task_id": "task-1"},
+        {},
+        "deep_task_planner",
+        [],
+        structured_schema=DeepResearchPlanProposal,
+        structured_output_strategy="provider_json_schema",
+        meter_research=False,
+    )
+    assert '"objective":"ok"' in text
+    model.ainvoke.assert_awaited()
+    structured.ainvoke.assert_awaited()

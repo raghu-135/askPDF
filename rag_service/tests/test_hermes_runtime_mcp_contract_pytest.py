@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from hermes_runtime.api import (
     _error,
+    _failed_runtime_result,
     _HermesEventBudget,
     _runtime_usage_snapshot,
     _upstream_timeout,
@@ -246,3 +247,14 @@ def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_comman
     assert "http://127.0.0.1:8000/health" in hermes_runtime
     assert "http://127.0.0.1:8200/readyz" in hermes_runtime
     assert "hermes hermes-runtime hermes-config-init" in (repository / "run_tests.sh").read_text()
+
+
+def test_failed_runtime_result_includes_task_orchestration_delta():
+    result = _failed_runtime_result(
+        {"code": "hermes_upstream_protocol_error", "message": "closed"},
+        None,
+        run_id="run-1",
+    )
+    assert result["status"] == "failed"
+    assert result["orchestration_delta"]["result"]["status"] == "failed"
+    assert result["orchestration_delta"]["pending_interrupt"] == {"operation": "clear"}

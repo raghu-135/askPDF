@@ -152,21 +152,48 @@ async def test_explicit_task_grant_survives_new_run_without_leaking_to_other_tas
             await tool_approval.record_tool_decision(session, run, request, "approve_for_scope")
     for scope, expected in [(task_id, ApprovalMode.ALLOW), ("different-task", ApprovalMode.ASK)]:
         context = ToolInvocationContext(run_id="next-run", thread_id=sample_thread.id, extensions={
-            "task_id": scope, "tool_approval_policy": {"search_web": {"mode": "ask", "scope": "task"}},
+            "approval_task_id": scope, "tool_approval_policy": {"search_web": {"mode": "ask", "scope": "task"}},
         })
         mode, _ = await tool_approval.check_tool_approval("search_web", {"query": "second"}, context, invocation_id="second-call")
         assert mode is expected
 
 
 def test_any_registered_tool_can_be_configured_for_human_approval():
-    policies = tool_approval.invocation_policies({"hitl_policy": {"enabled": True, "tools": {
+    policies = tool_approval.invocation_policies({"hitl_policy": {"enabled": False, "tools": {
         "search_knowledge": {"mode": "ask", "scope": "run"},
     }}})
     assert policies["search_knowledge"] == {"mode": "ask", "scope": "run"}
     with pytest.raises(ValueError, match="Unknown tools"):
-        tool_approval.invocation_policies({"hitl_policy": {"enabled": True, "tools": {
+        tool_approval.invocation_policies({"hitl_policy": {"enabled": False, "tools": {
             "misspelled_tool": {"mode": "ask"},
         }}})
+    with pytest.raises(ValueError, match="scope task requires an AgentTask"):
+        tool_approval.invocation_policies({"hitl_policy": {"tools": {
+            "search_knowledge": {"mode": "ask", "scope": "task"},
+        }}})
+    task_policies = tool_approval.invocation_policies(
+        {"hitl_policy": {"tools": {"search_knowledge": {"mode": "ask", "scope": "task"}}}},
+        task_id="task-1",
+    )
+    assert task_policies["search_knowledge"] == {"mode": "ask", "scope": "task"}
+
+
+def test_web_search_mode_is_authoritative_over_legacy_knobs():
+    policies = tool_approval.invocation_policies({
+        "web_search_mode": "on",
+        "hitl_web_approval": True,
+        "use_web_search": False,
+        "hitl_policy": {"enabled": False, "tools": {"search_web": {"mode": "ask", "scope": "run"}}},
+    })
+    assert policies["search_web"]["mode"] == "ask"
+    denied = tool_approval.invocation_policies({
+        "web_search_mode": "off",
+        "hitl_policy": {"tools": {"search_web": {"mode": "ask", "scope": "run"}}},
+    })
+    assert denied["search_web"]["mode"] == "deny"
+    derived = tool_approval.invocation_policies({"hitl_web_approval": True})
+    assert derived["search_web"]["mode"] == "ask"
+    assert derived["search_web"]["scope"] == "run"
 
 
 def test_approval_preserves_exact_arguments_and_rejects_oversized_requests():
@@ -178,3 +205,62 @@ def test_approval_preserves_exact_arguments_and_rejects_oversized_requests():
     request["proposed_tool"]["arguments"]["code"] = "x" * 16000
     with pytest.raises(ValueError, match="too large"):
         normalize_pending_interrupt_payload(request)
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_request_uses_runtime_response_operation(test_session_maker, monkeypatch):
+    monkeypatch.setattr(tool_approval, "async_session_maker", test_session_maker)
+    context = ToolInvocationContext(run_id="run", thread_id="thread", extensions={
+        "runtime": "hermes",
+        "tool_approval_policy": {"search_knowledge": {"mode": "ask", "scope": "run"}},
+    })
+    mode, request = await tool_approval.check_tool_approval(
+        "search_knowledge", {"query": "q"}, context, invocation_id="call-1",
+    )
+    assert mode is ApprovalMode.ASK
+    assert request["response_operation"] == "run.approval.respond"
+    assert request["type"] == "tool_approval"
+
+
+@pytest.mark.asyncio
+async def test_persisted_runs_are_fenced_without_an_approval_policy(test_session_maker, sample_thread, monkeypatch):
+    monkeypatch.setattr(tool_approval, "async_session_maker", test_session_maker)
+    workflow_id, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(AgentWorkflow(id=workflow_id, name=workflow_id, framework="langgraph", builder_id="langgraph_graph", spec_json={}))
+            await session.flush()
+            session.add(AgentRun(id=run_id, thread_id=sample_thread.id, workflow_id=workflow_id))
+    context = ToolInvocationContext(run_id=run_id, thread_id=sample_thread.id, extensions={})
+    invoke = AsyncMock(return_value=ToolResult(content="executed"))
+    first = await tool_approval.execute_tool_once("search_knowledge", {"query": "q"}, context, invocation_id="fence-1", invoke=invoke)
+    second = await tool_approval.execute_tool_once("search_knowledge", {"query": "q"}, context, invocation_id="fence-1", invoke=invoke)
+    assert first.content == second.content == "executed"
+    invoke.assert_awaited_once()
+    ephemeral = ToolInvocationContext(run_id="curator-correlation-id", thread_id=sample_thread.id, extensions={})
+    invoke_ephemeral = AsyncMock(return_value=ToolResult(content="loose"))
+    await tool_approval.execute_tool_once("search_knowledge", {}, ephemeral, invocation_id="e1", invoke=invoke_ephemeral)
+    await tool_approval.execute_tool_once("search_knowledge", {}, ephemeral, invocation_id="e1", invoke=invoke_ephemeral)
+    assert invoke_ephemeral.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_run_cannot_record_task_scoped_decisions(test_session_maker, sample_thread):
+    workflow_id, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+    run = AgentRun(id=run_id, thread_id=sample_thread.id, workflow_id=workflow_id)
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(AgentWorkflow(id=workflow_id, name=workflow_id, framework="langgraph", builder_id="langgraph_graph", spec_json={}))
+            await session.flush()
+            session.add(run)
+    request = tool_approval_request(
+        "search_knowledge", {"query": "q"},
+        policy=ToolApprovalPolicy(ApprovalMode.ASK, ApprovalScope.TASK),
+        caller="agent", response_operation="run.resume",
+    )
+    request["interrupt_id"] = "interrupt-1"
+    request["proposed_tool"]["invocation_id"] = "call-1"
+    async with test_session_maker() as session:
+        async with session.begin():
+            with pytest.raises(ValueError, match="no matching permission scope"):
+                await tool_approval.record_tool_decision(session, run, request, "approve_for_scope")

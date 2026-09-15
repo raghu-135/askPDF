@@ -1,7 +1,8 @@
-import pytest
-
 import json
+from pathlib import Path
 from unittest.mock import Mock
+
+import pytest
 
 from hermes_runtime.hermes_pinned_patch.approval_bridge import wrap_mcp_handler, decode_approval_request
 from runtime_protocol.tool_approval import ApprovalMode, ToolApprovalPolicy, tool_approval_request
@@ -12,11 +13,20 @@ def test_hermes_wrapper_uses_native_approval_and_retries_same_invocation():
     request["proposed_tool"]["invocation_id"] = "invocation"
     handler = Mock(side_effect=[json.dumps({"structuredContent": {"artifacts": {"approval_request": request}}}), '{"result":"executed"}'])
     approve = Mock(return_value={"approved": True})
-    wrapped = wrap_mcp_handler(handler, approve)
+    wrapped = wrap_mcp_handler(handler, approve, tool_name="arbitrary_tool")
     assert wrapped({"query": "example"}) == '{"result":"executed"}'
-    assert handler.call_args_list[0].args == handler.call_args_list[1].args
+    first_id = handler.call_args_list[0].args[0]["_askpdf_invocation_id"]
+    assert handler.call_args_list[1].args[0]["_askpdf_invocation_id"] == first_id
+    replay = Mock(return_value='{"structuredContent":{}}')
+    wrap_mcp_handler(replay, approve, tool_name="arbitrary_tool")({"query": "example"})
+    assert replay.call_args.args[0]["_askpdf_invocation_id"] == first_id
     event = {"pattern_key": "plugin_rule:" + approve.call_args.kwargs["rule_key"]}
     assert decode_approval_request(event) == request
+
+
+def test_approval_bridge_does_not_import_runtime_protocol():
+    import hermes_runtime.hermes_pinned_patch.approval_bridge as bridge
+    assert "runtime_protocol" not in Path(bridge.__file__).read_text()
 
 
 def test_hermes_native_denial_never_retries_tool():

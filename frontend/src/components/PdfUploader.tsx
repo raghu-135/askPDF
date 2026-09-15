@@ -1,6 +1,7 @@
 import { Button, Tooltip } from "@mui/material";
 import React from "react";
 import { getTargetFileStatus, getParsedSentencesForTarget, FileStatus, ProcessStatusHelper, uploadPdfToTarget, type KnowledgeTarget } from "../lib/api";
+import { isParsedSentencePayload } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
 import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
@@ -90,10 +91,10 @@ const PdfUploader = React.memo(function PdfUploader({
           onParsingComplete
         ) {
           try {
-            if (!target) {
+            const parsedData = await getParsedSentencesForTarget(fileStatus.fileHash, fileStatus.target);
+            if (!isParsedSentencePayload(parsedData?.sentences)) {
               return;
             }
-            const parsedData = await getParsedSentencesForTarget(fileStatus.fileHash, target);
             parsingNotifiedRef.current = fileStatus.fileHash;
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {

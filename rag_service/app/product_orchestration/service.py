@@ -886,6 +886,7 @@ class AgentRunService:
             definition_id=definition.definition_id,
             framework=definition.framework,
             builder_id=definition.builder_id,
+            task_id=resolution.run.task_id,
             continuation=continuation_from_run(resolution.run),
         )
         response_operation = RuntimeOperationId(str(resolution.interrupt.get("response_operation")))
@@ -934,6 +935,7 @@ class AgentRunService:
                     "agent_workflow_id": resolution.run.workflow_id,
                 },
                 embedding_model=embedding_model,
+                task_id=resolution.run.task_id,
             )
             runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
             logger.info(
@@ -1120,6 +1122,14 @@ class AgentRunService:
                 duplicate=False,
             )
         except Exception as exc:
+            if resolution.interrupt.get("type") == "tool_approval":
+                restored = await repository.restore_pending_approval_after_runtime_failure(
+                    resolution.run.id,
+                    interrupt_id=interrupt_id,
+                    action=action,
+                )
+                if restored:
+                    raise
             prior_metrics = dict(resolution.run.metrics_json or {})
             prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
             await lifecycle_repository.complete_run(
