@@ -163,7 +163,6 @@ async def prefetch_context(*args: Any, **kwargs: Any) -> Dict[str, Any]:
     raise RuntimeError("Product prefetch is unavailable inside langgraph-runtime; use MCP retrieval")
 
 
-search_documents = None
 search_thread_conversation_history = None
 search_durable_memory = None
 search_thread_events = None
@@ -514,7 +513,7 @@ class NodeRegistry:
                     return normalize_tool_result(raw, tool_name=tool_name, config=config)
 
                 question = state["question"]
-                document = await retrieve(ToolName.SEARCH_DOCUMENTS.value, {"query": question, "max_results": 10})
+                document = await retrieve(ToolName.SEARCH_KNOWLEDGE.value, {"query": question, "level": "chunk", "max_results": 10})
                 conversation = await retrieve(ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value, {"query": question, "max_results": 10})
                 memory = await retrieve(ToolName.SEARCH_DURABLE_MEMORY.value, {"query": question, "max_results": 10})
                 web = {}

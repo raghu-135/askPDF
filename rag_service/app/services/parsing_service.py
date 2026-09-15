@@ -3,11 +3,12 @@ import os
 import logging
 import json
 from typing import Optional
-import spacy
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import TextItem
+from app.services.document_extraction_contract import extraction_configuration as _lightweight_extraction_configuration
+from app.services.document_pipeline import sentence_pipeline_identity
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,28 @@ _docling_converter = DocumentConverter(
     }
 )
 
-# Initialize spaCy for sentence splitting
-try:
-    _nlp = spacy.load("en_core_web_sm")
-except Exception as e:
-    logger.error(f"Failed to load spacy model: {e}")
-    _nlp = None
+
+def extraction_configuration() -> dict[str, object]:
+    """Return every parsing input that can change the canonical document."""
+    configuration = _lightweight_extraction_configuration(sentence_model=sentence_pipeline_identity())
+    configuration.update(
+        {
+            "do_ocr": bool(_pipeline_options.do_ocr),
+            "do_table_structure": bool(_pipeline_options.do_table_structure),
+            "do_formula_enrichment": bool(_pipeline_options.do_formula_enrichment),
+            "table_mode": str(
+                getattr(_pipeline_options.table_structure_options.mode, "value", _pipeline_options.table_structure_options.mode)
+            ).upper(),
+            "force_full_page_ocr": bool(
+                getattr(_pipeline_options.ocr_options, "force_full_page_ocr", False)
+            ),
+        }
+    )
+    return configuration
+
+def _required_sentence_pipeline():
+    from app.services.document_pipeline import _sentence_nlp
+    return _sentence_nlp()
 
 def _convert_bottomleft_to_topleft(bbox, page_height):
     """Convert Docling BOTTOMLEFT bbox to pdfplumber TOPLEFT."""
@@ -119,8 +136,8 @@ def parse_with_docling(data: bytes, filename: str, debug_output_dir: Optional[st
         
         return docling_result.document
     except Exception as e:
-        logger.warning(f"Docling conversion failed: {e}")
-        return None
+        logger.error("Docling conversion failed", exc_info=True)
+        raise RuntimeError("Docling conversion failed") from e
 
 def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, page_width, start_id=0):
     """Extract sentences from a single cropped region using pdfplumber."""
@@ -155,11 +172,8 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
     # Concatenate text for sentence splitting
     full_text = " ".join(w["text"] for w in words)
     
-    # Split into sentences using spaCy
-    if not _nlp:
-        return []
-    
-    doc = _nlp(full_text)
+    # Split into sentences using the required, successfully loaded model.
+    doc = _required_sentence_pipeline()(full_text)
     sentences = []
     
     # Pre-calculate character positions for all words
@@ -320,11 +334,8 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
     # Using word text instead of item.text to avoid spacing/character mismatches
     full_text = " ".join(w["text"] for w in all_words)
     
-    # Split into sentences using spaCy
-    if not _nlp:
-        return []
-    
-    doc = _nlp(full_text)
+    # Split into sentences using the required, successfully loaded model.
+    doc = _required_sentence_pipeline()(full_text)
     sentences = []
     
     for sent in doc.sents:
@@ -509,6 +520,10 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, merge_multi_b
                     start_id=len(all_sentences)
                 )
             
+            source_ref = str(getattr(dl_item, "self_ref", "") or "")
+            for sentence in sentences:
+                if source_ref:
+                    sentence["source_ref"] = source_ref
             all_sentences.extend(sentences)
     
     # Write pdfplumber parsed output to test folder if requested

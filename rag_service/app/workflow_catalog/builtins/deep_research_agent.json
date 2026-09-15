@@ -34,8 +34,9 @@
       "custom_instructions": "",
       "allowed_tool_ids": [
         "thread_shape",
-        "document_evidence",
-        "focused_document_evidence",
+        "document_search_knowledge",
+        "document_inspection",
+        "document_context",
         "thread_conversation_history",
         "durable_memory",
         "thread_events",
@@ -63,7 +64,7 @@
           "max_incomplete_review_rounds": 3,
           "tool_policy": {
             "role_tools": {
-              "document_researcher": ["search_documents", "search_thread_events"],
+              "document_researcher": ["search_knowledge", "inspect_document", "read_context", "search_thread_events"],
               "web_researcher": ["search_web"],
               "memory_researcher": ["search_durable_memory", "search_thread_conversation_history"],
               "evidence_critic": []

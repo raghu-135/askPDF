@@ -18,7 +18,7 @@ import pytest
 
 # Add the parent directory to the path to import parsing_service
 
-from app.services.parsing_service import extract_text_with_coordinates, parse_with_docling, parse_with_pdfplumber
+from app.services.parsing_service import extraction_configuration, extract_text_with_coordinates, parse_with_docling, parse_with_pdfplumber
 
 
 @pytest.fixture
@@ -77,14 +77,56 @@ def test_pdfplumber_parsing(sample_pdf_data, sample_filename):
             assert field in item, f"Item {i} missing required field: {field}"
         # Check that item has either 'page' or 'pages' field
         assert 'page' in item or 'pages' in item, f"Item {i} missing required field: page or pages"
-    
+
     # Check label distribution
     label_counts = {}
     for item in result:
         label = item.get('label', 'unspecified')
         label_counts[label] = label_counts.get(label, 0) + 1
-    
+
     assert len(label_counts) > 0, "No labels found in pdfplumber output"
+
+
+def test_extraction_configuration_exposes_cache_invalidating_options(monkeypatch):
+    import app.services.parsing_service as parsing_service
+
+    monkeypatch.setattr(parsing_service._pipeline_options, "do_ocr", False)
+    without_ocr = extraction_configuration()
+    monkeypatch.setattr(parsing_service._pipeline_options, "do_ocr", True)
+    with_ocr = extraction_configuration()
+
+    assert without_ocr["do_ocr"] is False
+    assert with_ocr["do_ocr"] is True
+    assert {"do_table_structure", "do_formula_enrichment", "table_mode", "docling", "docling_core", "pdfplumber"} <= set(with_ocr)
+
+
+def test_coordinate_alignment_preserves_unmatched_canonical_ocr_sentence():
+    from app.services.document_conversion_service import _align_coordinates
+
+    canonical = [
+        {"text": "Selectable text.", "pages": [1], "alignment_precision": "coarse", "bboxes": []},
+        {"text": "OCR-only text.", "pages": [2], "alignment_precision": "coarse", "bboxes": []},
+    ]
+    aligned = _align_coordinates(
+        canonical,
+        [{"text": "Selectable text.", "pages": [1], "bboxes": [{"page": 1, "x": 1}]}],
+    )
+
+    assert [item["text"] for item in aligned] == ["Selectable text.", "OCR-only text."]
+    assert aligned[0]["alignment_precision"] == "exact"
+    assert aligned[1]["alignment_precision"] == "coarse"
+
+
+def test_coordinate_alignment_rejects_shared_word_from_unrelated_page():
+    from app.services.document_conversion_service import _align_coordinates
+
+    aligned = _align_coordinates(
+        [{"text": "The shared word appears here.", "pages": [2], "label": "text", "bboxes": []}],
+        [{"text": "shared", "page": 1, "label": "text", "bboxes": [{"page": 1, "x0": 1}]}],
+    )
+
+    assert aligned[0]["alignment_precision"] == "coarse"
+    assert aligned[0]["bboxes"] == []
 
 
 def test_combined_parsing(sample_pdf_data, sample_filename):

@@ -559,34 +559,57 @@ export const buildLiveTraceView = (
   // journal while this client still has only a suffix of that journal (for
   // example after reconnecting with an after-sequence cursor). Structural
   // validation remains strict, but referential validation must wait for the
-  // retained/full trace, where the complete event set is available.
+  // retained/full trace, where the complete event set is available. A malformed
+  // parallel snapshot must not erase the live operation timeline.
   const parallelError = validateParallelGroups(liveParallelGroups, timelineEvents, { requireEventReferences: false });
-  if (parallelError) {
-    return {
-      parseError: parallelError.slice(0, 240),
-      parseCorrelationId: 'trace:live',
-      metrics: {},
-      events: [],
-      visualizations: {},
-      operations: [],
-      tools: [],
-      models: [],
-      usedOperationCount: 0,
-      usedToolCount: 0,
-      warningCount: 0,
-      errorCount: 0,
-      diagnostics: buildDiagnosticsFromTimeline([]),
-      parallelGroups: [],
-      detailManifest: [],
+  const parallelGroups = parallelError ? [] : liveParallelGroups as AgentTraceParallelGroup[];
+
+  const upsertOperation = (row: TraceOperationView) => {
+    const key = `${row.id}:${row.visitIndex || 1}`;
+    const existing = operationIndex.get(key);
+    if (existing === undefined) {
+      operationIndex.set(key, operations.length);
+      operations.push(row);
+      return;
+    }
+    const previous = operations[existing];
+    const keepPriorStatus = row.status === 'active' && previous.status && previous.status !== 'active';
+    operations[existing] = {
+      ...previous,
+      ...row,
+      status: keepPriorStatus ? previous.status : row.status,
+      skipped: Boolean(row.skipped || previous.skipped),
+      raw: { ...previous.raw, ...row.raw },
     };
-  }
+  };
+
+  const ensureOperation = (
+    operationId: string | undefined,
+    visitIndex: number | undefined,
+    extras: Partial<TraceOperationView> = {},
+  ) => {
+    if (!operationId) return;
+    upsertOperation({
+      id: operationId,
+      type: extras.type,
+      label: extras.label || operationId,
+      instanceLabel: extras.instanceLabel || formatNodeInstanceLabel(operationId, extras.type),
+      parentOperationId: extras.parentOperationId,
+      visitIndex: visitIndex || 1,
+      status: extras.status || 'active',
+      skipped: extras.skipped === true,
+      warningCodes: extras.warningCodes || [],
+      error: extras.error || {},
+      raw: extras.raw || {},
+      topologyRef: extras.topologyRef,
+    });
+  };
 
   events.forEach((envelope, index) => {
     const data = asObject(envelope.data);
     if (envelope.event.startsWith('operation.') && typeof data.operation_id === 'string') {
       const operationId = String(data.operation_id);
       const visitIndex = asNumber(data.visit_index) || 1;
-      const key = `${operationId}:${visitIndex}`;
       const status = envelope.event.endsWith('.started') ? 'active'
         : envelope.event.endsWith('.failed') ? 'error'
           : envelope.event.endsWith('.skipped') ? 'skipped'
@@ -610,15 +633,34 @@ export const buildLiveTraceView = (
         raw: data,
         topologyRef: asObject(data.topology_ref),
       };
-      const existing = operationIndex.get(key);
-      if (existing === undefined) {
-        operationIndex.set(key, operations.length);
-        operations.push(row);
-      } else {
-        operations[existing] = { ...operations[existing], ...row, raw: { ...operations[existing].raw, ...data } };
-      }
+      upsertOperation(row);
       route = row.route || route;
       routeReason = row.routeReason || routeReason;
+    }
+    if (envelope.event.startsWith('worker.') || envelope.event.startsWith('dispatch.')) {
+      const operationId = asNonEmptyString(data.operation_id)
+        || asNonEmptyString(data.worker_node_id)
+        || asNonEmptyString(data.work_id);
+      if (operationId) {
+        const status = envelope.event.endsWith('.failed') || envelope.event.endsWith('.timed_out')
+          ? 'error'
+          : envelope.event.endsWith('.skipped') || envelope.event.endsWith('.cancelled')
+            ? 'skipped'
+            : envelope.event.endsWith('.completed')
+              ? 'completed'
+              : 'active';
+        ensureOperation(operationId, asNumber(data.visit_index) || asNumber(data.attempt) || 1, {
+          type: asNonEmptyString(data.operation_type) || asNonEmptyString(data.worker_type),
+          label: asNonEmptyString(data.operation_label) || asNonEmptyString(data.worker_node_id) || operationId,
+          parentOperationId: asNonEmptyString(data.parent_operation_id),
+          status,
+          skipped: status === 'skipped',
+          warningCodes: asStringArray(data.warnings),
+          error: asObject(data.error),
+          raw: data,
+          topologyRef: asObject(data.topology_ref),
+        });
+      }
     }
     if (envelope.event.startsWith('tool.')) {
       const tool = toolViewFromSummary({ ...data, status: data.status || envelope.event.slice(5), ok: envelope.event !== 'tool.failed' && data.ok !== false });
@@ -630,12 +672,22 @@ export const buildLiveTraceView = (
       } else {
         tools[existing] = { ...tools[existing], ...tool, raw: { ...tools[existing].raw, ...tool.raw } };
       }
+      ensureOperation(tool.callerNode, tool.callerVisitIndex, {
+        type: tool.callerNodeType,
+        status: envelope.event === 'tool.failed' ? 'error' : 'active',
+        raw: { caller_from: 'tool', tool_name: tool.name },
+      });
     }
     if (envelope.event.startsWith('llm.')) {
       const model = modelViewFromSummary({ ...data, event_id: data.event_id || `live:${index + 1}`, status: envelope.event.slice(4) });
       const existing = models.findIndex((row) => row.invocation_id === model.invocation_id);
       if (existing >= 0) models[existing] = { ...models[existing], ...model, raw: { ...models[existing].raw, ...model.raw } };
       else models.push(model);
+      ensureOperation(model.operation_id, model.visit_index, {
+        type: model.operation_type,
+        status: envelope.event.endsWith('.failed') ? 'error' : 'active',
+        raw: { caller_from: 'llm', model_name: model.model_name },
+      });
     }
     if (envelope.event === 'run.completed') {
       finalOutput = asObject(data.final_output) as AgentRunFinalOutput;
@@ -649,10 +701,10 @@ export const buildLiveTraceView = (
   const visualizations: Record<string, AgentTraceVisualization> = {
     'generic.timeline': { id: 'generic.timeline' },
   };
-  if (liveParallelGroups.length > 0) {
+  if (parallelGroups.length > 0) {
     visualizations['generic.parallel'] = {
       id: 'generic.parallel',
-      group_ids: liveParallelGroups.map((group: AgentTraceParallelGroup) => group.group_id),
+      group_ids: parallelGroups.map((group) => group.group_id),
     };
   }
 
@@ -670,7 +722,7 @@ export const buildLiveTraceView = (
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
     errorCount: diagnostics.summary.failure_count,
     diagnostics,
-    parallelGroups: liveParallelGroups as AgentTraceParallelGroup[],
+    parallelGroups,
     finalOutput,
     detailManifest: operations.filter((operation) => operation.raw.detail).map((operation) => ({
       operation_id: operation.id,
@@ -680,6 +732,7 @@ export const buildLiveTraceView = (
       available: true,
       truncated: Boolean(operation.raw.detail?.safety?.truncated),
     })),
+    ...(parallelError ? { parseError: parallelError.slice(0, 240), parseCorrelationId: 'trace:live' } : {}),
   };
 };
 

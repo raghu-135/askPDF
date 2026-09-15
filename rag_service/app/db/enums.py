@@ -41,6 +41,11 @@ class FileSourceType(str, Enum):
     PDF = "pdf"
     BROWSER = "browser"
 
+    @classmethod
+    def uses_pdf_conversion(cls, source_type: str | None) -> bool:
+        """Uploaded and captured PDFs share the same durable conversion path."""
+        return str(source_type or cls.PDF.value) in {cls.PDF.value, cls.BROWSER.value}
+
 
 class ChatTurnStatus(str, Enum):
     """Persisted chat turn lifecycle statuses."""

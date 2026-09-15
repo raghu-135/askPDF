@@ -10,7 +10,9 @@
       "allowed_tool_ids": [
         "thread_shape",
         "wikipedia_reference",
-        "document_evidence",
+        "document_search_knowledge",
+        "document_inspection",
+        "document_context",
         "thread_conversation_history",
         "durable_memory",
         "thread_events",

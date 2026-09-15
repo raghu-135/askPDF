@@ -37,8 +37,9 @@ def test_mcp_runner_includes_all_framework_neutral_tests():
 def test_migrated_mcp_handlers_are_framework_neutral():
     migrated = {
         "get_thread_shape",
-        "search_documents",
-        "search_document_by_id",
+        "search_knowledge",
+        "inspect_document",
+        "read_context",
         "search_thread_conversation_history",
         "search_durable_memory",
         "search_thread_events",

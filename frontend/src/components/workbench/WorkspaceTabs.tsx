@@ -26,7 +26,7 @@ import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PublicIcon from '@mui/icons-material/Public';
-import RouteIcon from '@mui/icons-material/Route';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import ErrorIcon from '@mui/icons-material/Error';
 import ReplayIcon from '@mui/icons-material/Replay';
 import { truncateFileName } from '../../lib/pdf-utils';
@@ -234,7 +234,7 @@ export default React.memo(function WorkspaceTabs({
           if (tab.kind === 'trace') {
             return renderSystemTab({
               tab,
-              icon: <Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><RouteIcon fontSize="small" /></Badge>,
+              icon: <Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><BugReportIcon fontSize="small" /></Badge>,
               tooltip: 'Debug Trace',
             });
           }

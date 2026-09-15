@@ -689,10 +689,12 @@ export default function Home() {
   }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
-    rememberNonMemoryTab('trace-tab');
+    if (trace.activate !== false) {
+      rememberNonMemoryTab('trace-tab');
+      setActiveTabId('trace-tab');
+      setIsBrowserActive(false);
+    }
     openTrace(trace);
-    setActiveTabId('trace-tab');
-    setIsBrowserActive(false);
   }, [openTrace, rememberNonMemoryTab]);
 
   const isMemoryWorkspaceActive = activeTabId === 'memory-tab';

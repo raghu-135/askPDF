@@ -7,7 +7,7 @@ import pytest
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import collect_tool_sources, normalize_tool_result
-from app.db.vector.adapter import WeaviateAdapter
+from app.db.vector.adapter import WeaviateAdapter, _document_vector_uuid
 from app.rag import agent_tools
 from app.tools.context import ToolInvocationContext
 from app.tools.contracts import TimelineRequest
@@ -29,6 +29,62 @@ class CapturingAdapter(WeaviateAdapter):
 
 
 @pytest.mark.asyncio
+async def test_indexed_chunk_identity_check_confirms_deterministic_object_ids():
+    adapter = CapturingAdapter()
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=3)
+    collection.data.exists.return_value = True
+    adapter.collection_manager.get_collection.return_value = collection
+
+    assert await adapter.has_file_indexed_chunks(
+        file_hash="file-1",
+        embedding_model="embed-1",
+        expected_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        manifest_id="manifest-1",
+    )
+    collection.query.fetch_objects.assert_not_called()
+    seen = {str(call.args[0]) for call in collection.data.exists.call_args_list}
+    assert seen == {
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-1"),
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-2"),
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-3"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_indexed_chunk_identity_check_rejects_count_mismatch():
+    adapter = CapturingAdapter()
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=2)
+    adapter.collection_manager.get_collection.return_value = collection
+
+    assert not await adapter.has_file_indexed_chunks(
+        file_hash="file-1",
+        embedding_model="embed-1",
+        expected_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        manifest_id="manifest-1",
+    )
+    collection.data.exists.assert_not_called()
+    collection.query.fetch_objects.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_indexed_chunk_identity_check_rejects_missing_object():
+    adapter = CapturingAdapter()
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=2)
+    collection.data.exists.side_effect = [True, False]
+    adapter.collection_manager.get_collection.return_value = collection
+
+    assert not await adapter.has_file_indexed_chunks(
+        file_hash="file-1",
+        embedding_model="embed-1",
+        expected_chunk_ids=["chunk-1", "chunk-2"],
+        manifest_id="manifest-1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_document_vector_properties_include_page_metadata_not_thread_temporal_metadata():
     adapter = CapturingAdapter()
 
@@ -40,6 +96,13 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
         embeddings=[[0.1, 0.2]],
         metadatas=[
             {
+                "manifest_id": "manifest-1",
+                "generation": "generation-1",
+                "source_id": "src-source-1",
+                "extraction_fingerprint": "extraction-1",
+                "chunking_fingerprint": "chunking-1",
+                "source_element_ids": [],
+                "body_text": "benefits body",
                 "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 "document_indexed_at": "2026-06-25T19:01:00Z",
                 "page_start": 3,
@@ -60,6 +123,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
     assert props["page_start"] == 3
     assert props["page_end"] == 4
     assert props["pages"] == "3-4"
+    assert props["text"] == "benefits body"
     assert "document_available_in_thread_at" not in props["metadata_json"]
     assert "document_indexed_at" not in props["metadata_json"]
     assert "timeline_event_at" not in props["metadata_json"]
@@ -275,7 +339,7 @@ def test_document_metadata_summary_uses_unstructured_element_metadata():
         ),
     ]
 
-    summary = indexer._document_metadata_from_unstructured_elements(elements)
+    summary = indexer._document_metadata_from_canonical_elements(elements)
 
     assert summary["page_count"] == 2
     assert summary["languages"] == ["eng", "spa"]
@@ -328,44 +392,15 @@ async def test_upsert_document_stats_persists_document_level_metadata(monkeypatc
     assert stored["element_types"] == {"Title": 1, "NarrativeText": 3}
 
 
-def test_blank_page_pdf_does_not_leave_single_non_contiguous_chunk(tmp_path):
-    fitz = pytest.importorskip("fitz")
-    from unstructured.chunking.title import chunk_by_title
-
-    pdf_path = tmp_path / "blank-page-provenance.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "First page title\nFirst page body text about apples and oranges.")
-    doc.new_page()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Third page title\nThird page body text about bananas and pears.")
-    doc.save(pdf_path)
-    doc.close()
-
-    elements = indexer.partition_pdf(filename=str(pdf_path))
-    chunked_elements = chunk_by_title(
-        elements,
-        multipage_sections=True,
-        combine_text_under_n_chars=200,
-        max_characters=500,
-        new_after_n_chars=400,
-        overlap=0,
-    )
-
-    chunks = indexer._chunks_with_page_metadata(chunked_elements)
-    page_labels = [chunk["metadata"].get("pages") for chunk in chunks if chunk.get("metadata")]
-
-    assert "1" in page_labels
-    assert "3" in page_labels
-    assert "1,3" not in page_labels
-
-
 @pytest.mark.asyncio
 async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_metadata(monkeypatch):
     fake_db = SimpleNamespace(
         has_file_indexed=AsyncMock(return_value=False),
+        has_file_indexed_chunks=AsyncMock(return_value=True),
         collection_manager=SimpleNamespace(validate_vectors_for_model=AsyncMock(return_value=True)),
         index_pdf_chunks=AsyncMock(return_value=1),
+        delete_document_vectors_by_file_hash_and_model=AsyncMock(),
+        delete_document_vectors_by_manifest=AsyncMock(),
     )
     global_file_created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     thread_file_added_at = datetime(2026, 6, 25, 19, 0, tzinfo=timezone.utc)
@@ -391,15 +426,47 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
     monkeypatch.setattr(indexer, "upsert_document_in_stats", AsyncMock())
     monkeypatch.setattr(
         indexer,
-        "get_chunks_with_document_metadata",
-        AsyncMock(
-            return_value=(
-                [{"text": "Chunk text", "metadata": {"pages": "3", "page_start": 3, "page_end": 3}}],
-                {"page_count": 1, "languages": ["eng"], "filetype": "application/pdf"},
-            )
+        "get_canonical_document_repo",
+        lambda: SimpleNamespace(
+            mark_vector_status=AsyncMock(),
+            get_published_manifest_ids=AsyncMock(return_value=[]),
+            publish_manifest=AsyncMock(return_value=SimpleNamespace(
+                published=True,
+                stale=False,
+                superseded_manifest_ids=(),
+            )),
         ),
     )
-    monkeypatch.setattr(indexer, "get_file_parsed_sentences", AsyncMock(return_value={"sentences": [{"text": "Chunk text"}]}))
+    monkeypatch.setattr(
+        indexer,
+        "ensure_retrieval_projection",
+        AsyncMock(return_value=(
+            SimpleNamespace(
+                manifest_id="manifest-1",
+                vector_status="missing",
+                vector_count=0,
+                expected_chunk_count=1,
+                expected_source_ids=["source-1"],
+                published_at=None,
+                superseded_at=None,
+                is_current=False,
+                generation="generation-1",
+                extraction_fingerprint="extraction-1",
+                source_version="source-version-1",
+                chunking_fingerprint="chunking-1",
+            ),
+            [{"chunk_id": "chunk-1", "body_text": "Chunk text", "contextualized_text": "Chunk text", "pages": [3], "sentence_ids": ["1"]}],
+                {
+                    "page_count": 1,
+                    "sentence_count": 1,
+                    "languages": ["eng"],
+                    "filetype": "application/pdf",
+                    "extraction_fingerprint": "extraction-1",
+                    "source_version": "source-version-1",
+                    "chunking_fingerprint": "chunking-1",
+                },
+        )),
+    )
     monkeypatch.setattr(indexer, "generate_embeddings", AsyncMock(return_value=[[0.1, 0.2]]))
 
     result = await indexer.index_document_for_thread(
@@ -426,7 +493,7 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
 @pytest.mark.asyncio
 async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(monkeypatch):
     fake_db = SimpleNamespace(
-        has_file_indexed=AsyncMock(return_value=True),
+        has_file_indexed_chunks=AsyncMock(return_value=True),
         get_file_chunk_count=AsyncMock(return_value=7),
     )
     upsert = AsyncMock()
@@ -441,6 +508,22 @@ async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(mon
     )
     monkeypatch.setattr("app.db.update_indexing_status", AsyncMock())
     monkeypatch.setattr(indexer, "upsert_document_in_stats", upsert)
+    monkeypatch.setattr(
+        indexer,
+        "ensure_retrieval_projection",
+        AsyncMock(return_value=(
+            SimpleNamespace(
+                manifest_id="manifest-1",
+                vector_status="completed",
+                vector_count=7,
+                expected_chunk_count=7,
+                expected_chunk_ids=[str(index) for index in range(7)],
+                expected_source_ids=[f"source-{index}" for index in range(7)],
+            ),
+            [{"chunk_id": str(index), "body_text": "cached", "contextualized_text": "cached"} for index in range(7)],
+            {"page_count": 2, "sentence_count": 7},
+        )),
+    )
 
     result = await indexer.index_document_for_thread(
         thread_id="thread-1",
@@ -453,7 +536,8 @@ async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(mon
     assert stored["chunk_count"] == 7
     assert "total_chars" not in stored
     assert "word_count" not in stored
-    assert "page_count" not in stored
+    assert stored["page_count"] == 2
+    assert stored["sentence_count"] == 7
 
 
 def test_document_grouping_ignores_stale_vector_temporal_metadata():
@@ -527,7 +611,7 @@ def test_web_context_exposes_search_performed_time():
 def test_thread_events_tool_replaces_topic_anchor():
     tool_names = {
         agent_tools.get_thread_shape.name,
-        agent_tools.search_documents.name,
+        agent_tools.search_knowledge.name,
         agent_tools.search_thread_conversation_history.name,
         agent_tools.search_thread_events.name,
     }

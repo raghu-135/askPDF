@@ -33,6 +33,11 @@ JOB_COMPLETED = "completed"
 JOB_FAILED = "failed"
 STALE_JOB_AFTER_SECONDS = 15 * 60
 MAX_JOB_ATTEMPTS = 5
+DEPENDENCY_REQUEUE_DELAY_SECONDS = 2
+
+
+class PermanentEmbeddingDependencyError(RuntimeError):
+    """A dependency failed permanently; do not consume another worker cycle."""
 
 def _wake() -> None:
     # The worker polls durable state. Avoid a process-global asyncio.Event because
@@ -47,6 +52,7 @@ async def ensure_embedding_job(
     scope_id: str,
     embedding_model: str,
     source_version: str,
+    requeue_completed: bool = False,
     session=None,
 ) -> EmbeddingJob:
     """Create or refresh one durable target without duplicating it."""
@@ -88,6 +94,17 @@ async def ensure_embedding_job(
             row.claimed_at = None
             row.completed_at = None
             row.updated_at = utc_now()
+        elif requeue_completed and row.status == JOB_COMPLETED:
+            # Readiness is checked against the persisted manifest and vector
+            # set, not merely this durable row.  A completed row can therefore
+            # become runnable again after vector loss or projection repair.
+            row.status = JOB_PENDING
+            row.attempts = 0
+            row.error = None
+            row.available_at = utc_now()
+            row.claimed_at = None
+            row.completed_at = None
+            row.updated_at = utc_now()
         elif row.status in {JOB_FAILED, JOB_PENDING}:
             row.updated_at = utc_now()
         await active.flush()
@@ -101,6 +118,26 @@ async def ensure_embedding_job(
                 row = await apply(owned)
     _wake()
     return row
+
+
+async def get_document_embedding_job(
+    *,
+    file_hash: str,
+    thread_id: str,
+    embedding_model: str,
+) -> EmbeddingJob | None:
+    """Read the per-thread document job used as the retrieval version pointer."""
+    async with async_session_maker() as session:
+        return (
+            await session.execute(
+                select(EmbeddingJob).where(
+                    EmbeddingJob.resource_type == RESOURCE_DOCUMENT,
+                    EmbeddingJob.resource_id == str(file_hash),
+                    EmbeddingJob.scope_id == str(thread_id),
+                    EmbeddingJob.embedding_model == str(embedding_model),
+                )
+            )
+        ).scalar_one_or_none()
 
 
 async def ensure_global_representation_job(
@@ -209,16 +246,43 @@ async def reconcile_thread_embedding_targets(
         documents = [file for file in documents if str(file.file_hash) in wanted]
     document_count = 0
     vector_db = get_vector_db()
+    from app.services.document_projection_service import (
+        DocumentConversionFailedError,
+        DocumentConversionPendingError,
+        ensure_retrieval_projection,
+        evaluate_retrieval_readiness,
+    )
     for file in documents:
         file_hash = str(file.file_hash)
-        if await vector_db.has_file_indexed(thread_id, file_hash, embedding_model):
+        readiness = await evaluate_retrieval_readiness(
+            file_hash,
+            embedding_model,
+            thread_id=thread_id,
+        )
+        if not readiness.get("canonical_ready"):
+            try:
+                await ensure_retrieval_projection(
+                    file_hash=file_hash,
+                    embedding_model=embedding_model,
+                    file_name=getattr(file, "file_name", None),
+                )
+            except DocumentConversionPendingError:
+                pass
+            except DocumentConversionFailedError as exc:
+                raise PermanentEmbeddingDependencyError(str(exc)) from exc
+            document_count += 1
             continue
+        if readiness.get("ready"):
+            continue
+        if not readiness.get("source_version"):
+            raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
         await ensure_embedding_job(
             resource_type=RESOURCE_DOCUMENT,
             resource_id=file_hash,
             scope_id=thread_id,
             embedding_model=embedding_model,
-            source_version=file_hash,
+            source_version=readiness["source_version"],
+            requeue_completed=True,
         )
         document_count += 1
 
@@ -319,6 +383,45 @@ async def fail_embedding_job(job: EmbeddingJob, error: Exception) -> None:
                 row.updated_at = now
 
 
+async def fail_embedding_job_terminal(job: EmbeddingJob, error: Exception) -> None:
+    """Mark a job terminal without making it eligible for another retry."""
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(EmbeddingJob, job.id, with_for_update=True)
+            if row and row.status == JOB_RUNNING and row.source_version == job.source_version:
+                row.status = JOB_FAILED
+                row.attempts = MAX_JOB_ATTEMPTS
+                row.error = str(error)[:2000]
+                row.claimed_at = None
+                row.available_at = utc_now()
+                row.updated_at = utc_now()
+
+
+async def defer_document_embedding_job(
+    job: EmbeddingJob,
+    *,
+    source_version: str | None = None,
+    reason: str,
+) -> bool:
+    """Return a dependency-stale document job to pending without a retry."""
+    now = utc_now()
+    async with async_session_maker() as session:
+        async with session.begin():
+            row = await session.get(EmbeddingJob, job.id, with_for_update=True)
+            if row is None or row.status != JOB_RUNNING or row.source_version != job.source_version:
+                return False
+            if source_version:
+                row.source_version = str(source_version)
+            row.status = JOB_PENDING
+            row.attempts = max(0, int(row.attempts or 0) - 1)
+            row.error = reason[:2000]
+            row.available_at = now + timedelta(seconds=DEPENDENCY_REQUEUE_DELAY_SECONDS)
+            row.claimed_at = None
+            row.completed_at = None
+            row.updated_at = now
+            return True
+
+
 async def process_embedding_job(job: EmbeddingJob) -> None:
     if job.resource_type == RESOURCE_GLOBAL_MEMORY:
         from app.services.memory_representation_service import index_global_representation
@@ -334,11 +437,61 @@ async def process_embedding_job(job: EmbeddingJob) -> None:
         return
     if job.resource_type == RESOURCE_DOCUMENT:
         from app.rag.indexer import index_document_for_thread
+        from app.services.document_projection_service import (
+            DocumentConversionFailedError,
+            DocumentConversionPendingError,
+            ensure_retrieval_projection,
+            evaluate_document_freshness,
+        )
+
+        freshness = await evaluate_document_freshness(
+            job.resource_id,
+            job.embedding_model,
+            require_manifest=True,
+        )
+        if not freshness.get("canonical_ready"):
+            try:
+                await ensure_retrieval_projection(
+                    file_hash=job.resource_id,
+                    embedding_model=job.embedding_model,
+                )
+            except DocumentConversionPendingError:
+                pass
+            except DocumentConversionFailedError as exc:
+                raise PermanentEmbeddingDependencyError(str(exc)) from exc
+            await defer_document_embedding_job(
+                job,
+                reason="waiting for canonical document conversion",
+            )
+            return
+        current_source_version = freshness.get("source_version")
+        if not current_source_version:
+            raise RuntimeError(f"retrieval version is unavailable for {job.resource_id}")
+        if str(current_source_version) != str(job.source_version):
+            await defer_document_embedding_job(
+                job,
+                source_version=str(current_source_version),
+                reason="document retrieval target refreshed",
+            )
+            return
         result = await index_document_for_thread(
             thread_id=job.scope_id,
             file_hash=job.resource_id,
             embedding_model=job.embedding_model,
+            expected_source_version=job.source_version,
         )
+        if result.get("status") in {"stale", "pending"}:
+            refreshed = await evaluate_document_freshness(
+                job.resource_id,
+                job.embedding_model,
+                require_manifest=True,
+            )
+            await defer_document_embedding_job(
+                job,
+                source_version=refreshed.get("source_version"),
+                reason=str(result.get("reason") or result.get("message") or "document dependency changed"),
+            )
+            return
         if result.get("status") not in {"success", "completed"}:
             raise RuntimeError(result.get("message", "Document indexing failed"))
         return
@@ -378,7 +531,10 @@ async def drain_embedding_jobs(*, limit: int = 10) -> int:
             await complete_embedding_job(job)
         except Exception as exc:
             logger.warning("Embedding job failed | id=%s type=%s resource=%s: %s", job.id, job.resource_type, job.resource_id, exc)
-            await fail_embedding_job(job, exc)
+            if isinstance(exc, PermanentEmbeddingDependencyError):
+                await fail_embedding_job_terminal(job, exc)
+            else:
+                await fail_embedding_job(job, exc)
     return len(jobs)
 
 

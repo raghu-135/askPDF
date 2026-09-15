@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_documents", "search_document_by_id"})
+DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_knowledge", "read_context"})
 RESEARCH_EVIDENCE_TOOLS = frozenset({
     "search_durable_memory",
     "search_web",

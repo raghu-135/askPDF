@@ -19,7 +19,7 @@ def _spec() -> dict:
         "config": {
             "system_prompt": "Use evidence.",
             "mcp_server": "askpdf",
-            "allowed_tool_ids": ["search_thread_conversation_history", "search_documents", "search_documents"],
+            "allowed_tool_ids": ["search_thread_conversation_history", "search_knowledge", "search_knowledge"],
             "model": "model-a",
             "provider": "provider-a",
             "skills": ["summarize", "research", "summarize"],
@@ -33,7 +33,7 @@ def test_profile_resolution_is_deterministic_and_canonical() -> None:
     first = resolve_hermes_profile(_spec())
     second = resolve_hermes_profile(copy.deepcopy(_spec()))
     assert first == second
-    assert first["mcp"]["allowed_tool_ids"] == ["search_documents", "search_thread_conversation_history"]
+    assert first["mcp"]["allowed_tool_ids"] == ["search_knowledge", "search_thread_conversation_history"]
     assert first["mcp"]["runtime_profile"] == HERMES_OFFLINE_PROFILE
     assert first["skills"]["enabled"] == ["research", "summarize"]
     assert first["delegation"] == {"enabled": True}
@@ -52,32 +52,32 @@ def test_external_profile_adds_canonical_langgraph_parity_tools() -> None:
     spec = _spec()
     spec["config"].update({
         "use_web_search": True,
-        "allowed_tool_ids": ["search_documents", "search_web", "pubmed", "semantic_scholar"],
+        "allowed_tool_ids": ["search_knowledge", "search_web", "pubmed", "semantic_scholar"],
     })
     profile = resolve_hermes_profile(spec)
     assert profile["mcp"]["runtime_profile"] == HERMES_EXTERNAL_PROFILE
-    assert profile["mcp"]["allowed_tool_ids"] == ["pubmed", "search_documents", "search_web", "semantic_scholar"]
+    assert profile["mcp"]["allowed_tool_ids"] == ["pubmed", "search_knowledge", "search_web", "semantic_scholar"]
 
 
 def test_offline_profile_removes_external_tools() -> None:
     spec = _spec()
-    spec["config"]["allowed_tool_ids"] = ["search_documents", "search_web", "wikipedia"]
+    spec["config"]["allowed_tool_ids"] = ["search_knowledge", "search_web", "wikipedia"]
     profile = resolve_hermes_profile(spec)
-    assert profile["mcp"]["allowed_tool_ids"] == ["search_documents"]
+    assert profile["mcp"]["allowed_tool_ids"] == ["search_knowledge"]
 
 
 def test_definition_metadata_uses_effective_managed_profile_tools() -> None:
     spec = _spec()
-    spec["config"]["allowed_tool_ids"] = ["search_documents", "search_web"]
+    spec["config"]["allowed_tool_ids"] = ["search_knowledge", "search_web"]
     spec["managed_profile"] = {
-        "mcp": {"allowed_tool_ids": ["search_documents"], "runtime_profile": HERMES_OFFLINE_PROFILE},
+        "mcp": {"allowed_tool_ids": ["search_knowledge"], "runtime_profile": HERMES_OFFLINE_PROFILE},
         "memory": {"persistent": True},
         "delegation": {"enabled": False},
         "skills": {"enabled": ["summarize"]},
     }
     metadata = definition_metadata_from_spec(spec)
-    assert metadata["allowed_tool_ids"] == ["search_documents"]
-    assert metadata["runtime_policy"]["allowed_tool_ids"] == ["search_documents"]
+    assert metadata["allowed_tool_ids"] == ["search_knowledge"]
+    assert metadata["runtime_policy"]["allowed_tool_ids"] == ["search_knowledge"]
     assert metadata["runtime_policy"]["allow_persistent_memory"] is True
     assert metadata["runtime_policy"]["external_context_enabled"] is False
 
@@ -85,7 +85,7 @@ def test_definition_metadata_uses_effective_managed_profile_tools() -> None:
 def test_definition_metadata_does_not_fall_back_to_requested_hermes_policy() -> None:
     spec = _spec()
     spec["config"].update({
-        "allowed_tool_ids": ["search_documents", "search_web"],
+        "allowed_tool_ids": ["search_knowledge", "search_web"],
         "use_web_search": True,
         "allow_persistent_memory": True,
         "allow_subagents": True,
@@ -114,10 +114,9 @@ def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
         (Path(__file__).parents[1] / "app/workflow_catalog/builtins/hermes_rag_agent.json").read_text()
     )
     prompt = definition["spec_json"]["config"]["system_prompt"]
-    assert "bridge APIs are only for genuinely deferred tools" in prompt
-    assert "Tool-discovery results" in prompt and "are not document evidence" in prompt
-    assert "only a successful document-retrieval result is evidence" in prompt
-    assert "If a relevant retrieval call fails or returns no evidence after valid attempts" in prompt
-    assert {"get_thread_shape", "search_documents", "search_document_by_id"}.issubset(
+    assert "exact namespaced names" in prompt
+    assert "Tool-discovery results" in prompt and "navigation metadata, not document evidence" in prompt
+    assert "only successful search_knowledge or read_context results are evidence" in prompt
+    assert {"get_thread_shape", "search_knowledge", "inspect_document", "read_context"}.issubset(
         definition["spec_json"]["config"]["allowed_tool_ids"]
     )

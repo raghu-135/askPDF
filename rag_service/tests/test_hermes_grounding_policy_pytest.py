@@ -19,7 +19,7 @@ def _event(kind, **payload):
 
 def test_document_grounding_summary_reports_missing_document_evidence():
     events = [
-        _event("tool.failed", tool_name="search_document_by_id", error={"code": "tool_arguments_invalid"}),
+        _event("tool.failed", tool_name="search_knowledge", error={"code": "tool_arguments_invalid"}),
         _event("tool.completed", tool_name="search_web", ok=True, result_count=4),
     ]
     summary = evaluator.evaluate({}, events, documents_present=True)
@@ -30,7 +30,7 @@ def test_document_grounding_summary_reports_missing_document_evidence():
 def test_grounding_summary_handles_boolean_error_markers():
     summary = evaluator.evaluate(
         {},
-        [_event("tool.failed", tool_name="search_document_by_id", error=True)],
+        [_event("tool.failed", tool_name="search_knowledge", error=True)],
         documents_present=True,
     )
 
@@ -40,8 +40,8 @@ def test_grounding_summary_handles_boolean_error_markers():
 
 def test_later_successful_document_retrieval_satisfies_grounding():
     events = [
-        _event("tool.failed", tool_name="search_documents", error={"code": "tool_execution_failed"}),
-        _event("tool.completed", tool_name="search_document_by_id", ok=True, result_count=3),
+        _event("tool.failed", tool_name="search_knowledge", error={"code": "tool_execution_failed"}),
+        _event("tool.completed", tool_name="read_context", ok=True, result_count=3),
     ]
     summary = evaluator.evaluate({}, events, documents_present=True)
     assert summary["grounded"] is True
@@ -64,7 +64,7 @@ def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
         "task_evidence_manifest": [],
         "grounding_report": {"verified_claims": []},
     }
-    events = [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})]
+    events = [_event("tool.failed", tool_name="search_knowledge", error={"code": "missing"})]
 
     summary = evaluator.evaluate(
         result,
@@ -79,7 +79,7 @@ def test_grounding_summary_is_diagnostic_and_framework_neutral(framework):
 def test_missing_retrieval_does_not_define_a_terminal_error():
     summary = evaluator.evaluate(
         {"final_answer": "answer", "task_evidence_manifest": [], "grounding_report": {"verified_claims": []}},
-        [_event("tool.failed", tool_name="search_document_by_id", error={"code": "missing"})],
+        [_event("tool.failed", tool_name="search_knowledge", error={"code": "missing"})],
         documents_present=True,
     )
 

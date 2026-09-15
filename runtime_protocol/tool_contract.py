@@ -31,6 +31,7 @@ class ToolWarningCode(str, Enum):
     WEB_SEARCH_DISABLED = "web_search_disabled"
     WEB_SEARCH_FAILED = "search_web_failed"
     RESPONSE_TRUNCATED = "tool_response_truncated"
+    INDEXING_IN_PROGRESS = "indexing_in_progress"
 
 
 class ToolErrorCode(str, Enum):

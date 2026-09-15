@@ -38,17 +38,20 @@ from app.runtime.builder_registry import builder_for_definition
 from app.runtime.catalog import definition_from_workflow
 from app.db import (
     EmbeddingReadinessStatus,
+    FileSourceType,
     ProcessStatus,
     delete_thread,
     assign_thread_to_project,
     ensure_default_project,
     get_file_status,
+    get_file,
     get_project,
     get_thread,
     get_thread_files,
     get_effective_thread_files,
     get_thread_settings,
     get_scoped_indexing_status,
+    is_file_accessible_to_thread,
     list_threads,
     update_thread,
     update_thread_settings,
@@ -595,12 +598,61 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 "embedding_model_ready": False,
             }
 
+        from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
+        try:
+            resolve_embedding_tokenizer(thread.embedding_model)
+        except EmbeddingTokenizerUnavailableError as exc:
+            return {
+                "thread_id": thread_id,
+                "status": EmbeddingReadinessStatus.BLOCKED.value,
+                "stats": _empty_thread_stats(),
+                "embedding_model_ready": True,
+                "error": {"code": "embedding_tokenizer_unavailable", "message": str(exc)},
+            }
+
         db = get_vector_db()
+        from app.services.document_projection_service import (
+            DocumentConversionPendingError,
+            ensure_retrieval_projection,
+            evaluate_retrieval_readiness,
+        )
+        from app.services.embedding_materialization_service import ensure_embedding_job, RESOURCE_DOCUMENT
+
+        async def schedule_pdf_repair(
+            target_file_hash: str,
+            readiness: dict,
+            *,
+            file_name: str | None = None,
+        ) -> None:
+            if readiness.get("ready"):
+                return
+            if not readiness.get("canonical_ready"):
+                try:
+                    await ensure_retrieval_projection(
+                        file_hash=target_file_hash,
+                        embedding_model=thread.embedding_model,
+                        file_name=file_name,
+                    )
+                except DocumentConversionPendingError:
+                    pass
+                return
+            if not readiness.get("source_version"):
+                raise RuntimeError(f"retrieval version is unavailable for {target_file_hash}")
+            await ensure_embedding_job(
+                resource_type=RESOURCE_DOCUMENT,
+                resource_id=target_file_hash,
+                scope_id=thread_id,
+                embedding_model=thread.embedding_model,
+                source_version=readiness["source_version"],
+                requeue_completed=True,
+            )
 
         # Track files list for stats query
         files = []
 
         if file_hash:
+            if not await is_file_accessible_to_thread(thread_id, file_hash):
+                raise HTTPException(status_code=404, detail="File not found")
             # Check specific file using file_status
             file_status = await get_file_status(file_hash)
             # Handle case where file doesn't exist yet (returns empty dict)
@@ -611,22 +663,27 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     "stats": _empty_thread_stats(),
                     "embedding_model_ready": embedding_model_ready,
                 }
+            file_record = await get_file(file_hash)
             scoped_indexing = get_scoped_indexing_status(
                 file_status,
                 embedding_model=thread.embedding_model,
                 thread_id=thread_id,
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
-            if ProcessStatus.is_completed(indexing_status):
-                status = EmbeddingReadinessStatus.READY.value
-            elif ProcessStatus.is_failed(indexing_status):
-                status = EmbeddingReadinessStatus.NOT_READY.value
-            elif ProcessStatus.is_running(indexing_status):
-                status = EmbeddingReadinessStatus.NOT_READY.value
+            if file_record is not None and FileSourceType.uses_pdf_conversion(getattr(file_record, "source_type", None)):
+                # Conversion and retrieval readiness are authoritative.  Run
+                # this gate even while file_status is pending so conversion
+                # completion can create the exact embedding target without
+                # requiring a second access or a stale status transition.
+                readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
+                await schedule_pdf_repair(
+                    file_hash,
+                    readiness,
+                    file_name=getattr(file_record, "file_name", None),
+                )
+                status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
             else:
-                # Fallback to vector DB check for backward compatibility
-                is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embedding_model)
-                status = EmbeddingReadinessStatus.READY.value if is_indexed else EmbeddingReadinessStatus.NOT_READY.value
+                status = EmbeddingReadinessStatus.READY.value if ProcessStatus.is_completed(indexing_status) else EmbeddingReadinessStatus.NOT_READY.value
         else:
             # Check all files in thread using file_status
             files = await get_thread_files(thread_id)
@@ -642,11 +699,18 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                         thread_id=thread_id,
                     )
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
-                    if not ProcessStatus.is_completed(indexing_status):
-                        # Fallback to vector DB check for backward compatibility
-                        if not await db.has_file_indexed(thread_id, f.file_hash, thread.embedding_model):
-                            all_indexed = False
-                            break
+                    file_ready = ProcessStatus.is_completed(indexing_status)
+                    if FileSourceType.uses_pdf_conversion(getattr(f, "source_type", None)):
+                        readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model, thread_id=thread_id)
+                        await schedule_pdf_repair(
+                            f.file_hash,
+                            readiness,
+                            file_name=getattr(f, "file_name", None),
+                        )
+                        file_ready = bool(readiness.get("ready"))
+                    if not file_ready:
+                        all_indexed = False
+                        break
                 status = EmbeddingReadinessStatus.READY.value if all_indexed else EmbeddingReadinessStatus.NOT_READY.value
 
         # Build file hashes list for stats query

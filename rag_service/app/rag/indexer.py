@@ -28,8 +28,6 @@ from app.db import (
     update_parsing_status,
 )
 
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.md import partition_md
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -41,10 +39,26 @@ from app.models.llm_server_client import (
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
 from app.services.content_store import get_content_store, pdf_content_key
+from app.services.document_projection_service import (
+    DocumentConversionPendingError,
+    ensure_retrieval_projection,
+    evaluate_document_freshness,
+)
+from app.db.repositories.canonical_document_repo import get_canonical_document_repo
+from app.services.document_pipeline import pack_retrieval_chunks, project_sentences, stable_fingerprint, stable_source_id
+from app.services.embedding_tokenizer import resolve_embedding_tokenizer
 
 logger = logging.getLogger(__name__)
 
 _document_index_locks: Dict[str, asyncio.Lock] = {}
+
+
+class DocumentVersionChangedError(RuntimeError):
+    """Raised when the document target changes during one indexing attempt."""
+
+    def __init__(self, current_source_version: str | None):
+        self.current_source_version = current_source_version
+        super().__init__("document retrieval version changed before indexing completed")
 
 
 def _int_page(value: Any) -> Optional[int]:
@@ -293,7 +307,7 @@ def _page_count_from_chunks(chunks: List[Dict[str, Any]]) -> Optional[int]:
     return len(set(pages)) if pages else None
 
 
-def _document_metadata_from_unstructured_elements(elements: List[Any]) -> Dict[str, Any]:
+def _document_metadata_from_canonical_elements(elements: List[Any]) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {}
 
     page_values: List[int] = []
@@ -412,33 +426,13 @@ async def summarize_qa(
 
 async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optional[List[str]]:
     """
-    Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
+    Read a PDF through the persisted canonical document and return body chunks.
     Returns a list of chunked strings, or None if reading/parsing fails.
     """
     try:
-        store = get_content_store()
-        key = pdf_content_key(file_hash)
-        if not await store.exists(key):
-            logger.error("PDF content not found for %s", file_hash)
-            return None
-        local_path = str(store.internal_path(key))
-
-        # Run partitioning in a thread pool as it is CPU-bound
-        elements = await asyncio.to_thread(partition_pdf, filename=local_path)
-
-        from unstructured.chunking.title import chunk_by_title
-        # Improved chunking: ensure sentences are not split and use consistent sizing
-        # multipage_sections=True helps keep context across page breaks
-        chunked_elements = chunk_by_title(
-            elements,
-            multipage_sections=True,
-            combine_text_under_n_chars=200,
-            max_characters=500,
-            new_after_n_chars=400,
-            overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
-        )
-        chunks = [str(c) for c in chunked_elements]
-        return chunks
+        model = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
+        _manifest, chunks, _metadata = await ensure_retrieval_projection(file_hash=file_hash, embedding_model=model)
+        return [str(chunk.get("body_text") or chunk.get("contextualized_text") or "") for chunk in chunks]
     except Exception as e:
         logger.error(f"Error reading/parsing PDF: {e}")
         return None
@@ -452,31 +446,9 @@ async def download_and_parse_pdf_chunks_with_summary(
     Read a PDF and parse it into text chunks plus document-level parser metadata.
     """
     try:
-        store = get_content_store()
-        key = pdf_content_key(file_hash)
-        if not await store.exists(key):
-            logger.error("PDF content not found for %s", file_hash)
-            return None
-        local_path = str(store.internal_path(key))
-
-        elements = await asyncio.to_thread(partition_pdf, filename=local_path)
-        document_metadata = _document_metadata_from_unstructured_elements(elements)
-
-        from unstructured.chunking.title import chunk_by_title
-        chunked_elements = chunk_by_title(
-            elements,
-            multipage_sections=True,
-            include_orig_elements=True,
-            combine_text_under_n_chars=200,
-            max_characters=500,
-            new_after_n_chars=400,
-            overlap=0
-        )
-        chunks = _chunks_with_page_metadata(chunked_elements)
-        if "page_count" not in document_metadata:
-            page_count = _page_count_from_chunks(chunks)
-            if page_count is not None:
-                document_metadata["page_count"] = page_count
+        model = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
+        _manifest, projection, document_metadata = await ensure_retrieval_projection(file_hash=file_hash, embedding_model=model)
+        chunks = [{"text": item.get("body_text", ""), "metadata": {"pages": _compact_page_ranges(item.get("pages") or []), **item}} for item in projection]
         return chunks, document_metadata
     except Exception as e:
         logger.error(f"Error reading/parsing PDF: {e}")
@@ -496,7 +468,7 @@ async def download_and_parse_pdf_chunks(file_hash: str, backend_url: str = "") -
 
 async def get_chunks(file_hash: str) -> List[str]:
     """
-    Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
+    Read a PDF through the persisted canonical document and return chunks with provenance.
     Returns a list of chunked strings.
     """
     chunks = await download_and_parse_pdf(file_hash)
@@ -544,31 +516,17 @@ def parse_markdown_to_chunks(markdown_content: str) -> List[str]:
     Returns:
         List of text chunks
     """
-    from unstructured.chunking.title import chunk_by_title
-    from io import StringIO
-
-    try:
-        # Use Unstructured to partition the markdown
-        elements = partition_md(text=markdown_content)
-
-        # Chunk by title for semantic coherence
-        chunked_elements = chunk_by_title(
-            elements,
-            multipage_sections=True,
-            combine_text_under_n_chars=200,
-            max_characters=500,
-            new_after_n_chars=400,
-            overlap=0
-        )
-        chunks = [str(c) for c in chunked_elements]
-        return chunks
-    except Exception as e:
-        logger.error(f"Markdown chunking failed: {e}")
-        # Fallback to simple text splitting
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        docs = splitter.create_documents([markdown_content])
-        return [d.page_content for d in docs]
+    chunks: list[str] = []
+    current: list[str] = []
+    for line in str(markdown_content or "").splitlines():
+        if line.lstrip().startswith("#") and current:
+            chunks.append("\n".join(current).strip())
+            current = []
+        if line.strip():
+            current.append(line.rstrip())
+    if current:
+        chunks.append("\n".join(current).strip())
+    return chunks or ([str(markdown_content).strip()] if str(markdown_content).strip() else [])
 
 
 async def get_chat_chunks(
@@ -619,7 +577,7 @@ def split_chat_memory_text(compact_text: str) -> List[str]:
     return [c.page_content for c in chunks]
 
 
-async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[List[float]]:
+async def generate_embeddings(chunks: List[str], embedding_model: str, formatter=None) -> List[List[float]]:
     """
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
@@ -627,6 +585,7 @@ async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[L
     """
     from app.models.retry import invoke_with_retry
     embedding_client = get_embedding_model(embedding_model)
+    formatted_chunks = [formatter(chunk) for chunk in chunks] if formatter is not None else chunks
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     
@@ -636,7 +595,7 @@ async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[L
     
     async def process_batch(start_idx: int) -> List[List[float]]:
         async with semaphore:
-            batch = chunks[start_idx:start_idx + batch_size]
+            batch = formatted_chunks[start_idx:start_idx + batch_size]
             return await invoke_with_retry(embedding_client.aembed_documents, batch)
     
     # Create tasks for each batch
@@ -664,10 +623,11 @@ async def index_document_for_thread(
     metadata: Optional[Dict[str, Any]] = None,
     markdown_content: Optional[str] = None,
     persist_thread_state: bool = True,
+    expected_source_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Index a document into the vector database.
-    The PDF is fetched from the backend and parsed using Unstructured.
+    The PDF is fetched from the content store and projected from the canonical Docling representation.
     For web sources, markdown_content is used instead of PDF parsing.
 
     Args:
@@ -687,6 +647,8 @@ async def index_document_for_thread(
     started_at = iso_utc_z()
     total_chars = 0
     document_available_in_thread_at: Optional[str] = None
+    retrieval_manifest = None
+    document_formatter = None
     try:
         if not persist_thread_state:
             raise LookupError
@@ -715,7 +677,33 @@ async def index_document_for_thread(
         )
 
         async with _document_index_lock(file_hash, embedding_model):
-            if await db_client.has_file_indexed(thread_id, file_hash, embedding_model):
+            retrieval_projection: list[dict[str, Any]] = []
+            if not markdown_content:
+                file_record = await get_file(file_hash)
+                retrieval_manifest, retrieval_projection, projection_metadata = await ensure_retrieval_projection(
+                    file_hash=file_hash,
+                    embedding_model=embedding_model,
+                    file_name=file_record.file_name if file_record else None,
+                    source_metadata=metadata,
+                )
+                metadata.update(projection_metadata)
+                if expected_source_version and str(projection_metadata.get("source_version")) != str(expected_source_version):
+                    raise DocumentVersionChangedError(str(projection_metadata.get("source_version") or "") or None)
+                if projection_metadata.get("tokenizer"):
+                    tokenizer_config, _ = resolve_embedding_tokenizer(embedding_model)
+                    document_formatter = tokenizer_config.format_document_input
+
+            if (
+                retrieval_manifest is not None
+                and retrieval_manifest.vector_status == "completed"
+                and retrieval_manifest.vector_count == retrieval_manifest.expected_chunk_count
+                and await db_client.has_file_indexed_chunks(
+                    file_hash,
+                    embedding_model,
+                    list(retrieval_manifest.expected_source_ids or []),
+                    manifest_id=retrieval_manifest.manifest_id,
+                )
+            ):
                 file_status = await get_file_status(file_hash)
                 model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model)
                 shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model)
@@ -749,12 +737,37 @@ async def index_document_for_thread(
                     "reused_existing_embeddings": True,
                 }
 
+            # A published manifest must never be mutated in place. If its
+            # exact vector set is incomplete, stage a fresh manifest and keep
+            # the old one published until the replacement is verified.
+            if retrieval_manifest is not None and retrieval_manifest.published_at is not None and retrieval_manifest.is_current:
+                retrieval_manifest = await get_canonical_document_repo().replace_manifest(
+                    file_hash=file_hash,
+                    embedding_model=embedding_model,
+                    generation=retrieval_manifest.generation,
+                    extraction_fingerprint=retrieval_manifest.extraction_fingerprint,
+                    source_version=retrieval_manifest.source_version,
+                    chunking_fingerprint=retrieval_manifest.chunking_fingerprint,
+                    chunks=retrieval_projection,
+                )
+
             # 1. Get chunks - use markdown for web sources, PDF for uploaded files
             if markdown_content:
                 logger.info(f"Using markdown content for web source indexing: {file_hash}")
+                web_generation = stable_fingerprint("web-markdown-v1", file_hash, markdown_content)
+                web_manifest_id = f"web_manifest_{web_generation}"
+                web_extraction_fingerprint = stable_fingerprint("web-extraction-v1", file_hash, markdown_content)
                 parsed_chunks = [
-                    {"text": chunk, "metadata": {}}
-                    for chunk in parse_markdown_to_chunks(markdown_content)
+                    {
+                        "text": chunk,
+                        "metadata": {
+                            "source_id": stable_source_id(file_hash, web_generation, str(index)),
+                            "manifest_id": web_manifest_id,
+                            "generation": web_generation,
+                            "extraction_fingerprint": web_extraction_fingerprint,
+                        },
+                    }
+                    for index, chunk in enumerate(parse_markdown_to_chunks(markdown_content))
                 ]
                 document_metadata: Dict[str, Any] = {}
                 chunks = _chunk_texts(parsed_chunks)
@@ -769,8 +782,39 @@ async def index_document_for_thread(
                 await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
                 logger.info(f"Saved {len(sentences)} sentences and marked parsing complete for web source: {file_hash}")
             else:
-                parsed_chunks, document_metadata = await get_chunks_with_document_metadata(file_hash)
-                chunks = _chunk_texts(parsed_chunks)
+                parsed_chunks = [
+                    {
+                        "text": str(item.get("body_text") or ""),
+                        "metadata": {
+                            "pages": _compact_page_ranges(item.get("pages") or []),
+                            "page_start": (item.get("pages") or [None])[0],
+                            "page_end": (item.get("pages") or [None])[-1],
+                            "heading_path": list(item.get("heading_path") or []),
+                            "section_id": item.get("section_id"),
+                            "source_element_ids": list(item.get("source_element_ids") or []),
+                            "sentence_ids": list(item.get("sentence_ids") or []),
+                            "chunk_identity": item.get("chunk_id"),
+                            "source_id": stable_source_id(file_hash, retrieval_manifest.generation, str(item.get("chunk_id"))),
+                            "manifest_id": retrieval_manifest.manifest_id,
+                            "generation": retrieval_manifest.generation,
+                            "extraction_fingerprint": retrieval_manifest.extraction_fingerprint,
+                            "source_version": retrieval_manifest.source_version,
+                            "chunking_fingerprint": retrieval_manifest.chunking_fingerprint,
+                            "tags": list(item.get("tags") or []),
+                            "tag_provenance": dict(item.get("tag_provenance") or {}),
+                            "source_spans": list(item.get("source_spans") or []),
+                            "table_row_id": item.get("table_row_id"),
+                            "table_row_ids": list(item.get("table_row_ids") or []),
+                            "table_headers": list(item.get("table_headers") or []),
+                            "table_cell_ids": list(item.get("table_cell_ids") or []),
+                            "synthetic_span": bool(item.get("synthetic_span")),
+                            "alignment_precision": item.get("alignment_precision"),
+                        },
+                    }
+                    for item in retrieval_projection
+                ]
+                document_metadata = projection_metadata.copy()
+                chunks = [str(item.get("contextualized_text") or item.get("body_text") or "") for item in retrieval_projection]
             if not chunks:
                 logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
                 await update_indexing_status(
@@ -787,7 +831,7 @@ async def index_document_for_thread(
             logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
 
             # 2. Generate embeddings
-            vectors = await generate_embeddings(chunks, embedding_model)
+            vectors = await generate_embeddings(chunks, embedding_model, formatter=document_formatter)
 
             # 3. Prepare metadata for each chunk
             chunk_metadatas = []
@@ -806,12 +850,49 @@ async def index_document_for_thread(
                     "file_hash": file_hash,
                     "chunk_index": i,
                 }
+                if i < len(retrieval_projection):
+                    projection = retrieval_projection[i]
+                    chunk_metadata.update({
+                        "body_text": projection.get("body_text", ""),
+                        "contextualized_text": projection.get("contextualized_text", ""),
+                        "chunk_identity": projection.get("chunk_id"),
+                        "sentence_ids": projection.get("sentence_ids", []),
+                        "source_element_ids": projection.get("source_element_ids", []),
+                        "section_id": projection.get("section_id"),
+                        "table_id": projection.get("table_id"),
+                        "heading_path": projection.get("heading_path", []),
+                        "source_id": stable_source_id(file_hash, retrieval_manifest.generation, str(projection.get("chunk_id"))),
+                        "manifest_id": retrieval_manifest.manifest_id,
+                        "generation": retrieval_manifest.generation,
+                        "extraction_fingerprint": projection_metadata.get("extraction_fingerprint"),
+                        "source_version": projection_metadata.get("source_version"),
+                        "chunking_fingerprint": projection_metadata.get("chunking_fingerprint"),
+                        "tags": list(projection.get("tags") or []),
+                        "tag_provenance": dict(projection.get("tag_provenance") or {}),
+                        "source_spans": list(projection.get("source_spans") or []),
+                        "table_row_id": projection.get("table_row_id"),
+                        "table_row_ids": list(projection.get("table_row_ids") or []),
+                        "table_headers": list(projection.get("table_headers") or []),
+                        "table_cell_ids": list(projection.get("table_cell_ids") or []),
+                        "synthetic_span": bool(projection.get("synthetic_span")),
+                        "alignment_precision": projection.get("alignment_precision"),
+                    })
                 chunk_metadatas.append(chunk_metadata)
 
             # 4. Index into document collection using model-aware manager
             # Validate vectors before indexing
             if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model):
                 raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
+
+            # Stage vectors under this manifest. The previously published
+            # manifest remains searchable until exact verification and the
+            # atomic publication transaction below succeed.
+            if retrieval_manifest is not None:
+                await get_canonical_document_repo().mark_vector_status(
+                    retrieval_manifest.manifest_id,
+                    "running",
+                    vector_count=0,
+                )
             
             indexed_count = await db_client.index_pdf_chunks(
                 thread_id=thread_id,
@@ -819,8 +900,46 @@ async def index_document_for_thread(
                 file_hash=file_hash,
                 texts=chunks,
                 embeddings=vectors,
-                metadatas=chunk_metadatas
+                metadatas=chunk_metadatas,
+                chunk_ids=[str(item.get("chunk_id")) for item in retrieval_projection] if retrieval_projection else None,
             )
+
+            if retrieval_manifest is not None:
+                expected_source_ids = list(retrieval_manifest.expected_source_ids or [])
+                if indexed_count != len(expected_source_ids) or not await db_client.has_file_indexed_chunks(
+                    file_hash,
+                    embedding_model,
+                    expected_source_ids,
+                    manifest_id=retrieval_manifest.manifest_id,
+                ):
+                    raise RuntimeError("staged vector identity verification failed")
+                publication = await get_canonical_document_repo().publish_manifest(
+                    retrieval_manifest.manifest_id,
+                    vector_count=indexed_count,
+                )
+                if publication.stale:
+                    await update_indexing_status(
+                        file_hash=file_hash,
+                        status=ProcessStatus.PENDING.value,
+                        embedding_model=embedding_model,
+                        thread_id=thread_id if persist_thread_state else None,
+                        started_at=started_at,
+                        finished_at=iso_utc_z(),
+                        error="staged document generation is no longer current",
+                    )
+                    return {
+                        "status": "stale",
+                        "reason": "document_generation_superseded",
+                        "message": "staged document generation is no longer current",
+                    }
+                if not publication.published:
+                    raise RuntimeError("could not publish staged manifest")
+                for prior_manifest_id in publication.superseded_manifest_ids:
+                    try:
+                        await db_client.delete_document_vectors_by_manifest(prior_manifest_id, embedding_model)
+                        await get_canonical_document_repo().delete_manifest(prior_manifest_id)
+                    except Exception:
+                        logger.warning("Could not garbage-collect superseded manifest %s", prior_manifest_id, exc_info=True)
 
             total_chars = sum(len(c) for c in chunks)
             metadata.update(document_metadata)
@@ -834,6 +953,15 @@ async def index_document_for_thread(
                 page_count = _page_count_from_chunks(parsed_chunks)
                 if page_count is not None:
                     metadata["page_count"] = page_count
+            if expected_source_version:
+                current_freshness = await evaluate_document_freshness(
+                    file_hash,
+                    embedding_model,
+                    require_manifest=True,
+                )
+                current_source_version = current_freshness.get("source_version")
+                if str(current_source_version or "") != str(expected_source_version):
+                    raise DocumentVersionChangedError(current_source_version)
             finished_at = iso_utc_z()
             logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
 
@@ -865,8 +993,55 @@ async def index_document_for_thread(
                 "chunks_count": indexed_count
             }
 
+    except DocumentConversionPendingError as e:
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=embedding_model,
+            thread_id=thread_id if persist_thread_state else None,
+            started_at=started_at,
+            finished_at=iso_utc_z(),
+            error=str(e),
+        )
+        return {"status": "pending", "reason": "document_conversion_pending", "message": str(e)}
+    except DocumentVersionChangedError as e:
+        if retrieval_manifest is not None:
+            try:
+                await get_canonical_document_repo().mark_vector_status(
+                    retrieval_manifest.manifest_id,
+                    "failed",
+                    failure={"code": "document_version_changed", "message": str(e)},
+                )
+                await db_client.delete_document_vectors_by_manifest(retrieval_manifest.manifest_id, embedding_model)
+            except Exception:
+                logger.exception("Failed to clean stale vector materialization for %s", file_hash)
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=embedding_model,
+            thread_id=thread_id if persist_thread_state else None,
+            started_at=started_at,
+            finished_at=iso_utc_z(),
+            error=str(e),
+        )
+        return {
+            "status": "stale",
+            "reason": "document_version_changed",
+            "current_source_version": e.current_source_version,
+            "message": str(e),
+        }
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
+        if retrieval_manifest is not None:
+            try:
+                await get_canonical_document_repo().mark_vector_status(
+                    retrieval_manifest.manifest_id,
+                    "failed",
+                    failure={"code": "vector_materialization_failed", "message": str(e)},
+                )
+                await db_client.delete_document_vectors_by_manifest(retrieval_manifest.manifest_id, embedding_model)
+            except Exception:
+                logger.exception("Failed to mark/clean incomplete vector materialization for %s", file_hash)
         try:
             await update_indexing_status(
                 file_hash=file_hash,

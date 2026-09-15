@@ -10,8 +10,9 @@ from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 CORE_TOOL_NAMES = [
     "get_thread_shape",
-    "search_documents",
-    "search_document_by_id",
+    "search_knowledge",
+    "inspect_document",
+    "read_context",
     "search_thread_conversation_history",
     "search_durable_memory",
     "search_thread_events",

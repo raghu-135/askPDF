@@ -21,8 +21,32 @@ class DocumentSearchRequest(QueryRequest):
     max_results: int = Field(default=10, ge=1, le=30)
 
 
-class FocusedDocumentSearchRequest(DocumentSearchRequest):
-    file_hash: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+class DocumentFilter(BaseModel):
+    source_types: list[str] = Field(default_factory=list, max_length=10)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    pages: list[int] = Field(default_factory=list, max_length=100)
+
+
+class SearchKnowledgeRequest(QueryRequest):
+    level: Literal["document", "section", "chunk"] = "chunk"
+    document_id: str | None = Field(default=None, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    section_id: str | None = Field(default=None, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    filters: DocumentFilter = Field(default_factory=DocumentFilter)
+    max_results: int = Field(default=10, ge=1, le=30)
+
+
+class InspectDocumentRequest(BaseModel):
+    document_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    section_id: str | None = Field(default=None, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    cursor: str | None = Field(default=None, max_length=512)
+    page_size: int = Field(default=50, ge=1, le=200)
+
+
+class ReadContextRequest(BaseModel):
+    source_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    expansion: Literal["chunk", "section", "table"] = "chunk"
+    token_budget: int = Field(default=2000, ge=1, le=8000)
+    cursor: str | None = Field(default=None, max_length=512)
 
 
 class TimelineRequest(QueryRequest):
@@ -45,7 +69,8 @@ Handler = Any
 ToolHandler = Any
 
 __all__ = [
-    "DocumentSearchRequest", "EmptyRequest", "FocusedDocumentSearchRequest",
+    "DocumentSearchRequest", "EmptyRequest",
+    "DocumentFilter", "InspectDocumentRequest", "ReadContextRequest", "SearchKnowledgeRequest",
     "QueryRequest", "TimelineRequest", "InternetSearchRequest", "ToolHandler", "ToolInvocationContext",
     "ToolResult", "ToolServices",
 ]

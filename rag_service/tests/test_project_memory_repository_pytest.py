@@ -88,6 +88,35 @@ async def test_embedding_jobs_are_deduplicated_and_refresh_source_version(repo_s
 
 
 @pytest.mark.asyncio
+async def test_completed_embedding_job_is_requeued_when_readiness_fails(repo_sessionmaker):
+    from app.services.embedding_materialization_service import ensure_embedding_job
+
+    job = await ensure_embedding_job(
+        resource_type="document",
+        resource_id="repair-file-1",
+        scope_id="repair-thread",
+        embedding_model="model-repair",
+        source_version="repair-file-1:retrieval-v2",
+    )
+    async with repo_sessionmaker() as session:
+        async with session.begin():
+            row = await session.get(EmbeddingJob, job.id, with_for_update=True)
+            row.status = "completed"
+
+    repaired = await ensure_embedding_job(
+        resource_type="document",
+        resource_id="repair-file-1",
+        scope_id="repair-thread",
+        embedding_model="model-repair",
+        source_version="repair-file-1:retrieval-v2",
+        requeue_completed=True,
+    )
+
+    assert repaired.id == job.id
+    assert repaired.status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_global_model_backfill_creates_only_missing_representations(repo_sessionmaker):
     from app.services.embedding_materialization_service import enqueue_global_model_jobs
 

@@ -9,7 +9,7 @@ from runtime_protocol.contracts import RuntimeEvidenceKind, RuntimeInheritedEvid
 
 INHERITED_EVIDENCE_CONTENT_LIMIT = 24_000
 TOOL_EVIDENCE_PREVIEW_LIMIT = 2_000
-EXPLICIT_GAP_WARNINGS = frozenset({"missing_document_vectors", "missing_thread_context", "no_relevant_content", "no_relevant_conversation_history", "no_relevant_memory", "no_thread_documents", "no_usable_web_results", "web_search_disabled", "search_web_failed"})
+EXPLICIT_GAP_WARNINGS = frozenset({"missing_document_vectors", "indexing_in_progress", "missing_thread_context", "no_relevant_content", "no_relevant_conversation_history", "no_relevant_memory", "no_thread_documents", "no_usable_web_results", "web_search_disabled", "search_web_failed"})
 
 def _bounded(value: Any, limit: int = INHERITED_EVIDENCE_CONTENT_LIMIT) -> str:
     return str(value or "").strip()[:limit]

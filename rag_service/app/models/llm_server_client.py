@@ -394,7 +394,9 @@ async def close_model_client(model: object) -> None:
 async def embed_query(model_name: str, text: str) -> List[float]:
     model = get_embedding_model(model_name, own_async_transport=True)
     try:
-        return await model.aembed_query(text)
+        from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+        tokenizer_config, _ = resolve_embedding_tokenizer(model_name)
+        return await model.aembed_query(tokenizer_config.format_query_input(text))
     finally:
         await close_model_client(model)
 

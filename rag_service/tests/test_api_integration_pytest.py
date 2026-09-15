@@ -51,6 +51,7 @@ class TestAPIIntegration:
         thread_response = await client.post("/api/threads", json={"name": "PDF integration thread"})
         assert thread_response.status_code == 200
         thread_id = thread_response.json()["id"]
+        embedding_model = thread_response.json()["embedding_model"]
 
         async def fake_index_document_for_thread(
             *, thread_id, file_hash, embedding_model, **_kwargs
@@ -67,7 +68,7 @@ class TestAPIIntegration:
             return {"status": OperationResultStatus.SUCCESS.value}
 
         monkeypatch.setattr(
-            "app.services.file_processing_service.index_document_for_thread",
+            "app.rag.indexer.index_document_for_thread",
             fake_index_document_for_thread,
         )
 
@@ -81,6 +82,22 @@ class TestAPIIntegration:
         file_hash = upload["file_hash"]
         assert upload["sentences"] is None
         assert file_hash
+
+        # Conversion and embedding are owned by durable workers. Process both
+        # queues explicitly after the request-owned enqueue.
+        from app.services.file_processing_service import _background_index
+        from app.services.embedding_materialization_service import drain_embedding_jobs
+        from app.workers.document_conversion_worker import drain_conversion_jobs
+        assert await drain_conversion_jobs() == 1
+        await _background_index(
+            file_hash,
+            thread_id,
+            embedding_model,
+            pdf_path.name,
+            "",
+            {},
+        )
+        assert await drain_embedding_jobs() >= 1
 
         status_response = await client.get(f"/api/threads/{thread_id}/files/{file_hash}/status")
         assert status_response.status_code == 200, status_response.text

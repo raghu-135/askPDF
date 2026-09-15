@@ -11,8 +11,9 @@ from runtime_protocol.hermes_contract import (
 from app.runtime.budgets import configured_budget_value
 HERMES_BASE_TOOL_IDS = (
     "get_thread_shape",
-    "search_document_by_id",
-    "search_documents",
+    "search_knowledge",
+    "inspect_document",
+    "read_context",
     "search_durable_memory",
     "search_thread_conversation_history",
     "search_thread_events",

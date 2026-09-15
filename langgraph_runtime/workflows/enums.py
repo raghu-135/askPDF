@@ -135,8 +135,9 @@ class WorkflowNodeType(str, Enum):
 
 class ToolName(str, Enum):
     GET_THREAD_SHAPE = "get_thread_shape"
-    SEARCH_DOCUMENTS = "search_documents"
-    SEARCH_DOCUMENT_BY_ID = "search_document_by_id"
+    SEARCH_KNOWLEDGE = "search_knowledge"
+    INSPECT_DOCUMENT = "inspect_document"
+    READ_CONTEXT = "read_context"
     SEARCH_THREAD_CONVERSATION_HISTORY = "search_thread_conversation_history"
     SEARCH_DURABLE_MEMORY = "search_durable_memory"
     SEARCH_THREAD_EVENTS = "search_thread_events"
@@ -296,8 +297,9 @@ class PlannerRiskLevel(str, Enum):
 
 class ToolContractId(str, Enum):
     THREAD_SHAPE = "thread_shape"
-    DOCUMENT_EVIDENCE = "document_evidence"
-    FOCUSED_DOCUMENT_EVIDENCE = "focused_document_evidence"
+    DOCUMENT_SEARCH_KNOWLEDGE = "document_search_knowledge"
+    DOCUMENT_INSPECTION = "document_inspection"
+    DOCUMENT_CONTEXT = "document_context"
     THREAD_CONVERSATION_HISTORY = "thread_conversation_history"
     DURABLE_MEMORY = "durable_memory"
     THREAD_EVENTS = "thread_events"

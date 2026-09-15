@@ -78,7 +78,7 @@ def _runtime_usage_snapshot(
 
 _DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
 - AskPDF document tools are already exposed directly in the model-facing MCP tool list.
-- Call the exact namespaced AskPDF document-retrieval tool directly with schema-valid arguments (for example, `askpdf_<server>__search_documents` or `askpdf_<server>__search_document_by_id`).
+- Call the exact namespaced AskPDF document-retrieval tool directly with schema-valid arguments (for example, `askpdf_<server>__search_knowledge`, `askpdf_<server>__inspect_document`, or `askpdf_<server>__read_context`).
 - Do not route an already-listed AskPDF tool through `tool_search`, `tool_describe`, or `tool_call`; those APIs are only for genuinely deferred tools.
 - Only a successful document-retrieval tool result is evidence. Tool-discovery failures do not mean the documents contain no evidence."""
 

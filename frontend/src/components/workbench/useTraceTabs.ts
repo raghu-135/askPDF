@@ -1,43 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ChatTraceDescriptor } from '../ChatInterface';
-import { closeTraceTab, isValidTraceId, upsertTraceTab } from '../../lib/trace-tabs';
+import { closeTraceTab, canOpenTraceTab, isValidTraceId, pendingTraceTabId, upsertTraceTab } from '../../lib/trace-tabs';
 import type { TraceRunTab } from './TraceWorkspace';
 
 export default function useTraceTabs() {
   const [traceTabs, setTraceTabs] = useState<TraceRunTab[]>([]);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
-  const pendingTraceUpdatesRef = useRef(new Map<string, ChatTraceDescriptor>());
-  const flushTimerRef = useRef<number | null>(null);
-
-  const flushPendingTraceUpdates = useCallback(() => {
-    flushTimerRef.current = null;
-    const pending = Array.from(pendingTraceUpdatesRef.current.values());
-    pendingTraceUpdatesRef.current.clear();
-    if (pending.length === 0) return;
-    setTraceTabs((current) => pending.reduce((tabs, trace) => upsertTraceTab(tabs, trace), current));
-  }, []);
-
-  const scheduleTraceFlush = useCallback(() => {
-    if (flushTimerRef.current !== null) return;
-    flushTimerRef.current = window.setTimeout(flushPendingTraceUpdates, 120);
-  }, [flushPendingTraceUpdates]);
 
   const openTrace = useCallback((trace: ChatTraceDescriptor) => {
-    // A live chat can emit trace metadata before the runtime assigns its run ID.
-    // Do not activate a tab that cannot be addressed by the debug panel/API.
-    if (!isValidTraceId(trace?.id)) return;
-    setActiveTraceId(trace.id);
-    if (trace.running) {
-      pendingTraceUpdatesRef.current.set(trace.id, trace);
-      scheduleTraceFlush();
-      return;
-    }
-    pendingTraceUpdatesRef.current.delete(trace.id);
-    setTraceTabs((current) => upsertTraceTab(current, trace));
-  }, [scheduleTraceFlush]);
+    if (!canOpenTraceTab(trace?.id)) return;
+    setTraceTabs((current) => {
+      const withoutPending = isValidTraceId(trace.id) && trace.messageId
+        ? current.filter((tab) => tab.id !== pendingTraceTabId(trace.messageId as string))
+        : current;
+      return upsertTraceTab(withoutPending, trace);
+    });
+    if (trace.activate !== false) setActiveTraceId(trace.id);
+  }, []);
 
   const closeTrace = useCallback((runId: string) => {
-    pendingTraceUpdatesRef.current.delete(runId);
     setTraceTabs((current) => {
       const result = closeTraceTab(current, activeTraceId, runId);
       setActiveTraceId(result.activeId);
@@ -46,19 +27,8 @@ export default function useTraceTabs() {
   }, [activeTraceId]);
 
   const clearTraces = useCallback(() => {
-    pendingTraceUpdatesRef.current.clear();
-    if (flushTimerRef.current !== null) {
-      window.clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = null;
-    }
     setTraceTabs([]);
     setActiveTraceId(null);
-  }, []);
-
-  useEffect(() => () => {
-    if (flushTimerRef.current !== null) {
-      window.clearTimeout(flushTimerRef.current);
-    }
   }, []);
 
   return {

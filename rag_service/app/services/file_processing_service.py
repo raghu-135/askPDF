@@ -10,7 +10,6 @@ This module contains business logic for:
 import hashlib
 import json
 import logging
-import traceback
 from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks
@@ -18,7 +17,6 @@ from fastapi import BackgroundTasks
 from app.db import FileSourceType, OperationResultStatus, ProcessStatus
 
 # SQLModel repositories for atomic transactions
-from app.db.repositories.file_repo_sqlmodel import FileRepository
 
 # Database operations (SQLModel/PostgreSQL)
 from app.db import (
@@ -26,16 +24,58 @@ from app.db import (
     add_file_to_project,
     create_or_get_file,
     get_file_parsed_sentences,
+    update_file_parsed_sentences,
     get_file_status,
     update_indexing_status,
     update_parsing_status,
 )
 from app.rag.indexer import index_document_for_thread
-from app.services.parsing_service import extract_text_with_coordinates
+from app.services.document_conversion_service import enqueue_pdf_conversion
+from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.content_store import get_content_store, pdf_content_key
 from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
+
+
+async def _enqueue_pdf_conversion(file_hash: str, filename: str) -> None:
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if not await store.exists(key):
+        raise FileNotFoundError(f"PDF content not found for {file_hash}")
+    data = await store.read(key)
+    await enqueue_pdf_conversion(file_hash=file_hash, data=data, file_name=filename)
+
+
+async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]) -> bool:
+    """Publish canonical reading data to the File cache used by read endpoints."""
+    repo = get_canonical_document_repo()
+    canonical = await repo.get(file_hash)
+    if canonical is None or canonical.status != "completed":
+        return False
+    sentences = parsed_data.get("sentences") if isinstance(parsed_data, dict) else None
+    generation = parsed_data.get("generation") if isinstance(parsed_data, dict) else None
+    fingerprint = parsed_data.get("extraction_fingerprint") if isinstance(parsed_data, dict) else None
+    document_json = canonical.document_json if isinstance(canonical.document_json, dict) else {}
+    if not isinstance(sentences, list) or not generation or not fingerprint:
+        raise ValueError("reading projection must include sentences, generation, and extraction_fingerprint")
+    if str(generation) != str(canonical.generation) or str(fingerprint) != str(canonical.extraction_fingerprint):
+        raise ValueError("reading projection version does not match canonical document")
+    payload = {
+        "version": "2.0",
+        "sentences": sentences,
+        "generation": str(generation),
+        "extraction_fingerprint": str(fingerprint),
+    }
+    current = await get_file_parsed_sentences(file_hash)
+    if (
+        isinstance(current, dict)
+        and current.get("generation") == payload["generation"]
+        and current.get("extraction_fingerprint") == payload["extraction_fingerprint"]
+        and isinstance(current.get("sentences"), list)
+    ):
+        return True
+    return await update_file_parsed_sentences(file_hash, json.dumps(payload))
 
 
 def _default_file_status(file_hash: str) -> Dict[str, Any]:
@@ -89,6 +129,8 @@ async def queue_file_processing(
         source_type=source_type,
     )
     await add_file_to_thread(thread.id, file_hash)
+    if FileSourceType.uses_pdf_conversion(source_type):
+        await _enqueue_pdf_conversion(file_hash, file_name)
 
     file_status = await get_file_status(file_hash)
     parsing_status = (file_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
@@ -118,12 +160,18 @@ async def queue_file_processing(
         )
 
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data and parsed_data.get("sentences"):
+    canonical = await get_canonical_document_repo().get(file_hash)
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, require_reading=True)
+    if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
         await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-        background_tasks.add_task(_background_parse, file_hash, file_name, backend_url)
+        background_tasks.add_task(_background_parse, file_hash, file_name, backend_url, indexing_metadata or {})
 
 
 async def queue_project_file_processing(
@@ -144,6 +192,8 @@ async def queue_project_file_processing(
         source_type=source_type,
     )
     await add_file_to_project(project.id, file_hash)
+    if FileSourceType.uses_pdf_conversion(source_type):
+        await _enqueue_pdf_conversion(file_hash, file_name)
     file_status = await get_file_status(file_hash)
     parsing_status = (file_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
     from app.db import get_scoped_indexing_status
@@ -169,80 +219,96 @@ async def queue_project_file_processing(
             False,
         )
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data and parsed_data.get("sentences"):
+    canonical = await get_canonical_document_repo().get(file_hash)
+    from app.services.document_projection_service import evaluate_document_freshness
+    freshness = await evaluate_document_freshness(file_hash, require_reading=True)
+    if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
         await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-        background_tasks.add_task(_background_parse, file_hash, file_name, "")
+        background_tasks.add_task(_background_parse, file_hash, file_name, "", indexing_metadata or {})
 
 
-async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
-    """
-    Background task to parse PDF and update status with atomic transactions.
-    Uses SQLModel repository for transaction safety - sentences and status updated together.
-    Reads PDF from local disk at /static/{file_hash}.pdf
-    """
-    file_repo = FileRepository()
+async def _background_parse(file_hash: str, filename: str, backend_url: str = "", source_metadata: Optional[Dict[str, Any]] = None):
+    """Queue durable conversion work without treating it as completed reading."""
+    await _enqueue_pdf_conversion(file_hash, filename)
+    await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
+    return
 
-    current_status = await get_file_status(file_hash)
-    parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
 
-    if ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-        parsed = await get_file_parsed_sentences(file_hash)
-        if parsed and parsed.get("sentences"):
-            return
+async def _enqueue_document_embedding_job(
+    *,
+    file_hash: str,
+    scope_id: str,
+    embedding_model: str,
+    file_name: str,
+    persist_thread_state: bool,
+) -> None:
+    from app.services.document_projection_service import (
+        DocumentConversionFailedError,
+        DocumentConversionPendingError,
+        ensure_retrieval_projection,
+        evaluate_retrieval_readiness,
+    )
+    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+    from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
 
-    started_at = iso_utc_z()
+    await update_indexing_status(
+        file_hash=file_hash,
+        status=ProcessStatus.PENDING.value,
+        embedding_model=embedding_model,
+        thread_id=scope_id if persist_thread_state else None,
+    )
     try:
-        # Claim the parsing job using legacy function (this is already atomic via claim mechanism)
-        claimed = await update_parsing_status(
+        readiness = await evaluate_retrieval_readiness(
             file_hash,
-            ProcessStatus.RUNNING.value,
-            started_at=started_at,
-            claim=True,
+            embedding_model,
+            thread_id=scope_id,
         )
-        if not claimed:
-            return
-
-        store = get_content_store()
-        key = pdf_content_key(file_hash)
-        if not await store.exists(key):
-            raise FileNotFoundError(f"PDF content not found for {file_hash}")
-        pdf_data = await store.read(key)
-
-        sentences = extract_text_with_coordinates(pdf_data, filename=filename)
-        parsed_data = {
-            "version": "1.0",
-            "sentences": sentences
-        }
-
-        # ATOMIC: Store sentences AND update status to completed in ONE transaction
-        finished_at = iso_utc_z()
-        success = await file_repo.complete_parsing_atomically(
-            file_hash=file_hash,
-            parsed_data_json=json.dumps(parsed_data),
-            finished_at=finished_at
-        )
-
-        if success:
-            logger.info(f"Background parsing completed for {file_hash} - {len(sentences)} sentences stored atomically")
-        else:
-            logger.error(f"Failed to atomically complete parsing for {file_hash}")
-
-    except Exception as e:
-        traceback.print_exc()
-        finished_at = iso_utc_z()
+    except EmbeddingTokenizerUnavailableError:
+        raise
+    if not readiness.get("canonical_ready"):
         try:
-            # ATOMIC: Update status to failed with error message
-            await file_repo.fail_parsing_atomically(
+            await ensure_retrieval_projection(
                 file_hash=file_hash,
-                error=str(e),
-                finished_at=finished_at
+                embedding_model=embedding_model,
+                file_name=file_name,
             )
-        except Exception as update_error:
-            logger.error(f"Failed to update parsing status to failed for {file_hash}: {update_error}")
-        logger.error(f"Background parsing failed for {file_hash}: {e}")
+        except DocumentConversionPendingError:
+            return
+        except DocumentConversionFailedError as exc:
+            await update_indexing_status(
+                file_hash=file_hash,
+                status=ProcessStatus.FAILED.value,
+                embedding_model=embedding_model,
+                thread_id=scope_id if persist_thread_state else None,
+                finished_at=iso_utc_z(),
+                error=str(exc),
+            )
+            raise
+        readiness = await evaluate_retrieval_readiness(
+            file_hash,
+            embedding_model,
+            thread_id=scope_id,
+        )
+        if not readiness.get("canonical_ready"):
+            return
+    if readiness.get("ready"):
+        return
+    if not readiness.get("source_version"):
+        raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
+    await ensure_embedding_job(
+        resource_type=RESOURCE_DOCUMENT,
+        resource_id=file_hash,
+        scope_id=scope_id,
+        embedding_model=embedding_model,
+        source_version=readiness["source_version"],
+        requeue_completed=True,
+    )
 
 
 async def _background_index(
@@ -255,9 +321,32 @@ async def _background_index(
     markdown_content: Optional[str] = None,
     persist_thread_state: bool = True,
 ):
-    """
-    Background task to index a document for a thread after parsing completes.
-    """
+    """Queue durable conversion and embedding work; do not index PDFs inline."""
+    if markdown_content is None:
+        try:
+            await _enqueue_pdf_conversion(file_hash, file_name)
+            await _enqueue_document_embedding_job(
+                file_hash=file_hash,
+                scope_id=thread_id,
+                embedding_model=embedding_model,
+                file_name=file_name,
+                persist_thread_state=persist_thread_state,
+            )
+        except Exception as exc:
+            logger.exception("Background document indexing enqueue failed for %s", file_hash)
+            try:
+                await update_indexing_status(
+                    file_hash=file_hash,
+                    status=ProcessStatus.FAILED.value,
+                    embedding_model=embedding_model,
+                    thread_id=thread_id if persist_thread_state else None,
+                    finished_at=iso_utc_z(),
+                    error=str(exc),
+                )
+            except Exception as update_error:
+                logger.error("Failed to update indexing status to failed for %s: %s", file_hash, update_error)
+        return
+
     started_at = iso_utc_z()
     try:
         claimed = await update_indexing_status(
@@ -270,7 +359,6 @@ async def _background_index(
         )
         if not claimed:
             return
-
         result = await index_document_for_thread(
             thread_id=thread_id,
             file_hash=file_hash,
@@ -281,13 +369,9 @@ async def _background_index(
         )
         if result.get("status") != OperationResultStatus.SUCCESS.value:
             raise Exception(result.get("message", "Indexing failed"))
-        logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
-
-        # Trigger PDF parsing for sentence extraction (needed for both PDFs and web sources)
-        await _background_parse(file_hash, file_name, backend_url)
+        logger.info("Background markdown indexing completed for %s in thread %s", file_hash, thread_id)
     except Exception as e:
-        traceback.print_exc()
-        finished_at = iso_utc_z()
+        logger.exception("Background indexing failed for %s", file_hash)
         try:
             await update_indexing_status(
                 file_hash=file_hash,
@@ -295,9 +379,8 @@ async def _background_index(
                 embedding_model=embedding_model,
                 thread_id=thread_id if persist_thread_state else None,
                 started_at=started_at,
-                finished_at=finished_at,
+                finished_at=iso_utc_z(),
                 error=str(e),
             )
         except Exception as update_error:
-            logger.error(f"Failed to update indexing status to failed for {file_hash}: {update_error}")
-        logger.error(f"Background indexing failed for {file_hash}: {e}")
+            logger.error("Failed to update indexing status to failed for %s: %s", file_hash, update_error)

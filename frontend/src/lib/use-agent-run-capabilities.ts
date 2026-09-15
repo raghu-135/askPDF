@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getAgentRunCapabilities, type AgentRuntimeCapabilityResponse } from './api';
+import { isValidTraceId } from './trace-tabs';
 import { runtimeCapabilityResponseMatchesRun } from './runtime-capabilities';
 
 const RECOVERY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000] as const;
@@ -23,7 +24,7 @@ export function useAgentRunCapabilities(
     // Normal chat uses an optimistic assistant message id until the runtime
     // returns the durable agent run id. That placeholder is not addressable by
     // the runtime capabilities endpoint.
-    if (!runId || runId.startsWith('temp-assistant-') || !threadId) return false;
+    if (!runId || !isValidTraceId(runId) || !threadId) return false;
     const currentRequest = ++requestId.current;
     const isCurrent = () => currentRequest === requestId.current && identity === currentIdentity.current;
     try {

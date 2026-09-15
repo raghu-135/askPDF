@@ -12,6 +12,7 @@ from typing import Generator
 from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
+from fastapi import HTTPException
 
 from app.api import threads as threads_api
 from app.models.requests import (
@@ -479,6 +480,54 @@ class TestThreadEndpoints:
             "embedding_model_ready": False,
         }
         get_vector_db.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_index_status_repairs_stale_failed_pdf_job(self):
+        """A failed historical job is rechecked and repaired when its version is stale."""
+        thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
+        file_record = SimpleNamespace(file_hash="file-1", source_type="pdf")
+        db = SimpleNamespace(get_thread_stats=AsyncMock(return_value={"documents": {}}))
+        readiness = {"ready": False, "canonical_ready": True, "source_version": "current-version"}
+
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=True),
+            patch("app.api.threads.get_file_status", new_callable=AsyncMock, return_value={"indexing_status": {}}),
+            patch("app.api.threads.get_file", new_callable=AsyncMock, return_value=file_record),
+            patch("app.api.threads.get_scoped_indexing_status", return_value={"status": "failed"}),
+            patch("app.services.document_projection_service.evaluate_retrieval_readiness", new_callable=AsyncMock, return_value=readiness),
+            patch("app.services.embedding_materialization_service.ensure_embedding_job", new_callable=AsyncMock) as ensure_job,
+            patch("app.api.threads.get_vector_db", return_value=db),
+        ):
+            data = await threads_api.get_thread_index_status_endpoint("thread-1", file_hash="file-1")
+
+        assert data["status"] == "not_ready"
+        ensure_job.assert_awaited_once_with(
+            resource_type="document",
+            resource_id="file-1",
+            scope_id="thread-1",
+            embedding_model="embed-1",
+            source_version="current-version",
+            requeue_completed=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_thread_index_status_rejects_unattached_file_hash(self):
+        thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=False),
+            patch("app.services.embedding_materialization_service.ensure_embedding_job", new_callable=AsyncMock) as ensure_job,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await threads_api.get_thread_index_status_endpoint("thread-1", file_hash="foreign-file")
+
+        assert exc.value.status_code == 404
+        ensure_job.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_get_thread_uses_real_stats_when_embedding_model_ready(self):

@@ -1,4 +1,13 @@
 import type { AgentExecutionStreamEnvelope } from './agent-execution-stream';
+import { isValidTraceId } from './trace-tabs';
+
+export const liveTraceRunIdFromEvent = (event: AgentExecutionStreamEnvelope): string | undefined => {
+  const data = event.data || {};
+  for (const candidate of [data.run_id, data.agent_run_id, (event as { run_id?: unknown }).run_id]) {
+    if (isValidTraceId(candidate)) return String(candidate);
+  }
+  return undefined;
+};
 
 export const LIVE_TRACE_TERMINAL_EVENTS = new Set([
   'run.completed',
@@ -35,11 +44,12 @@ export class LiveTraceStreamController {
   private events: AgentExecutionStreamEnvelope[] = [];
 
   constructor(initialRunId: string) {
-    this.runId = initialRunId;
+    this.runId = isValidTraceId(initialRunId) ? initialRunId : '';
   }
 
   append(event: AgentExecutionStreamEnvelope, terminalError?: string, fallbackStatus?: string): LiveTraceStreamSnapshot {
-    if (event.data?.run_id) this.runId = String(event.data.run_id);
+    const runId = liveTraceRunIdFromEvent(event);
+    if (runId) this.runId = runId;
     if (event.event !== 'heartbeat') this.events.push(event);
     return this.snapshot(event.event, terminalError, fallbackStatus);
   }

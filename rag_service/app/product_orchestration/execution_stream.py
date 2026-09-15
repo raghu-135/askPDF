@@ -346,6 +346,8 @@ class AgentExecutionEventSink:
         if self._delivery_attached:
             delivery_payload = dict(canonical.payload)
             delivery_payload.setdefault("event_id", canonical.event_id)
+            delivery_payload.setdefault("run_id", canonical.run_id)
+            delivery_payload.setdefault("sequence", canonical.sequence)
             parallel_groups = build_parallel_groups_safely(self._canonical_events)
             if parallel_groups:
                 delivery_payload["parallel_groups"] = parallel_groups

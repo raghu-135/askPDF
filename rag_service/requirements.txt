@@ -9,7 +9,6 @@ httpx
 mcp==1.29.0
 pydantic
 python-dateutil>=2.9.0
-unstructured[pdf]
 langchain-openai
 opentelemetry-sdk
 openinference-semantic-conventions

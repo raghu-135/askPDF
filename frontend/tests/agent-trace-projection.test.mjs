@@ -578,9 +578,46 @@ test('malformed live parallel data returns a bounded parse error instead of thro
   }]);
 
   assert.match(view.parseError, /invalid aggregation data/);
-  assert.deepEqual(view.events, []);
+  assert.equal(view.events.length, 1);
+  assert.equal(view.events[0].kind, 'dispatch.started');
   assert.deepEqual(view.parallelGroups, []);
-  assert.deepEqual(view.visualizations, {});
+  assert.equal(view.visualizations['generic.timeline'].id, 'generic.timeline');
+  assert.equal(view.visualizations['generic.parallel'], undefined);
+});
+
+test('live worker and tool events create in-flight operations without operation.started', () => {
+  const workerView = buildLiveTraceView([{
+    id: 1,
+    event: 'worker.started',
+    data: {
+      event_id: 'event-1',
+      sequence: 1,
+      operation_id: 'retrieval_worker',
+      operation_type: 'retrieval_worker',
+      work_id: 'work-1',
+      visit_index: 1,
+    },
+  }]);
+  assert.equal(workerView.operations.length, 1);
+  assert.equal(workerView.operations[0].id, 'retrieval_worker');
+  assert.equal(workerView.operations[0].status, 'active');
+
+  const toolView = buildLiveTraceView([{
+    id: 1,
+    event: 'tool.started',
+    data: {
+      event_id: 'event-1',
+      sequence: 1,
+      tool_name: 'search',
+      caller_node: 'planner',
+      caller_node_type: 'deep_task_planner',
+      caller_visit_index: 1,
+    },
+  }]);
+  assert.equal(toolView.operations.length, 1);
+  assert.equal(toolView.operations[0].id, 'planner');
+  assert.equal(toolView.operations[0].status, 'active');
+  assert.equal(toolView.tools[0].name, 'search');
 });
 
 test('live parallel snapshots tolerate references outside the current event window', () => {

@@ -112,12 +112,30 @@ class _QueryArguments(_OpenArguments):
     query: str = Field(min_length=1, max_length=4000)
 
 
-class _DocumentSearchArguments(_QueryArguments):
+class _SearchArguments(_QueryArguments):
     max_results: int = Field(default=10, ge=1, le=30)
 
 
-class _FocusedDocumentSearchArguments(_DocumentSearchArguments):
-    file_hash: str = Field(min_length=1, max_length=256)
+class _SearchKnowledgeArguments(_QueryArguments):
+    level: str = "chunk"
+    document_id: str | None = None
+    section_id: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    max_results: int = Field(default=10, ge=1, le=30)
+
+
+class _InspectDocumentArguments(BaseModel):
+    document_id: str = Field(min_length=1, max_length=256)
+    section_id: str | None = None
+    cursor: str | None = None
+    page_size: int = Field(default=50, ge=1, le=200)
+
+
+class _ReadContextArguments(BaseModel):
+    source_id: str = Field(min_length=1, max_length=256)
+    expansion: str = "chunk"
+    token_budget: int = Field(default=2000, ge=1, le=8000)
+    cursor: str | None = None
 
 
 class _TimelineArguments(_QueryArguments):
@@ -127,10 +145,11 @@ class _TimelineArguments(_QueryArguments):
 
 
 _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
-    "search_documents": _DocumentSearchArguments,
-    "search_document_by_id": _FocusedDocumentSearchArguments,
-    "search_thread_conversation_history": _DocumentSearchArguments,
-    "search_durable_memory": _DocumentSearchArguments,
+    "search_knowledge": _SearchKnowledgeArguments,
+    "inspect_document": _InspectDocumentArguments,
+    "read_context": _ReadContextArguments,
+    "search_thread_conversation_history": _SearchArguments,
+    "search_durable_memory": _SearchArguments,
     "search_thread_events": _TimelineArguments,
     "search_web": _QueryArguments,
     "wikipedia": _QueryArguments,
