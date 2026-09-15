@@ -38,6 +38,7 @@ from app.runtime.builder_registry import builder_for_definition
 from app.runtime.catalog import definition_from_workflow
 from app.db import (
     EmbeddingReadinessStatus,
+    FileSourceType,
     ProcessStatus,
     delete_thread,
     assign_thread_to_project,
@@ -50,6 +51,7 @@ from app.db import (
     get_effective_thread_files,
     get_thread_settings,
     get_scoped_indexing_status,
+    is_file_accessible_to_thread,
     list_threads,
     update_thread,
     update_thread_settings,
@@ -649,6 +651,8 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         files = []
 
         if file_hash:
+            if not await is_file_accessible_to_thread(thread_id, file_hash):
+                raise HTTPException(status_code=404, detail="File not found")
             # Check specific file using file_status
             file_status = await get_file_status(file_hash)
             # Handle case where file doesn't exist yet (returns empty dict)
@@ -666,7 +670,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 thread_id=thread_id,
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
-            if file_record is not None and str(getattr(file_record, "source_type", "pdf")) == "pdf":
+            if file_record is not None and FileSourceType.uses_pdf_conversion(getattr(file_record, "source_type", None)):
                 # Conversion and retrieval readiness are authoritative.  Run
                 # this gate even while file_status is pending so conversion
                 # completion can create the exact embedding target without
@@ -696,7 +700,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     )
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
                     file_ready = ProcessStatus.is_completed(indexing_status)
-                    if str(getattr(f, "source_type", "pdf")) == "pdf":
+                    if FileSourceType.uses_pdf_conversion(getattr(f, "source_type", None)):
                         readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model, thread_id=thread_id)
                         await schedule_pdf_repair(
                             f.file_hash,

@@ -129,7 +129,7 @@ async def queue_file_processing(
         source_type=source_type,
     )
     await add_file_to_thread(thread.id, file_hash)
-    if source_type == FileSourceType.PDF.value:
+    if FileSourceType.uses_pdf_conversion(source_type):
         await _enqueue_pdf_conversion(file_hash, file_name)
 
     file_status = await get_file_status(file_hash)
@@ -166,7 +166,7 @@ async def queue_file_processing(
     if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif source_type != FileSourceType.PDF.value and parsed_data and isinstance(parsed_data.get("sentences"), list):
+    elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
@@ -192,7 +192,7 @@ async def queue_project_file_processing(
         source_type=source_type,
     )
     await add_file_to_project(project.id, file_hash)
-    if source_type == FileSourceType.PDF.value:
+    if FileSourceType.uses_pdf_conversion(source_type):
         await _enqueue_pdf_conversion(file_hash, file_name)
     file_status = await get_file_status(file_hash)
     parsing_status = (file_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
@@ -225,7 +225,7 @@ async def queue_project_file_processing(
     if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif source_type != FileSourceType.PDF.value and parsed_data and isinstance(parsed_data.get("sentences"), list):
+    elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
@@ -234,10 +234,82 @@ async def queue_project_file_processing(
 
 
 async def _background_parse(file_hash: str, filename: str, backend_url: str = "", source_metadata: Optional[Dict[str, Any]] = None):
-    """Compatibility hook that only queues durable conversion work."""
+    """Queue durable conversion work without treating it as completed reading."""
     await _enqueue_pdf_conversion(file_hash, filename)
     await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
     return
+
+
+async def _enqueue_document_embedding_job(
+    *,
+    file_hash: str,
+    scope_id: str,
+    embedding_model: str,
+    file_name: str,
+    persist_thread_state: bool,
+) -> None:
+    from app.services.document_projection_service import (
+        DocumentConversionFailedError,
+        DocumentConversionPendingError,
+        ensure_retrieval_projection,
+        evaluate_retrieval_readiness,
+    )
+    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+    from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
+
+    await update_indexing_status(
+        file_hash=file_hash,
+        status=ProcessStatus.PENDING.value,
+        embedding_model=embedding_model,
+        thread_id=scope_id if persist_thread_state else None,
+    )
+    try:
+        readiness = await evaluate_retrieval_readiness(
+            file_hash,
+            embedding_model,
+            thread_id=scope_id,
+        )
+    except EmbeddingTokenizerUnavailableError:
+        raise
+    if not readiness.get("canonical_ready"):
+        try:
+            await ensure_retrieval_projection(
+                file_hash=file_hash,
+                embedding_model=embedding_model,
+                file_name=file_name,
+            )
+        except DocumentConversionPendingError:
+            return
+        except DocumentConversionFailedError as exc:
+            await update_indexing_status(
+                file_hash=file_hash,
+                status=ProcessStatus.FAILED.value,
+                embedding_model=embedding_model,
+                thread_id=scope_id if persist_thread_state else None,
+                finished_at=iso_utc_z(),
+                error=str(exc),
+            )
+            raise
+        readiness = await evaluate_retrieval_readiness(
+            file_hash,
+            embedding_model,
+            thread_id=scope_id,
+        )
+        if not readiness.get("canonical_ready"):
+            return
+    if readiness.get("ready"):
+        return
+    if not readiness.get("source_version"):
+        raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
+    await ensure_embedding_job(
+        resource_type=RESOURCE_DOCUMENT,
+        resource_id=file_hash,
+        scope_id=scope_id,
+        embedding_model=embedding_model,
+        source_version=readiness["source_version"],
+        requeue_completed=True,
+    )
+
 
 async def _background_index(
     file_hash: str,
@@ -249,20 +321,32 @@ async def _background_index(
     markdown_content: Optional[str] = None,
     persist_thread_state: bool = True,
 ):
-    """
-    Background task to index a document for a thread after parsing completes.
-    """
+    """Queue durable conversion and embedding work; do not index PDFs inline."""
     if markdown_content is None:
-        canonical = await get_canonical_document_repo().get(file_hash)
-        if canonical is None or canonical.status != "completed":
+        try:
             await _enqueue_pdf_conversion(file_hash, file_name)
-            await update_indexing_status(
+            await _enqueue_document_embedding_job(
                 file_hash=file_hash,
-                status=ProcessStatus.PENDING.value,
+                scope_id=thread_id,
                 embedding_model=embedding_model,
-                thread_id=thread_id if persist_thread_state else None,
+                file_name=file_name,
+                persist_thread_state=persist_thread_state,
             )
-            return
+        except Exception as exc:
+            logger.exception("Background document indexing enqueue failed for %s", file_hash)
+            try:
+                await update_indexing_status(
+                    file_hash=file_hash,
+                    status=ProcessStatus.FAILED.value,
+                    embedding_model=embedding_model,
+                    thread_id=thread_id if persist_thread_state else None,
+                    finished_at=iso_utc_z(),
+                    error=str(exc),
+                )
+            except Exception as update_error:
+                logger.error("Failed to update indexing status to failed for %s: %s", file_hash, update_error)
+        return
+
     started_at = iso_utc_z()
     try:
         claimed = await update_indexing_status(
@@ -275,13 +359,6 @@ async def _background_index(
         )
         if not claimed:
             return
-
-        # Conversion/TTS persistence is an independent prerequisite from vector
-        # materialization. Finish it first so readers can use the document even
-        # while the model-specific index is still running or unavailable.
-        if markdown_content is None:
-            await _background_parse(file_hash, file_name, backend_url, metadata)
-
         result = await index_document_for_thread(
             thread_id=thread_id,
             file_hash=file_hash,
@@ -292,11 +369,9 @@ async def _background_index(
         )
         if result.get("status") != OperationResultStatus.SUCCESS.value:
             raise Exception(result.get("message", "Indexing failed"))
-        logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
-
+        logger.info("Background markdown indexing completed for %s in thread %s", file_hash, thread_id)
     except Exception as e:
         logger.exception("Background indexing failed for %s", file_hash)
-        finished_at = iso_utc_z()
         try:
             await update_indexing_status(
                 file_hash=file_hash,
@@ -304,9 +379,8 @@ async def _background_index(
                 embedding_model=embedding_model,
                 thread_id=thread_id if persist_thread_state else None,
                 started_at=started_at,
-                finished_at=finished_at,
+                finished_at=iso_utc_z(),
                 error=str(e),
             )
         except Exception as update_error:
-            logger.error(f"Failed to update indexing status to failed for {file_hash}: {update_error}")
-        logger.error(f"Background indexing failed for {file_hash}: {e}")
+            logger.error("Failed to update indexing status to failed for %s: %s", file_hash, update_error)

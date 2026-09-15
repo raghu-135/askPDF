@@ -7,7 +7,7 @@ import pytest
 
 from app.agent import external_research_tools
 from app.agent.tool_contract import collect_tool_sources, normalize_tool_result
-from app.db.vector.adapter import WeaviateAdapter
+from app.db.vector.adapter import WeaviateAdapter, _document_vector_uuid
 from app.rag import agent_tools
 from app.tools.context import ToolInvocationContext
 from app.tools.contracts import TimelineRequest
@@ -29,31 +29,59 @@ class CapturingAdapter(WeaviateAdapter):
 
 
 @pytest.mark.asyncio
-async def test_indexed_chunk_identity_check_paginates_large_documents():
+async def test_indexed_chunk_identity_check_confirms_deterministic_object_ids():
     adapter = CapturingAdapter()
     collection = MagicMock()
-    collection.query.fetch_objects.side_effect = [
-        SimpleNamespace(
-            objects=[
-                SimpleNamespace(uuid="uuid-1", properties={"chunk_identity": "chunk-1"}),
-                SimpleNamespace(uuid="uuid-2", properties={"chunk_identity": "chunk-2"}),
-            ]
-        ),
-        SimpleNamespace(
-            objects=[
-                SimpleNamespace(uuid="uuid-3", properties={"chunk_identity": "chunk-3"}),
-            ]
-        ),
-    ]
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=3)
+    collection.data.exists.return_value = True
     adapter.collection_manager.get_collection.return_value = collection
 
     assert await adapter.has_file_indexed_chunks(
         file_hash="file-1",
         embedding_model="embed-1",
         expected_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        manifest_id="manifest-1",
     )
-    assert collection.query.fetch_objects.call_count == 2
-    assert collection.query.fetch_objects.call_args_list[1].kwargs["after"] == "uuid-2"
+    collection.query.fetch_objects.assert_not_called()
+    seen = {str(call.args[0]) for call in collection.data.exists.call_args_list}
+    assert seen == {
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-1"),
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-2"),
+        _document_vector_uuid("embed-1", "file-1", "manifest-1", "chunk-3"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_indexed_chunk_identity_check_rejects_count_mismatch():
+    adapter = CapturingAdapter()
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=2)
+    adapter.collection_manager.get_collection.return_value = collection
+
+    assert not await adapter.has_file_indexed_chunks(
+        file_hash="file-1",
+        embedding_model="embed-1",
+        expected_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        manifest_id="manifest-1",
+    )
+    collection.data.exists.assert_not_called()
+    collection.query.fetch_objects.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_indexed_chunk_identity_check_rejects_missing_object():
+    adapter = CapturingAdapter()
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=2)
+    collection.data.exists.side_effect = [True, False]
+    adapter.collection_manager.get_collection.return_value = collection
+
+    assert not await adapter.has_file_indexed_chunks(
+        file_hash="file-1",
+        embedding_model="embed-1",
+        expected_chunk_ids=["chunk-1", "chunk-2"],
+        manifest_id="manifest-1",
+    )
 
 
 @pytest.mark.asyncio

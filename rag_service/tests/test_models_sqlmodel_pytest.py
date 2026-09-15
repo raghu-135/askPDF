@@ -223,6 +223,9 @@ class TestProcessStatusEnum:
         """Verify domain enum values remain wire-compatible strings."""
         assert FileSourceType.PDF.value == "pdf"
         assert FileSourceType.BROWSER.value == "browser"
+        assert FileSourceType.uses_pdf_conversion("pdf") is True
+        assert FileSourceType.uses_pdf_conversion("browser") is True
+        assert FileSourceType.uses_pdf_conversion("markdown") is False
         assert ChatTurnStatus.CANCELLED.value == "cancelled"
         assert WorkflowVisibility.INTERNAL.value == "internal"
         assert AgentRunStatus.AWAITING_HUMAN.value == "awaiting_human"

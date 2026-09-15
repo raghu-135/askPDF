@@ -180,6 +180,46 @@ async def _scoped_files(context: ToolInvocationContext, requested: str | None = 
     return lookup, list(lookup.keys())
 
 
+async def _schedule_document_repair(
+    *,
+    file_hash: str,
+    embedding_model: str,
+    thread_id: str,
+    readiness: dict[str, Any],
+) -> None:
+    from app.services.document_projection_service import (
+        DocumentConversionPendingError,
+        ensure_retrieval_projection,
+    )
+    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+
+    if not readiness.get("canonical_ready"):
+        try:
+            await ensure_retrieval_projection(
+                file_hash=file_hash,
+                embedding_model=embedding_model,
+            )
+        except DocumentConversionPendingError:
+            return
+        return
+    job = readiness.get("thread_job")
+    if job is not None and job.status == "failed" and readiness.get("reason") == "thread_job_failed":
+        raise RuntimeError(
+            f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
+        )
+    source_version = readiness.get("source_version")
+    if not source_version:
+        raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
+    await ensure_embedding_job(
+        resource_type=RESOURCE_DOCUMENT,
+        resource_id=file_hash,
+        scope_id=thread_id,
+        embedding_model=embedding_model,
+        source_version=source_version,
+        requeue_completed=True,
+    )
+
+
 async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocationContext, *, services: DefaultToolServices | None = None):
     started = tool_started()
     tool_name = "search_knowledge"
@@ -191,47 +231,25 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         if not file_hashes:
             return make_tool_result(tool_name=tool_name, content="No documents are linked to this thread yet.", context=context, started=started, warnings=[ToolWarningCode.NO_THREAD_DOCUMENTS])
         repo = get_canonical_document_repo()
-        from app.services.document_projection_service import (
-            DocumentConversionPendingError,
-            ensure_retrieval_projection,
-            evaluate_retrieval_readiness,
-        )
+        from app.services.document_projection_service import evaluate_retrieval_readiness
         ready_manifests = []
         repair_scheduled = False
-        from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
         for file_hash in file_hashes:
             readiness = await evaluate_retrieval_readiness(
                 file_hash,
                 context.embedding_model,
                 thread_id=context.thread_id,
             )
-            if not readiness.get("canonical_ready"):
-                try:
-                    await ensure_retrieval_projection(
-                        file_hash=file_hash,
-                        embedding_model=context.embedding_model,
-                    )
-                except DocumentConversionPendingError:
-                    pass
-                repair_scheduled = True
-                continue
             if readiness.get("ready") and readiness.get("manifest") is not None:
                 ready_manifests.append(readiness["manifest"])
-            else:
-                job = readiness.get("thread_job")
-                if job is not None and job.status == "failed" and readiness.get("reason") == "thread_job_failed":
-                    raise RuntimeError(
-                        f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
-                    )
-                await ensure_embedding_job(
-                    resource_type=RESOURCE_DOCUMENT,
-                    resource_id=file_hash,
-                    scope_id=context.thread_id,
-                    embedding_model=context.embedding_model,
-                    source_version=readiness["source_version"],
-                    requeue_completed=True,
-                )
-                repair_scheduled = True
+                continue
+            await _schedule_document_repair(
+                file_hash=file_hash,
+                embedding_model=context.embedding_model,
+                thread_id=context.thread_id,
+                readiness=readiness,
+            )
+            repair_scheduled = True
         if not ready_manifests:
             return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "indexing", "repair_scheduled": repair_scheduled})
         ready_file_hashes = [manifest.file_hash for manifest in ready_manifests]
@@ -416,7 +434,7 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
     try:
         if not context.thread_id:
             return make_tool_result(tool_name=tool_name, content="No thread context found.", context=context, started=started, warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT])
-        await _scoped_files(context, request.document_id)
+        await _scoped_files(context, request.document_id, services)
         repo = get_canonical_document_repo()
         from app.services.document_projection_service import DocumentConversionFailedError, evaluate_document_freshness
         freshness = await evaluate_document_freshness(request.document_id, context.embedding_model)
@@ -454,7 +472,6 @@ async def inspect_document(request: InspectDocumentRequest, context: ToolInvocat
         next_cursor = _cursor(offset + len(page)) if offset + len(page) < len(sections) else None
         artifacts = {
             "outline": entries,
-            "document_sources": entries,
             "tags": sorted({item.element_type for item in elements}),
             "tag_provenance": {item.element_type: "docling_label" for item in elements},
             "valid_expansion_targets": {
@@ -481,34 +498,25 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         # Context reads depend on the same exact tokenizer as indexing. Resolve
         # it before any stale-document repair can be queued.
         resolve_embedding_tokenizer(context.embedding_model)
+        from app.services.document_projection_service import evaluate_retrieval_readiness
         repo = get_canonical_document_repo()
         selected = []
         source_section_files: set[str] = set()
         source_anchors = []
         repair_scheduled = False
         for file_hash in file_hashes:
-            from app.services.document_projection_service import evaluate_document_freshness
-            freshness = await evaluate_document_freshness(
+            freshness = await evaluate_retrieval_readiness(
                 file_hash,
                 context.embedding_model,
-                require_manifest=True,
                 thread_id=context.thread_id,
             )
             manifest = freshness.get("manifest")
             if not freshness.get("ready") or manifest is None:
-                job = freshness.get("thread_job")
-                if job is not None and job.status == "failed" and freshness.get("reason") == "thread_job_failed":
-                    raise RuntimeError(
-                        f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
-                    )
-                from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
-                await ensure_embedding_job(
-                    resource_type=RESOURCE_DOCUMENT,
-                    resource_id=file_hash,
-                    scope_id=context.thread_id,
+                await _schedule_document_repair(
+                    file_hash=file_hash,
                     embedding_model=context.embedding_model,
-                    source_version=freshness["source_version"],
-                    requeue_completed=True,
+                    thread_id=context.thread_id,
+                    readiness=freshness,
                 )
                 repair_scheduled = True
                 continue
@@ -566,7 +574,10 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
             return make_tool_result(tool_name=tool_name, content="The requested source is not available in this thread.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
         source_chunk = next((item for item in source_anchors if item is not None), selected[0])
         canonical = await repo.get(source_chunk.file_hash)
-        manifest_id = str(source_chunk.manifest_id)
+        selected_manifest = await repo.get_manifest_by_id(str(source_chunk.manifest_id))
+        if selected_manifest is None:
+            raise ValueError("context manifest is not available for the requested evidence")
+        manifest_id = str(selected_manifest.manifest_id)
         source_generation = canonical.generation if canonical and canonical.status == "completed" else ""
         source_is_section = bool(source_section_files) or any(item.section_id == request.source_id for item in selected)
         source_is_table = any(item.table_id == request.source_id for item in selected)
@@ -590,7 +601,7 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
         except EmbeddingTokenizerUnavailableError:
             raise
         token_budget = request.token_budget
-        source_version = str(getattr(manifest, "source_version", "") or "")
+        source_version = str(getattr(selected_manifest, "source_version", "") or "")
         if not source_version:
             raise ValueError("context manifest version metadata is incomplete")
         ordered_chunks = sorted(chunks, key=lambda item: int(item.chunk_order or 0))

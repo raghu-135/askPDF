@@ -528,7 +528,21 @@ class CanonicalDocumentRepository:
             result = await session.execute(delete(DocumentChunkManifest).where(DocumentChunkManifest.manifest_id == manifest_id))
             return bool(result.rowcount)
 
-    async def get_ready_manifest(self, file_hash: str, embedding_model: str, generation: str, chunking_fingerprint: str) -> Optional[DocumentChunkManifest]:
+    async def get_manifest_by_id(self, manifest_id: str) -> Optional[DocumentChunkManifest]:
+        session = await self._owned_session()
+        async with session.begin():
+            return await session.get(DocumentChunkManifest, manifest_id)
+
+    async def get_ready_manifest(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        generation: str,
+        chunking_fingerprint: str,
+        source_version: str,
+    ) -> Optional[DocumentChunkManifest]:
+        if not str(source_version or "").strip():
+            raise ValueError("ready manifest lookup requires a nonempty source_version")
         session = await self._owned_session()
         async with session.begin():
             query = select(DocumentChunkManifest).where(
@@ -536,6 +550,7 @@ class CanonicalDocumentRepository:
                 DocumentChunkManifest.embedding_model == embedding_model,
                 DocumentChunkManifest.generation == generation,
                 DocumentChunkManifest.chunking_fingerprint == chunking_fingerprint,
+                DocumentChunkManifest.source_version == source_version,
                 DocumentChunkManifest.is_current.is_(True),
                 DocumentChunkManifest.status == "completed",
                 DocumentChunkManifest.vector_status == "completed",

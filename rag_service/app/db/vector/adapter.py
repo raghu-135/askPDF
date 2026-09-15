@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Mapping
 from urllib.parse import urlparse
 
@@ -47,6 +48,21 @@ _DOCUMENT_THREAD_TEMPORAL_FIELDS = {
     "timeline_event_at",
     "timeline_event_type",
 }
+_DOCUMENT_IDENTITY_VERIFY_WORKERS = 16
+
+
+def _document_vector_uuid(
+    embedding_model: str,
+    file_hash: str,
+    manifest_id: str,
+    source_id: str,
+) -> str:
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"askpdf:document:{embedding_model}:{file_hash}:{manifest_id}:{source_id}",
+        )
+    )
 
 
 class WeaviateAdapter:
@@ -484,7 +500,7 @@ class WeaviateAdapter:
                 {
                     "vector": vector,
                     "properties": properties,
-                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:document:{embedding_model}:{file_hash}:{manifest_id}:{source_id}")),
+                    "uuid": _document_vector_uuid(embedding_model, file_hash, manifest_id, source_id),
                 }
             )
         # Use model-aware collection manager
@@ -1344,43 +1360,35 @@ class WeaviateAdapter:
         file_hash: str,
         embedding_model: str,
         expected_chunk_ids: List[str],
-        manifest_id: Optional[str] = None,
+        manifest_id: str,
     ) -> bool:
         """Verify the exact deterministic chunk identity set is materialized."""
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(manifest_id, "manifest_id")
         expected = {str(value) for value in expected_chunk_ids}
         if not expected:
             return False
         try:
             col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
-            filt = (
-                wvc.query.Filter.by_property("embedding_model").equal(embedding_model)
-                & wvc.query.Filter.by_property("file_hash").equal(file_hash)
+            scope_filter = (
+                wvc.query.Filter.by_property("file_hash").equal(file_hash)
+                & wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
             )
-            if manifest_id:
-                filt = filt & wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
-            identities: set[str] = set()
-            after = None
-            page_size = min(1000, max(100, len(expected)))
-            while True:
-                kwargs = {"filters": filt, "limit": page_size}
-                if after is not None:
-                    kwargs["after"] = after
-                response = await asyncio.to_thread(col.query.fetch_objects, **kwargs)
-                objects = list(getattr(response, "objects", []) or [])
-                identities.update(
-                    str(obj.properties.get("chunk_identity"))
-                    for obj in objects
-                    if obj.properties.get("chunk_identity") is not None
-                )
-                if len(identities) >= len(expected) or not objects:
-                    break
-                next_after = getattr(objects[-1], "uuid", None)
-                if next_after is None or next_after == after:
-                    break
-                after = next_after
-            return len(identities) == len(expected) and identities == expected
+            count_response = await asyncio.to_thread(col.aggregate.over_all, filters=scope_filter)
+            if int(getattr(count_response, "total_count", 0) or 0) != len(expected):
+                return False
+            object_ids = [
+                _document_vector_uuid(embedding_model, file_hash, manifest_id, source_id)
+                for source_id in expected
+            ]
+
+            def _all_expected_objects_exist() -> bool:
+                workers = min(_DOCUMENT_IDENTITY_VERIFY_WORKERS, max(1, len(object_ids)))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    return all(pool.map(col.data.exists, object_ids))
+
+            return await asyncio.to_thread(_all_expected_objects_exist)
         except Exception as e:
             logger.error("Failed to verify indexed chunk identities: %s", e)
             raise VectorDBQueryError("Could not verify indexed chunk identities") from e

@@ -254,7 +254,11 @@ async def reconcile_thread_embedding_targets(
     )
     for file in documents:
         file_hash = str(file.file_hash)
-        readiness = await evaluate_retrieval_readiness(file_hash, embedding_model)
+        readiness = await evaluate_retrieval_readiness(
+            file_hash,
+            embedding_model,
+            thread_id=thread_id,
+        )
         if not readiness.get("canonical_ready"):
             try:
                 await ensure_retrieval_projection(

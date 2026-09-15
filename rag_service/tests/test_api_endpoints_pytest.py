@@ -12,6 +12,7 @@ from typing import Generator
 from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
+from fastapi import HTTPException
 
 from app.api import threads as threads_api
 from app.models.requests import (
@@ -492,6 +493,7 @@ class TestThreadEndpoints:
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
             patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
             patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=True),
             patch("app.api.threads.get_file_status", new_callable=AsyncMock, return_value={"indexing_status": {}}),
             patch("app.api.threads.get_file", new_callable=AsyncMock, return_value=file_record),
             patch("app.api.threads.get_scoped_indexing_status", return_value={"status": "failed"}),
@@ -510,6 +512,22 @@ class TestThreadEndpoints:
             source_version="current-version",
             requeue_completed=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_thread_index_status_rejects_unattached_file_hash(self):
+        thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=False),
+            patch("app.services.embedding_materialization_service.ensure_embedding_job", new_callable=AsyncMock) as ensure_job,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await threads_api.get_thread_index_status_endpoint("thread-1", file_hash="foreign-file")
+
+        assert exc.value.status_code == 404
+        ensure_job.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_get_thread_uses_real_stats_when_embedding_model_ready(self):

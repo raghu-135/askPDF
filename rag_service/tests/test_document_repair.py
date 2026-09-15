@@ -451,5 +451,151 @@ async def test_document_discovery_uses_file_identity_and_title(monkeypatch):
     assert result.sources[0]["pages"] == [12, 13, 14]
 
 
+@pytest.mark.asyncio
+async def test_reconcile_enqueues_missing_thread_version_pointer(monkeypatch):
+    captured = {}
+    queued = []
+
+    async def readiness(_file_hash, _model, **kwargs):
+        captured["thread_id"] = kwargs.get("thread_id")
+        if kwargs.get("thread_id"):
+            return {
+                "ready": False,
+                "canonical_ready": True,
+                "source_version": "version-a",
+                "reason": "thread_version_missing",
+            }
+        return {"ready": True, "canonical_ready": True, "source_version": "version-a"}
+
+    async def enqueue(**kwargs):
+        queued.append(kwargs)
+
+    monkeypatch.setattr(embedding_materialization_service, "require_embedding_model_ready", AsyncMock())
+    monkeypatch.setattr(
+        "app.db.get_effective_thread_files",
+        AsyncMock(return_value=[SimpleNamespace(file_hash="file-a", file_name="paper.pdf")]),
+    )
+    monkeypatch.setattr(document_projection_service, "evaluate_retrieval_readiness", readiness)
+    monkeypatch.setattr(embedding_materialization_service, "ensure_embedding_job", enqueue)
+    monkeypatch.setattr(
+        embedding_materialization_service,
+        "get_vector_db",
+        lambda: SimpleNamespace(has_chat_memory_indexed=AsyncMock(return_value=True)),
+    )
+    monkeypatch.setattr("app.db.get_thread_turns", AsyncMock(return_value=[]))
+    monkeypatch.setattr(embedding_materialization_service, "async_session_maker", _empty_sessionmaker())
+
+    counts = await embedding_materialization_service.reconcile_thread_embedding_targets("thread-a", "model-a")
+
+    assert captured["thread_id"] == "thread-a"
+    assert queued == [{
+        "resource_type": "document",
+        "resource_id": "file-a",
+        "scope_id": "thread-a",
+        "embedding_model": "model-a",
+        "source_version": "version-a",
+        "requeue_completed": True,
+    }]
+    assert counts["documents"] == 1
+
+
+def _empty_sessionmaker():
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def begin(self):
+            return self
+
+        async def execute(self, *_args, **_kwargs):
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
+    def maker():
+        return Session()
+
+    return maker
+
+
+@pytest.mark.asyncio
+async def test_background_index_enqueues_embedding_job_instead_of_indexing(monkeypatch):
+    from app.services import file_processing_service
+
+    queued = []
+    indexed = []
+
+    monkeypatch.setattr(file_processing_service, "_enqueue_pdf_conversion", AsyncMock())
+    monkeypatch.setattr(file_processing_service, "update_indexing_status", AsyncMock())
+    monkeypatch.setattr(
+        document_projection_service,
+        "evaluate_retrieval_readiness",
+        AsyncMock(return_value={"ready": False, "canonical_ready": True, "source_version": "version-a"}),
+    )
+    monkeypatch.setattr(
+        "app.services.embedding_materialization_service.ensure_embedding_job",
+        AsyncMock(side_effect=lambda **kwargs: queued.append(kwargs)),
+    )
+    monkeypatch.setattr(
+        file_processing_service,
+        "index_document_for_thread",
+        AsyncMock(side_effect=lambda **kwargs: indexed.append(kwargs) or {"status": "success"}),
+    )
+
+    await file_processing_service._background_index("file-a", "thread-a", "model-a", "paper.pdf", "")
+
+    assert indexed == []
+    assert queued == [{
+        "resource_type": "document",
+        "resource_id": "file-a",
+        "scope_id": "thread-a",
+        "embedding_model": "model-a",
+        "source_version": "version-a",
+        "requeue_completed": True,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_queue_file_processing_enqueues_browser_capture_conversion(monkeypatch):
+    from app.db import FileSourceType
+    from app.services import file_processing_service
+
+    enqueued = []
+    monkeypatch.setattr(file_processing_service, "create_or_get_file", AsyncMock())
+    monkeypatch.setattr(file_processing_service, "add_file_to_thread", AsyncMock())
+    monkeypatch.setattr(
+        file_processing_service,
+        "_enqueue_pdf_conversion",
+        AsyncMock(side_effect=lambda file_hash, file_name: enqueued.append((file_hash, file_name))),
+    )
+    monkeypatch.setattr(file_processing_service, "get_file_status", AsyncMock(return_value={"parsing": {"status": "pending"}, "indexing": {"status": "pending"}}))
+    monkeypatch.setattr(file_processing_service, "update_indexing_status", AsyncMock())
+    monkeypatch.setattr(file_processing_service, "update_parsing_status", AsyncMock())
+    monkeypatch.setattr(file_processing_service, "get_file_parsed_sentences", AsyncMock(return_value=None))
+    monkeypatch.setattr(file_processing_service, "get_canonical_document_repo", lambda: SimpleNamespace(get=AsyncMock(return_value=None)))
+    monkeypatch.setattr(document_projection_service, "evaluate_document_freshness", AsyncMock(return_value={"canonical_ready": False, "reading_ready": False}))
+    monkeypatch.setattr("app.db.get_scoped_indexing_status", lambda *_args, **_kwargs: {"status": "pending"})
+
+    await file_processing_service.queue_file_processing(
+        background_tasks=SimpleNamespace(add_task=lambda *_args, **_kwargs: None),
+        thread=SimpleNamespace(id="thread-a", embedding_model="model-a"),
+        file_hash="capture-a",
+        file_name="Captured page",
+        source_type=FileSourceType.BROWSER.value,
+    )
+
+    assert enqueued == [("capture-a", "Captured page")]
+
+
+@pytest.mark.asyncio
+async def test_ready_manifest_lookup_requires_source_version():
+    from app.db.repositories.canonical_document_repo import CanonicalDocumentRepository
+
+    repo = CanonicalDocumentRepository()
+    with pytest.raises(ValueError, match="nonempty source_version"):
+        await repo.get_ready_manifest("file-a", "model-a", "generation-a", "chunk-a", "")
+
+
 async def _get_file(value):
     return value

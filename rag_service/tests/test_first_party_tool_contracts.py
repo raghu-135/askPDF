@@ -7,12 +7,13 @@ from pydantic import ValidationError
 from app.agent import external_research_tools
 from app.agent.tool_contract import ToolWarningCode, normalize_tool_result
 from app.tools.context import ToolInvocationContext
-from app.tools.contracts import DocumentSearchRequest, ReadContextRequest, SearchKnowledgeRequest, TimelineRequest
+from app.tools.contracts import DocumentSearchRequest, InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest, TimelineRequest
 from app.tools.retrieval_conversation import search_thread_conversation_history as neutral_history
 from app.tools.retrieval_knowledge import (
     _context_cursor,
     _context_cursor_payload,
     _source_from_chunk,
+    inspect_document,
     read_context,
     search_knowledge as neutral_knowledge,
 )
@@ -20,6 +21,7 @@ from app.tools.retrieval_timeline import search_thread_events as neutral_events
 from app.tools.thread_shape import invoke_thread_shape
 from app.tools.thread_shape import ThreadShapeRequest
 from app.services.document_pipeline import TokenCounter
+from app.services.document_projection_service import DocumentConversionPendingError
 
 
 def _config(**overrides):
@@ -287,6 +289,10 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
             SimpleNamespace(section_id="child", parent_section_id="root"),
         ]),
         get_descendant_section_ids=AsyncMock(return_value=["root", "child"]),
+        get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
+            manifest_id="manifest-file-1",
+            source_version="ready-file-1",
+        )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
 
@@ -300,7 +306,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
         }
 
     monkeypatch.setattr(
-        "app.services.document_projection_service.evaluate_document_freshness",
+        "app.services.document_projection_service.evaluate_retrieval_readiness",
         fresh_document,
     )
     monkeypatch.setattr(
@@ -369,10 +375,14 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
         get_chunks=AsyncMock(return_value=chunks),
         get_sections=AsyncMock(return_value=[]),
         get_descendant_section_ids=AsyncMock(return_value=["section-1"]),
+        get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
+            manifest_id="manifest-file-1",
+            source_version="ready-file-1",
+        )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
     monkeypatch.setattr(
-        "app.services.document_projection_service.evaluate_document_freshness",
+        "app.services.document_projection_service.evaluate_retrieval_readiness",
         AsyncMock(return_value={
             "canonical_ready": True,
             "manifest_ready": True,
@@ -466,6 +476,190 @@ def test_context_cursor_binds_budget_and_tokenizer_version():
     assert payload["token_budget"] == 512
     assert payload["tokenizer_fingerprint"] == "tokenizer-1"
     assert payload["segment_index"] == 3
+
+
+@pytest.mark.asyncio
+async def test_inspect_document_keeps_outline_out_of_document_sources(monkeypatch):
+    repo = SimpleNamespace(
+        get_sections=AsyncMock(return_value=[
+            SimpleNamespace(
+                section_id="section-1",
+                parent_section_id=None,
+                title="Intro",
+                level=1,
+                heading_path=["Intro"],
+                page_start=1,
+                page_end=1,
+            )
+        ]),
+        get_elements=AsyncMock(return_value=[SimpleNamespace(element_id="table-1", element_type="table")]),
+        get_descendant_section_ids=AsyncMock(return_value=["section-1"]),
+    )
+    monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
+    monkeypatch.setattr(
+        "app.services.document_projection_service.evaluate_document_freshness",
+        AsyncMock(return_value={
+            "canonical_ready": True,
+            "canonical": SimpleNamespace(generation="generation-1", status="completed"),
+        }),
+    )
+
+    class Services:
+        async def document_lookup(self, _thread_id):
+            return {"file-1": {"file_name": "paper.pdf"}}
+
+    raw = await inspect_document(
+        InspectDocumentRequest(document_id="file-1"),
+        _context(),
+        services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="inspect_document")
+    document_sources = []
+    from app.agent.tool_contract import collect_tool_sources
+    collect_tool_sources(raw.to_json(), document_sources, [], [])
+
+    assert payload["ok"] is True
+    assert "document_sources" not in payload["artifacts"]
+    assert payload["artifacts"]["outline"][0]["section_id"] == "section-1"
+    assert document_sources == []
+
+
+@pytest.mark.asyncio
+async def test_read_context_does_not_enqueue_null_source_version(monkeypatch):
+    queued = []
+
+    async def enqueue(**kwargs):
+        queued.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.document_projection_service.evaluate_retrieval_readiness",
+        AsyncMock(return_value={"ready": False, "canonical_ready": False, "source_version": None, "manifest": None}),
+    )
+    monkeypatch.setattr(
+        "app.services.document_projection_service.ensure_retrieval_projection",
+        AsyncMock(side_effect=DocumentConversionPendingError("file-1")),
+    )
+    monkeypatch.setattr("app.services.embedding_materialization_service.ensure_embedding_job", enqueue)
+    monkeypatch.setattr(
+        "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
+        lambda _model: (SimpleNamespace(fingerprint="tokenizer-1"), TokenCounter(count=lambda value: 1, split=lambda value, limit: [value])),
+    )
+
+    class Services:
+        async def document_lookup(self, _thread_id):
+            return {"file-1": {"file_name": "paper.pdf"}}
+
+    raw = await read_context(
+        ReadContextRequest(source_id="src-hit"),
+        _context(),
+        services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="read_context")
+
+    assert payload["ok"] is True
+    assert "indexing_in_progress" in payload["warnings"]
+    assert queued == []
+
+
+@pytest.mark.asyncio
+async def test_read_context_uses_selected_chunk_manifest_version(monkeypatch):
+    def make_chunk(file_hash, manifest_id, source_id):
+        return SimpleNamespace(
+            source_id=source_id,
+            chunk_id=f"{file_hash}-chunk",
+            manifest_id=manifest_id,
+            file_hash=file_hash,
+            embedding_model="embed-1",
+            section_id="section-1",
+            table_id=None,
+            chunk_order=0,
+            body_text="selected evidence",
+            contextualized_text="selected evidence",
+            page_start=1,
+            page_end=1,
+            sentence_ids=["sentence-1"],
+            source_element_ids=["element-1"],
+            metadata_json={
+                "pages": [1],
+                "generation": "generation-1",
+                "extraction_fingerprint": "extract-1",
+                "chunking_fingerprint": "chunk-1",
+                "source_version": "version-selected",
+            },
+        )
+
+    selected = make_chunk("file-1", "manifest-file-1", "src-hit")
+    other = make_chunk("file-2", "manifest-file-2", "src-other")
+
+    async def get_chunks(file_hash, *_args, **_kwargs):
+        return [selected] if file_hash == "file-1" else [other]
+
+    async def get_chunks_by_source_id(source_id, *_args, **kwargs):
+        if kwargs.get("file_hash") == "file-1" and source_id == "src-hit":
+            return [selected]
+        return []
+
+    async def get_manifest_by_id(manifest_id):
+        versions = {
+            "manifest-file-1": "version-selected",
+            "manifest-file-2": "version-other",
+        }
+        return SimpleNamespace(manifest_id=manifest_id, source_version=versions[manifest_id])
+
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(
+            status="completed", generation="generation-1", extraction_fingerprint="extract-1"
+        )),
+        get_chunks=get_chunks,
+        get_chunks_by_source_id=get_chunks_by_source_id,
+        get_sections=AsyncMock(return_value=[]),
+        get_descendant_section_ids=AsyncMock(return_value=[]),
+        get_manifest_by_id=get_manifest_by_id,
+    )
+    monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
+
+    async def readiness(file_hash, _model, **_kwargs):
+        if file_hash == "file-1":
+            return {
+                "ready": True,
+                "canonical_ready": True,
+                "source_version": "version-selected",
+                "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="version-selected"),
+            }
+        return {
+            "ready": True,
+            "canonical_ready": True,
+            "source_version": "version-other",
+            "manifest": SimpleNamespace(manifest_id="manifest-file-2", source_version="version-other"),
+        }
+
+    monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
+    monkeypatch.setattr(
+        "app.tools.retrieval_knowledge.resolve_embedding_tokenizer",
+        lambda _model: (
+            SimpleNamespace(fingerprint="tokenizer-1"),
+            TokenCounter(count=lambda value: len(str(value).split()), split=lambda value, limit: [value]),
+        ),
+    )
+
+    class Services:
+        async def document_lookup(self, _thread_id):
+            return {"file-1": {"file_name": "one.pdf"}, "file-2": {"file_name": "two.pdf"}}
+
+    raw = await read_context(
+        ReadContextRequest(source_id="src-hit"),
+        _context(),
+        services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="read_context")
+    cursor = _context_cursor_payload(payload["artifacts"]["continuation"]) if payload["artifacts"].get("continuation") else {}
+
+    assert payload["ok"] is True
+    assert payload["content"] == "selected evidence"
+    assert all(source["manifest_id"] == "manifest-file-1" for source in payload["artifacts"]["document_sources"])
+    if cursor:
+        assert cursor["source_version"] == "version-selected"
+        assert cursor["manifest_id"] == "manifest-file-1"
 
 
 @pytest.mark.asyncio
