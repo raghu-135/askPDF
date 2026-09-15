@@ -96,6 +96,7 @@ import {
     liveTraceStatusFromEvent,
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
+import { isValidTraceId } from '../lib/trace-tabs';
 import {
     ConversationComposer,
     ConversationHeader,
@@ -656,6 +657,8 @@ export type ChatTraceDescriptor = {
     loading?: boolean;
     error?: string;
     running?: boolean;
+    activate?: boolean;
+    onRunDetailsChange?: (run: AgentRunDetails) => void;
 };
 
 const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -741,6 +744,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [openAgentRunIds, setOpenAgentRunIds] = useState<Set<string>>(new Set());
     const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const workspaceTraceMessageIdRef = useRef<string | null>(null);
+    const liveTraceActivatedRunRef = useRef<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
     const [liveCapabilityRevision, setLiveCapabilityRevision] = useState(0);
     const { capabilities: liveRunCapabilities, refresh: refreshLiveRunCapabilities } = useAgentRunCapabilities(
@@ -750,6 +754,29 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     );
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
+    const handleAgentRunDetailsChange = useCallback((run: AgentRunDetails) => {
+        setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
+    }, []);
+    const publishLiveTrace = useCallback((
+        snapshot: { runId: string; events: AgentExecutionStreamEnvelope[]; running: boolean; status: string },
+        extras: Omit<ChatTraceDescriptor, 'id' | 'running' | 'status'>,
+    ) => {
+        if (!onOpenTrace || !isValidTraceId(snapshot.runId)) return;
+        const requested = extras.messageId === workspaceTraceMessageIdRef.current;
+        const activate = extras.activate === true
+            || (requested && liveTraceActivatedRunRef.current !== snapshot.runId);
+        if (activate) liveTraceActivatedRunRef.current = snapshot.runId;
+        onOpenTrace({
+            ...extras,
+            id: snapshot.runId,
+            threadId: extras.threadId || activeThread?.id,
+            status: snapshot.status,
+            liveTraceView: extras.liveTraceView || buildLiveTraceView(snapshot.events),
+            running: snapshot.running,
+            onRunDetailsChange: extras.onRunDetailsChange || handleAgentRunDetailsChange,
+            activate,
+        });
+    }, [activeThread?.id, handleAgentRunDetailsChange, onOpenTrace]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
@@ -1508,15 +1535,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     running: snapshot.running,
                     error: terminalError,
                 });
-                onOpenTrace?.({
-                    id: snapshot.runId,
-                    messageId: assistantId,
-                    label: `Test · ${fingerprint}`,
-                    status: snapshot.status,
-                    liveTraceView: buildLiveTraceView(snapshot.events),
-                    running: snapshot.running,
-                    error: terminalError,
-                });
+                if (event.event !== 'heartbeat') {
+                    publishLiveTrace(snapshot, {
+                        messageId: assistantId,
+                        label: `Test · ${fingerprint}`,
+                        error: terminalError,
+                    });
+                }
             });
             const runDetails = await getLatestAgentWorkflowBuilderTest(
                 builderRuntime.sessionIdRef.current,
@@ -1542,12 +1567,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
                 onOpenTrace?.({
                     id: runDetails.id,
+                    threadId: activeThread?.id,
                     messageId: assistantId,
                     label: `Test · ${fingerprint}`,
                     status: runDetails.status,
                     runDetails,
                     liveTraceView: buildRunTraceView(runDetails),
                     running: false,
+                    onRunDetailsChange: handleAgentRunDetailsChange,
                 });
             }
         } catch (error: any) {
@@ -1597,14 +1624,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         appendLiveExecutionEvent(event as AgentExecutionStreamEnvelope);
                     }
                     const snapshot = traceStream.append(event as AgentExecutionStreamEnvelope);
-                    onOpenTrace?.({
-                        id: pendingHumanReview.runId,
-                        messageId: pendingHumanReview.localAssistantMessageId,
-                        label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
-                        status: snapshot.status,
-                        liveTraceView: buildLiveTraceView(snapshot.events),
-                        running: snapshot.running,
-                    });
+                    if (event.event !== 'heartbeat') {
+                        publishLiveTrace(snapshot, {
+                            messageId: pendingHumanReview.localAssistantMessageId,
+                            label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
+                        });
+                    }
                 });
                 const refreshed = await getLatestAgentWorkflowBuilderTest(
                     builderRuntime.sessionIdRef.current,
@@ -1624,12 +1649,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setAgentRunDetails((current) => ({ ...current, [refreshed.id]: refreshed }));
                     onOpenTrace?.({
                         id: refreshed.id,
+                        threadId: activeThread?.id,
                         messageId: pendingHumanReview.localAssistantMessageId,
                         label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
                         status: refreshed.status,
                         runDetails: refreshed,
                         liveTraceView: buildRunTraceView(refreshed),
                         running: false,
+                        onRunDetailsChange: handleAgentRunDetailsChange,
                     });
                 }
                 if (refreshed?.pending_interrupt) {
@@ -1837,17 +1864,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             return next;
                         });
                     }
-                    if (workspaceTraceMessageIdRef.current === tempAssistantMsg.id && event.event !== 'heartbeat') {
-                        const latestSnapshot = traceStream.snapshot(event.event, terminalStreamError, response?.status);
-                        onOpenTrace?.({
-                            id: latestSnapshot.runId,
+                    if (event.event !== 'heartbeat') {
+                        publishLiveTrace(snapshot, {
                             messageId: tempAssistantMsg.id,
                             label: response?.agent_workflow_id || agentWorkflowId || 'agent',
-                            status: latestSnapshot.status,
                             routeReason: response?.agent_route_reason,
                             traceRefs: response?.agent_trace_refs,
-                            liveTraceView: buildLiveTraceView(latestSnapshot.events),
-                            running: latestSnapshot.running,
                             error: terminalStreamError,
                         });
                     }
@@ -1865,6 +1887,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
                     onOpenTrace?.({
                         id: run.id,
+                        threadId: activeThread.id,
                         messageId,
                         label,
                         status: run.status,
@@ -1876,6 +1899,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             buildRunTraceView(run),
                         ),
                         running: false,
+                        activate: true,
+                        onRunDetailsChange: handleAgentRunDetailsChange,
                     });
                 } catch (error: any) {
                     const message = error?.message || 'Unable to load agent run.';
@@ -1885,6 +1910,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }));
                     onOpenTrace?.({
                         id: response.agent_run_id,
+                        threadId: activeThread.id,
                         messageId,
                         label,
                         status: liveTraceStatusFromEvent('run.completed', terminalStreamError, response.status),
@@ -1893,6 +1919,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         liveTraceView: buildLiveTraceView(traceStream.snapshot('run.completed', terminalStreamError, response.status).events),
                         running: false,
                         error: message,
+                        activate: true,
+                        onRunDetailsChange: handleAgentRunDetailsChange,
                     });
                 }
             };
@@ -1913,16 +1941,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 setComposerText(textToSend);
                 requestAnimationFrame(() => composerInputRef.current?.focus());
                 if (traceWasOpenForTempMessage) {
-                    onOpenTrace?.({
-                        id: response.agent_run_id || traceStream.snapshot('run.cancelled').runId,
-                        messageId: tempAssistantMsg.id,
-                        label: response.agent_workflow_id || agentWorkflowId || 'agent',
-                        status: 'cancelled',
-                        routeReason: response.agent_route_reason,
-                        traceRefs: response.agent_trace_refs,
-                        liveTraceView: buildLiveTraceView(traceStream.snapshot('run.cancelled').events),
-                        running: false,
-                    });
+                    const cancelledRunId = response.agent_run_id || traceStream.snapshot('run.cancelled').runId;
+                    if (isValidTraceId(cancelledRunId)) {
+                        onOpenTrace?.({
+                            id: cancelledRunId,
+                            threadId: activeThread.id,
+                            messageId: tempAssistantMsg.id,
+                            label: response.agent_workflow_id || agentWorkflowId || 'agent',
+                            status: 'cancelled',
+                            routeReason: response.agent_route_reason,
+                            traceRefs: response.agent_trace_refs,
+                            liveTraceView: buildLiveTraceView(traceStream.snapshot('run.cancelled').events),
+                            running: false,
+                            activate: true,
+                            onRunDetailsChange: handleAgentRunDetailsChange,
+                        });
+                    }
                 }
                 return;
             }
@@ -1982,6 +2016,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         workspaceTraceMessageIdRef.current = localAssistantMessageId;
                         onOpenTrace?.({
                             id: run.id,
+                            threadId: activeThread.id,
                             messageId: localAssistantMessageId,
                             label: `${response.agent_workflow_id || agentWorkflowId || 'agent'}${(response.agent_route || response.route) ? ` · ${response.agent_route || response.route}` : ''}`,
                             status: run.status,
@@ -1993,6 +2028,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                 buildRunTraceView(run),
                             ),
                             running: false,
+                            activate: true,
+                            onRunDetailsChange: handleAgentRunDetailsChange,
                         });
                     }
                 } catch (error: any) {
@@ -2005,6 +2042,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         workspaceTraceMessageIdRef.current = localAssistantMessageId;
                         onOpenTrace?.({
                             id: response.agent_run_id,
+                            threadId: activeThread.id,
                             messageId: localAssistantMessageId,
                             label: `${response.agent_workflow_id || agentWorkflowId || 'agent'}${(response.agent_route || response.route) ? ` · ${response.agent_route || response.route}` : ''}`,
                             status: 'review',
@@ -2013,6 +2051,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             liveTraceView: buildLiveTraceView(traceStream.snapshot('interrupt.requested').events),
                             running: false,
                             error: error?.message || 'Unable to load agent run.',
+                            activate: true,
+                            onRunDetailsChange: handleAgentRunDetailsChange,
                         });
                     }
                 }
@@ -2339,11 +2379,35 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
+    const formatAgentWorkflowLabel = useCallback((msg: ChatMessage) => {
+        return msg.agent_workflow_id || 'agent';
+    }, []);
+
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
-        const runId = msg.agent_run_id;
+        const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+        const runId = msg.agent_run_id || liveForMessage?.runId;
         setWorkspaceTraceMessageId(msg.id);
         workspaceTraceMessageIdRef.current = msg.id;
-        if (!runId || !activeThread || agentRunDetails[runId] || agentRunLoading[runId]) return;
+        if (!runId || !isValidTraceId(runId) || !activeThread) return;
+
+        liveTraceActivatedRunRef.current = runId;
+        onOpenTrace?.({
+            id: runId,
+            threadId: activeThread.id,
+            messageId: msg.id,
+            label: `${msg.agent_workflow_id || 'agent'}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
+            status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
+            routeReason: msg.agent_route_reason,
+            traceRefs: msg.agent_trace_refs,
+            runDetails: agentRunDetails[runId],
+            liveTraceView: liveForMessage ? liveTraceView : undefined,
+            loading: Boolean(agentRunLoading[runId]),
+            error: liveForMessage?.error || agentRunErrors[runId],
+            running: Boolean(liveForMessage?.running),
+            activate: true,
+            onRunDetailsChange: handleAgentRunDetailsChange,
+        });
+        if (agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
         setAgentRunErrors(prev => {
@@ -2362,7 +2426,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setAgentRunLoading(prev => ({ ...prev, [runId]: false }));
         }
-    }, [activeThread, agentRunDetails, agentRunLoading]);
+    }, [
+        activeThread,
+        agentRunDetails,
+        agentRunErrors,
+        agentRunLoading,
+        handleAgentRunDetailsChange,
+        liveExecution,
+        liveTraceView,
+        onOpenTrace,
+    ]);
 
     useEffect(() => {
         if (!workspaceTraceMessageId || !onOpenTrace) return;
@@ -2376,10 +2449,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         workspaceTraceMessageIdRef.current = workspaceTraceMessageId;
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
-        const runId = msg.agent_run_id || liveForMessage?.runId || msg.id;
+        const runId = msg.agent_run_id || liveForMessage?.runId;
+        if (!runId || !isValidTraceId(runId)) return;
         onOpenTrace({
             id: runId,
-            threadId: activeThread.id,
+            threadId: activeThread?.id,
             messageId: msg.id,
             label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
             status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
@@ -2390,25 +2464,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             loading: Boolean(agentRunLoading[runId]),
             error: liveForMessage?.error || agentRunErrors[runId],
             running: Boolean(liveForMessage?.running),
+            activate: false,
+            onRunDetailsChange: handleAgentRunDetailsChange,
         });
     }, [
+        activeThread?.id,
         agentRunDetails,
         agentRunErrors,
         agentRunLoading,
+        formatAgentWorkflowLabel,
+        handleAgentRunDetailsChange,
         liveExecution,
         liveTraceView,
         messages,
         onOpenTrace,
         workspaceTraceMessageId,
     ]);
-
-    const handleAgentRunDetailsChange = useCallback((run: AgentRunDetails) => {
-        setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
-    }, []);
-
-    const formatAgentWorkflowLabel = useCallback((msg: ChatMessage) => {
-        return msg.agent_workflow_id || 'agent';
-    }, []);
 
     if (!activeThread) {
         return (

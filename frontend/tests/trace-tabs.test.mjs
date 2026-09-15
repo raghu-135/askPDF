@@ -6,6 +6,9 @@ import { closeTraceTab, isValidTraceId, upsertTraceTab } from '../src/lib/trace-
 test('invalid trace IDs cannot create or activate a trace tab', () => {
   assert.equal(isValidTraceId(undefined), false);
   assert.equal(isValidTraceId(''), false);
+  assert.equal(isValidTraceId('temp-assistant-1'), false);
+  assert.equal(isValidTraceId('test-assistant-1'), false);
+  assert.equal(isValidTraceId('run-1'), true);
   assert.deepEqual(upsertTraceTab([{ id: 'run-1' }], { id: undefined }), [{ id: 'run-1' }]);
 });
 

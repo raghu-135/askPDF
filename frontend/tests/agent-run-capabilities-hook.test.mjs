@@ -13,7 +13,8 @@ const networkModule = 'data:text/javascript,' + encodeURIComponent('export const
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
   .replace("from 'react'", `from '${import.meta.resolve('react')}'`)
   .replace("from './api'", `from '${networkModule}'`)
-  .replace("from './runtime-capabilities'", `from '${new URL('../src/lib/runtime-capabilities.ts', import.meta.url)}'`);
+  .replace("from './runtime-capabilities'", `from '${new URL('../src/lib/runtime-capabilities.ts', import.meta.url)}'`)
+  .replace("from './trace-tabs'", `from '${new URL('../src/lib/trace-tabs.ts', import.meta.url)}'`);
 const { useAgentRunCapabilities } = await import('data:text/javascript,' + encodeURIComponent(compiled));
 
 test('actual hook hides obsolete controls and handles failures, malformed data, and recovery', async () => {

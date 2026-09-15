@@ -7,6 +7,7 @@ export default function useTraceTabs() {
   const [traceTabs, setTraceTabs] = useState<TraceRunTab[]>([]);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const pendingTraceUpdatesRef = useRef(new Map<string, ChatTraceDescriptor>());
+  const knownTabIdsRef = useRef(new Set<string>());
   const flushTimerRef = useRef<number | null>(null);
 
   const flushPendingTraceUpdates = useCallback(() => {
@@ -14,6 +15,7 @@ export default function useTraceTabs() {
     const pending = Array.from(pendingTraceUpdatesRef.current.values());
     pendingTraceUpdatesRef.current.clear();
     if (pending.length === 0) return;
+    pending.forEach((trace) => knownTabIdsRef.current.add(trace.id));
     setTraceTabs((current) => pending.reduce((tabs, trace) => upsertTraceTab(tabs, trace), current));
   }, []);
 
@@ -26,18 +28,25 @@ export default function useTraceTabs() {
     // A live chat can emit trace metadata before the runtime assigns its run ID.
     // Do not activate a tab that cannot be addressed by the debug panel/API.
     if (!isValidTraceId(trace?.id)) return;
-    setActiveTraceId(trace.id);
-    if (trace.running) {
-      pendingTraceUpdatesRef.current.set(trace.id, trace);
-      scheduleTraceFlush();
+    if (trace.activate !== false) setActiveTraceId(trace.id);
+    if (!trace.running) {
+      pendingTraceUpdatesRef.current.delete(trace.id);
+      knownTabIdsRef.current.add(trace.id);
+      setTraceTabs((current) => upsertTraceTab(current, trace));
       return;
     }
-    pendingTraceUpdatesRef.current.delete(trace.id);
-    setTraceTabs((current) => upsertTraceTab(current, trace));
-  }, [scheduleTraceFlush]);
+    const isFirstSnapshot = !knownTabIdsRef.current.has(trace.id);
+    pendingTraceUpdatesRef.current.set(trace.id, trace);
+    if (isFirstSnapshot) {
+      flushPendingTraceUpdates();
+      return;
+    }
+    scheduleTraceFlush();
+  }, [flushPendingTraceUpdates, scheduleTraceFlush]);
 
   const closeTrace = useCallback((runId: string) => {
     pendingTraceUpdatesRef.current.delete(runId);
+    knownTabIdsRef.current.delete(runId);
     setTraceTabs((current) => {
       const result = closeTraceTab(current, activeTraceId, runId);
       setActiveTraceId(result.activeId);
@@ -47,6 +56,7 @@ export default function useTraceTabs() {
 
   const clearTraces = useCallback(() => {
     pendingTraceUpdatesRef.current.clear();
+    knownTabIdsRef.current.clear();
     if (flushTimerRef.current !== null) {
       window.clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;

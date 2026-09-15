@@ -13,6 +13,7 @@ import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
 import { useAgentRunCapabilities } from '../../lib/use-agent-run-capabilities';
+import { isValidTraceId } from '../../lib/trace-tabs';
 
 function AgentRunDebugPanel({
   runId,
@@ -41,9 +42,7 @@ function AgentRunDebugPanel({
   running?: boolean;
   onResumeAction?: (action: AgentRunResumeAction, selectedOptionIds?: string[]) => Promise<boolean>;
 }) {
-  const normalizedRunId = typeof runId === 'string' && !runId.startsWith('temp-assistant-')
-    ? runId.trim()
-    : '';
+  const normalizedRunId = isValidTraceId(runId) ? runId.trim() : '';
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -508,7 +507,7 @@ function AgentRunDebugPanel({
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Correlation ID: {liveTraceView?.parseCorrelationId || `trace:${normalizedRunId || 'pending'}`}</Typography>
         </Box>
       )}
-      {executionTraceView && !liveParseError && (
+      {executionTraceView && (!liveParseError || executionTraceView.events.length > 0 || executionTraceView.operations.length > 0) && (
         <>
       <AgentExecutionView
             runId={normalizedRunId}

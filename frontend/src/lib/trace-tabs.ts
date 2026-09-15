@@ -1,7 +1,12 @@
 export type IdentifiedTraceTab = { id: string; liveTraceView?: unknown };
 
+export const isPlaceholderTraceId = (value: unknown): boolean => (
+  typeof value === 'string'
+  && (value.startsWith('temp-assistant-') || value.startsWith('test-assistant-'))
+);
+
 export const isValidTraceId = (value: unknown): value is string => (
-  typeof value === 'string' && value.trim().length > 0
+  typeof value === 'string' && value.trim().length > 0 && !isPlaceholderTraceId(value)
 );
 
 export const mergeTraceTab = <T extends IdentifiedTraceTab>(tab: T | undefined, nextTab: T): T => {

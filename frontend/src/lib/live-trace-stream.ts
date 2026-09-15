@@ -1,4 +1,5 @@
 import type { AgentExecutionStreamEnvelope } from './agent-execution-stream';
+import { isValidTraceId } from './trace-tabs';
 
 export const LIVE_TRACE_TERMINAL_EVENTS = new Set([
   'run.completed',
@@ -35,11 +36,11 @@ export class LiveTraceStreamController {
   private events: AgentExecutionStreamEnvelope[] = [];
 
   constructor(initialRunId: string) {
-    this.runId = initialRunId;
+    this.runId = isValidTraceId(initialRunId) ? initialRunId : '';
   }
 
   append(event: AgentExecutionStreamEnvelope, terminalError?: string, fallbackStatus?: string): LiveTraceStreamSnapshot {
-    if (event.data?.run_id) this.runId = String(event.data.run_id);
+    if (event.data?.run_id && isValidTraceId(String(event.data.run_id))) this.runId = String(event.data.run_id);
     if (event.event !== 'heartbeat') this.events.push(event);
     return this.snapshot(event.event, terminalError, fallbackStatus);
   }
