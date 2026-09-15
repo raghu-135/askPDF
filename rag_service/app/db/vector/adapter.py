@@ -472,6 +472,10 @@ class WeaviateAdapter:
             }
             url = md.get("url") or md.get("original_url") or ""
             title = md.get("title") or ""
+            # Embeddings are computed from contextualized_text (`text` argument).
+            # BM25/hybrid search must use the body so a repeated "Document:" prefix
+            # cannot match every chunk.
+            search_text = str(md.get("body_text") or "").strip() or text
             properties = {
                 "thread_id": thread_id,
                 "type": "knowledge_source",
@@ -486,7 +490,7 @@ class WeaviateAdapter:
                 "tags": [str(tag) for tag in (md.get("tags") or [])],
                 "section_id": md.get("section_id") or "",
                 "table_id": md.get("table_id") or "",
-                "text": text,
+                "text": search_text,
                 "url": url,
                 "title": title,
                 "pages": md.get("pages") or "",

@@ -32,7 +32,7 @@ def test_pack_fills_embedding_budget_and_preserves_context_and_ids():
         {"id": 5, "text": "五 unicode", "section_id": "s2", "heading_path": ["Other"], "source_element_ids": ["e5"], "pages": [4]},
     ]
     chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=16)
-    assert chunks[0]["sentence_ids"] == ["1", "2", "3"]
+    assert chunks[0]["sentence_ids"] == ["1", "2", "3", "4"]
     assert chunks[-1]["section_id"] == "s2"
     assert all(chunk["token_count"] <= 16 for chunk in chunks)
     assert "Child" in chunks[0]["contextualized_text"]
@@ -92,6 +92,51 @@ def test_stable_canonical_projection_shape_is_json_compatible():
     assert payload["schema_version"] == CANONICAL_SCHEMA_VERSION
     assert payload["elements"][0]["element_id"]
     assert payload["source_metadata"]["original_url"].startswith("https://")
+
+
+def test_nested_word_children_collapse_to_one_block_element():
+    class FakeDocument:
+        def export_to_dict(self):
+            return {
+                "groups": [{
+                    "self_ref": "#/groups/0",
+                    "label": "list_item",
+                    "children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}, {"$ref": "#/texts/2"}],
+                }],
+                "texts": [
+                    {"self_ref": "#/texts/0", "label": "text", "text": "Senior", "parent": {"$ref": "#/groups/0"}, "prov": []},
+                    {"self_ref": "#/texts/1", "label": "text", "text": "Software", "parent": {"$ref": "#/groups/0"}, "prov": []},
+                    {"self_ref": "#/texts/2", "label": "text", "text": "Engineer", "parent": {"$ref": "#/groups/0"}, "prov": []},
+                ],
+                "body": {"children": [{"$ref": "#/groups/0"}]},
+            }
+
+    payload = build_canonical_payload(FakeDocument(), filename="resume.pdf", document_identity="resume")
+    assert len(payload["elements"]) == 1
+    assert payload["elements"][0]["text"] == "Senior Software Engineer"
+    assert payload["elements"][0]["element_type"] == "list_item"
+
+
+def test_text_with_word_children_keeps_parent_block_and_drops_children():
+    class FakeDocument:
+        def export_to_dict(self):
+            return {
+                "texts": [
+                    {
+                        "self_ref": "#/texts/0",
+                        "label": "text",
+                        "text": "Masters 2015 The University of Texas",
+                        "children": [{"$ref": "#/texts/1"}, {"$ref": "#/texts/2"}],
+                        "prov": [],
+                    },
+                    {"self_ref": "#/texts/1", "label": "text", "text": "Masters", "parent": {"$ref": "#/texts/0"}, "prov": []},
+                    {"self_ref": "#/texts/2", "label": "text", "text": "2015", "parent": {"$ref": "#/texts/0"}, "prov": []},
+                ],
+                "body": {"children": [{"$ref": "#/texts/0"}]},
+            }
+
+    payload = build_canonical_payload(FakeDocument(), filename="resume.pdf")
+    assert [item["text"] for item in payload["elements"]] == ["Masters 2015 The University of Texas"]
 
 
 def _native_table_document():
@@ -272,7 +317,7 @@ def test_paragraph_boundaries_and_chunk_tags_are_preserved():
     assert chunks[1]["tags"] == ["table"]
 
 
-def test_shared_generic_parent_does_not_merge_paragraphs():
+def test_adjacent_section_text_is_packed_until_the_embedding_budget():
     from app.services.document_pipeline import project_sentences
 
     payload = {"elements": [
@@ -281,7 +326,8 @@ def test_shared_generic_parent_does_not_merge_paragraphs():
     ]}
     sentences = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
     chunks = pack_retrieval_chunks(sentences, token_counter=_counter(), embedding_token_limit=32)
-    assert [chunk["sentence_ids"] for chunk in chunks] == [["0"], ["1"]]
+    assert [chunk["sentence_ids"] for chunk in chunks] == [["0", "1"]]
+    assert chunks[0]["body_text"] == "First. Second."
 
 
 def test_source_ids_are_schema_safe_and_model_independent():

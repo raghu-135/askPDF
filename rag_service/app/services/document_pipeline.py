@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v3"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v4"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "sentence-pack-v4"
+RETRIEVAL_CHUNKING_VERSION = "section-pack-v5"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -28,9 +28,21 @@ READING_EXCLUDED_LABELS = frozenset({
     "footnote",
     "caption",
 })
-# Keep retrieval units small and structurally local.  The tokenizer remains the
-# hard bound, but a chunk must never span more than three consecutive sentences.
-CHUNK_MAX_SENTENCES = 3
+# Optional safety cap for callers that still want a sentence ceiling.
+# Default packing fills the embedding token budget inside a section.
+CHUNK_MAX_SENTENCES = 64
+CONTAINER_LABELS = frozenset({
+    "group",
+    "list",
+    "ordered_list",
+    "unordered_list",
+    "section",
+    "key_value_area",
+    "form_area",
+    "document_index",
+    "unspecified",
+})
+SKIPPED_LABELS = frozenset({"picture"})
 STRUCTURAL_CONTEXT_TOKEN_LIMIT = 96
 DEFAULT_EMBEDDING_TOKEN_LIMIT = 512
 
@@ -236,8 +248,71 @@ def _table_structure_for_raw_item(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _exported_child_refs(item: Mapping[str, Any], collections: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    refs: list[str] = []
+    for child in item.get("children") or []:
+        ref = _ref_value(child)
+        if ref and ref in collections:
+            refs.append(ref)
+    return refs
+
+
+def _is_container_ref(ref: str, item: Mapping[str, Any]) -> bool:
+    label = str(item.get("label") or "").strip().casefold()
+    return ref.startswith("#/groups/") or label in CONTAINER_LABELS
+
+
+def _mark_descendants_seen(
+    ref: str,
+    collections: Mapping[str, Mapping[str, Any]],
+    seen: set[str],
+) -> None:
+    stack = [ref]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        item = collections.get(current)
+        if item is None:
+            continue
+        stack.extend(_exported_child_refs(item, collections))
+
+
+def _collapsed_container_item(
+    parent: Mapping[str, Any],
+    child_refs: Sequence[str],
+    collections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Join sibling word/line texts into one block when a container has no own text."""
+    parts: list[str] = []
+    pages: list[int] = []
+    for ref in child_refs:
+        child = collections[ref]
+        if ref.startswith("#/tables/") or str(child.get("label") or "").casefold() in {"table", "picture"}:
+            return None
+        if _exported_child_refs(child, collections) and _is_container_ref(ref, child):
+            return None
+        text = _text_for_raw_item(child)
+        if text:
+            parts.append(text)
+        pages.extend(_pages_from_provenance(child.get("prov")))
+    if not parts:
+        return None
+    collapsed = dict(parent)
+    joined = " ".join(parts)
+    collapsed["text"] = joined
+    collapsed["orig"] = joined
+    label = str(collapsed.get("label") or "").strip().casefold()
+    if label in CONTAINER_LABELS or not label:
+        collapsed["label"] = "text"
+    if pages and not collapsed.get("prov"):
+        collapsed["prov"] = [{"page_no": page} for page in sorted(set(pages))]
+    return collapsed
+
+
 def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
-    """Yield body-order item refs, followed by any orphaned exported items."""
+    """Yield block-level body items, skipping word/line children and empty groups."""
     seen: set[str] = set()
     collections = {
         f"#/{name}/{index}": item
@@ -246,27 +321,70 @@ def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str,
         if isinstance(item, Mapping)
     }
 
-    def walk(node: Any) -> Iterable[str]:
+    def consider(ref: str) -> Iterable[tuple[str, Mapping[str, Any]]]:
+        if ref in seen or ref not in collections:
+            return
+        item = collections[ref]
+        label = str(item.get("label") or "").strip().casefold()
+        child_refs = _exported_child_refs(item, collections)
+        if label in SKIPPED_LABELS or ref.startswith("#/pictures/"):
+            _mark_descendants_seen(ref, collections, seen)
+            return
+        if ref.startswith("#/tables/") or label == "table":
+            seen.add(ref)
+            for child in child_refs:
+                _mark_descendants_seen(child, collections, seen)
+            yield ref, item
+            return
+        if ref.startswith("#/formulas/") or label == "formula":
+            seen.add(ref)
+            for child in child_refs:
+                _mark_descendants_seen(child, collections, seen)
+            yield ref, item
+            return
+        text = _text_for_raw_item(item)
+        nested_structure = [
+            child
+            for child in child_refs
+            if child.startswith("#/tables/")
+            or child.startswith("#/groups/")
+            or _is_container_ref(child, collections[child])
+        ]
+        if child_refs and (not text or _is_container_ref(ref, item)):
+            if not nested_structure:
+                collapsed = _collapsed_container_item(item, child_refs, collections)
+                if collapsed is not None:
+                    seen.add(ref)
+                    for child in child_refs:
+                        _mark_descendants_seen(child, collections, seen)
+                    yield ref, collapsed
+                    return
+            seen.add(ref)
+            for child in child_refs:
+                yield from consider(child)
+            return
+        if text or label in {"section_header", "title", "chapter_header", "list_item", "caption", "footnote", "text", "code", "checkbox", "paragraph"}:
+            seen.add(ref)
+            for child in child_refs:
+                _mark_descendants_seen(child, collections, seen)
+            yield ref, item
+            return
+        seen.add(ref)
+        for child in child_refs:
+            yield from consider(child)
+
+    def walk(node: Any) -> Iterable[tuple[str, Mapping[str, Any]]]:
         if isinstance(node, Mapping) and "$ref" in node:
-            ref = str(node["$ref"])
-            if ref not in seen and ref in collections:
-                seen.add(ref)
-                yield ref
-                item = collections[ref]
-                for child in item.get("children") or []:
-                    yield from walk(child)
+            yield from consider(str(node["$ref"]))
             return
         if isinstance(node, Mapping):
             for child in node.get("children") or []:
                 yield from walk(child)
 
-    for ref in walk(docling_json.get("body") or {}):
-        item = collections.get(ref)
-        if item is not None:
-            yield ref, item
+    yield from walk(docling_json.get("body") or {})
     for ref, item in collections.items():
         if ref not in seen:
-            yield ref, item
+            yield from consider(ref)
 
 
 def build_canonical_payload(
@@ -574,15 +692,15 @@ def pack_retrieval_chunks(
     *,
     token_counter: TokenCounter | None = None,
     embedding_token_limit: int = DEFAULT_EMBEDDING_TOKEN_LIMIT,
-    max_sentences: int = CHUNK_MAX_SENTENCES,
+    max_sentences: int | None = None,
     document_identity: str | None = None,
     document_title: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Pack adjacent sentences without crossing structural boundaries.
+    """Pack adjacent sentences inside a section until the embedding budget.
 
-    A sentence is the atomic provenance unit.  A sentence that exceeds the
-    embedding budget is split independently; it is never combined with other
-    sentences before splitting.
+    A sentence is the atomic provenance unit.  Packing does not cross section
+    or table boundaries.  A sentence that exceeds the embedding budget is split
+    independently; it is never combined with other sentences before splitting.
     """
     if token_counter is None:
         raise ValueError("an exact embedding token counter is required")
@@ -793,13 +911,12 @@ def pack_retrieval_chunks(
 
     previous_section: Any = object()
     previous_table: Any = object()
-    previous_paragraph: Any = object()
     for sentence in sentences:
         section = sentence.get("section_id")
         table = sentence.get("table_id")
-        paragraph = sentence.get("paragraph_id")
-        structural_change = section != previous_section or table != previous_table or paragraph != previous_paragraph
-        if group and (structural_change or len(group) >= max_sentences):
+        structural_change = section != previous_section or table != previous_table
+        sentence_ceiling = max_sentences is not None and len(group) >= max_sentences
+        if group and (structural_change or sentence_ceiling):
             flush()
         if group:
             prefix = _context_prefix(document_title, group[0].get("heading_path") or [], counter) + "\n"
@@ -811,12 +928,11 @@ def pack_retrieval_chunks(
         ) > embedding_token_limit:
             group.append(sentence)
             flush()
-            previous_section, previous_table, previous_paragraph = section, table, paragraph
+            previous_section, previous_table = section, table
             continue
         group.append(sentence)
         previous_section = section
         previous_table = table
-        previous_paragraph = paragraph
     flush()
     return chunks
 

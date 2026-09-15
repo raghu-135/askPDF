@@ -102,6 +102,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
                 "extraction_fingerprint": "extraction-1",
                 "chunking_fingerprint": "chunking-1",
                 "source_element_ids": [],
+                "body_text": "benefits body",
                 "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                 "document_indexed_at": "2026-06-25T19:01:00Z",
                 "page_start": 3,
@@ -122,6 +123,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
     assert props["page_start"] == 3
     assert props["page_end"] == 4
     assert props["pages"] == "3-4"
+    assert props["text"] == "benefits body"
     assert "document_available_in_thread_at" not in props["metadata_json"]
     assert "document_indexed_at" not in props["metadata_json"]
     assert "timeline_event_at" not in props["metadata_json"]
