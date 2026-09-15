@@ -29,6 +29,9 @@ variable to the example file before documenting it here.
 ## Model configuration
 
 - LOCAL_EMBEDDING_MODEL selects the local embedding model.
+- Popular OpenRouter embedding models are registered in rag_service with matching
+  Hugging Face tokenizers. Create Project lists those ids when LLM_API_URL is
+  OpenRouter. EMBEDDING_TOKENIZER_CONFIG_JSON overrides or adds models.
 - LOCAL_RERANKER_MODEL selects the optional local cross-encoder.
 - EMBEDDING_DEVICE and RERANKER_DEVICE select CPU, CUDA, or MPS where supported.
 - LLM_API_URL points to Docker Model Runner, Ollama, LM Studio, OpenRouter, or

@@ -59,6 +59,11 @@ requires a compatible embedding model and may use a local reranker.
     LLM_KEYLESS_PROVIDER=
     OPENAI_API_KEY=sk-or-replace-with-your-key
 
+The control plane lists OpenRouter embedding models that have a registered
+tokenizer (Qwen3, GTE, E5, BGE, MiniLM, LFM, and Nomic aliases). Models without
+a Hugging Face tokenizer, such as OpenAI text-embedding-3-*, stay hidden until
+you add them via EMBEDDING_TOKENIZER_CONFIG_JSON and cache that tokenizer.
+
 ## Start askPDF
 
     docker compose up --build
