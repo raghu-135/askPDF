@@ -790,7 +790,10 @@ class NodeRegistry:
                 "router_output_invalid",
                 "The router returned an unavailable route",
                 retryable=True,
-                details={"requested_route": requested_route, "allowed_routes": sorted(allowed_routes)},
+                details={
+                    "requested_route": requested_route if requested_route is not None else "",
+                    "allowed_routes": sorted(allowed_routes),
+                },
             )
         route = requested_route
         clarification_options = parsed.get("clarification_options")

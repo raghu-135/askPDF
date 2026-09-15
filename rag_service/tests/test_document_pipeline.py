@@ -461,12 +461,32 @@ def test_tokenizer_failure_never_uses_whitespace_fallback(monkeypatch):
             raise OSError("fixture tokenizer unavailable")
 
     monkeypatch.setenv("LOCAL_EMBEDDING_MODEL", "model-a")
-    monkeypatch.setenv("LOCAL_EMBEDDING_TOKENIZER", "fixture-tokenizer")
-    monkeypatch.setenv("LOCAL_EMBEDDING_INPUT_LIMIT", "32")
+    monkeypatch.setenv("EMBEDDING_TOKENIZER_CONFIG_JSON", "")
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=BrokenAutoTokenizer))
     resolve_embedding_tokenizer.cache_clear()
     with pytest.raises(EmbeddingTokenizerUnavailableError):
-        resolve_embedding_tokenizer("model-a")
+        resolve_embedding_tokenizer("external-embed")
+
+
+def test_local_embedding_tokenizer_uses_loaded_sentence_transformer(monkeypatch):
+    from types import SimpleNamespace
+    from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+
+    class FakeTokenizer:
+        def __call__(self, formatted, add_special_tokens=True, truncation=False):
+            return {"input_ids": list(formatted)}
+
+    monkeypatch.setenv("LOCAL_EMBEDDING_MODEL", "model-a")
+    monkeypatch.setenv("LOCAL_EMBEDDING_TOKENIZER", "model-a")
+    monkeypatch.setenv("LOCAL_EMBEDDING_INPUT_LIMIT", "32")
+    monkeypatch.setattr(
+        "app.models.llm_server_client.get_local_embedding_model",
+        lambda _name: SimpleNamespace(model=SimpleNamespace(tokenizer=FakeTokenizer())),
+    )
+    resolve_embedding_tokenizer.cache_clear()
+    config, counter = resolve_embedding_tokenizer("model-a")
+    assert config.identity == "model-a"
+    assert counter.count("ab") == 2
 
 
 def test_sentence_model_failure_never_switches_to_another_splitter(monkeypatch):

@@ -10,7 +10,49 @@ from typing import Any, AsyncIterator
 
 import httpx
 from langchain_openai import ChatOpenAI
+from openai import BaseModel as OpenAIBaseModel
 from runtime_protocol.configuration import LANGGRAPH_LIMIT_NAMES, parse_required_positive_int
+
+_REASONING_RESPONSE_FIELDS = (
+    "reasoning",
+    "reasoning_content",
+    "reasoning_details",
+    "reasoning_summary",
+    "reasoning_text",
+    "thinking",
+    "thoughts",
+)
+
+
+class ReasoningChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that preserves OpenAI-compatible reasoning extensions."""
+
+    def _create_chat_result(self, response, generation_info=None):
+        result = super()._create_chat_result(response, generation_info)
+        response_dict = (
+            response
+            if isinstance(response, dict)
+            else response.model_dump(
+                exclude={"choices": {"__all__": {"message": {"parsed"}}}}
+            )
+            if isinstance(response, OpenAIBaseModel)
+            else {}
+        )
+
+        choices = response_dict.get("choices", []) if isinstance(response_dict, dict) else []
+        for generation, choice in zip(result.generations, choices):
+            message_dict = choice.get("message", {}) if isinstance(choice, dict) else {}
+            if not isinstance(message_dict, dict):
+                continue
+            preserved = {
+                key: value
+                for key, value in message_dict.items()
+                if key in _REASONING_RESPONSE_FIELDS and value
+            }
+            if preserved:
+                generation.message.additional_kwargs.update(preserved)
+
+        return result
 
 
 @dataclass(frozen=True)
@@ -94,6 +136,16 @@ def provider_configuration(base_url_override: str | None = None) -> tuple[str, d
     raise RuntimeError("LLM_AUTH_MODE must be 'required' or 'none'")
 
 
+def openai_sdk_default_headers(headers: dict[str, str]) -> dict[str, str] | None:
+    """Headers for ChatOpenAI. Authorization is supplied by api_key.
+
+    Passing the same Bearer token in default_headers duplicates Authorization
+    and Cloudflare (OpenRouter) rejects the request with a generic 400 HTML page.
+    """
+    filtered = {key: value for key, value in headers.items() if key.lower() != "authorization"}
+    return filtered or None
+
+
 def get_llm(
     model_name: str,
     temperature: float = 0.0,
@@ -104,7 +156,7 @@ def get_llm(
     client = http_async_client or _execution_client.get()
     if client is None:
         raise RuntimeError("LangGraph model client is unavailable outside an execution scope")
-    return ChatOpenAI(
+    return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=base_url,
@@ -112,6 +164,6 @@ def get_llm(
         # OpenAI-compatible servers. This placeholder is not a credential;
         # keyless readiness probes still send no Authorization header.
         api_key=api_key or "not-needed",
-        default_headers=headers or None,
+        default_headers=openai_sdk_default_headers(headers),
         http_async_client=client,
     )

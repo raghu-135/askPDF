@@ -55,6 +55,16 @@ def llm_provider_auth() -> tuple[str, Dict[str, str]]:
         return api_key, {"Authorization": f"Bearer {api_key}"}
     return "sk-no-key-required", {}
 
+
+def openai_sdk_default_headers(headers: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """Headers for ChatOpenAI/OpenAIEmbeddings. Authorization is supplied by api_key.
+
+    Passing the same Bearer token in default_headers duplicates Authorization
+    and Cloudflare (OpenRouter) rejects the request with a generic 400 HTML page.
+    """
+    filtered = {key: value for key, value in headers.items() if key.lower() != "authorization"}
+    return filtered or None
+
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
     "reasoning_content",
@@ -368,7 +378,7 @@ def get_llm(
         temperature=temperature,
         base_url=_get_base_url(),
         api_key=api_key or "sk-no-key-required",
-        default_headers=headers or None,
+        default_headers=openai_sdk_default_headers(headers),
         http_async_client=async_client,
     )
 
@@ -385,7 +395,7 @@ def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
         model=model_name,
         base_url=_get_base_url(),
         api_key=api_key or "sk-no-key-required",
-        default_headers=headers or None,
+        default_headers=openai_sdk_default_headers(headers),
         check_embedding_ctx_length=False,
         http_async_client=(
             register_owned_client(httpx.AsyncClient())

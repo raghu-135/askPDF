@@ -22,6 +22,7 @@ test('chat composer state follows lock precedence', () => {
     [{ isLlmToolsSupported: false, isEmbeddingModelValid: null, indexingStatus: 'checking' }, 'llm_tools_unsupported', true, false],
     [{ isEmbeddingModelValid: null, indexingStatus: 'checking' }, 'embedding_checking', true, true],
     [{ isEmbeddingModelValid: false, indexingStatus: 'error' }, 'embedding_unavailable', true, false],
+    [{ indexingStatus: 'blocked' }, 'embedding_unavailable', true, false],
     [{ indexingStatus: 'error' }, 'index_error', true, false],
     [{ indexingStatus: 'indexing' }, 'indexing', true, true],
     [{ hasInput: true }, 'ready', false, false],

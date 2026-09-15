@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from langgraph_runtime.agent.reasoning import normalize_ai_response
 from langgraph_runtime.workflows.enums import NodeEventStatus
 
 
@@ -20,6 +21,20 @@ class JsonDecisionNodeSpec:
     system_message: str
     prompt: str
     failure_data: Dict[str, Any]
+
+
+def parse_json_decision(response: Any, safe_json_object: Callable[[str], Dict[str, Any]]) -> Dict[str, Any]:
+    """Parse a JSON object from visible answer text, then from preserved reasoning.
+
+    Reasoning models on OpenRouter often put thousands of tokens in
+    `reasoning_content` and leave a short non-JSON `content` field. Decision
+    nodes must read both, or the router treats a greeting as an unavailable route.
+    """
+    normalized = normalize_ai_response(response)
+    parsed = safe_json_object(str(normalized.get("answer") or ""))
+    if parsed:
+        return parsed
+    return safe_json_object(str(normalized.get("reasoning") or ""))
 
 
 def build_decision_node_event_data(
@@ -75,7 +90,7 @@ async def invoke_json_decision_node(
         model_name=state.get("llm_model"),
         failure_data={**spec.failure_data, "prompt_summary": prompt_details},
     )
-    parsed = safe_json_object(str(getattr(response, "content", "") or ""))
+    parsed = parse_json_decision(response, safe_json_object)
     return response, parsed, prompt_details, retry_attempts
 
 

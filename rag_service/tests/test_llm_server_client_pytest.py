@@ -12,6 +12,7 @@ from app.models.llm_server_client import (
     close_model_client,
     get_llm,
     llm_provider_auth,
+    openai_sdk_default_headers,
 )
 
 
@@ -29,6 +30,13 @@ def test_provider_auth_omits_authorization_for_keyless_local_providers(monkeypat
     api_key, headers = llm_provider_auth()
     assert api_key == "sk-no-key-required"
     assert headers == {}
+
+
+def test_openai_sdk_headers_drop_authorization_to_avoid_cloudflare_400():
+    assert openai_sdk_default_headers({"Authorization": "Bearer sk-or-test-key"}) is None
+    assert openai_sdk_default_headers({"authorization": "Bearer sk-or-test-key", "X-Title": "askPDF"}) == {
+        "X-Title": "askPDF"
+    }
 
 
 def test_chat_probe_accepts_openrouter_alias_resolution_and_empty_first_token():

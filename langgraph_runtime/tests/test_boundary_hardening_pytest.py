@@ -180,7 +180,7 @@ async def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(llm_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(llm_module, "ReasoningChatOpenAI", FakeChatOpenAI)
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
     monkeypatch.setenv("LLM_AUTH_MODE", "none")
     monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
@@ -190,6 +190,45 @@ async def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
         assert captured["api_key"] == "not-needed"
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_required_auth_chat_client_sends_authorization_once(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    import langgraph_runtime.models.llm as llm_module
+
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-or-test-key")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        llm = llm_module.get_llm("deepseek/deepseek-chat", http_async_client=client)
+        await llm.ainvoke([HumanMessage(content="hi there")])
+    finally:
+        await client.aclose()
+
+    authorization = [value for key, value in requests[0].headers.raw if key.decode().lower() == "authorization"]
+    assert authorization == [b"Bearer sk-or-test-key"]
 
 
 def test_model_creation_requires_execution_client(monkeypatch):
@@ -250,3 +289,35 @@ def test_outer_failure_result_contains_terminal_delta(monkeypatch):
     assert result.error == error
     assert result.orchestration_delta is not None
     assert result.orchestration_delta.result == {"status": "failed", "error": error}
+
+
+def test_json_decision_parser_reads_reasoning_when_content_is_not_json():
+    from types import SimpleNamespace
+
+    from langgraph_runtime.agent.tool_contract import _safe_json_object
+    from langgraph_runtime.workflows.decision_nodes import parse_json_decision
+
+    response = SimpleNamespace(
+        content="Hello there!\n",
+        additional_kwargs={
+            "reasoning_content": 'scratchpad\n{"route": "direct", "reason": "greeting", "tool_name": null, "query": null, "clarification_options": null}'
+        },
+        response_metadata={},
+    )
+    parsed = parse_json_decision(response, _safe_json_object)
+    assert parsed["route"] == "direct"
+
+
+def test_json_decision_parser_prefers_visible_json_content():
+    from types import SimpleNamespace
+
+    from langgraph_runtime.agent.tool_contract import _safe_json_object
+    from langgraph_runtime.workflows.decision_nodes import parse_json_decision
+
+    response = SimpleNamespace(
+        content='{"route": "clarify"}',
+        additional_kwargs={"reasoning_content": '{"route": "direct"}'},
+        response_metadata={},
+    )
+    parsed = parse_json_decision(response, _safe_json_object)
+    assert parsed["route"] == "clarify"

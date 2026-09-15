@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Box,
+  ClickAwayListener,
   IconButton,
   List,
   Paper,
@@ -86,8 +87,10 @@ export function ConversationHeader({
 }) {
   const [showContextHighlight, setShowContextHighlight] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  const ignoreNextClickAwayRef = useRef(false);
 
   const handleModelChange = (nextModel: string) => {
+    ignoreNextClickAwayRef.current = true;
     setShowContextHighlight(true);
     setTooltipOpen(true);
     onModelChange(nextModel);
@@ -104,59 +107,64 @@ export function ConversationHeader({
     >
       {leading}
       {beforeModelControls}
-      <Tooltip
-        title={
-          <Box sx={{ p: 0.5 }}>
-            <Typography variant="caption" sx={{ display: 'block' }}>
-              Set context window size for the LLM.
-            </Typography>
-            <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
-              Find the model context length at{' '}
-              <a
-                href="https://llm-explorer.com/list/"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: '#90caf9', textDecoration: 'underline' }}
-              >
-                llm-explorer.com
-              </a>
-              . Enter the numeric Context Len value, such as 8000 or 128000.
-              Larger windows allow more context but can increase latency and cost.
-            </Typography>
-          </Box>
-        }
-        placement="top"
-        open={tooltipOpen}
-        onOpen={() => setTooltipOpen(true)}
-        onClose={() => {
-          if (!showContextHighlight) setTooltipOpen(false);
+      <ClickAwayListener
+        onClickAway={() => {
+          if (ignoreNextClickAwayRef.current) {
+            ignoreNextClickAwayRef.current = false;
+            return;
+          }
+          dismissContextHelp();
         }}
       >
-        <TextField
-          size="small"
-          label="Ctx size"
-          type="number"
-          value={contextWindow}
-          disabled={disabled || contextWindowDisabled}
-          onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
-          onClick={dismissContextHelp}
-          onFocus={dismissContextHelp}
-          sx={{
-            width: 116,
-            flex: '0 0 116px',
-            '& .MuiOutlinedInput-root': {
-              transition: 'all 0.3s ease',
-              backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
-              ...workbenchControlOutlineSx,
-              '& fieldset': {
-                borderColor: showContextHighlight ? 'primary.main' : 'transparent',
-                borderWidth: showContextHighlight ? '2px' : '1px',
-              },
-            },
-          }}
-          slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
-        />
-      </Tooltip>
+        <Box>
+          <Tooltip
+            title={
+              <Box sx={{ p: 0.5 }}>
+                <Typography variant="caption" sx={{ display: 'block' }}>
+                  AskPDF packing budget for this run: how much document text, thread history, and memory to load.
+                </Typography>
+                <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
+                  It does not change the model&apos;s context on OpenRouter, LM Studio, or other providers.
+                  Stay at or below the model&apos;s published context length so prompts do not overflow.
+                  Larger budgets retrieve more context but can increase latency and cost.
+                </Typography>
+              </Box>
+            }
+            placement="top"
+            disablePortal
+            open={tooltipOpen}
+            onOpen={() => setTooltipOpen(true)}
+            onClose={() => {
+              if (!showContextHighlight) setTooltipOpen(false);
+            }}
+          >
+            <TextField
+              size="small"
+              label="Ctx size"
+              type="number"
+              value={contextWindow}
+              disabled={disabled || contextWindowDisabled}
+              onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
+              onClick={dismissContextHelp}
+              onFocus={dismissContextHelp}
+              sx={{
+                width: 116,
+                flex: '0 0 116px',
+                '& .MuiOutlinedInput-root': {
+                  transition: 'all 0.3s ease',
+                  backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+                  ...workbenchControlOutlineSx,
+                  '& fieldset': {
+                    borderColor: showContextHighlight ? 'primary.main' : 'transparent',
+                    borderWidth: showContextHighlight ? '2px' : '1px',
+                  },
+                },
+              }}
+              slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
+            />
+          </Tooltip>
+        </Box>
+      </ClickAwayListener>
       <WorkbenchAutocomplete
         label="Select LLM"
         value={model}

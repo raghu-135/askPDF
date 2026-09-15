@@ -130,8 +130,20 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
         ) from exc
 
     try:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(config.identity, revision=config.revision, local_files_only=True)
+        if model == local_model:
+            from app.models.llm_server_client import get_local_embedding_model
+
+            tokenizer = getattr(get_local_embedding_model(model).model, "tokenizer", None)
+            if tokenizer is None:
+                raise EmbeddingTokenizerUnavailableError(
+                    f"Tokenizer is missing on the loaded local embedding model '{model}'"
+                )
+        else:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.identity, revision=config.revision, local_files_only=True
+            )
 
         def count(text: str) -> int:
             formatted = config.format_document_input(text)
@@ -159,6 +171,8 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
             return output
 
         return config, TokenCounter(count=count, split=split)
+    except EmbeddingTokenizerUnavailableError:
+        raise
     except Exception as exc:
         raise EmbeddingTokenizerUnavailableError(
             f"Tokenizer '{config.identity}' is unavailable locally for embedding model '{model}'"
