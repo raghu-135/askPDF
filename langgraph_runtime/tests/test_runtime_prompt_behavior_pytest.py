@@ -23,6 +23,7 @@ from langgraph_runtime.workflows.prompting import (
 def test_deep_research_runtime_policy_is_used_by_deep_nodes():
     assert DEEP_RESEARCH_POLICY
     assert DEEP_RESEARCH_POLICY in _deep_system("node-specific role")
+    assert "Canvas publish is runtime-owned at synthesis" in DEEP_RESEARCH_POLICY
 
 
 def test_runtime_prompt_manifest_is_complete_and_runtime_owned():
@@ -86,7 +87,7 @@ def test_canvas_layout_skills_gate_on_publish_admission():
     assert "canvas_timeline" not in off
     assert "publish_canvas" not in off
 
-    on = build_router_prompt(
+    on_router = build_router_prompt(
         {
             "question": "Compare the papers",
             "use_web_search": False,
@@ -94,10 +95,23 @@ def test_canvas_layout_skills_gate_on_publish_admission():
             "allowed_tool_ids": ["research_canvas_publish"],
         }
     )
-    assert "canvas_compare_papers" in on
-    assert "canvas_evidence_matrix" in on
-    assert "canvas_timeline" in on
-    assert "publish_canvas" in on
+    assert "canvas_compare_papers" not in on_router
+    assert "publish_canvas" not in on_router
+
+    on_answer = build_final_answer_messages(
+        {
+            "question": "Compare the papers",
+            "use_web_search": False,
+            "pre_fetch_bundle": {},
+            "allowed_tool_ids": ["research_canvas_publish"],
+        },
+        "Evidence context",
+    )
+    combined = on_answer["system"] + "\n" + on_answer["human"]
+    assert "canvas_compare_papers" in combined
+    assert "canvas_evidence_matrix" in combined
+    assert "canvas_timeline" in combined
+    assert "publish_canvas" in combined
 
 
 def test_runtime_graph_prompt_builders_include_datetime_context():

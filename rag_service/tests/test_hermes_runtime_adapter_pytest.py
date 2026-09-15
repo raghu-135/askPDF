@@ -981,3 +981,51 @@ def test_native_approval_pause_publishes_task_delta_and_resumes(monkeypatch, tmp
         assert completed["orchestration_delta"]["event_id"] != delta["event_id"]
         assert completed["task_result"]["text"] == "verified"
     assert not streams
+
+
+def test_native_run_failed_string_error_round_trips_as_object(monkeypatch, tmp_path):
+    from runtime_protocol.protocol import decode_event_frame
+    from runtime_protocol.transport import result_from_dict
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "failure-state.json"))
+    monkeypatch.setattr(hermes_api.RunProfileManager, "is_reusable", lambda *_: True)
+    monkeypatch.setattr(hermes_api.RunProfileManager, "retire", lambda *_: None)
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "hermes" / "run_events.json").read_text())
+    streams = list(fixture["failure"])
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/upstream-run-7"):
+            return httpx.Response(200, json={"status": "failed"}, request=request)
+        assert request.method == "GET" and request.url.path.endswith("/events")
+        event = streams.pop(0)
+        return httpx.Response(200, text="data: " + json.dumps(event) + "\n\n", request=request)
+
+    monkeypatch.setattr(hermes_api.httpx, "AsyncClient", lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)))
+    payload = {
+        "request": {
+            "run_id": "run-1", "thread_id": "thread-1", "task_id": "task-1",
+            "input": {"question": "Verify release", "task_context": {"metadata": {"attempt_id": "attempt-1", "task_version": 4, "plan_revision": 2}}},
+            "options": {"idempotency_key": "start-operation"},
+            "continuation": _cancel_payload()["continuation"],
+        },
+        "context": {"resolved_spec": {"managed_profile": {"limits": {"max_duration_seconds": 60}}}},
+    }
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        response = client.post("/v1/runs/start", json=payload)
+        assert response.status_code == 200, response.text
+        frames = [decode_event_frame(block + "\n\n") for block in response.text.split("\n\n") if "data:" in block]
+        results = [frame["result"] for frame in frames if frame.get("result")]
+        failed = results[-1]
+        assert failed["status"] == "failed"
+        assert isinstance(failed["error"], dict)
+        assert failed["error"]["code"] == "hermes_upstream_error"
+        assert "deterministic upstream failure" in failed["error"]["safe_message"]
+        assert isinstance(failed["task_result"]["error"], dict)
+        assert failed["task_result"]["error"]["code"] == "hermes_upstream_error"
+        neutral = result_from_dict(failed)
+        assert neutral.status == "failed"
+        assert neutral.error["code"] == "hermes_upstream_error"
+    assert not streams

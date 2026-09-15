@@ -43,6 +43,8 @@ from langgraph_runtime.runtime_support.task_results import (
 )
 from langgraph_runtime.workflows.state import consume_task_result_packets, task_result_packet_identity
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
+from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled, canvas_layout_skills_section
+from langgraph_runtime.workflows.canvas_publish import synthesize_with_canvas_publish
 from langgraph_runtime.budgets import planner_limits
 
 
@@ -1476,14 +1478,42 @@ Effective memory snapshot (bounded, provenance retained):
 Unresolved required todos: {json.dumps(failed, ensure_ascii=True)[:12000]}
 Unavailable evidence: {json.dumps(all_gaps, ensure_ascii=True)[:4000]}
 Clearly label the result incomplete when unresolved required todos exist. Preserve source references and do not invent citations."""
+    layout = canvas_layout_skills_section(state.get("allowed_tool_ids")) if not provisional else ""
+    if layout:
+        prompt += (
+            "\n\n"
+            + layout
+            + "\nCall the publish_canvas tool with a canvas_spec_v1 spec when a structured comparison, timeline, or evidence map would help. "
+            "Do not write a publish_canvas(...) call in the report text. Canvas publish is runtime-owned at synthesis; do not treat it as a research todo."
+        )
     synthesis_error: Dict[str, Any] | None = None
     try:
-        text, metadata = await _call_model(
-            state, config, DEEP_NODE_SYNTHESIZER,
-            [SystemMessage(content=_deep_system("Synthesize a grounded askPDF deep research report.")), HumanMessage(content=prompt)],
-            meter_research=not provisional,
-            accounting_phase="partial_synthesis" if provisional else "research",
-        )
+        if canvas_emit_enabled(state.get("allowed_tool_ids")) and not provisional:
+            llm = get_llm(str(state.get("llm_model") or ""), http_async_client=execution_model_client(config))
+            published = await synthesize_with_canvas_publish(
+                llm,
+                [SystemMessage(content=_deep_system("Synthesize a grounded askPDF deep research report.")), HumanMessage(content=prompt)],
+                state=state,
+                config=config,
+                node=DEEP_NODE_SYNTHESIZER,
+                started=time.perf_counter(),
+            )
+            text = published["answer"]
+            metadata = llm_result_metadata(
+                published["response"],
+                model_name=state.get("llm_model"),
+                normalized_response=published,
+                retry_attempts=published["retry_attempts"],
+            )
+            if published["published"]:
+                await services.consume_budget(str(state.get("agent_task_id") or ""), tool_calls=1)
+        else:
+            text, metadata = await _call_model(
+                state, config, DEEP_NODE_SYNTHESIZER,
+                [SystemMessage(content=_deep_system("Synthesize a grounded askPDF deep research report.")), HumanMessage(content=prompt)],
+                meter_research=not provisional,
+                accounting_phase="partial_synthesis" if provisional else "research",
+            )
     except ChatRunCancellationRequested:
         raise
     except Exception as exc:

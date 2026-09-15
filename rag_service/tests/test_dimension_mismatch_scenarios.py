@@ -268,6 +268,7 @@ class TestErrorRecoveryScenarios:
         
         mock_client.collections.exists.return_value = False
         mock_client.collections.create.return_value = None
+        mock_client.collections.list_all.return_value = {}
         mock_client.collections.use.return_value = MagicMock()
         
         collection_manager = ModelAwareCollectionManager(mock_client)

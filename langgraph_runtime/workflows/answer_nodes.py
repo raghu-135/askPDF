@@ -8,7 +8,6 @@ from typing import Any, Dict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from langgraph_runtime.agent.reasoning import normalize_ai_response
 from langgraph_runtime.workflows.evidence import (
     combine_evidence,
     corrective_evidence_packets,
@@ -21,11 +20,10 @@ from langgraph_runtime.workflows.enums import NodeEventStatus, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
+from langgraph_runtime.workflows.canvas_publish import synthesize_with_canvas_publish
 from langgraph_runtime.workflows.runtime_invocation import (
     append_event,
-    invoke_llm_for_node,
     llm_result_metadata,
-    llm_retry_observer,
     log_node_end,
 )
 from langgraph_runtime.workflows.state import RouterRagState
@@ -80,14 +78,22 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
             limit=evidence_text_limit(state),
         )
     messages = build_final_answer_messages(state, context)
-    retry_attempts, retry_observer = llm_retry_observer()
     prompt_details = prompt_summary(
         "Final Answer Prompt",
         messages["system"],
         messages["human"],
     )
-    response = await invoke_llm_for_node(
-        llm.ainvoke,
+    failure_data = {
+        "input_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
+        "input_preview": {
+            "question": compact_preview(state.get("question")),
+            "context_source": context_source,
+            "context": compact_preview(context),
+        },
+        "prompt_summary": prompt_details,
+    }
+    published = await synthesize_with_canvas_publish(
+        llm,
         [
             SystemMessage(content=messages["system"]),
             HumanMessage(content=messages["human"]),
@@ -96,20 +102,9 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         config=config,
         node=node_name,
         started=started,
-        retry_observer=retry_observer,
-        retry_attempts=retry_attempts,
-        model_name=state.get("llm_model"),
-        failure_data={
-            "input_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "context_source": context_source,
-                "context": compact_preview(context),
-            },
-            "prompt_summary": prompt_details,
-        },
+        failure_data=failure_data,
     )
-    normalized = normalize_ai_response(response)
+    response = published["response"]
     data = {
         "status": NodeEventStatus.COMPLETED.value,
         "input_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
@@ -120,27 +115,28 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         },
         "prompt_summary": prompt_details,
         "llm_result_summary": {
-            "answer_chars": len(normalized["answer"] or ""),
-            "reasoning_available": bool(normalized["reasoning_available"]),
-            "reasoning_format": normalized["reasoning_format"],
+            "answer_chars": len(published["answer"] or ""),
+            "reasoning_available": bool(published["reasoning_available"]),
+            "reasoning_format": published["reasoning_format"],
             "llm": llm_result_metadata(
                 response,
                 model_name=state.get("llm_model"),
-                normalized_response=normalized,
-                retry_attempts=retry_attempts,
+                normalized_response=published,
+                retry_attempts=published["retry_attempts"],
             ),
         },
-        "answer_chars": len(normalized["answer"] or ""),
+        "answer_chars": len(published["answer"] or ""),
         "evidence_chars": len(str(context or "")),
         "output_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
-        "output_preview": {"answer": compact_preview(normalized["answer"])},
+        "output_preview": {"answer": compact_preview(published["answer"])},
+        "canvas_published": published["published"],
     }
     log_node_end(state, node_name, started, data)
     return {
-        "final_answer": normalized["answer"],
-        "reasoning": normalized["reasoning"],
-        "reasoning_available": normalized["reasoning_available"],
-        "reasoning_format": normalized["reasoning_format"],
+        "final_answer": published["answer"],
+        "reasoning": published["reasoning"],
+        "reasoning_available": published["reasoning_available"],
+        "reasoning_format": published["reasoning_format"],
         "node_events": append_event(state, node_name, data, started=started, config=config),
     }
 

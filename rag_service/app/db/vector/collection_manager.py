@@ -9,7 +9,8 @@ This module provides dynamic collection management with:
 
 import asyncio
 import logging
-from typing import Dict, Optional
+import re
+from typing import Dict, Mapping
 import weaviate.classes as wvc
 from weaviate.exceptions import WeaviateBaseError
 
@@ -23,6 +24,16 @@ from app.db.vector.helpers import _metadata_json, _parse_metadata
 
 logger = logging.getLogger(__name__)
 
+_SIMILAR_CLASS_RE = re.compile(r'found similar class "([^"]+)"', re.IGNORECASE)
+
+
+def similar_weaviate_class_name(exc: BaseException) -> str | None:
+    """Parse Weaviate's case-insensitive duplicate-class 422 message."""
+    match = _SIMILAR_CLASS_RE.search(str(exc))
+    if match:
+        return match.group(1)
+    return None
+
 
 class ModelAwareCollectionManager:
     """Manager for model-aware collections with on-demand creation."""
@@ -31,60 +42,98 @@ class ModelAwareCollectionManager:
         self.client = client
         self.registry = get_embedding_model_registry()
         self._collection_cache: Dict[str, any] = {}
+
+    def listed_collection_names(self) -> list[str]:
+        list_all = getattr(self.client.collections, "list_all", None)
+        if list_all is None:
+            return []
+        listed = list_all()
+        if isinstance(listed, Mapping):
+            return [str(name) for name in listed.keys()]
+        if not isinstance(listed, (list, tuple, set)):
+            return []
+        names: list[str] = []
+        for item in listed:
+            if isinstance(item, str):
+                names.append(item)
+                continue
+            name = getattr(item, "name", None)
+            if name:
+                names.append(str(name))
+        return names
+
+    def existing_collection_name(self, collection_name: str) -> str | None:
+        """Return the stored Weaviate class, matching case-insensitively."""
+        try:
+            exists = self.client.collections.exists(collection_name)
+            if exists is True:
+                return collection_name
+        except Exception as exc:
+            logger.warning("Failed to check collection existence for '%s': %s", collection_name, exc)
+        folded = collection_name.casefold()
+        for name in self.listed_collection_names():
+            if name.casefold() == folded:
+                return name
+        return None
     
     async def get_collection(self, base_name: str, model_name: str):
         """Get or create collection for base name and model."""
-        # Ensure model info is loaded first
         await self.registry.get_model_info(model_name)
         collection_name = self.registry.get_collection_name(base_name, model_name)
         
         if collection_name not in self._collection_cache:
-            # Check if collection exists (this might be async in some clients)
-            try:
-                collection_exists = self.client.collections.exists(collection_name)
-                if hasattr(collection_exists, '__await__'):
-                    collection_exists = await collection_exists
-            except Exception as e:
-                logger.warning(f"Failed to check collection existence for '{collection_name}': {e}")
-                collection_exists = False
-                
-            if not collection_exists:
-                # Ensure model info is loaded
-                await self.registry.get_model_info(model_name)
+            stored_name = self.existing_collection_name(collection_name)
+            if stored_name is None:
                 dimensions = self.registry._dimension_cache.get(model_name)
                 if not dimensions:
                     raise ValueError(f"Could not determine dimensions for model '{model_name}'")
-                
-                logger.info(f"Creating collection '{collection_name}' for model '{model_name}' ({dimensions} dimensions)")
-                await self._create_model_collection(collection_name, base_name, dimensions)
+                logger.info(
+                    "Creating collection '%s' for model '%s' (%s dimensions)",
+                    collection_name,
+                    model_name,
+                    dimensions,
+                )
+                stored_name = await self._create_model_collection(collection_name, base_name, dimensions)
             else:
-                self._ensure_collection_properties(collection_name, self._get_collection_properties(base_name))
+                self._ensure_collection_properties(stored_name, self._get_collection_properties(base_name))
             
-            # Cache the actual collection object
-            collection = self.client.collections.use(collection_name)
+            collection = self.client.collections.use(stored_name)
             self._collection_cache[collection_name] = collection
+            if stored_name != collection_name:
+                self._collection_cache[stored_name] = collection
         
         return self._collection_cache[collection_name]
     
-    async def _create_model_collection(self, collection_name: str, base_name: str, dimensions: int):
-        """Create a collection with proper schema for given dimensions."""
+    async def _create_model_collection(self, collection_name: str, base_name: str, dimensions: int) -> str:
+        """Create a collection, or reuse a case-equivalent class Weaviate already has."""
+        properties = self._get_collection_properties(base_name)
+        logger.warning("Model-aware collection '%s' is missing, creating it now...", collection_name)
+        logger.info(
+            "Creating '%s' collection for %s-dimensional vectors with %s properties",
+            base_name,
+            dimensions,
+            len(properties),
+        )
         try:
-            # Define properties based on base collection type
-            properties = self._get_collection_properties(base_name)
-            
-            logger.warning(f"Model-aware collection '{collection_name}' is missing, creating it now...")
-            logger.info(f"Creating '{base_name}' collection for {dimensions}-dimensional vectors with {len(properties)} properties")
-            
             self.client.collections.create(
                 name=collection_name,
                 vector_config=wvc.config.Configure.Vectors.self_provided(),
-                properties=properties
+                properties=properties,
             )
-            logger.info(f"Successfully created model-aware collection '{collection_name}' - ready for {base_name} embeddings")
-            
-        except WeaviateBaseError as e:
-            logger.error(f"Failed to create collection '{collection_name}': {e}")
-            raise VectorDBError(f"Could not create collection '{collection_name}'") from e
+            logger.info("Successfully created model-aware collection '%s'", collection_name)
+            return collection_name
+        except WeaviateBaseError as exc:
+            stored_name = similar_weaviate_class_name(exc) or self.existing_collection_name(collection_name)
+            if stored_name:
+                logger.info(
+                    "Reusing existing Weaviate class '%s' for canonical name '%s'",
+                    stored_name,
+                    collection_name,
+                )
+                self._ensure_collection_properties(stored_name, properties)
+                return stored_name
+            logger.error("Failed to create collection '%s': %s", collection_name, exc)
+            raise VectorDBError(f"Could not create collection '{collection_name}'") from exc
     
     def _get_collection_properties(self, base_name: str):
         """Get properties for collection type."""
@@ -190,7 +239,7 @@ class ModelAwareCollectionManager:
             'model_name': model_name,
             'dimensions': model_info.get('dimensions'),
             'sanitized_name': model_info.get('sanitized_name'),
-            'exists': self.client.collections.exists(collection_name),
+            'exists': self.existing_collection_name(collection_name) is not None,
             'is_local': model_info.get('is_local', False)
         }
     
@@ -239,12 +288,16 @@ class ModelAwareCollectionManager:
             # Get collection name for this model
             collection_name = self.registry.get_collection_name(base_name, embedding_model)
             
-            # Check if collection already exists before creating
-            if self.client.collections.exists(collection_name):
-                logger.debug(f"Model-aware collection '{collection_name}' already exists for {description}")
-                collection = self.client.collections.use(collection_name)
+            stored_name = self.existing_collection_name(collection_name)
+            if stored_name is not None:
+                logger.debug(
+                    "Model-aware collection '%s' already exists for %s",
+                    stored_name,
+                    description,
+                )
+                collection = self.client.collections.use(stored_name)
             else:
-                logger.info(f"Creating new model-aware collection '{collection_name}' for {description}")
+                logger.info("Creating new model-aware collection '%s' for %s", collection_name, description)
                 collection = await self.get_collection(base_name, embedding_model)
             
             # Validate that the collection can accept vectors for this model

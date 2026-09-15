@@ -100,6 +100,15 @@ class TestEmbeddingModelRegistry:
         
         collection_name = registry.get_collection_name("DocumentChunk", "test-model")
         assert collection_name == "DocumentChunk_test_model_768"
+
+    def test_huggingface_model_ids_share_a_weaviate_collection_name(self, registry):
+        assert registry.sanitize_model_name("BAAI/bge-m3") == "baai_bge_m3"
+        assert registry.sanitize_model_name("baai/bge-m3") == "baai_bge_m3"
+        for model_name in ("BAAI/bge-m3", "baai/bge-m3"):
+            seed_model(registry, model_name, dimensions=1024)
+        assert registry.get_collection_name("DocumentChunk", "BAAI/bge-m3") == "DocumentChunk_baai_bge_m3_1024"
+        assert registry.get_collection_name("DocumentChunk", "baai/bge-m3") == "DocumentChunk_baai_bge_m3_1024"
+        assert registry.is_model_compatible("DocumentChunk_BAAI_bge_m3_1024", "baai/bge-m3")
     
     @pytest.mark.asyncio
     async def test_model_compatibility_check(self, registry):
@@ -139,6 +148,7 @@ class TestModelAwareCollectionManager:
         client = MagicMock()
         client.collections.exists.return_value = False
         client.collections.create.return_value = None
+        client.collections.list_all.return_value = {}
         client.collections.use.return_value = MagicMock()
         return client
     
@@ -164,6 +174,43 @@ class TestModelAwareCollectionManager:
             assert collection is not None
             mock_client.collections.exists.assert_called_once_with("DocumentChunk_test_model_384")
             mock_client.collections.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_collection_reuses_case_equivalent_weaviate_class(self, collection_manager, mock_client):
+        registry = EmbeddingModelRegistry()
+        seed_model(registry, "baai/bge-m3", dimensions=1024)
+        collection_manager.registry = registry
+        mock_client.collections.exists.return_value = False
+        mock_client.collections.list_all.return_value = {"DocumentChunk_BAAI_bge_m3_1024": object()}
+
+        collection = await collection_manager.get_collection("DocumentChunk", "baai/bge-m3")
+
+        assert collection is mock_client.collections.use.return_value
+        mock_client.collections.create.assert_not_called()
+        mock_client.collections.use.assert_called_with("DocumentChunk_BAAI_bge_m3_1024")
+
+    @pytest.mark.asyncio
+    async def test_create_reuses_similar_class_from_weaviate_422(self, collection_manager, mock_client):
+        from weaviate.exceptions import WeaviateBaseError
+
+        class DuplicateClass(WeaviateBaseError):
+            def __init__(self, message: str):
+                Exception.__init__(self, message)
+
+        registry = EmbeddingModelRegistry()
+        seed_model(registry, "baai/bge-m3", dimensions=1024)
+        collection_manager.registry = registry
+        mock_client.collections.exists.return_value = False
+        mock_client.collections.list_all.return_value = {}
+        mock_client.collections.create.side_effect = DuplicateClass(
+            'class already exists: found similar class "DocumentChunk_BAAI_bge_m3_1024"'
+        )
+
+        collection = await collection_manager.get_collection("DocumentChunk", "baai/bge-m3")
+
+        mock_client.collections.create.assert_called_once()
+        mock_client.collections.use.assert_called_with("DocumentChunk_BAAI_bge_m3_1024")
+        assert collection is mock_client.collections.use.return_value
     
     @pytest.mark.asyncio
     async def test_collection_caching(self, collection_manager, mock_client):

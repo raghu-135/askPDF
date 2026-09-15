@@ -103,6 +103,18 @@ def _error(
     return structured_error(code, message, retryable=retryable, details=details)
 
 
+def _terminal_error(raw: Any) -> dict[str, Any] | None:
+    """Normalize upstream terminal errors to the protocol object shape."""
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        if str(raw.get("code") or "").strip():
+            return dict(raw)
+        message = str(raw.get("safe_message") or raw.get("message") or "Hermes upstream failed")
+        return _error("hermes_upstream_error", message, details=dict(raw))
+    return _error("hermes_upstream_error", str(raw))
+
+
 def _upstream_timeout() -> httpx.Timeout:
     """Bound stalled transport operations independently of research usage."""
     read_timeout = required_positive_float("AGENT_RUNTIME_READ_TIMEOUT_SECONDS")
@@ -1082,6 +1094,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     started_tool_calls=started_tool_calls,
                     active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
                 )
+                terminal_error = _terminal_error(event_payload.get("error"))
                 neutral_task_result = {
                     "status": result_outcome,
                     "text": text_output,
@@ -1090,7 +1103,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     "warnings": warnings,
                     "gaps": gaps,
                     "usage": usage,
-                    "error": event_payload.get("error"),
+                    "error": terminal_error,
                     "framework_details": {"framework": "hermes", "native_output": output_mapping},
                     "correction_outcomes": correction_outcomes,
                 }
@@ -1140,7 +1153,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         },
                     },
                     "continuation": continuation,
-                    "error": event_payload.get("error"),
+                    "error": terminal_error,
                 }
             sequence += 1
             operation_event = None
@@ -1164,7 +1177,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         },
                         "visit_index": 1,
                         "status": status,
-                        "error": event_payload.get("error"),
+                        "error": terminal_error,
                     },
                     continuation=continuation,
                 )

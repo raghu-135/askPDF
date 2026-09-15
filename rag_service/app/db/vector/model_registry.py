@@ -28,8 +28,16 @@ class EmbeddingModelRegistry:
         self._dimension_cache: Dict[str, int] = {}
     
     def sanitize_model_name(self, model_name: str) -> str:
-        """Sanitize model name for safe collection naming."""
-        return re.sub(r'[^a-zA-Z0-9_]', '_', model_name.replace('/', '_').replace('-', '_').replace('.', '_'))
+        """Sanitize a model id into a Weaviate-safe, case-canonical fragment.
+
+        Weaviate class names are case-insensitive. Hugging Face ids such as
+        ``BAAI/bge-m3`` and ``baai/bge-m3`` must therefore share one collection.
+        """
+        return re.sub(
+            r"[^a-zA-Z0-9_]",
+            "_",
+            model_name.replace("/", "_").replace("-", "_").replace(".", "_"),
+        ).casefold()
     
     async def _probe_model_dimensions(self, model_name: str) -> int:
         """Probe embedding model to determine vector dimensions."""
@@ -105,7 +113,7 @@ class EmbeddingModelRegistry:
                         model_part = '_'.join(remaining_parts[:-1])
                         # Try to find matching model in cache
                         for cached_name, info in self._model_cache.items():
-                            if info['sanitized_name'] == model_part:
+                            if str(info["sanitized_name"]).casefold() == model_part.casefold():
                                 return cached_name
         return None
     
@@ -122,8 +130,11 @@ class EmbeddingModelRegistry:
             if not collection_info or not model_info:
                 return False
             
-            return (collection_info['dimensions'] == model_info['dimensions'] and
-                   collection_info['sanitized_name'] == model_info['sanitized_name'])
+            return (
+                collection_info["dimensions"] == model_info["dimensions"]
+                and str(collection_info["sanitized_name"]).casefold()
+                == str(model_info["sanitized_name"]).casefold()
+            )
         except Exception:
             return False
 

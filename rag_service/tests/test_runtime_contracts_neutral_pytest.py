@@ -17,6 +17,7 @@ from runtime_protocol.contracts import (
     TaskOrchestrationDelta,
 )
 from runtime_protocol.transport import event_from_dict, request_from_dict, result_from_dict
+from runtime_protocol.validation import RuntimeProtocolValidationError, validate_runtime_result_envelope
 import pytest
 from runtime_protocol.adapter import AgentRuntimeAdapter
 from runtime_protocol.errors import RuntimeError
@@ -140,3 +141,25 @@ def test_runtime_request_rejects_request_level_authentication():
             "builder_id": "langgraph_graph",
             "authentication": {"token": "must-not-cross-the-wire"},
         })
+
+
+def test_result_envelope_rejects_string_error_objects():
+    with pytest.raises(RuntimeProtocolValidationError) as caught:
+        validate_runtime_result_envelope({"status": "failed", "error": "deterministic upstream failure"})
+    assert caught.value.field == "error"
+
+    with pytest.raises(RuntimeProtocolValidationError) as caught:
+        validate_runtime_result_envelope({
+            "status": "failed",
+            "task_result": {"status": "failed", "error": "deterministic upstream failure"},
+        })
+    assert caught.value.field == "task_result.error"
+
+
+def test_result_from_dict_accepts_structured_error_objects():
+    result = result_from_dict({
+        "status": "failed",
+        "error": {"code": "hermes_upstream_error", "safe_message": "deterministic upstream failure"},
+    })
+    assert result.status == "failed"
+    assert result.error["code"] == "hermes_upstream_error"

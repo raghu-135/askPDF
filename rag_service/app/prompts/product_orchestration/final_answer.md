@@ -37,6 +37,10 @@ Prefer retrieved evidence. If you use a retrieved source, cite it inline. If you
 
 Never fabricate citations.
 
+{CANVAS_LAYOUT_SKILLS_SECTION}
+
+When the canvas layout skills section is present, call the `publish_canvas` tool with a `canvas_spec_v1` spec. Do not write a `publish_canvas(...)` call in the answer.
+
 ### Documents
 
 - Cite using the exact source labels returned by tools, for example: `[Source: PDF: filename, pages 3-4]`.

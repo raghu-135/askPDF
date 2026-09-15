@@ -51,6 +51,13 @@ class RuntimeProtocolValidationError(ValueError):
         return details
 
 
+def _require_optional_object(value: Any, *, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        raise RuntimeProtocolValidationError(f"{field} must be an object", field=field, value=value)
+
+
 def validate_runtime_result_envelope(value: Mapping[str, Any]) -> None:
     """Validate required result status fields without coercion or fallback."""
 
@@ -71,6 +78,8 @@ def validate_runtime_result_envelope(value: Mapping[str, Any]) -> None:
             value=status,
         )
 
+    _require_optional_object(value.get("error"), field="error")
+
     task_result = value.get("task_result")
     if task_result is None:
         return
@@ -78,6 +87,7 @@ def validate_runtime_result_envelope(value: Mapping[str, Any]) -> None:
         raise RuntimeProtocolValidationError(
             "task_result must be an object", field="task_result"
         )
+    _require_optional_object(task_result.get("error"), field="task_result.error")
     task_status = task_result.get("status")
     if not isinstance(task_status, str) or not task_status.strip():
         raise RuntimeProtocolValidationError(

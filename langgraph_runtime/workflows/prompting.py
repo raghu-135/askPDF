@@ -15,7 +15,7 @@ from langgraph_runtime.workflows.enums import PromptProfile, ToolName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from langgraph_runtime.workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
-from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled, canvas_layout_skills_section
+from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
 from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runtime_prompt
 
 
@@ -27,13 +27,14 @@ GRAPH_TOOL_NAMES = [
     ToolName.SEARCH_DURABLE_MEMORY.value,
     ToolName.SEARCH_THREAD_EVENTS.value,
     ToolName.SEARCH_WEB.value,
-    ToolName.PUBLISH_CANVAS.value,
     ToolName.ASK_FOR_CLARIFICATION.value,
 ]
 GRAPH_TOOL_NAMES.extend(
     name
     for name, config in TOOL_FRIENDLY_CONFIG.items()
-    if config.get("mcp_server") and name not in GRAPH_TOOL_NAMES
+    if config.get("mcp_server")
+    and name not in GRAPH_TOOL_NAMES
+    and name != ToolName.PUBLISH_CANVAS.value
 )
 
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
@@ -121,8 +122,6 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
     active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != ToolName.SEARCH_WEB.value])
-    if not canvas_emit_enabled(state_or_settings.get("allowed_tool_ids")):
-        active_tools = [name for name in active_tools if name != ToolName.PUBLISH_CANVAS.value]
     catalog = get_tool_catalog(active_tools)
     playbook = normalize_tool_instructions(
         state_or_settings.get("tool_instructions") or {},

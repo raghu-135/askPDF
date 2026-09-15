@@ -11,6 +11,7 @@ from hermes_runtime.api import (
     _failed_runtime_result,
     _HermesEventBudget,
     _runtime_usage_snapshot,
+    _terminal_error,
     _upstream_timeout,
     create_app,
 )
@@ -258,3 +259,11 @@ def test_failed_runtime_result_includes_task_orchestration_delta():
     assert result["status"] == "failed"
     assert result["orchestration_delta"]["result"]["status"] == "failed"
     assert result["orchestration_delta"]["pending_interrupt"] == {"operation": "clear"}
+
+
+def test_terminal_error_normalizes_upstream_strings():
+    assert _terminal_error(None) is None
+    structured = _terminal_error({"code": "already_structured", "safe_message": "kept"})
+    assert structured["code"] == "already_structured"
+    wrapped = _terminal_error("deterministic upstream failure")
+    assert wrapped == _error("hermes_upstream_error", "deterministic upstream failure")

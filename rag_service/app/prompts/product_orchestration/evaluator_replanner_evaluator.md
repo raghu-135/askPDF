@@ -32,8 +32,6 @@ This is a bounded evaluator. Decide whether the gathered evidence can support a 
 
 {TOOL_PLAYBOOK_SECTION}
 
-{CANVAS_LAYOUT_SKILLS_SECTION}
-
 {WEB_SEARCH_MANDATE_SECTION}
 
 ## Output Contract

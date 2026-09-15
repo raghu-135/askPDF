@@ -10,8 +10,10 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   IconButton,
+  Menu,
   Typography,
   TextField,
   Button,
@@ -48,6 +50,7 @@ import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator
 import ClearIcon from '@mui/icons-material/Clear';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import SettingsIcon from '@mui/icons-material/Settings';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 
@@ -59,6 +62,7 @@ import {
   listProjects,
   listThreads,
   bulkDeleteThreads,
+  deleteThread,
   forkThread,
   updateThread,
   updateProject,
@@ -186,6 +190,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
   const [forkDialogThread, setForkDialogThread] = useState<Thread | null>(null);
+  const [threadMenuAnchorEl, setThreadMenuAnchorEl] = useState<HTMLElement | null>(null);
+  const [threadMenuThread, setThreadMenuThread] = useState<Thread | null>(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const [projectReadiness, setProjectReadiness] = useState<Record<string, boolean | null>>({});
@@ -668,15 +675,53 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
+  const closeThreadMenu = useCallback(() => {
+    setThreadMenuAnchorEl(null);
+    setThreadMenuThread(null);
+  }, []);
+
+  const openThreadMenu = (thread: Thread, event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    setThreadMenuAnchorEl(event.currentTarget);
+    setThreadMenuThread(thread);
+  };
+
   const startEditing = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
+    closeThreadMenu();
     setEditingThreadId(thread.id);
     setEditingName(thread.name);
   };
 
   const openForkDialog = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
+    closeThreadMenu();
     setForkDialogThread(thread);
+  };
+
+  const handleDeleteSingleThread = async (thread: Thread) => {
+    closeThreadMenu();
+    if (!confirm(`Delete "${thread.name}" and all its messages?`)) return;
+
+    try {
+      setDeletingThreadId(thread.id);
+      await deleteThread(thread.id);
+      setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+      setSelectedThreadIds((current) => {
+        if (!current.has(thread.id)) return current;
+        const next = new Set(current);
+        next.delete(thread.id);
+        return next;
+      });
+      if (activeThreadId === thread.id) {
+        onThreadSelect(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete thread:', error);
+      alert('Failed to delete thread.');
+    } finally {
+      setDeletingThreadId(null);
+    }
   };
 
   const handleForkThread = async (options: { name?: string; targetProjectId?: string; memoryCopyMode?: MemoryCopyMode }) => {
@@ -787,6 +832,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       onHeaderStateChange?.(null);
     };
   }, [onHeaderStateChange]);
+
+  useEffect(() => {
+    const list = threadListRef.current;
+    if (!list || !threadMenuAnchorEl) return undefined;
+    const handleScroll = () => closeThreadMenu();
+    list.addEventListener('scroll', handleScroll);
+    return () => list.removeEventListener('scroll', handleScroll);
+  }, [closeThreadMenu, threadMenuAnchorEl]);
 
   const focusThreadInList = (threadId: string, event?: React.MouseEvent) => {
     event?.preventDefault();
@@ -1323,7 +1376,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             onClick={(e) => e.stopPropagation()}
                           />
                         ) : (
-                          <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
+                          <Tooltip
+                            title={renderThreadTooltip(thread)}
+                            placement="bottom-start"
+                            arrow
+                            enterDelay={500}
+                            leaveDelay={150}
+                            disableHoverListener={Boolean(threadMenuAnchorEl)}
+                          >
                             <Box sx={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', ...flexTruncateSx }}>
                               <ListItemText
                                 primary={
@@ -1352,19 +1412,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         )}
                       </ListItemButton>
 
-                      {!selectionOnly && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
-                          <Tooltip title="Fork thread">
+                      {!selectionOnly && editingThreadId !== thread.id && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 0 auto', px: 0.5 }}>
+                          <Tooltip title="Thread actions">
                             <span>
-                              <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
-                                {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
+                              <IconButton
+                                size="small"
+                                aria-label={`Thread actions for ${thread.name}`}
+                                aria-controls={threadMenuThread?.id === thread.id ? 'thread-actions-menu' : undefined}
+                                aria-haspopup="true"
+                                aria-expanded={threadMenuThread?.id === thread.id ? 'true' : undefined}
+                                onClick={(event) => openThreadMenu(thread, event)}
+                                disabled={forkingThreadId === thread.id || deletingThreadId === thread.id}
+                                sx={threadActionButtonSx}
+                              >
+                                {forkingThreadId === thread.id || deletingThreadId === thread.id
+                                  ? <CircularProgress size={16} />
+                                  : <MoreVertIcon fontSize="small" />}
                               </IconButton>
                             </span>
-                          </Tooltip>
-                          <Tooltip title="Rename thread">
-                            <IconButton size="small" onClick={(e) => startEditing(thread, e)} sx={threadActionButtonSx}>
-                              <EditIcon fontSize="small" />
-                            </IconButton>
                           </Tooltip>
                         </Box>
                       )}
@@ -1373,145 +1439,55 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 );
               })}
             </Box>
-            {false && groupedThreads.map((group) => (
-              <Box key={group.project?.id || 'unassigned'}>
-                <Box sx={{ px: 1.5, py: 0.75, bgcolor: 'action.hover', borderTop: 1, borderColor: 'divider' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
-                    {group.project?.name || 'Unassigned'}
-                  </Typography>
-                </Box>
-                {group.threads.map((thread) => (
-                  <ListItem
-                    key={thread.id}
-                    ref={(node) => {
-                      threadRowRefs.current[thread.id] = node;
-                    }}
-                    disablePadding
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'stretch',
-                      bgcolor: activeThreadId === thread.id
-                        ? theme.palette.mode === 'dark'
-                          ? theme.palette.primary.dark
-                          : theme.palette.primary.light
-                        : focusedThreadId === thread.id
-                          ? theme.palette.action.focus
-                        : isSelectionMode && selectedThreadIds.has(thread.id)
-                          ? theme.palette.action.selected
-                        : 'transparent',
-                      boxShadow: focusedThreadId === thread.id
-                        ? `inset 3px 0 0 ${theme.palette.primary.main}`
-                        : 'none',
-                      transition: 'background-color 160ms ease, box-shadow 160ms ease',
-                      '&:hover': {
-                        bgcolor: activeThreadId === thread.id
-                          ? theme.palette.mode === 'dark'
-                            ? theme.palette.primary.dark
-                            : theme.palette.primary.light
-                          : focusedThreadId === thread.id
-                            ? theme.palette.action.focus
-                          : isSelectionMode && selectedThreadIds.has(thread.id)
-                            ? theme.palette.action.selected
-                          : theme.palette.mode === 'dark'
-                            ? theme.palette.background.paper
-                            : theme.palette.grey[100]
-                      }
-                    }}
-                  >
-                    <ListItemButton
-                      onClick={() => handleThreadRowClick(thread)}
-                      selected={activeThreadId === thread.id}
-                      sx={{
-                        flex: 1,
-                        minWidth: 0,
-                        py: 1,
-                        pr: 1,
-                        bgcolor: 'transparent',
-                        '&:hover, &.Mui-selected, &.Mui-selected:hover, &.Mui-focusVisible': {
-                          bgcolor: 'transparent',
-                        },
-                      }}
-                    >
-                      {isSelectionMode && !selectionOnly && (
-                        <Checkbox
-                          edge="start"
-                          size="small"
-                          checked={selectedThreadIds.has(thread.id)}
-                          onChange={(e) => handleToggleThreadSelection(thread.id, e)}
-                          onClick={(e) => e.stopPropagation()}
-                          disabled={isBulkDeleting}
-                          inputProps={{ 'aria-label': `Select ${thread.name}` }}
-                          sx={{ p: 0.5, mr: 0.5 }}
-                        />
-                      )}
-
-                      {editingThreadId === thread.id ? (
-                        <TextField
-                          size="small"
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleEditThread(thread.id);
-                            if (e.key === 'Escape') setEditingThreadId(null);
-                          }}
-                          onBlur={() => handleEditThread(thread.id)}
-                          autoFocus
-                          fullWidth
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
-                          <Box sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' }}>
-                            <ListItemText
-                              primary={
-                                <Typography variant="body2" fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'} noWrap>
-                                  {thread.name}
-                                </Typography>
-                              }
-                              secondaryTypographyProps={{ component: 'span' }}
-                              secondary={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
-                                  <Typography variant="caption" color="text.secondary" noWrap>
-                                    {formatDate(thread.created_at)}
-                                  </Typography>
-                                  {thread.message_count !== undefined && thread.message_count > 0 && (
-                                    <Chip label={`${thread.message_count} msgs`} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
-                                  )}
-                                  {thread.file_count !== undefined && thread.file_count > 0 && (
-                                    <Chip icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />} label={thread.file_count} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
-                                  )}
-                                </Box>
-                              }
-                              sx={{ m: 0, minWidth: 0 }}
-                            />
-                          </Box>
-                        </Tooltip>
-                      )}
-                    </ListItemButton>
-
-                    {!isSelectionMode && !selectionOnly && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
-                        <Tooltip title="Fork thread">
-                          <span>
-                            <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
-                              {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title="Rename thread">
-                          <IconButton size="small" onClick={(e) => startEditing(thread, e)} sx={threadActionButtonSx}>
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    )}
-                  </ListItem>
-                ))}
-              </Box>
-            ))}
           </List>
         )}
       </Collapse>
+
+      <Menu
+        id="thread-actions-menu"
+        anchorEl={threadMenuAnchorEl}
+        open={Boolean(threadMenuAnchorEl && threadMenuThread)}
+        onClose={closeThreadMenu}
+        onClick={(event) => event.stopPropagation()}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        {threadMenuThread && (
+          <MenuItem
+            disabled={forkingThreadId === threadMenuThread.id}
+            onClick={(event) => openForkDialog(threadMenuThread, event)}
+          >
+            <ListItemIcon>
+              {forkingThreadId === threadMenuThread.id
+                ? <CircularProgress size={16} />
+                : <CallSplitIcon fontSize="small" />}
+            </ListItemIcon>
+            <ListItemText>Fork thread</ListItemText>
+          </MenuItem>
+        )}
+        {threadMenuThread && (
+          <MenuItem onClick={(event) => startEditing(threadMenuThread, event)}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Rename thread</ListItemText>
+          </MenuItem>
+        )}
+        {threadMenuThread && (
+          <MenuItem
+            disabled={deletingThreadId === threadMenuThread.id}
+            onClick={() => {
+              void handleDeleteSingleThread(threadMenuThread);
+            }}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon sx={{ color: 'error.main' }}>
+              {deletingThreadId === threadMenuThread.id
+                ? <CircularProgress size={16} />
+                : <DeleteIcon fontSize="small" />}
+            </ListItemIcon>
+            <ListItemText>Delete thread</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
 
       <Dialog
         open={bulkProjectDeleteOpen}
