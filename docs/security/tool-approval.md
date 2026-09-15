@@ -34,6 +34,11 @@ derived only when `web_search_mode` is absent. `off` is an admission deny for
 every `CAT_WEB` and `CAT_EXTERNAL_RESEARCH` tool, even if the tools map asked
 to gate them. That deny is not a human skip.
 
+Thread setting `hitl_canvas_publish` (default false) is the product shortcut
+for `publish_canvas`. When true, the compiler adds `{ "mode": "ask", "scope":
+"run" }` unless the tools map already names that tool. Canvas publish is not a
+web-search category tool.
+
 ## Approval lifecycle
 
 An ask call returns the exact tool name, arguments, argument digest, and

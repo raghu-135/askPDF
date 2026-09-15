@@ -12,6 +12,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 from openai import BaseModel as OpenAIBaseModel
 from runtime_protocol.configuration import LANGGRAPH_LIMIT_NAMES, parse_required_positive_int
+from runtime_protocol.llm_provider import llm_provider_configuration, openai_sdk_default_headers
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -118,32 +119,9 @@ def runtime_limits(environ: dict[str, str] | None = None) -> LangGraphLimits:
 
 
 def provider_configuration(base_url_override: str | None = None) -> tuple[str, dict[str, str], str]:
-    """Return the validated provider URL, safe request headers, and API key."""
-    base_url = (base_url_override if base_url_override is not None else os.getenv("LLM_API_URL", "")).strip()
-    if not base_url:
-        raise RuntimeError("LLM_API_URL is required by langgraph-runtime")
-    auth_mode = os.getenv("LLM_AUTH_MODE", "").strip().lower()
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if auth_mode == "required":
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
-        return base_url, {"authorization": f"Bearer {api_key}"}, api_key
-    if auth_mode == "none":
-        provider = os.getenv("LLM_KEYLESS_PROVIDER", "").strip().lower()
-        if provider not in {"lmstudio", "ollama", "local"}:
-            raise RuntimeError("LLM_KEYLESS_PROVIDER must identify an allowed local provider")
-        return base_url, {}, ""
-    raise RuntimeError("LLM_AUTH_MODE must be 'required' or 'none'")
-
-
-def openai_sdk_default_headers(headers: dict[str, str]) -> dict[str, str] | None:
-    """Headers for ChatOpenAI. Authorization is supplied by api_key.
-
-    Passing the same Bearer token in default_headers duplicates Authorization
-    and Cloudflare (OpenRouter) rejects the request with a generic 400 HTML page.
-    """
-    filtered = {key: value for key, value in headers.items() if key.lower() != "authorization"}
-    return filtered or None
+    """Return the shared LLM server URL, request headers, and SDK API key."""
+    provider = llm_provider_configuration(base_url=base_url_override)
+    return provider.base_url, dict(provider.request_headers), provider.sdk_api_key
 
 
 def get_llm(
@@ -160,10 +138,7 @@ def get_llm(
         model=model_name,
         temperature=temperature,
         base_url=base_url,
-        # The OpenAI SDK rejects an empty key even for local/keyless
-        # OpenAI-compatible servers. This placeholder is not a credential;
-        # keyless readiness probes still send no Authorization header.
-        api_key=api_key or "not-needed",
+        api_key=api_key,
         default_headers=openai_sdk_default_headers(headers),
         http_async_client=client,
     )

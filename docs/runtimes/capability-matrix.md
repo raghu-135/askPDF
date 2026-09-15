@@ -17,6 +17,7 @@ execution is owned by the selected external runtime.
 | Checkpoint pruning | Runtime administration | Paused checkpoints retained |
 | Workflow compatibility | Workflow store and thread services | Stable IDs, versions, settings, fork metadata |
 | MCP behavior | MCP adapters and tool contracts | Tool names and context propagation |
+| Research canvases | Product CanvasService; runtimes call publish_canvas | research_canvas artifacts and ChatTurn canvas_ref |
 
 Capability responses are deployment-specific, definition-specific, and
 run-state-specific. Never infer support from a shared endpoint name alone.

@@ -189,8 +189,6 @@ services:
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: "120"
       LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      LLM_AUTH_MODE: none
-      LLM_KEYLESS_PROVIDER: local
       OPENAI_API_KEY: ""
       DEFAULT_TOKEN_BUDGET: ${DEFAULT_TOKEN_BUDGET:?DEFAULT_TOKEN_BUDGET must be set in .env}
       REPLANS_LIMIT: ${REPLANS_LIMIT:?REPLANS_LIMIT must be set in .env}
@@ -489,8 +487,6 @@ services:
       PYTHONPATH: /workspace:/app
       WEAVIATE_URL: http://weaviate:8080
       LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      LLM_AUTH_MODE: none
-      LLM_KEYLESS_PROVIDER: local
       OPENAI_API_KEY: ""
       ASKPDF_REPO_DIR: /workspace
     env_file: []
@@ -524,8 +520,6 @@ services:
       MCP_REQUEST_TIMEOUT_SECONDS: "120"
       MCP_OTEL_ENABLED: "false"
       LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      LLM_AUTH_MODE: none
-      LLM_KEYLESS_PROVIDER: local
       OPENAI_API_KEY: ""
       DEFAULT_TOKEN_BUDGET: "8192"
       REPLANS_LIMIT: "10"

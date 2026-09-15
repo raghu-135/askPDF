@@ -18,6 +18,7 @@ from app.services.memory_policy import (
     normalize_thread_memory_settings,
 )
 from app.services.embedding_tokenizer_registry import is_registered_embedding_model
+from runtime_protocol.llm_provider import llm_provider_configuration, openai_sdk_default_headers
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -37,33 +38,9 @@ async def _managed_http_client(name: str):
 
 
 def llm_provider_auth() -> tuple[str, Dict[str, str]]:
-    """Return the OpenAI-compatible API key and request headers for LLM_API_URL.
-
-    LangGraph already branches on LLM_AUTH_MODE. Control-plane probes and
-    ChatOpenAI wrappers must use the same credential; OpenRouter rejects
-    unauthenticated /chat/completions even though /models is public.
-    """
-    auth_mode = os.getenv("LLM_AUTH_MODE", "").strip().lower()
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if auth_mode == "required":
-        if not api_key:
-            return "", {}
-        return api_key, {"Authorization": f"Bearer {api_key}"}
-    if auth_mode == "none":
-        return api_key or "sk-no-key-required", {}
-    if api_key:
-        return api_key, {"Authorization": f"Bearer {api_key}"}
-    return "sk-no-key-required", {}
-
-
-def openai_sdk_default_headers(headers: Dict[str, str]) -> Optional[Dict[str, str]]:
-    """Headers for ChatOpenAI/OpenAIEmbeddings. Authorization is supplied by api_key.
-
-    Passing the same Bearer token in default_headers duplicates Authorization
-    and Cloudflare (OpenRouter) rejects the request with a generic 400 HTML page.
-    """
-    filtered = {key: value for key, value in headers.items() if key.lower() != "authorization"}
-    return filtered or None
+    """Return the shared LLM server SDK key and request headers."""
+    provider = llm_provider_configuration()
+    return provider.sdk_api_key, dict(provider.request_headers)
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -271,9 +248,7 @@ def merge_thread_settings(overrides=None):
 
 
 def _get_base_url() -> str:
-    """Get the LLM API base URL, ensuring it ends with /v1."""
-    base_url = os.getenv("LLM_API_URL")
-    return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+    return llm_provider_configuration().base_url
 
 
 def _is_openrouter_url(url: str) -> bool:
@@ -324,8 +299,7 @@ async def fetch_available_models():
                 "not_embedding_models": [],
                 "not_llm_models": [],
             }
-        if not llm_api_url.endswith("/v1"):
-            llm_api_url = f"{llm_api_url}/v1"
+        llm_api_url = llm_provider_configuration(base_url=llm_api_url).base_url
 
         async with _managed_http_client("llm") as client:
             _api_key, headers = llm_provider_auth()

@@ -45,8 +45,7 @@ def configure_runtime_test_environment():
         "DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS": "20",
         "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "1000",
         "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "1000",
-        "LLM_AUTH_MODE": "none",
-        "LLM_KEYLESS_PROVIDER": "local",
+        "LLM_API_URL": "http://127.0.0.1:1234/v1",
     }
     for name, value in defaults.items():
         os.environ.setdefault(name, value)

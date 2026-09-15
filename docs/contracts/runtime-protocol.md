@@ -10,6 +10,7 @@ It defines:
 - event envelopes and terminal semantics
 - typed runtime errors
 - authentication parsing
+- shared LLM server URL and optional API key
 - tool contracts and approval context
 - continuation bindings
 - task results and evidence

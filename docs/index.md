@@ -11,6 +11,7 @@ This directory contains the canonical human-facing documentation for askPDF.
 ## Product and API
 
 - [API overview](api.md): endpoint groups and request-flow behavior
+- [Research canvases](research-canvases.md): chat-native `canvas_spec_v1` documents, persistence, and agent emit
 - [Data model](data-model.md): PostgreSQL, Weaviate, files, runs, tasks, and memory
 - [Security and tool approval](security/tool-approval.md): authentication boundaries and human-gated tools
 

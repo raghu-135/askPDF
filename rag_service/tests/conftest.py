@@ -51,6 +51,7 @@ os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-charact
 os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
 os.environ.setdefault("ASKPDF_MCP_HEALTH_URL", "http://127.0.0.1:8000/health")
+os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
 # Control-plane pytest invokes first-party tools in-process. CI copies
 # `.env.ci` into the test runner, and that file uses loopback HTTP against
 # `rag-service`, which is not part of docker-compose.test.yml.

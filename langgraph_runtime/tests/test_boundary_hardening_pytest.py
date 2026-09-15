@@ -135,7 +135,6 @@ def test_missing_mcp_grant_fails_closed():
 async def test_provider_probe_uses_required_auth_header(monkeypatch):
     from langgraph_runtime.dependencies import probe_provider
 
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
     requests = []
 
@@ -156,8 +155,7 @@ async def test_provider_probe_uses_required_auth_header(monkeypatch):
 async def test_provider_probe_omits_auth_for_keyless_mode(monkeypatch):
     from langgraph_runtime.dependencies import probe_provider
 
-    monkeypatch.setenv("LLM_AUTH_MODE", "none")
-    monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     requests = []
     client = httpx.AsyncClient(transport=httpx.MockTransport(
         lambda request: (requests.append(request) or httpx.Response(200, json={"data": []}))
@@ -182,8 +180,7 @@ async def test_keyless_llm_client_uses_sdk_placeholder(monkeypatch):
 
     monkeypatch.setattr(llm_module, "ReasoningChatOpenAI", FakeChatOpenAI)
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "none")
-    monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     client = httpx.AsyncClient()
     try:
         llm_module.get_llm("local-model", http_async_client=client)
@@ -199,7 +196,6 @@ async def test_required_auth_chat_client_sends_authorization_once(monkeypatch):
     import langgraph_runtime.models.llm as llm_module
 
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-or-test-key")
     requests = []
 
@@ -235,8 +231,7 @@ def test_model_creation_requires_execution_client(monkeypatch):
     import langgraph_runtime.models.llm as llm_module
 
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "none")
-    monkeypatch.setenv("LLM_KEYLESS_PROVIDER", "local")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     with pytest.raises(RuntimeError, match="outside an execution scope"):
         llm_module.get_llm("local-model")
 

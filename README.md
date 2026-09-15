@@ -10,6 +10,7 @@ configurable AI workflows.
 - PDF viewing, annotations, highlighting, and local text-to-speech
 - Thread and project organization
 - Document, conversation, web, and memory retrieval
+- Research canvases: structured comparison, evidence, and timeline documents in the thread workspace
 - LangGraph and Hermes-backed agent workflows
 - Deep-research tasks with plans, artifacts, approvals, and recovery
 - Local or OpenAI-compatible model providers
@@ -25,39 +26,31 @@ Prerequisites:
 Set up the environment and start the stack:
 
     cp .env.example .env
-    # Edit .env: LLM_API_URL plus LLM_AUTH_MODE (and OPENAI_API_KEY when required).
+    # Edit .env: LLM_API_URL, and OPENAI_API_KEY when the server requires it.
     docker compose up --build
 
 Open http://localhost:3000.
 
 ### LLM provider authentication
 
-Chat and remote embeddings use one OpenAI-compatible base URL (`LLM_API_URL`).
-The model dropdown can list public catalogs without a key; **using** a model
-always goes through `/chat/completions` (and `/embeddings`) with the auth mode
-below. LangGraph uses the same variables.
+Chat and remote embeddings use one OpenAI-compatible base URL (`LLM_API_URL`)
+and one optional API key (`OPENAI_API_KEY`). The control plane, LangGraph, and
+Hermes all use those two values. A nonempty key sends `Authorization: Bearer`
+on catalog, chat, and embedding calls. Leave the key empty for local servers.
 
-**Local / keyless** (LM Studio, Ollama, Docker Model Runner):
+**Local** (LM Studio, Ollama, Docker Model Runner):
 
     LLM_API_URL=http://host.docker.internal:1234/v1
-    LLM_AUTH_MODE=none
-    LLM_KEYLESS_PROVIDER=lmstudio
     OPENAI_API_KEY=
 
-`LLM_KEYLESS_PROVIDER` must be `lmstudio`, `ollama`, or `local`. It is required
-when `LLM_AUTH_MODE=none` and ignored when auth is `required`.
-
-**Hosted / API key** (OpenRouter, OpenAI, and similar):
+**Hosted** (OpenRouter, OpenAI, and similar):
 
     LLM_API_URL=https://openrouter.ai/api/v1
-    LLM_AUTH_MODE=required
-    LLM_KEYLESS_PROVIDER=
     OPENAI_API_KEY=sk-or-replace-with-your-key
 
-Do not leave `LLM_KEYLESS_PROVIDER=lmstudio` as your only mental model of
-auth: with `LLM_AUTH_MODE=required` that value is unused; the Bearer token is
-what OpenRouter checks. A missing or unused key shows up in the UI as
-“Selected LLM model is unavailable.”
+When switching from a hosted API to a local server, clear `OPENAI_API_KEY`.
+A leftover key is sent as a Bearer token. A missing key on a hosted API shows
+up in the UI as “Selected LLM model is unavailable.”
 
 Replace the other placeholder secrets in `.env` as well. Full setup, model
 requirements, and service-specific configuration are in
@@ -78,6 +71,7 @@ See [Architecture](docs/architecture.md) and [Runtime overview](docs/runtimes/ov
 - [Getting started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [API overview](docs/api.md)
+- [Research canvases](docs/research-canvases.md)
 - [Data model](docs/data-model.md)
 - [Runtime documentation](docs/runtimes/overview.md)
 - [Security and tool approval](docs/security/tool-approval.md)

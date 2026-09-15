@@ -63,7 +63,7 @@ async def probe_provider(url: str, timeout: float, *, client: httpx.AsyncClient 
     client = client or httpx.AsyncClient(timeout=timeout)
     try:
         provider_base, headers, _api_key = provider_configuration(url)
-        models_url = provider_base + "/models" if provider_base.endswith("/v1") else provider_base + "/v1/models"
+        models_url = provider_base.rstrip("/") + "/models"
         response = await client.get(models_url, headers=headers)
         if not 200 <= response.status_code < 300:
             return {"ok": False, "reason": "unexpected_status", "http_status": response.status_code}

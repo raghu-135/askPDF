@@ -517,6 +517,10 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             **os.environ,
             "HERMES_RUNTIME_TOKEN": "test-hermes-runtime-token-32-characters",
         }
+        validation_environment["LLM_API_URL"] = (
+            validation_environment.get("LLM_API_URL")
+            or "http://127.0.0.1:1234/v1"
+        )
     validate_runtime_environment(service="hermes", environ=validation_environment)
     hermes_api_url = os.getenv("HERMES_API_URL", "").strip()
     if not hermes_api_url:

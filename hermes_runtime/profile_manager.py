@@ -20,6 +20,7 @@ from runtime_protocol.hermes_contract import (
     validate_provider_context,
 )
 from runtime_protocol.configuration import validate_runtime_environment
+from runtime_protocol.llm_provider import llm_provider_configuration
 
 
 PROFILE_PREFIX = "askpdf-run-"
@@ -179,14 +180,13 @@ class RunProfileManager:
             validate_provider_context(selected_provider, context_length)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
-        provider_url = os.getenv("LLM_API_URL", "").strip()
+        provider = llm_provider_configuration()
+        provider_url = provider.base_url
         # Run profiles always talk to LLM_API_URL as an OpenAI-compatible
         # endpoint. Hermes' native lmstudio/openrouter adapters 404 against
         # that URL; `custom` uses base_url + the selected model id.
         chat_provider = "custom"
-        if not provider_url:
-            raise RuntimeError("LLM_API_URL is required for run profiles")
-        provider_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        provider_api_key = provider.credential
         secret_values = (
             api_server_key, context_token, provider_url, provider_api_key,
             selected_model, selected_provider,

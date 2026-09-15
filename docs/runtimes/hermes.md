@@ -15,6 +15,10 @@ Hermes definitions resolve into deterministic managed profiles containing MCP
 and tool policy, model/provider policy, skills, memory, delegation, and limits.
 Credentials are environment-owned and must not appear in definitions.
 
+When `publish_canvas` is in `allowed_tool_ids`, resolve appends layout-skill
+ids and the canvas layout prompt to instructions. Those skills are omitted
+when the tool is not admitted. See [Research canvases](../research-canvases.md).
+
 ## Capabilities and limitations
 
 Hermes supports execution, event streaming, approvals, and cooperative
@@ -38,7 +42,7 @@ When enabled, configure distinct values for:
 - HERMES_RUNTIME_TOKEN
 - HERMES_API_TOKEN
 - MCP_EXECUTION_CONTEXT_SECRET
-- OPENAI_API_KEY when required by the upstream provider
+- OPENAI_API_KEY when the shared LLM server requires a Bearer token
 
 Hermes uses the selected askPDF thread model and the existing
 OpenAI-compatible LLM_API_URL. Readiness verifies both the upstream service and

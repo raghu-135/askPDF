@@ -359,18 +359,9 @@ def validate_runtime_environment(
     if service == "hermes":
         _deep_agent_budgets("hermes", values, errors)
 
+    if service in {"control_plane", "langgraph", "hermes"}:
+        _url("LLM_API_URL", values, errors)
     if service == "langgraph":
-        auth_mode = _required("LLM_AUTH_MODE", values, errors)
-        if auth_mode is not None and auth_mode not in {"required", "none"}:
-            errors.append("LLM_AUTH_MODE must be 'required' or 'none'")
-        keyless_provider = values.get("LLM_KEYLESS_PROVIDER", "").strip().lower()
-        if auth_mode == "none":
-            if not keyless_provider:
-                errors.append("LLM_KEYLESS_PROVIDER is required when LLM_AUTH_MODE=none")
-            elif keyless_provider not in {"lmstudio", "ollama", "local"}:
-                errors.append("LLM_KEYLESS_PROVIDER must be lmstudio, ollama, or local")
-        elif auth_mode == "required" and not values.get("OPENAI_API_KEY", "").strip():
-            errors.append("OPENAI_API_KEY is required when LLM_AUTH_MODE=required")
         _secret("LANGGRAPH_RUNTIME_BINDING_SECRET", values, errors)
         _secret("LANGGRAPH_RUNTIME_TOKEN", values, errors)
         _distinct_secrets(

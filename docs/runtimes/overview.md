@@ -6,7 +6,8 @@ askPDF has a product control plane and pluggable external execution runtimes:
                                       └───────────────→ Hermes runtime
 
 The control plane owns workflow definitions, product policy, authentication,
-tasks, plans, todos, subagents, budgets, artifacts, and trace projections.
+tasks, plans, todos, subagents, budgets, artifacts (including research
+canvases), and trace projections.
 
 Runtimes own framework validation, compilation, execution, checkpoints,
 runtime leases, execution journals, dependency monitoring, and opaque

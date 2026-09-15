@@ -21,7 +21,12 @@ running because test services do not publish the same host ports.
 - schema and migration guardrails
 - LangGraph runtime integration and recovery
 - Hermes runtime proof and restart recovery
-- frontend Node tests
+- frontend Node tests, including canvas-spec and document-tab coverage
+
+Canvas backend coverage lives in test_canvas_spec_pytest.py,
+test_canvas_emit_pytest.py, test_canvas_layout_skills_pytest.py, and
+test_canvas_api_pytest.py. LangGraph answer-node emit is
+langgraph_runtime/tests/test_canvas_publish_pytest.py.
 
 The backend runner maintains explicit ownership in
 rag_service/tests/test_inventory.json and validates that repository tests are

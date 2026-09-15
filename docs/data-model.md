@@ -17,11 +17,9 @@ are derived or service-owned stores.
 - AgentTaskArtifact: durable content-addressed objects, including task reports
   and chat-native research canvases (`research_canvas`,
   `application/vnd.askpdf.canvas+json`). Chat-only canvases are thread-owned
-  and do not require a deep-research task. Agent publishes use the
-  `publish_canvas` tool and may store the emitting `agent_run_id` so the
-  current ChatTurn can surface an Open canvas card.
-  Compare-papers, evidence-matrix, and timeline canvases are prompt skills
-  over the same spec, injected only when publish is admitted.
+  (`thread_id` set, `task_id` optional). Agent publishes may store
+  `agent_run_id` so ChatTurn can surface `canvas_ref`. See
+  [Research canvases](research-canvases.md).
 
 Files and associations remain separate because one file can be reused across
 threads and projects. Annotations are association-specific, not globally

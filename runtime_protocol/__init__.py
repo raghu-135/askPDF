@@ -11,6 +11,14 @@ from .protocol import (
     validate_event_mapping,
 )
 from .configuration import RuntimeConfigurationError, RuntimeEnvironment, parse_bounded_ratio, validate_runtime_environment
+from .llm_provider import (
+    LLM_SDK_PLACEHOLDER_API_KEY,
+    LlmProviderConfiguration,
+    LlmProviderConfigurationError,
+    llm_provider_configuration,
+    normalize_llm_api_url,
+    openai_sdk_default_headers,
+)
 from .auth import PUBLIC_OPERATIONAL_PATHS, bearer_token, valid_bearer_token
 from .tool_contract import (
     MAX_TOOL_RESULT_BYTES,
@@ -45,6 +53,12 @@ __all__ = [
     "RuntimeEnvironment",
     "parse_bounded_ratio",
     "validate_runtime_environment",
+    "LLM_SDK_PLACEHOLDER_API_KEY",
+    "LlmProviderConfiguration",
+    "LlmProviderConfigurationError",
+    "llm_provider_configuration",
+    "normalize_llm_api_url",
+    "openai_sdk_default_headers",
     "PUBLIC_OPERATIONAL_PATHS",
     "bearer_token",
     "valid_bearer_token",

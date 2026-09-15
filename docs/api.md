@@ -36,25 +36,16 @@ The implementation is in rag_service/app/api/messages.py.
 
 ## Research canvases
 
-POST /api/threads/{thread_id}/canvases stores a versioned canvas_spec_v1 document
-as a `research_canvas` artifact (`application/vnd.askpdf.canvas+json`) in the
-shared content store. Chat-only requests persist one without an AgentTask,
-the same way ChatTurn is a product projection. GET lists current canvases;
-GET by id returns one document. Revisions use supersedes_id. The renderer only
-accepts typed blocks (stat, table, callout, markdown, sources, dag).
+POST /api/threads/{thread_id}/canvases stores a `canvas_spec_v1` document as a
+`research_canvas` artifact. GET lists current canvases (`current_only` defaults
+true); GET by id returns one document. Chat responses may include `canvas_ref`
+on the assistant turn. Revisions use `supersedes_id`.
 
-Agents emit canvases with the first-party `publish_canvas` MCP tool
-(`research_canvas_publish`). Admission rejects unknown blocks and requires a
-sources block whose document `file_hash` values are attached to the thread.
-Thread setting `hitl_canvas_publish` asks a human before that durable write.
+Agent emit, admission, layout skills, and the workbench tab are documented in
+[Research canvases](research-canvases.md).
 
-When `publish_canvas` / `research_canvas_publish` is admitted, the agent
-also receives prompt-only layout skills (`canvas_compare_papers`,
-`canvas_evidence_matrix`, `canvas_timeline`). Those are recipes over the
-existing blocks, not new runtimes or block types.
-
-The implementation is in rag_service/app/models/canvas.py,
-rag_service/app/tools/publish_canvas.py, and rag_service/app/api/canvases.py.
+The routers are rag_service/app/api/canvases.py and the `canvas_ref` projection
+in rag_service/app/api/messages.py.
 
 ## Long-running tasks
 

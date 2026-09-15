@@ -271,8 +271,10 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             or "postgresql://runtime-test:runtime-test@localhost/runtime-test"
         )
         validation_environment["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
-        validation_environment["LLM_AUTH_MODE"] = validation_environment.get("LLM_AUTH_MODE") or "none"
-        validation_environment["LLM_KEYLESS_PROVIDER"] = validation_environment.get("LLM_KEYLESS_PROVIDER") or "local"
+        validation_environment["LLM_API_URL"] = (
+            validation_environment.get("LLM_API_URL")
+            or "http://127.0.0.1:1234/v1"
+        )
         # ``require_auth=False`` is the injected, in-process test app.  It is
         # intentionally allowed to validate against a production-shaped
         # external-runtime configuration even when the developer's .env still

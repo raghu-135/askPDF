@@ -48,8 +48,6 @@ services:
       - EMBEDDING_DEVICE=cpu
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
-      - LLM_AUTH_MODE=none
-      - LLM_KEYLESS_PROVIDER=local
       - OPENAI_API_KEY=
       - LANGGRAPH_RUNTIME_TOKEN=test-langgraph-runtime-token-32-characters
       - MCP_TRANSPORT=in_process

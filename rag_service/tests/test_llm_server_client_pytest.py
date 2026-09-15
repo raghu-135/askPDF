@@ -24,7 +24,7 @@ from app.models.llm_server_client import (
 
 
 def test_provider_auth_sends_bearer_token_when_required(monkeypatch):
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-or-test-key")
     api_key, headers = llm_provider_auth()
     assert api_key == "sk-or-test-key"
@@ -32,10 +32,10 @@ def test_provider_auth_sends_bearer_token_when_required(monkeypatch):
 
 
 def test_provider_auth_omits_authorization_for_keyless_local_providers(monkeypatch):
-    monkeypatch.setenv("LLM_AUTH_MODE", "none")
+    monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     api_key, headers = llm_provider_auth()
-    assert api_key == "sk-no-key-required"
+    assert api_key == "not-needed"
     assert headers == {}
 
 
@@ -57,7 +57,6 @@ def test_openrouter_rate_limit_is_congestion_not_missing_model():
 @pytest.mark.asyncio
 async def test_chat_readiness_treats_gemma_free_rate_limit_as_ready(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model_id = "google/gemma-4-31b-it:free"
     _model_ready_cache.clear()
@@ -75,7 +74,6 @@ async def test_chat_readiness_treats_gemma_free_rate_limit_as_ready(monkeypatch)
 @pytest.mark.asyncio
 async def test_chat_readiness_probes_only_on_cache_miss(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model_id = "google/gemma-4-31b-it:free"
     _model_ready_cache.clear()
@@ -186,7 +184,6 @@ async def test_closing_implicit_llm_wrapper_does_not_close_shared_transport():
 @pytest.mark.asyncio
 async def test_openrouter_model_list_includes_registered_embedding_catalog(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -221,7 +218,6 @@ async def test_openrouter_model_list_includes_registered_embedding_catalog(monke
 @pytest.mark.asyncio
 async def test_openrouter_embedding_readiness_uses_embeddings_catalog(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model_id = "qwen/qwen3-embedding-4b"
     _model_ready_cache.clear()
@@ -261,7 +257,6 @@ def test_embedding_probe_accepts_huggingface_casing():
 @pytest.mark.asyncio
 async def test_openrouter_embedding_readiness_accepts_huggingface_model_echo(monkeypatch):
     monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("LLM_AUTH_MODE", "required")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model_id = "qwen/qwen3-embedding-4b"
     _model_ready_cache.clear()

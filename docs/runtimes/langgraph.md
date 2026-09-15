@@ -19,6 +19,11 @@ langgraph-runtime owns:
 The product control plane owns user authorization, product workflow records,
 task lifecycle, budgets, artifacts, tool policy, and trace projection.
 
+When a workflow admits `research_canvas_publish`, answer and synthesis nodes
+may call `publish_canvas` once the evidence pass is done. Retrieval workers
+do not. Flattened tool arguments are normalized to `canvas_spec_v1` before
+MCP. See [Research canvases](../research-canvases.md).
+
 ## Configuration
 
 Production runtime deployments require:

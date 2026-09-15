@@ -55,8 +55,7 @@ def _environment() -> dict[str, str]:
         "LANGGRAPH_RUNTIME_URL": "http://langgraph-runtime:8100",
         "LANGGRAPH_RUNTIME_TOKEN": "r" * 32,
         "LANGGRAPH_RUNTIME_BINDING_SECRET": "b" * 32,
-        "LLM_AUTH_MODE": "none",
-        "LLM_KEYLESS_PROVIDER": "local",
+        "LLM_API_URL": "http://127.0.0.1:1234/v1",
         "HERMES_MODEL_CONTEXT_LENGTH": "32768",
         "HERMES_MODEL_PROVIDER": "lmstudio",
         "MCP_EXECUTION_CONTEXT_SECRET": "x" * 32,
@@ -242,24 +241,27 @@ def test_control_plane_may_use_in_process_mcp_transport():
     validate_runtime_environment(service="control_plane", environ=values)
 
 
-@pytest.mark.parametrize(
-    "mode,keyless_provider,api_key,expected",
-    [
-        ("required", "", "secret", True),
-        ("required", "", "", False),
-        ("none", "local", "", True),
-        ("none", "", "", False),
-        ("none", "remote", "", False),
-    ],
-)
-def test_langgraph_model_authentication_is_explicit(mode, keyless_provider, api_key, expected):
+def test_shared_llm_provider_uses_one_url_and_optional_key():
+    from runtime_protocol.llm_provider import llm_provider_configuration
+
+    hosted = llm_provider_configuration(
+        environ={"LLM_API_URL": "http://ollama.local:11434", "OPENAI_API_KEY": "sk-test"},
+    )
+    local = llm_provider_configuration(
+        environ={"LLM_API_URL": "http://127.0.0.1:1234/v1", "OPENAI_API_KEY": ""},
+    )
+    assert hosted.base_url == "http://ollama.local:11434/v1"
+    assert hosted.request_headers == {"Authorization": "Bearer sk-test"}
+    assert local.request_headers == {}
     values = _environment()
-    values.update({"LLM_AUTH_MODE": mode, "LLM_KEYLESS_PROVIDER": keyless_provider, "OPENAI_API_KEY": api_key})
-    if expected:
+    values.pop("LLM_API_URL")
+    with pytest.raises(RuntimeConfigurationError, match="LLM_API_URL"):
         validate_runtime_environment(service="langgraph", environ=values)
-    else:
-        with pytest.raises(RuntimeConfigurationError):
-            validate_runtime_environment(service="langgraph", environ=values)
+    values = _environment()
+    values["OPENAI_API_KEY"] = ""
+    validate_runtime_environment(service="langgraph", environ=values)
+    values["OPENAI_API_KEY"] = "sk-test"
+    validate_runtime_environment(service="control_plane", environ={**values, "COMPOSE_PROFILES": ""})
 
 
 def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
@@ -307,5 +309,7 @@ def test_unused_environment_names_are_not_documented():
         "AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS",
         "AGENT_RUNTIME_PROVIDER_READY_TIMEOUT_SECONDS",
         "AGENT_RUNTIME_SCHEMA_AUTO_CREATE",
+        "LLM_AUTH_MODE",
+        "LLM_KEYLESS_PROVIDER",
     ):
         assert name not in text

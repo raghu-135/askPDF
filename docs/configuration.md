@@ -12,9 +12,7 @@ variable to the example file before documenting it here.
 | TEST_DATABASE_URL | Test runner | Isolated test PostgreSQL |
 | WEAVIATE_URL | Control plane | Vector database |
 | LLM_API_URL | Control plane/runtime | OpenAI-compatible model provider |
-| LLM_AUTH_MODE | Control plane/runtime | `required` (Bearer token) or `none` (local keyless) |
-| LLM_KEYLESS_PROVIDER | Control plane/runtime | `lmstudio`, `ollama`, or `local` when auth is `none` |
-| OPENAI_API_KEY | Control plane/runtime | Provider API key when auth is `required` |
+| OPENAI_API_KEY | Control plane/runtime | Optional Bearer token; empty for local servers |
 | ASKPDF_ADMIN_TOKEN | Control plane/frontend proxy | Product API authentication |
 | NEXT_PUBLIC_API_URL | Frontend build | Browser-visible API base |
 | ASKPDF_BACKEND_URL | Frontend server | Server-side control-plane URL |
@@ -35,10 +33,10 @@ variable to the example file before documenting it here.
 - LOCAL_RERANKER_MODEL selects the optional local cross-encoder.
 - EMBEDDING_DEVICE and RERANKER_DEVICE select CPU, CUDA, or MPS where supported.
 - LLM_API_URL points to Docker Model Runner, Ollama, LM Studio, OpenRouter, or
-  another OpenAI-compatible provider.
-- LLM_AUTH_MODE must match that provider: `none` for local servers (with
-  LLM_KEYLESS_PROVIDER), `required` plus OPENAI_API_KEY for hosted APIs.
-  Model-list endpoints may be public; chat probes always use this auth.
+  another OpenAI-compatible provider. The app appends `/v1` when needed.
+- OPENAI_API_KEY, when set, is sent as `Authorization: Bearer` on catalog,
+  chat, and embedding calls from every service. Leave it empty for local
+  servers. Model-list endpoints may be public; chat probes always use this auth.
 
 The chat model must support the tool-calling behavior required by the selected
 workflow. Model readiness is checked by rag_service before dependent operations.

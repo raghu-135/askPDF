@@ -15,9 +15,7 @@ Copy the example environment file:
 At minimum, set the LLM provider block in `.env`:
 
 - `LLM_API_URL`
-- `LLM_AUTH_MODE` (`none` for local servers, `required` for hosted APIs)
-- `LLM_KEYLESS_PROVIDER` when `LLM_AUTH_MODE=none` (`lmstudio`, `ollama`, or `local`)
-- `OPENAI_API_KEY` when `LLM_AUTH_MODE=required`
+- `OPENAI_API_KEY` when the server requires a Bearer token; leave empty for local servers
 
 Replace the other placeholder secrets. The complete variable inventory and
 service ownership are documented in [Configuration](configuration.md).
@@ -29,8 +27,7 @@ See the README for copy-paste local vs OpenRouter examples.
     docker model pull ai/nomic-embed-text-v1.5:latest
 
     LLM_API_URL=http://host.docker.internal:12434
-    LLM_AUTH_MODE=none
-    LLM_KEYLESS_PROVIDER=local
+    OPENAI_API_KEY=
 
 ### Ollama
 
@@ -38,16 +35,14 @@ See the README for copy-paste local vs OpenRouter examples.
     ollama pull nomic-embed-text
 
     LLM_API_URL=http://host.docker.internal:11434
-    LLM_AUTH_MODE=none
-    LLM_KEYLESS_PROVIDER=ollama
+    OPENAI_API_KEY=
 
 ### LM Studio
 
 Start the local server, download a chat model and embedding model, then use:
 
     LLM_API_URL=http://host.docker.internal:1234/v1
-    LLM_AUTH_MODE=none
-    LLM_KEYLESS_PROVIDER=lmstudio
+    OPENAI_API_KEY=
 
 The selected chat model must support tool calling. The control plane also
 requires a compatible embedding model and may use a local reranker.
@@ -55,8 +50,6 @@ requires a compatible embedding model and may use a local reranker.
 ### OpenRouter (or other hosted OpenAI-compatible APIs)
 
     LLM_API_URL=https://openrouter.ai/api/v1
-    LLM_AUTH_MODE=required
-    LLM_KEYLESS_PROVIDER=
     OPENAI_API_KEY=sk-or-replace-with-your-key
 
 The control plane lists OpenRouter embedding models that have a registered
