@@ -19,6 +19,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
     deriveConversationSentences,
@@ -112,6 +113,7 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import type { CanvasRef } from '../lib/canvas-spec';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -128,6 +130,7 @@ interface ChatMessage extends Message {
     agent_route?: string;
     agent_route_reason?: string;
     pending_human_review?: boolean;
+    canvas_ref?: CanvasRef | null;
 }
 
 type LiveChatExecution = {
@@ -391,6 +394,7 @@ type ChatMessageItemProps = {
     onEditQuestion: (msg: ChatMessage, event: React.MouseEvent) => void;
     onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
     onOpenAgentRun: (msg: ChatMessage) => void;
+    onOpenCanvas?: (canvas: CanvasRef) => void;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
 };
 
@@ -413,6 +417,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     onEditQuestion,
     onDeleteMessage,
     onOpenAgentRun,
+    onOpenCanvas,
     formatAgentWorkflowLabel,
 }: ChatMessageItemProps) {
     const theme = useTheme();
@@ -532,6 +537,31 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </Button>
                     </Box>
                 )}
+                {msg.canvas_ref && onOpenCanvas && (
+                    <Paper
+                        variant="outlined"
+                        sx={{
+                            mb: 1,
+                            px: 1.25,
+                            py: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.25,
+                            borderRadius: 2,
+                            cursor: 'pointer',
+                        }}
+                        onClick={() => onOpenCanvas(msg.canvas_ref!)}
+                    >
+                        <DashboardOutlinedIcon fontSize="small" color="primary" />
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Research canvas</Typography>
+                            <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+                                {msg.canvas_ref.title}
+                            </Typography>
+                        </Box>
+                        <Button size="small" sx={{ textTransform: 'none', flexShrink: 0 }}>Open</Button>
+                    </Paper>
+                )}
                 {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
                     <Box sx={{ mb: 1 }}>
                         <details>
@@ -642,6 +672,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
@@ -680,6 +711,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     autoScroll = true,
     isPanelResizing = false,
     onOpenTrace,
+    onOpenCanvas,
     onOpenMemoryReview,
     testRuntime,
 }) => {
@@ -711,8 +743,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
+    const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
+    const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
     const [useMemory, setUseMemory] = useState(true);
@@ -819,6 +853,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
         setHitlWebApproval(webSearchMode === 'ask');
+        setHitlCanvasPublish(settings?.hitl_canvas_publish ?? defaultHitlCanvasPublish);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setUseMemory(settings?.memory?.memory_enabled ?? true);
         setUseThreadMemory(settings?.memory?.thread_reads_thread_memory ?? true);
@@ -827,6 +862,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
     }, [
         defaultCustomInstructions,
+        defaultHitlCanvasPublish,
         defaultSystemRole,
         defaultUseReranker,
         webSearchMode,
@@ -948,6 +984,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
+                    setDefaultHitlCanvasPublish(res.defaults.hitl_canvas_publish ?? false);
                     setDefaultUseReranker(res.defaults.use_reranker ?? false);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
@@ -957,6 +994,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
+                        setHitlCanvasPublish(res.defaults.hitl_canvas_publish ?? false);
                         setUseReranker(res.defaults.use_reranker ?? false);
                         setAgentWorkflowId(normalizeAgentWorkflowForUi(res.defaults.agent_workflow?.workflow_id));
                     }
@@ -1001,6 +1039,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 agent_workflow_id: m.agent_workflow_id ?? m.metadata?.agent_workflow_id,
                 agent_route: m.agent_route ?? m.metadata?.agent_route,
                 agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
+                canvas_ref: m.canvas_ref,
             }));
             const temporary = testRuntime?.session.messages.map((message) => (
                 builderTestMessageToChatMessage(message, testRuntime.baseWorkflowId)
@@ -1208,6 +1247,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
         setUseReranker(defaultUseReranker);
+        setHitlCanvasPublish(defaultHitlCanvasPublish);
         setUseMemory(true);
         setUseThreadMemory(true);
         setUseProjectMemory(true);
@@ -2314,6 +2354,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
+                hitl_canvas_publish: hitlCanvasPublish,
                 use_reranker: useReranker,
                 memory: {
                     memory_enabled: useMemory,
@@ -2684,6 +2725,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     onEditQuestion={handleEditQuestion}
                                     onDeleteMessage={handleDeleteMessage}
                                     onOpenAgentRun={handleOpenAgentRun}
+                                    onOpenCanvas={onOpenCanvas}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}
                                 />
                             </Box>
@@ -2796,6 +2838,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 replans={replans}
                 replansLimit={replansLimit}
                 useReranker={useReranker}
+                hitlCanvasPublish={hitlCanvasPublish}
                 useMemory={useMemory}
                 useThreadMemory={useThreadMemory}
                 useProjectMemory={useProjectMemory}
@@ -2812,6 +2855,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
+                onHitlCanvasPublishChange={(checked) => setHitlCanvasPublish(checked)}
                 onMemoryChange={(checked) => setUseMemory(checked)}
                 onThreadMemoryChange={(checked) => setUseThreadMemory(checked)}
                 onProjectMemoryChange={(checked) => setUseProjectMemory(checked)}

@@ -25,7 +25,8 @@
       }
     },
     "config": {
-      "allowed_tool_ids": ["thread_shape", "wikipedia_reference", "document_search_knowledge", "document_inspection", "document_context", "thread_conversation_history", "durable_memory", "thread_events", "live_web_recon", "clarify_intent"],
+      "allowed_tool_ids": ["thread_shape", "wikipedia_reference", "document_search_knowledge",
+        "research_canvas_publish", "document_inspection", "document_context", "thread_conversation_history", "durable_memory", "thread_events", "live_web_recon", "clarify_intent"],
       "use_web_search": false,
       "use_reranker": true,
       "system_role": "",

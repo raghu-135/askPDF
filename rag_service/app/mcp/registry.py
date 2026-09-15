@@ -18,6 +18,7 @@ from app.tools.memory_manager import InternetSearchRequest, memory_get, memory_p
 from app.models.memory_tools import MemoryGetInput, MemoryPrepareChangeInput, MemorySearchInput
 from app.tools.external_research import search_external
 from app.tools.thread_shape import ThreadShapeRequest, invoke_thread_shape
+from app.tools.publish_canvas import PublishCanvasRequest, invoke_publish_canvas
 from app.tools.retrieval_knowledge import inspect_document, read_context, search_knowledge
 
 ToolHandler = Callable[..., Awaitable[ToolResult]]
@@ -85,6 +86,7 @@ def _neutral(name: str, model: type[BaseModel], handler: ToolHandler) -> MCPTool
 
 _NEUTRAL: dict[str, MCPToolDefinition] = {
     "get_thread_shape": _neutral("get_thread_shape", ThreadShapeRequest, invoke_thread_shape),
+    "publish_canvas": _neutral("publish_canvas", PublishCanvasRequest, invoke_publish_canvas),
     "search_knowledge": _neutral("search_knowledge", SearchKnowledgeRequest, search_knowledge),
     "inspect_document": _neutral("inspect_document", InspectDocumentRequest, inspect_document),
     "read_context": _neutral("read_context", ReadContextRequest, read_context),

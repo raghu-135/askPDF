@@ -3,7 +3,7 @@ import type {
   ProcessStatus as ProcessStatusValue,
   ThreadFileSourceType as ThreadFileSourceTypeValue,
 } from './enums';
-import type { WorkspaceTab, TraceWorkspaceTab } from '../components/workbench/WorkspaceTabs';
+import type { WorkspaceTab, TraceWorkspaceTab, ResearchCanvasWorkspaceTab } from '../components/workbench/WorkspaceTabs';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
 type DocumentProcessStatus = Extract<ProcessStatusValue, 'pending' | 'completed' | 'failed'>;
@@ -49,24 +49,37 @@ export const buildDocumentWorkspaceTabs = ({
   enabled,
   documents,
   traces,
+  includeResearchCanvas = false,
+  canvasCount = 0,
 }: {
   enabled: boolean;
   documents: readonly PdfTab[];
   traces: readonly TraceTabStatusInput[];
+  includeResearchCanvas?: boolean;
+  canvasCount?: number;
 }): WorkspaceTab[] => {
   if (!enabled) return [];
-  return [
+  const tabs: WorkspaceTab[] = [
     { kind: 'memory', id: 'memory-tab', label: 'Memory' },
     { kind: 'browser', id: 'browser-tab', label: 'Browser' },
     ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
-    {
-      kind: 'trace',
-      id: 'trace-tab',
-      label: 'Debug Trace',
-      count: traces.length,
-      status: traceWorkspaceStatus(traces),
-    },
   ];
+  if (includeResearchCanvas) {
+    tabs.push({
+      kind: 'research_canvas',
+      id: 'research-canvas-tab',
+      label: 'Canvas',
+      count: canvasCount,
+    } satisfies ResearchCanvasWorkspaceTab);
+  }
+  tabs.push({
+    kind: 'trace',
+    id: 'trace-tab',
+    label: 'Debug Trace',
+    count: traces.length,
+    status: traceWorkspaceStatus(traces),
+  });
+  return tabs;
 };
 
 export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): WorkspaceTab[] => [

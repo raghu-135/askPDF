@@ -257,6 +257,7 @@ export interface ThreadSettings {
   tool_instructions: Record<string, string>;
   custom_instructions: string;
   hitl_web_approval: boolean;
+  hitl_canvas_publish: boolean;
   use_reranker: boolean;
   agent_workflow?: {
     workflow_id: string;
@@ -898,6 +899,7 @@ export interface PromptDefaults {
   tool_instructions: Record<string, string>;
   custom_instructions: string;
   hitl_web_approval?: boolean;
+  hitl_canvas_publish?: boolean;
   use_reranker?: boolean;
   agent_workflow?: {
     workflow_id: string;
@@ -983,6 +985,7 @@ export interface Message {
   agent_workflow_id?: string;
   agent_route?: string;
   agent_route_reason?: string;
+  canvas_ref?: { id: string; title: string } | null;
 }
 
 export interface AgentTraceEvent {

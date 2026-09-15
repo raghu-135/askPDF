@@ -34,6 +34,7 @@ from app.time_utils import iso_utc_z
 from app.auth import current_principal
 from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
+from app.services.canvas_service import CanvasService
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -76,6 +77,7 @@ async def get_thread_messages_endpoint(
             raise HTTPException(status_code=404, detail="Thread not found")
 
         messages = await get_thread_messages(thread_id, limit, offset)
+        canvas_refs = await CanvasService().refs_by_turn(thread_id)
         return {
             "thread_id": thread_id,
             "messages": [
@@ -93,6 +95,11 @@ async def get_thread_messages_endpoint(
                     "agent_run_turn_kind": getattr(m, "agent_run_turn_kind", None),
                     "agent_run_sequence": getattr(m, "agent_run_sequence", None),
                     "agent_trace_refs": getattr(m, "agent_trace_refs", None),
+                    "canvas_ref": (
+                        canvas_refs.get(getattr(m, "turn_id", None) or "")
+                        if str(getattr(m, "role", "")) in {MessageRole.ASSISTANT.value, "assistant"}
+                        else None
+                    ),
                     "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages

@@ -48,6 +48,7 @@ from app.api.models import router as models_router
 from app.api.agent_workflows import router as agent_workflows_router
 from app.api.agent_tasks import router as agent_tasks_router
 from app.api.tools import router as tools_router
+from app.api.canvases import router as canvases_router
 from app.product_orchestration.repository import AgentWorkflowRepository
 from app.product_orchestration.execution_stream import drain_retained_executions
 from app.db import ensure_default_project
@@ -432,6 +433,7 @@ app.include_router(models_router, prefix="/api")
 app.include_router(agent_workflows_router, prefix="/api")
 app.include_router(agent_tasks_router, prefix="/api")
 app.include_router(tools_router, prefix="/api")
+app.include_router(canvases_router, prefix="/api")
 
 @app.get("/health")
 async def health_check():

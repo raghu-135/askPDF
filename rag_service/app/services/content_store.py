@@ -239,3 +239,12 @@ def task_artifact_content_key(task_id: str, run_id: str, artifact_id: str, versi
     if version < 1:
         raise ValueError("artifact version must be positive")
     return f"agent-tasks/{task_id}/{run_id}/{artifact_id}/{version}"
+
+
+def thread_artifact_content_key(thread_id: str, artifact_id: str, version: int = 1) -> str:
+    values = (thread_id, artifact_id)
+    if any(not value or "/" in value or "\\" in value or value in {".", ".."} for value in values):
+        raise ValueError("invalid thread artifact identity")
+    if version < 1:
+        raise ValueError("artifact version must be positive")
+    return f"thread-artifacts/{thread_id}/{artifact_id}/{version}"

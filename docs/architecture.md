@@ -22,7 +22,8 @@ The Compose topology and service ports are defined in docker-compose.yml.
 
 The frontend is a client-heavy Next.js application. The main workspace is
 assembled in frontend/src/pages/index.tsx. Chat, thread/project navigation,
-PDF viewing, memory management, workflow building, traces, and deep-research
+PDF viewing, memory management, workflow building, traces, research canvases,
+and deep-research
 panels are implemented under frontend/src/components.
 
 The frontend normally calls the Next server proxy at /api/backend. The proxy
@@ -73,9 +74,11 @@ store execution/checkpoint state owned by their respective runtime.
       → thread settings and workflow resolution
       → normalized frozen AgentRun
       → LangGraph/Hermes adapter
-      → runtime MCP tool calls
+      → runtime MCP tool calls (including optional publish_canvas)
+      → optional canvas layout skills in prompts when that tool is admitted
       → canonical runtime events
       → product ChatTurn projection
+      → optional research_canvas artifact in the content store
       → JSON response or SSE stream
 
 ### Long-running task flow
@@ -101,6 +104,7 @@ Related implementation:
 - rag_service/main.py
 - rag_service/app/product_orchestration/
 - rag_service/app/runtime/
+- rag_service/app/agent/canvas_layout_skills.py
 - runtime_protocol/
 - langgraph_runtime/api.py
 - hermes_runtime/api.py

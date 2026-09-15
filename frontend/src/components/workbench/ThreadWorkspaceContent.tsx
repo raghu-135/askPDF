@@ -2,11 +2,14 @@ import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
+import ResearchCanvasWorkspace from './ResearchCanvasWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
 import type { Project, Thread } from '../../lib/api';
 import type { MemoryManagerIntent } from '../../lib/memory-manager';
+import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
+import { RESEARCH_CANVAS_TAB_ID } from '../../lib/canvas-spec';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -35,6 +38,10 @@ export default function ThreadWorkspaceContent({
   onOpenMemoryCurator,
   emptyTitle,
   emptyDescription,
+  activeCanvasId = null,
+  onActiveCanvasChange,
+  onOpenDocumentCitation,
+  canvasRefreshVersion = 0,
 }: {
   activeTabId: string | null;
   activeDocument: PdfTab | null;
@@ -60,11 +67,23 @@ export default function ThreadWorkspaceContent({
   onOpenMemoryCurator?: (intent: MemoryManagerIntent) => void;
   emptyTitle: string;
   emptyDescription: string;
+  activeCanvasId?: string | null;
+  onActiveCanvasChange?: (canvasId: string) => void;
+  onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+  canvasRefreshVersion?: number;
 }) {
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
       {activeTabId === 'home-tab' ? (
         <HomeInstructions darkMode={darkMode} />
+      ) : activeTabId === RESEARCH_CANVAS_TAB_ID ? (
+        <ResearchCanvasWorkspace
+          threadId={threadId ?? null}
+          activeCanvasId={activeCanvasId}
+          onActiveCanvasChange={onActiveCanvasChange || (() => undefined)}
+          onOpenDocumentCitation={onOpenDocumentCitation}
+          refreshVersion={canvasRefreshVersion}
+        />
       ) : activeTabId === 'trace-tab' ? (
         <TraceWorkspace
           tabs={traceTabs}

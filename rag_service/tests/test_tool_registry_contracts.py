@@ -95,6 +95,8 @@ def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("search_thread_events", "thread_events_worker")
     validate_tool_call_allowed("search_web", "web_worker")
     validate_tool_call_allowed("search_knowledge", "deep_research_subagent")
+    validate_tool_call_allowed("publish_canvas", "retrieval_worker")
+    validate_tool_call_allowed("publish_canvas", "deep_research_subagent")
 
     try:
         validate_tool_call_allowed("search_knowledge", "thread_conversation_history_worker")

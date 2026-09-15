@@ -21,6 +21,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "context_window",
     "web_search_mode",
     "hitl_web_approval",
+    "hitl_canvas_publish",
     "use_web_search",
     "use_reranker",
     "system_role",

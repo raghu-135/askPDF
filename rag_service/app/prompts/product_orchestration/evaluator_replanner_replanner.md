@@ -28,6 +28,8 @@ This is a bounded replanner. Revise only worker selection. The runtime executes 
 
 {TOOL_PLAYBOOK_SECTION}
 
+{CANVAS_LAYOUT_SKILLS_SECTION}
+
 {WEB_SEARCH_MANDATE_SECTION}
 
 ## Output Contract

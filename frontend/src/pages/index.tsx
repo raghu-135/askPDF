@@ -19,6 +19,8 @@ import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInter
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
 import MemoryManagerPanel from "../components/MemoryManagerPanel";
 import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
+import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
+import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbar, WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
@@ -92,6 +94,8 @@ export default function Home() {
     closeTrace,
     clearTraces,
   } = useTraceTabs();
+  const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
+  const [canvasRefreshVersion, setCanvasRefreshVersion] = useState(0);
 
   const confirmDiscardMemoryCurator = useCallback(() => (
     !memoryManagerDirtyRef.current
@@ -132,6 +136,7 @@ export default function Home() {
     setActiveProject(null);
     setThreadProject(null);
     clearTraces();
+    setActiveCanvasId(null);
     
     // Reset browser state when leaving thread context
     setIsBrowserActive(false);
@@ -187,6 +192,7 @@ export default function Home() {
     setActiveProject(project);
     setPdfTabs([]);
     clearTraces();
+    setActiveCanvasId(null);
     setIsBrowserActive(false);
     setActiveTabId('browser-tab');
     setIsPdfLoading(true);
@@ -257,6 +263,7 @@ export default function Home() {
     setActiveSource('pdf');
     setChatSentences([]);
     clearTraces();
+    setActiveCanvasId(null);
   }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleBackToProject = useCallback(async () => {
@@ -629,6 +636,7 @@ export default function Home() {
           enabled: true,
           documents: pdfTabs,
           traces: traceTabs,
+          includeResearchCanvas: true,
         })
       : activeProject ? buildProjectWorkspaceTabs(pdfTabs) : buildHomeWorkspaceTabs(),
     [activeThread, activeProject, pdfTabs, traceTabs],
@@ -690,6 +698,27 @@ export default function Home() {
     }
     handleOpenMemoryCurator(reviewManagerIntent(activeThread));
   }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
+
+  const handleOpenCanvas = useCallback((canvas: CanvasRef) => {
+    rememberNonMemoryTab(RESEARCH_CANVAS_TAB_ID);
+    setActiveCanvasId(canvas.id);
+    setActiveTabId(RESEARCH_CANVAS_TAB_ID);
+    setIsBrowserActive(false);
+    setCanvasRefreshVersion((value) => value + 1);
+  }, [rememberNonMemoryTab]);
+
+  const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
+    const documentTab = pdfTabs.find((tab) => tab.fileHash === target.fileHash);
+    if (!documentTab) return;
+    rememberNonMemoryTab(documentTab.id);
+    setActiveTabId(documentTab.id);
+    setIsBrowserActive(false);
+    setActiveSource('pdf');
+    if (target.sentenceId != null) {
+      setCurrentPdfId(target.sentenceId);
+      setPlayRequestId(target.sentenceId);
+    }
+  }, [pdfTabs, rememberNonMemoryTab]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
     if (trace.activate !== false) {
@@ -840,6 +869,10 @@ export default function Home() {
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
               activeThread={activeThread}
+              activeCanvasId={activeCanvasId}
+              onActiveCanvasChange={setActiveCanvasId}
+              onOpenDocumentCitation={handleOpenDocumentCitation}
+              canvasRefreshVersion={canvasRefreshVersion}
               activeProject={activeProject}
               projectInventoryVersion={sidebarVersion}
               curatorRefreshVersion={memoryRefreshVersion}
@@ -933,6 +966,7 @@ export default function Home() {
                   onThreadUpdate={handleThreadUpdated}
                   onOpenThread={handleOpenThreadInChat}
                   onOpenTrace={handleOpenTrace}
+                  onOpenCanvas={handleOpenCanvas}
                   onOpenMemoryReview={handleOpenConversationReview}
                   hideInlineLineage
                   darkMode={pdfDarkMode}

@@ -58,6 +58,8 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 
 {TOOL_PLAYBOOK_SECTION}
 
+{CANVAS_LAYOUT_SKILLS_SECTION}
+
 {WEB_SEARCH_MANDATE_SECTION}
 
 ## Output Contract

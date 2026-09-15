@@ -27,6 +27,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PublicIcon from '@mui/icons-material/Public';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import ErrorIcon from '@mui/icons-material/Error';
 import ReplayIcon from '@mui/icons-material/Replay';
 import { truncateFileName } from '../../lib/pdf-utils';
@@ -60,6 +61,7 @@ export type BrowserWorkspaceTab = { kind: 'browser'; id: 'browser-tab'; label: s
 export type HomeWorkspaceTab = { kind: 'home'; id: 'home-tab'; label: string };
 export type MemoryWorkspaceTab = { kind: 'memory'; id: 'memory-tab'; label: string };
 export type CanvasWorkspaceTab = { kind: 'canvas'; id: 'canvas-tab'; label: string; issueCount?: number };
+export type ResearchCanvasWorkspaceTab = { kind: 'research_canvas'; id: 'research-canvas-tab'; label: string; count?: number };
 export type SpecWorkspaceTab = { kind: 'spec'; id: 'spec-tab'; label: string; dirty?: boolean };
 export type TraceWorkspaceTab = {
   kind: 'trace';
@@ -68,7 +70,7 @@ export type TraceWorkspaceTab = {
   status?: 'idle' | 'running' | 'failed' | 'review';
   count?: number;
 };
-export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
+export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | ResearchCanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
 
 const statusColor = (status?: TraceWorkspaceTab['status']) => {
   if (status === 'failed') return 'error';
@@ -141,7 +143,7 @@ export default React.memo(function WorkspaceTabs({
     tooltip,
     label,
   }: {
-    tab: BrowserWorkspaceTab | MemoryWorkspaceTab | TraceWorkspaceTab;
+    tab: BrowserWorkspaceTab | MemoryWorkspaceTab | TraceWorkspaceTab | ResearchCanvasWorkspaceTab;
     icon: React.ReactElement;
     tooltip: string;
     label?: string | React.ReactElement;
@@ -230,6 +232,13 @@ export default React.memo(function WorkspaceTabs({
           }
           if (tab.kind === 'spec') {
             return <Tab key={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+          }
+          if (tab.kind === 'research_canvas') {
+            return renderSystemTab({
+              tab,
+              icon: <Badge color="default" badgeContent={tab.count} max={99}><DashboardOutlinedIcon fontSize="small" /></Badge>,
+              tooltip: 'Canvas',
+            });
           }
           if (tab.kind === 'trace') {
             return renderSystemTab({

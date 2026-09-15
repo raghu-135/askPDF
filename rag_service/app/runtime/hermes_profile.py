@@ -17,6 +17,7 @@ HERMES_BASE_TOOL_IDS = (
     "search_durable_memory",
     "search_thread_conversation_history",
     "search_thread_events",
+    "publish_canvas",
 )
 HERMES_EXTERNAL_TOOL_IDS = (
     "arxiv",

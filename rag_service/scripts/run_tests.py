@@ -77,6 +77,9 @@ UNIT_TEST_FILES = [
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
     "test_http_client_lifecycle.py",
+    "test_canvas_spec_pytest.py",
+    "test_canvas_emit_pytest.py",
+    "test_canvas_layout_skills_pytest.py",
 ]
 
 HERMES_TEST_FILES = [
@@ -122,6 +125,7 @@ API_TEST_FILES = [
     "test_api_endpoints_pytest.py",
     "test_api_integration_pytest.py",
     "test_project_lifecycle_api_pytest.py",
+    "test_canvas_api_pytest.py",
 ]
 
 INTEGRATION_TEST_FILES = [

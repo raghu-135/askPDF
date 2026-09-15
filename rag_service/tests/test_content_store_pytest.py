@@ -9,6 +9,7 @@ from app.services.content_store import (
     SharedVolumeContentStore,
     pdf_content_key,
     task_artifact_content_key,
+    thread_artifact_content_key,
 )
 
 
@@ -99,3 +100,6 @@ def test_content_key_contracts():
         pdf_content_key("../../pdf")
     with pytest.raises(ValueError, match="artifact identity"):
         task_artifact_content_key("../task", "run", "artifact")
+    assert thread_artifact_content_key("thread", "artifact") == "thread-artifacts/thread/artifact/1"
+    with pytest.raises(ValueError, match="thread artifact identity"):
+        thread_artifact_content_key("../thread", "artifact")
