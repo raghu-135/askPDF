@@ -132,6 +132,19 @@ async def test_hermes_resolution_inherits_thread_model_through_deployment_provid
     assert "# askPDF Deep Research Policy (v1)" in resolved["config"]["system_prompt"]
     assert "Hermes MCP execution protocol" in resolved["config"]["system_prompt"]
     assert resolved["config"]["research_policy_id"] == "deep_research_v1"
+    assert "canvas_compare_papers" in resolved["config"]["system_prompt"]
+    assert "canvas_evidence_matrix" in resolved["config"]["system_prompt"]
+    assert "canvas_timeline" in resolved["config"]["system_prompt"]
+    assert resolved["config"]["skills"] == [
+        "canvas_compare_papers",
+        "canvas_evidence_matrix",
+        "canvas_timeline",
+    ]
+    assert resolved["managed_profile"]["skills"]["enabled"] == [
+        "canvas_compare_papers",
+        "canvas_evidence_matrix",
+        "canvas_timeline",
+    ]
 
 
 @pytest.mark.asyncio

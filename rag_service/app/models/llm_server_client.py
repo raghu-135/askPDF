@@ -239,6 +239,7 @@ def default_thread_settings():
         "tool_instructions": {},
         "custom_instructions": "",
         "hitl_web_approval": False,
+        "hitl_canvas_publish": False,
         "use_reranker": False,
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
         "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),

@@ -152,6 +152,7 @@ class ToolName(str, Enum):
     STACK_EXCHANGE = "stack_exchange"
     YAHOO_FINANCE_NEWS = "yahoo_finance_news"
     ASK_FOR_CLARIFICATION = "ask_for_clarification"
+    PUBLISH_CANVAS = "publish_canvas"
 
 
 class GraphSentinel(str, Enum):
@@ -312,6 +313,7 @@ class ToolContractId(str, Enum):
     STACKEXCHANGE_REFERENCE = "stackexchange_reference"
     YAHOO_FINANCE_NEWS = "yahoo_finance_news"
     CLARIFY_INTENT = "clarify_intent"
+    RESEARCH_CANVAS_PUBLISH = "research_canvas_publish"
 
 
 ROUTER_ROUTES = {route.value for route in RouterRoute}

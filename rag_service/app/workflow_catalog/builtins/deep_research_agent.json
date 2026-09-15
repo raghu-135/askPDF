@@ -35,6 +35,7 @@
       "allowed_tool_ids": [
         "thread_shape",
         "document_search_knowledge",
+        "research_canvas_publish",
         "document_inspection",
         "document_context",
         "thread_conversation_history",

@@ -74,7 +74,8 @@ store execution/checkpoint state owned by their respective runtime.
       → thread settings and workflow resolution
       → normalized frozen AgentRun
       → LangGraph/Hermes adapter
-      → runtime MCP tool calls
+      → runtime MCP tool calls (including optional publish_canvas)
+      → optional canvas layout skills in prompts when that tool is admitted
       → canonical runtime events
       → product ChatTurn projection
       → optional research_canvas artifact in the content store
@@ -103,6 +104,7 @@ Related implementation:
 - rag_service/main.py
 - rag_service/app/product_orchestration/
 - rag_service/app/runtime/
+- rag_service/app/agent/canvas_layout_skills.py
 - runtime_protocol/
 - langgraph_runtime/api.py
 - hermes_runtime/api.py

@@ -326,6 +326,16 @@ class MessageRepository:
             result = await session.execute(select(ChatTurn).where(ChatTurn.id == turn_id))
             return result.scalar_one_or_none()
 
+    async def get_turn_by_agent_run_id(self, thread_id: str, agent_run_id: str) -> Optional[ChatTurn]:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ChatTurn)
+                .where(ChatTurn.thread_id == thread_id, ChatTurn.agent_run_id == agent_run_id)
+                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
+            )
+            return result.scalars().first()
+
     async def get(self, message_id: str) -> Optional[ExpandedMessage]:
         """Get a compatibility message by turn-derived message ID."""
         turn = await self.get_turn(turn_id_from_message_id(message_id))

@@ -17,6 +17,7 @@ CORE_TOOL_NAMES = [
     "search_durable_memory",
     "search_thread_events",
     "search_web",
+    "publish_canvas",
     "ask_for_clarification",
 ]
 

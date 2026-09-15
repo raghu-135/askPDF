@@ -68,6 +68,8 @@ Route this askPDF question to exactly one route.
 
 {TOOL_PLAYBOOK_SECTION}
 
+{CANVAS_LAYOUT_SKILLS_SECTION}
+
 {WEB_SEARCH_MANDATE_SECTION}
 
 ## Output Contract

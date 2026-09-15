@@ -11,6 +11,7 @@ PROMPTS_DIR = Path(__file__).parent
 RUNTIME_PROMPT_NAMESPACE = "agent_workflows"
 DEEP_RESEARCH_POLICY_ID = "deep_research_v1"
 RUNTIME_PROMPT_FILES = (
+    "canvas_layout_skills.md",
     "corrective_grounded_verifier.md",
     "corrective_retrieval_grader.md",
     "deep_research_policy.md",

@@ -79,7 +79,13 @@ class CanvasService:
         if thread is None:
             raise CanvasNotFoundError("Thread not found")
 
-    async def create(self, thread_id: str, request: CanvasCreateRequest) -> dict[str, Any]:
+    async def create(
+        self,
+        thread_id: str,
+        request: CanvasCreateRequest,
+        *,
+        agent_run_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         await self._require_thread(thread_id)
         spec = request.spec
         if request.idempotency_key:
@@ -117,7 +123,7 @@ class CanvasService:
         artifact = AgentTaskArtifact(
             id=artifact_id,
             task_id=None,
-            agent_run_id=None,
+            agent_run_id=agent_run_id,
             thread_id=thread_id,
             chat_turn_id=chat_turn_id,
             idempotency_key=request.idempotency_key,
@@ -127,7 +133,10 @@ class CanvasService:
             media_type=RESEARCH_CANVAS_MEDIA_TYPE,
             byte_size=len(body),
             sha256=digest,
-            provenance_json={"chat_turn_id": chat_turn_id} if chat_turn_id else {},
+            provenance_json={
+                **({"chat_turn_id": chat_turn_id} if chat_turn_id else {}),
+                **({"agent_run_id": agent_run_id} if agent_run_id else {}),
+            },
             summary_json={"title": spec.title, "schema_version": spec.schema_version},
             supersedes_id=request.supersedes_id,
             retention_until=None,
@@ -173,9 +182,17 @@ class CanvasService:
 
     async def refs_by_turn(self, thread_id: str) -> dict[str, dict[str, str]]:
         refs: dict[str, dict[str, str]] = {}
-        for item in await self._canvases.list_for_thread(thread_id):
-            if item.chat_turn_id and item.chat_turn_id not in refs:
-                refs[item.chat_turn_id] = {"id": item.id, "title": _canvas_title(item)}
+        canvases = await self._canvases.list_for_thread(thread_id)
+        run_ids = [item.agent_run_id for item in canvases if item.agent_run_id and not item.chat_turn_id]
+        turns_by_run: dict[str, str] = {}
+        for agent_run_id in run_ids:
+            turn = await self._messages.get_turn_by_agent_run_id(thread_id, agent_run_id)
+            if turn is not None:
+                turns_by_run[agent_run_id] = turn.id
+        for item in canvases:
+            turn_id = item.chat_turn_id or turns_by_run.get(item.agent_run_id or "")
+            if turn_id and turn_id not in refs:
+                refs[turn_id] = {"id": item.id, "title": _canvas_title(item)}
         return refs
 
 

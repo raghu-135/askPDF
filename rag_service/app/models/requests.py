@@ -366,6 +366,7 @@ class ThreadSettingsResponse(BaseModel):
         default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     hitl_web_approval: bool = False
+    hitl_canvas_publish: bool = False
     use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
     agent_workflow_validation: Optional[Dict[str, Any]] = None
@@ -380,6 +381,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     hitl_web_approval: Optional[bool] = None
+    hitl_canvas_publish: Optional[bool] = None
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
     memory: Optional[ThreadMemorySettings] = None
@@ -399,6 +401,7 @@ class PromptDefaults(BaseModel):
     tool_instructions: Dict[str, str]
     custom_instructions: str
     hitl_web_approval: bool = False
+    hitl_canvas_publish: bool = False
     use_reranker: bool = False
 
 

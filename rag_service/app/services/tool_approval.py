@@ -43,6 +43,8 @@ def invocation_policies(
         if metadata.get("category") in {CAT_WEB, CAT_EXTERNAL_RESEARCH}:
             if web_mode is ApprovalMode.DENY or name not in rules:
                 rules[name] = ToolApprovalPolicy(web_mode, scope).to_dict()
+    if config.get("hitl_canvas_publish") and "publish_canvas" not in rules:
+        rules["publish_canvas"] = ToolApprovalPolicy(ApprovalMode.ASK, scope).to_dict()
     return rules
 
 

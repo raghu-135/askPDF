@@ -77,6 +77,8 @@ UNIT_TEST_FILES = [
     "test_time_utils.py",
     "test_http_client_lifecycle.py",
     "test_canvas_spec_pytest.py",
+    "test_canvas_emit_pytest.py",
+    "test_canvas_layout_skills_pytest.py",
 ]
 
 HERMES_TEST_FILES = [

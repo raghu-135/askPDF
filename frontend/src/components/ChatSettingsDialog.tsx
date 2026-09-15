@@ -31,6 +31,7 @@ interface ChatSettingsDialogProps {
     replans: number;
     replansLimit: number | null;
     useReranker: boolean;
+    hitlCanvasPublish: boolean;
     useMemory: boolean;
     useThreadMemory: boolean;
     useProjectMemory: boolean;
@@ -49,6 +50,7 @@ interface ChatSettingsDialogProps {
     // Change handlers
     onReplansChange: (value: number) => void;
     onRerankerChange: (checked: boolean) => void;
+    onHitlCanvasPublishChange: (checked: boolean) => void;
     onMemoryChange: (checked: boolean) => void;
     onThreadMemoryChange: (checked: boolean) => void;
     onProjectMemoryChange: (checked: boolean) => void;
@@ -76,6 +78,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     replans,
     replansLimit,
     useReranker,
+    hitlCanvasPublish,
     useMemory,
     useThreadMemory,
     useProjectMemory,
@@ -92,6 +95,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     promptPreview,
     onReplansChange,
     onRerankerChange,
+    onHitlCanvasPublishChange,
     onMemoryChange,
     onThreadMemoryChange,
     onProjectMemoryChange,
@@ -252,6 +256,24 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     />
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
                         Reorders retrieved chunks for documents, web results, and chat memory using the reranker model.
+                    </Typography>
+                </Box>
+                <Box>
+                    <FormControlLabel
+                        control={
+                            <Switch
+                                checked={hitlCanvasPublish}
+                                onChange={(e) => onHitlCanvasPublishChange(e.target.checked)}
+                            />
+                        }
+                        label={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Ask before publishing a canvas</Typography>
+                            </Box>
+                        }
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                        Pause the agent so you can approve or skip publish_canvas before it writes a durable research canvas.
                     </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>

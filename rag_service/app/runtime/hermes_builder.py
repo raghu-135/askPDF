@@ -20,6 +20,7 @@ from runtime_protocol.contracts import (
 from runtime_protocol.errors import RuntimeError
 from app.runtime.hermes_config import hermes_model_context_length, hermes_model_provider
 from app.runtime.hermes_profile import resolve_hermes_profile
+from app.agent.canvas_layout_skills import apply_canvas_layout_skills
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
@@ -177,6 +178,7 @@ class HermesBuilderProvider:
         policy_id = str(config.get("research_policy_id") or "")
         runtime_instructions = str(config.get("system_prompt") or "").strip()
         config["system_prompt"] = get_deep_research_policy(policy_id) + "\n\n" + runtime_instructions
+        config = apply_canvas_layout_skills(config)
         resolved["config"] = config
         resolved["managed_profile"] = resolve_hermes_profile(resolved)
         return await self.normalize(definition, resolved)

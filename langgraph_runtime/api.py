@@ -704,9 +704,13 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
             options = payload.get("options") or {}
             from langgraph_runtime.workflows.prompting import build_agent_workflow_prompt_preview
             runtime = spec.get("runtime") if isinstance(spec, Mapping) and isinstance(spec.get("runtime"), Mapping) else {}
+            config = spec.get("config") if isinstance(spec, Mapping) and isinstance(spec.get("config"), Mapping) else {}
+            preview_options = dict(options)
+            if "allowed_tool_ids" not in preview_options:
+                preview_options["allowed_tool_ids"] = list(config.get("allowed_tool_ids") or [])
             prompt = build_agent_workflow_prompt_preview(
                 prompt_profile=str(runtime.get("prompt_preview") or "router"),
-                **dict(options),
+                **preview_options,
             )
             return json_envelope(status="ok", request_id=request.headers.get("x-request-id"), result={"prompt": prompt})
         except Exception as exc:

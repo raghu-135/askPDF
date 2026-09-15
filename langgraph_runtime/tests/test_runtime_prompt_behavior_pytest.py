@@ -79,6 +79,27 @@ def test_planner_and_replanner_prefer_comprehensive_relevant_worker_coverage():
     assert "Use as many relevant workers as needed" in replanner_prompt
 
 
+def test_canvas_layout_skills_gate_on_publish_admission():
+    off = build_router_prompt({"question": "Compare the papers", "use_web_search": False, "pre_fetch_bundle": {}})
+    assert "canvas_compare_papers" not in off
+    assert "canvas_evidence_matrix" not in off
+    assert "canvas_timeline" not in off
+    assert "publish_canvas" not in off
+
+    on = build_router_prompt(
+        {
+            "question": "Compare the papers",
+            "use_web_search": False,
+            "pre_fetch_bundle": {},
+            "allowed_tool_ids": ["research_canvas_publish"],
+        }
+    )
+    assert "canvas_compare_papers" in on
+    assert "canvas_evidence_matrix" in on
+    assert "canvas_timeline" in on
+    assert "publish_canvas" in on
+
+
 def test_runtime_graph_prompt_builders_include_datetime_context():
     state = {"question": "What is the latest document?", "use_web_search": False, "client_timezone": "America/Chicago", "client_locale": "en-US", "pre_fetch_bundle": {}}
     assert "RUNTIME DATE/TIME CONTEXT" in build_router_prompt(state)

@@ -176,3 +176,39 @@ class CanvasCreateRequest(CanvasModel):
 
 def parse_canvas_spec(value: Any) -> CanvasSpec:
     return CanvasSpec.model_validate(value)
+
+
+class CanvasAdmissionError(ValueError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+def iter_canvas_citations(spec: CanvasSpec) -> list[CanvasCitation]:
+    citations: list[CanvasCitation] = []
+    for section in spec.sections:
+        for block in section.blocks:
+            if isinstance(block, SourceListBlock):
+                citations.extend(block.citations)
+    return citations
+
+
+def admit_canvas_spec(spec: CanvasSpec, *, thread_file_hashes: set[str]) -> None:
+    citations = iter_canvas_citations(spec)
+    if not citations:
+        raise CanvasAdmissionError(
+            "missing_citations",
+            "publish_canvas requires at least one citation in a sources block",
+        )
+    unknown = sorted(
+        {
+            citation.file_hash
+            for citation in citations
+            if citation.kind == "document" and citation.file_hash not in thread_file_hashes
+        }
+    )
+    if unknown:
+        raise CanvasAdmissionError(
+            "unknown_document_citation",
+            "document citations must use file_hash values attached to this thread: " + ", ".join(unknown),
+        )

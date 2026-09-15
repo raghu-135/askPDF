@@ -144,6 +144,13 @@ class _TimelineArguments(_QueryArguments):
     max_results: int = Field(default=10, ge=1, le=30)
 
 
+class _PublishCanvasArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    spec: dict[str, Any]
+    supersedes_id: str | None = None
+    idempotency_key: str | None = None
+
+
 _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "search_knowledge": _SearchKnowledgeArguments,
     "inspect_document": _InspectDocumentArguments,
@@ -152,6 +159,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "search_durable_memory": _SearchArguments,
     "search_thread_events": _TimelineArguments,
     "search_web": _QueryArguments,
+    "publish_canvas": _PublishCanvasArguments,
     "wikipedia": _QueryArguments,
     "wikidata": _QueryArguments,
     "arxiv": _QueryArguments,

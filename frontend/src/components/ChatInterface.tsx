@@ -743,8 +743,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
+    const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
+    const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
     const [useMemory, setUseMemory] = useState(true);
@@ -851,6 +853,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
         setHitlWebApproval(webSearchMode === 'ask');
+        setHitlCanvasPublish(settings?.hitl_canvas_publish ?? defaultHitlCanvasPublish);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setUseMemory(settings?.memory?.memory_enabled ?? true);
         setUseThreadMemory(settings?.memory?.thread_reads_thread_memory ?? true);
@@ -859,6 +862,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
     }, [
         defaultCustomInstructions,
+        defaultHitlCanvasPublish,
         defaultSystemRole,
         defaultUseReranker,
         webSearchMode,
@@ -980,6 +984,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
+                    setDefaultHitlCanvasPublish(res.defaults.hitl_canvas_publish ?? false);
                     setDefaultUseReranker(res.defaults.use_reranker ?? false);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
@@ -989,6 +994,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
+                        setHitlCanvasPublish(res.defaults.hitl_canvas_publish ?? false);
                         setUseReranker(res.defaults.use_reranker ?? false);
                         setAgentWorkflowId(normalizeAgentWorkflowForUi(res.defaults.agent_workflow?.workflow_id));
                     }
@@ -1241,6 +1247,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
         setUseReranker(defaultUseReranker);
+        setHitlCanvasPublish(defaultHitlCanvasPublish);
         setUseMemory(true);
         setUseThreadMemory(true);
         setUseProjectMemory(true);
@@ -2347,6 +2354,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
+                hitl_canvas_publish: hitlCanvasPublish,
                 use_reranker: useReranker,
                 memory: {
                     memory_enabled: useMemory,
@@ -2830,6 +2838,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 replans={replans}
                 replansLimit={replansLimit}
                 useReranker={useReranker}
+                hitlCanvasPublish={hitlCanvasPublish}
                 useMemory={useMemory}
                 useThreadMemory={useThreadMemory}
                 useProjectMemory={useProjectMemory}
@@ -2846,6 +2855,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
+                onHitlCanvasPublishChange={(checked) => setHitlCanvasPublish(checked)}
                 onMemoryChange={(checked) => setUseMemory(checked)}
                 onThreadMemoryChange={(checked) => setUseThreadMemory(checked)}
                 onProjectMemoryChange={(checked) => setUseProjectMemory(checked)}
