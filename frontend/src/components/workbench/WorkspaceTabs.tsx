@@ -120,7 +120,7 @@ export default React.memo(function WorkspaceTabs({
   const [documentMenuTabId, setDocumentMenuTabId] = React.useState<string | null>(null);
 
   if (tabs.length === 0) return null;
-  const activeIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+  const selectedTabValue = activeTabId && tabs.some((tab) => tab.id === activeTabId) ? activeTabId : false;
   const activeDocumentMenuTab = tabs.find((tab): tab is DocumentWorkspaceTab => (
     tab.kind === 'document' && tab.id === documentMenuTabId
   )) || null;
@@ -153,6 +153,7 @@ export default React.memo(function WorkspaceTabs({
     return (
       <Tooltip key={tab.id} title={tooltip}>
         <Tab
+          value={tab.id}
           aria-label={tooltip}
           icon={icon}
           iconPosition="start"
@@ -171,8 +172,8 @@ export default React.memo(function WorkspaceTabs({
   return (
     <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 40, minWidth: 0, width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
       <Tabs
-        value={activeIndex >= 0 ? activeIndex : false}
-        onChange={(_, index) => tabs[index] && onTabChange(tabs[index].id)}
+        value={selectedTabValue}
+        onChange={(_, tabId) => typeof tabId === 'string' && onTabChange(tabId)}
         variant="scrollable"
         scrollButtons="auto"
         allowScrollButtonsMobile
@@ -210,6 +211,7 @@ export default React.memo(function WorkspaceTabs({
             return (
               <Tooltip key={tab.id} title="Home">
                 <Tab
+                  value={tab.id}
                   aria-label="Home"
                   label={tab.label}
                   sx={{
@@ -226,6 +228,7 @@ export default React.memo(function WorkspaceTabs({
             return (
               <Tooltip key={tab.id} title="Project">
                 <Tab
+                  value={tab.id}
                   aria-label="Project"
                   icon={<FolderIcon fontSize="small" />}
                   iconPosition="start"
@@ -247,10 +250,10 @@ export default React.memo(function WorkspaceTabs({
             });
           }
           if (tab.kind === 'canvas') {
-            return <Tab key={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+            return <Tab key={tab.id} value={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'spec') {
-            return <Tab key={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+            return <Tab key={tab.id} value={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'research_canvas') {
             return renderSystemTab({
@@ -318,6 +321,7 @@ export default React.memo(function WorkspaceTabs({
           return (
             <Tab
               key={tab.id}
+              value={tab.id}
               aria-label={fullTitle}
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, width: '100%' }}>

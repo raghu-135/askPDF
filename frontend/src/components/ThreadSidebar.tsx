@@ -512,9 +512,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   const handleProjectClick = async (project: Project) => {
     if (selectionOnly) return;
-    if (activeProjectId === project.id) {
-      return;
-    }
     onProjectSelect?.(project);
     setProjectReadiness((current) => ({ ...current, [project.id]: null }));
     onProjectReadinessChange?.(project.id, null);

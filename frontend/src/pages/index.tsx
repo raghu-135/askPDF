@@ -79,6 +79,7 @@ export default function Home() {
   const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
   const [lastNonMemoryTabByContext, setLastNonMemoryTabByContext] = useState<Record<string, string>>({});
   const [sidebarHeaderState, setSidebarHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
+  const workspaceNavRef = useRef(0);
 
   // Browser tab state
   const [showBrowserTab, setShowBrowserTab] = useState(false);
@@ -126,6 +127,7 @@ export default function Home() {
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    const nav = ++workspaceNavRef.current;
     setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     // Clear current state
@@ -150,7 +152,7 @@ export default function Home() {
         setIsPdfLoading(true);
         // Always fetch the latest thread data to ensure we have current files and stats
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
-        setActiveThread(detailedThread);
+        if (nav !== workspaceNavRef.current) return;
 
         const [loadedTabs, parentProject] = await Promise.all([
           loadThreadTabs(detailedThread),
@@ -158,14 +160,18 @@ export default function Home() {
             ? getProject(detailedThread.project_id).catch(() => null)
             : Promise.resolve(null),
         ]);
+        if (nav !== workspaceNavRef.current) return;
+        setActiveThread(detailedThread);
         setThreadProject(parentProject);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
           window.setTimeout(() => {
+            if (nav !== workspaceNavRef.current) return;
             detailedThread.files.slice(1).forEach(async (threadFile) => {
               try {
                 const hydrated = await hydrateThreadPdfTab(detailedThread.id, threadFile);
+                if (nav !== workspaceNavRef.current) return;
                 setPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
               } catch (error) {
                 console.warn(`Failed to hydrate background PDF tab ${threadFile.fileHash}:`, error);
@@ -176,9 +182,12 @@ export default function Home() {
           setActiveTabId('browser-tab');
         }
       } catch (err) {
+        if (nav !== workspaceNavRef.current) return;
         console.error('Failed to load thread files:', err);
       } finally {
-        setIsPdfLoading(false);
+        if (nav === workspaceNavRef.current) {
+          setIsPdfLoading(false);
+        }
       }
     } else {
       setActiveThread(null);
@@ -188,6 +197,7 @@ export default function Home() {
 
   const handleProjectSelect = useCallback(async (project: Project) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    const nav = ++workspaceNavRef.current;
     setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     setActiveThread(null);
@@ -202,14 +212,18 @@ export default function Home() {
     setProjectModelReady(null);
     try {
       const tabs = await loadProjectTabs(project);
+      if (nav !== workspaceNavRef.current) return;
       setPdfTabs(tabs);
       setActiveTabId(projectWorkspaceLandingTabId(tabs));
       setIsBrowserActive(false);
     } catch (error) {
+      if (nav !== workspaceNavRef.current) return;
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
     } finally {
-      setIsPdfLoading(false);
+      if (nav === workspaceNavRef.current) {
+        setIsPdfLoading(false);
+      }
     }
   }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
@@ -251,6 +265,7 @@ export default function Home() {
 
   const handleOpenHome = useCallback(() => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
+    workspaceNavRef.current += 1;
     setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     setActiveThread(null);
@@ -809,10 +824,8 @@ export default function Home() {
                 onUploaded={handlePdfUploaded}
                 onIndexingComplete={handleIndexingComplete}
                 onParsingComplete={handleParsingComplete}
-                disabled={!activeThread && (!activeProject || projectModelReady !== true)}
-                tooltipText={!activeThread && !activeProject
-                  ? 'Select a thread or project first'
-                  : activeProject && projectModelReady !== true ? 'Project embedding model is unavailable' : undefined}
+                disabled={!activeThread && !activeProject}
+                showButton={Boolean(activeThread)}
               />
               <Tooltip title="Agent workflow builder">
                 <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
@@ -840,6 +853,7 @@ export default function Home() {
           }
           primaryTabs={
             <WorkspaceTabs
+              key={workspaceContextKey}
               tabs={workspaceTabs}
               activeTabId={activeTabId}
               onTabChange={handleWorkspaceTabChange}
@@ -862,7 +876,6 @@ export default function Home() {
               activeTraceId={activeTraceId}
               onActiveTraceChange={setActiveTraceId}
               onCloseTrace={closeTrace}
-              isBrowserActive={isBrowserActive}
               isLoading={isPdfLoading}
               isResizing={isResizing}
               darkMode={pdfDarkMode}

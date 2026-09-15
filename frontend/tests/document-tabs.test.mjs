@@ -7,6 +7,7 @@ import {
   buildProjectWorkspaceTabs,
   isBrowserWorkspaceActive,
   projectWorkspaceLandingTabId,
+  selectedWorkspaceTabValue,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
 
@@ -60,13 +61,25 @@ test('project workspace opens overview first and keeps browser off the landing t
   assert.deepEqual(tabs.map((tab) => tab.id), ['project-tab', 'memory-tab', 'browser-tab', 'file-1']);
 });
 
-test('project landing prefers the first document and falls back to overview', () => {
-  assert.equal(projectWorkspaceLandingTabId([document]), 'file-1');
+test('project landing stays on overview instead of leftover browser or a document', () => {
+  assert.equal(projectWorkspaceLandingTabId([document]), 'project-tab');
   assert.equal(projectWorkspaceLandingTabId([]), 'project-tab');
 });
 
-test('browser workspace is inactive after switching to a PDF tab', () => {
+test('browser workspace follows the Browser tab, not a leftover active flag', () => {
   assert.equal(isBrowserWorkspaceActive({ activeTabId: 'browser-tab', isBrowserActive: false }), true);
-  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'file-1', isBrowserActive: true }), true);
+  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'file-1', isBrowserActive: true }), false);
+  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'project-tab', isBrowserActive: true }), false);
   assert.equal(isBrowserWorkspaceActive({ activeTabId: 'file-1', isBrowserActive: false }), false);
+});
+
+test('selected workspace tab value ignores stale ids from a previous workspace', () => {
+  assert.equal(selectedWorkspaceTabValue(
+    [{ id: 'project-tab' }, { id: 'memory-tab' }, { id: 'browser-tab' }],
+    'home-tab',
+  ), false);
+  assert.equal(selectedWorkspaceTabValue(
+    [{ id: 'project-tab' }, { id: 'memory-tab' }, { id: 'browser-tab' }],
+    'project-tab',
+  ), 'project-tab');
 });

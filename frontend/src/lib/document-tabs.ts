@@ -41,11 +41,15 @@ export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
 
 export const isBrowserWorkspaceActive = ({
   activeTabId,
-  isBrowserActive,
 }: {
   activeTabId: string | null;
-  isBrowserActive: boolean;
-}) => isBrowserActive || activeTabId === 'browser-tab';
+  isBrowserActive?: boolean;
+}) => activeTabId === 'browser-tab';
+
+export const selectedWorkspaceTabValue = (
+  tabs: readonly { id: string }[],
+  activeTabId: string | null,
+) => (activeTabId && tabs.some((tab) => tab.id === activeTabId) ? activeTabId : false);
 
 export const buildDocumentWorkspaceTabs = ({
   enabled,
@@ -92,8 +96,8 @@ export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): Workspa
 ];
 
 export const projectWorkspaceLandingTabId = (
-  documents: readonly Pick<PdfTab, 'id'>[],
-): string => documents[0]?.id || PROJECT_OVERVIEW_TAB_ID;
+  _documents: readonly Pick<PdfTab, 'id'>[] = [],
+): string => PROJECT_OVERVIEW_TAB_ID;
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
   { kind: 'home', id: 'home-tab', label: 'Home' },

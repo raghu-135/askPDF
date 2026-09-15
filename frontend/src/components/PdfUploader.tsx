@@ -1,4 +1,4 @@
-import { Button, Tooltip } from "@mui/material";
+import { Button } from "@mui/material";
 import React from "react";
 import { getTargetFileStatus, getParsedSentencesForTarget, FileStatus, ProcessStatusHelper, uploadPdfToTarget, type KnowledgeTarget } from "../lib/api";
 import { isParsedSentencePayload } from "../lib/bbox-derivation";
@@ -11,7 +11,7 @@ type Props = {
   onIndexingComplete?: (fileHash: string) => void;
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
-  tooltipText?: string;
+  showButton?: boolean;
 };
 
 const PdfUploader = React.memo(function PdfUploader({
@@ -20,7 +20,7 @@ const PdfUploader = React.memo(function PdfUploader({
   onIndexingComplete,
   onParsingComplete,
   disabled,
-  tooltipText,
+  showButton = true,
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
@@ -170,9 +170,13 @@ const PdfUploader = React.memo(function PdfUploader({
   };
 
 
+  if (disabled) {
+    return null;
+  }
+
   const buttonLabel = isUploading ? "Uploading..." : "Upload PDF";
 
-  const button = (
+  return (
     <>
       <input
         id={inputId}
@@ -182,25 +186,19 @@ const PdfUploader = React.memo(function PdfUploader({
         style={{ display: "none" }}
         disabled={isDisabled}
       />
-      <label htmlFor={inputId}>
-        <Button
-          variant="contained"
-          component="span"
-          disabled={isDisabled}
-        >
-          {buttonLabel}
-        </Button>
-      </label>
+      {showButton ? (
+        <label htmlFor={inputId}>
+          <Button
+            variant="contained"
+            component="span"
+            disabled={isDisabled}
+          >
+            {buttonLabel}
+          </Button>
+        </label>
+      ) : null}
     </>
   );
-
-  const content = button;
-
-  if (tooltipText && isDisabled) {
-    return <Tooltip title={tooltipText}><span>{content}</span></Tooltip>;
-  }
-
-  return content;
 });
 
 export default PdfUploader;

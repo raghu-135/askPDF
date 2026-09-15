@@ -23,7 +23,6 @@ export default function ThreadWorkspaceContent({
   activeTraceId,
   onActiveTraceChange,
   onCloseTrace,
-  isBrowserActive = false,
   isLoading = false,
   isResizing = false,
   darkMode = false,
@@ -59,7 +58,6 @@ export default function ThreadWorkspaceContent({
   activeTraceId: string | null;
   onActiveTraceChange: (runId: string) => void;
   onCloseTrace: (runId: string) => void;
-  isBrowserActive?: boolean;
   isLoading?: boolean;
   isResizing?: boolean;
   darkMode?: boolean;
@@ -136,7 +134,7 @@ export default function ThreadWorkspaceContent({
           curatorRefreshVersion={curatorRefreshVersion}
           onOpenCurator={onOpenMemoryCurator}
         />
-      ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
+      ) : isBrowserWorkspaceActive({ activeTabId }) ? (
         <BrowserWorkspaceFrame />
       ) : isLoading ? (
         <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit' }}>
