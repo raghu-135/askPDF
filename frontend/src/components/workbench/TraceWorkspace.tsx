@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Chip, IconButton, Tab, Tabs, Tooltip, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import RouteIcon from '@mui/icons-material/Route';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AgentRunDebugPanel from '../agent-debug/AgentRunDebugPanel';
 import type { AgentRunDetails, AgentRunResumeAction, AgentTraceRefs } from '../../lib/api';
@@ -44,7 +44,7 @@ export default function TraceWorkspace({
     return (
       <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, color: 'text.secondary' }}>
         <Box sx={{ textAlign: 'center' }}>
-          <RouteIcon sx={{ fontSize: 42, opacity: 0.45 }} />
+          <BugReportIcon sx={{ fontSize: 42, opacity: 0.45 }} />
           <Typography variant="h6">No trace open</Typography>
           <Typography variant="body2">Open a trace from an assistant response to inspect its run.</Typography>
         </Box>

@@ -8,7 +8,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
-import PsychologyIcon from '@mui/icons-material/Psychology';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import {
   API_BASE,
@@ -803,7 +803,7 @@ export default function DeepResearchTaskPanel({
               onClick={() => void command(action)}
             >{label}</Button>;
           })}
-          <Button size="small" startIcon={<PsychologyIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
+          <Button size="small" startIcon={<BugReportIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
         </Stack>
         <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
       </Box>}

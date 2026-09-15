@@ -18,7 +18,7 @@ import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
-import RouteIcon from '@mui/icons-material/Route';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
     deriveConversationSentences,
@@ -519,7 +519,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         <Button
                             size="small"
                             variant="text"
-                            startIcon={<RouteIcon fontSize="small" />}
+                            startIcon={<BugReportIcon fontSize="small" />}
                             onClick={() => void onOpenAgentRun(msg)}
                             sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
                         >
