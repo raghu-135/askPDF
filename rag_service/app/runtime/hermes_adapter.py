@@ -27,7 +27,7 @@ from runtime_protocol.protocol import json_payload
 from app.runtime.adapter import AgentRuntimeAdapter
 from app.runtime.http_transport import RuntimeTransportConnector
 from app.runtime.hermes_config import HermesConfigurationError, hermes_runtime_enabled, validate_hermes_model_compatibility
-from app.models.llm_server_client import check_model_can_invoke_tools
+from app.models.llm_server_client import check_model_supports_tools
 from app.mcp.execution_context_token import execution_context_ttl_seconds, issue_execution_context_token
 from app.tools.context import ToolInvocationContext
 
@@ -133,7 +133,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self._ensure_enabled()
         resolved_spec = dict(getattr(context, "resolved_spec", None) or {})
         model = str(((resolved_spec.get("managed_profile") or {}).get("model_policy") or {}).get("model") or "").strip()
-        if not model or not await check_model_can_invoke_tools(model):
+        if not model or not await check_model_supports_tools(model):
             raise RuntimeError(
                 "runtime_model_tool_calling_unsupported",
                 "The selected model cannot invoke the tools required by Hermes",

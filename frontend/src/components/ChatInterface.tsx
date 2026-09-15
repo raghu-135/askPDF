@@ -67,7 +67,7 @@ import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { useAgentRunCapabilities } from '../lib/use-agent-run-capabilities';
 import type { AgentRuntimeCapabilityResponse } from '../lib/api';
 import { isRetryableError } from '../lib/error-utils';
-import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
+import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady, peekLlmModelHealth } from '../lib/models-api';
 import {
     AgentRunResumeAction as AgentRunResumeActionValue,
     ChatComposerIndexingStatus,
@@ -731,7 +731,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
-    const [canLlmInvokeTools, setCanLlmInvokeTools] = useState<boolean | null>(null);
     const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
@@ -1271,27 +1270,37 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             const result = await checkLlmModelReady(model);
             setIsLlmModelValid(result.ready);
             setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
-            setCanLlmInvokeTools(result.ready ? result.canInvokeTools : null);
         } catch (err) {
             setIsLlmModelValid(false);
             setIsLlmToolsSupported(null);
-            setCanLlmInvokeTools(null);
         }
     }, []);
+
+    const applyCachedLlmHealth = (model: string) => {
+        const cached = peekLlmModelHealth(model);
+        if (!cached) return false;
+        setIsLlmModelValid(cached.ready);
+        setIsLlmToolsSupported(cached.ready ? cached.supportsTools : null);
+        return true;
+    };
 
     // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
-        setIsLlmModelValid(null);
-        setIsLlmToolsSupported(null);
-        setCanLlmInvokeTools(null);
         if (model) {
             // Persist as last selected LLM in browser memory
             if (typeof window !== 'undefined') {
                 localStorage.setItem('last_llm_model', model);
             }
         }
-        if (!model) return;
+        if (!model) {
+            setIsLlmModelValid(null);
+            setIsLlmToolsSupported(null);
+            return;
+        }
+        if (applyCachedLlmHealth(model)) return;
+        setIsLlmModelValid(null);
+        setIsLlmToolsSupported(null);
         await validateLlmModel(model);
     };
 
@@ -1427,8 +1436,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         const savedLlm = localStorage.getItem('last_llm_model');
         if (savedLlm && !llmModel) {
             setLlmModel(savedLlm);
-            setIsLlmModelValid(null);
-            setIsLlmToolsSupported(null);
+            const cached = peekLlmModelHealth(savedLlm);
+            if (cached) {
+                setIsLlmModelValid(cached.ready);
+                setIsLlmToolsSupported(cached.ready ? cached.supportsTools : null);
+            } else {
+                setIsLlmModelValid(null);
+                setIsLlmToolsSupported(null);
+            }
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -2754,7 +2769,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     loading={loading}
                     llmModel={llmModel}
                     isLlmModelValid={isLlmModelValid}
-                    isLlmToolsSupported={isLlmToolsSupported && canLlmInvokeTools}
+                    isLlmToolsSupported={isLlmToolsSupported}
                     isEmbeddingModelValid={isEmbeddingModelValid}
                     indexingStatus={indexingStatus}
                     liveExecution={liveExecution}

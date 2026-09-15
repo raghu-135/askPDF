@@ -131,7 +131,7 @@ export function ConversationHeader({
               </Box>
             }
             placement="top"
-            disablePortal
+            slotProps={{ popper: { disablePortal: true } }}
             open={tooltipOpen}
             onOpen={() => setTooltipOpen(true)}
             onClose={() => {

@@ -681,7 +681,7 @@ async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     async def tool_capable(_model):
         return True
-    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_capable)
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", tool_capable)
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
     progress = {
         "event_id": "run-1:346",
@@ -729,7 +729,7 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     async def tool_incapable(_model):
         return False
-    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", tool_incapable)
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", tool_incapable)
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
 
@@ -748,7 +748,7 @@ async def test_hermes_deep_task_defers_approval_to_actual_tool_invocation(monkey
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
     monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
-    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_can_invoke_tools", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", AsyncMock(return_value=True))
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._stream = AsyncMock(return_value="started")
     request = AgentRuntimeRequest("run-approval", "thread-approval", "hermes_rag_agent", "hermes", "hermes_agent")

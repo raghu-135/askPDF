@@ -4,6 +4,13 @@
 
 import { API_BASE } from "./api";
 import ErrorIcon from '@mui/icons-material/Error';
+import { loadLlmModelHealth, type LlmModelHealth } from './llm-model-health-cache';
+
+export {
+  clearLlmModelHealthCache,
+  peekLlmModelHealth,
+  type LlmModelHealth,
+} from './llm-model-health-cache';
 
 /**
  * Fetches available embedding models from the backend RAG API.
@@ -84,22 +91,21 @@ export const checkEmbeddingModelReady = async (model: string): Promise<boolean> 
   }
 };
 
-/**
- * Checks if the specified LLM (chat) model is ready and supports tool calling.
- * @param model - The LLM model name to check.
- * @returns A promise resolving to { ready: boolean, supportsTools: boolean }.
- */
-export const checkLlmModelReady = async (
-  model: string
-): Promise<{ ready: boolean; supportsTools: boolean; canInvokeTools: boolean }> => {
+export const checkLlmModelReady = async (model: string): Promise<LlmModelHealth> => {
   try {
-    const res = await fetch(`${API_BASE}/api/health/chat-model/${encodeURIComponent(model)}`);
-    const data = await res.json();
-    return {
-      ready: data.ready === true || data.chat_model_ready === true,
-      supportsTools: data.supports_tools === true,
-      canInvokeTools: data.can_invoke_tools === true,
-    };
+    return await loadLlmModelHealth(model, async (modelId) => {
+      const res = await fetch(`${API_BASE}/api/health/chat-model/${encodeURIComponent(modelId)}`);
+      if (!res.ok) {
+        throw new Error(`Unable to check model health (${res.status}).`);
+      }
+      const data = await res.json();
+      const supportsTools = data.supports_tools === true;
+      return {
+        ready: data.ready === true || data.chat_model_ready === true,
+        supportsTools,
+        canInvokeTools: supportsTools,
+      };
+    });
   } catch {
     return { ready: false, supportsTools: false, canInvokeTools: false };
   }

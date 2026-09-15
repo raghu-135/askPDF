@@ -3,12 +3,15 @@
 
 
 from app.agent.reasoning import normalize_ai_response
+import httpx
 import pytest
 
 from app.models.llm_server_client import (
     ReasoningChatOpenAI,
     _chat_probe_accepted,
-    _response_invokes_tool,
+    _congested_provider_status,
+    _model_ready_cache,
+    check_chat_model_ready,
     close_model_client,
     get_llm,
     llm_provider_auth,
@@ -39,6 +42,57 @@ def test_openai_sdk_headers_drop_authorization_to_avoid_cloudflare_400():
     }
 
 
+def test_openrouter_rate_limit_is_congestion_not_missing_model():
+    assert _congested_provider_status(429) is True
+    assert _congested_provider_status(502) is True
+    assert _congested_provider_status(503) is True
+    assert _congested_provider_status(403) is False
+    assert _congested_provider_status(404) is False
+
+
+@pytest.mark.asyncio
+async def test_chat_readiness_treats_gemma_free_rate_limit_as_ready(monkeypatch):
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model_id = "google/gemma-4-31b-it:free"
+    _model_ready_cache.clear()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": model_id}]})
+        return httpx.Response(429, json={"error": {"message": "Rate limited"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
+    assert await check_chat_model_ready(model_id) is True
+
+
+@pytest.mark.asyncio
+async def test_chat_readiness_probes_only_on_cache_miss(monkeypatch):
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model_id = "google/gemma-4-31b-it:free"
+    _model_ready_cache.clear()
+    chat_posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": model_id}]})
+        chat_posts.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"model": model_id, "choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
+    assert await check_chat_model_ready(model_id) is True
+    assert await check_chat_model_ready(model_id) is True
+    assert len(chat_posts) == 1
+
+
 def test_chat_probe_accepts_openrouter_alias_resolution_and_empty_first_token():
     assert _chat_probe_accepted(
         "~deepseek/deepseek-v4-flash-latest",
@@ -52,18 +106,6 @@ def test_chat_probe_accepts_openrouter_alias_resolution_and_empty_first_token():
         {"model": "qwen/qwen3.8-27b", "choices": [{"message": {"role": "assistant", "content": ""}}]},
     )
     assert not _chat_probe_accepted("qwen/qwen3.8-27b", {"model": "qwen/qwen3.8-27b", "choices": []})
-
-
-def test_native_tool_probe_requires_an_actual_matching_tool_call():
-    assert _response_invokes_tool({"choices": [{"message": {"content": "plain text"}}]}, "probe") is False
-    assert _response_invokes_tool(
-        {"choices": [{"message": {"tool_calls": [{"function": {"name": "other"}}]}}]},
-        "probe",
-    ) is False
-    assert _response_invokes_tool(
-        {"choices": [{"message": {"tool_calls": [{"function": {"name": "probe", "arguments": "{}"}}]}}]},
-        "probe",
-    ) is True
 
 
 @pytest.mark.asyncio

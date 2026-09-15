@@ -4,10 +4,9 @@ load_dotenv()
 import httpx
 import asyncio
 import logging
-import time
 import math
 from contextlib import asynccontextmanager
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
@@ -106,25 +105,30 @@ class ReasoningChatOpenAI(ChatOpenAI):
 
         return result
 
-# Cache for model readiness checks
-_model_ready_cache: Dict[str, Tuple[bool, float]] = {}
-CACHE_TTL = 300  # 5 minutes for successful checks
-CACHE_TTL_FAIL = 15  # 15 seconds for failed checks
+# Process-lifetime probe results. Live completions run only on a miss.
+_model_ready_cache: Dict[str, bool] = {}
+_model_ready_locks: Dict[str, asyncio.Lock] = {}
+
 
 def _check_model_ready_cache(cache_key: str) -> bool | None:
-    """Returns the cached readiness status if valid, otherwise None."""
-    cached = _model_ready_cache.get(cache_key)
-    if cached:
-        is_ready, timestamp = cached
-        ttl = CACHE_TTL if is_ready else CACHE_TTL_FAIL
-        if time.time() - timestamp < ttl:
-            return is_ready
-    return None
+    """Return a cached probe result, or None when that id has never been probed."""
+    if cache_key not in _model_ready_cache:
+        return None
+    return _model_ready_cache[cache_key]
+
 
 def _update_model_ready_cache(cache_key: str, is_ready: bool) -> bool:
-    """Updates the cache and returns the readiness status."""
-    _model_ready_cache[cache_key] = (is_ready, time.time())
+    """Store a probe result until process restart and return it."""
+    _model_ready_cache[cache_key] = is_ready
     return is_ready
+
+
+def _lock_for_model_probe(cache_key: str) -> asyncio.Lock:
+    lock = _model_ready_locks.get(cache_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _model_ready_locks[cache_key] = lock
+    return lock
 
 
 # Token budget configuration
@@ -564,6 +568,16 @@ async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_na
     except Exception:
         return False
 
+def _congested_provider_status(status_code: int) -> bool:
+    """Return whether a probe status means the provider saw the model, not that it is missing.
+
+    OpenRouter free models such as ``google/gemma-4-31b-it:free`` often 429 a
+    1-token readiness ping. 502/503 are the same class of upstream blip. Treat
+    those as ready so the composer is not locked as 'unavailable'.
+    """
+    return status_code in {429, 502, 503}
+
+
 async def _probe_with_retry(
     client: httpx.AsyncClient, 
     url: str, 
@@ -581,6 +595,18 @@ async def _probe_with_retry(
             logger.info(f"{probe_type} probe response status for {model_name}: {resp.status_code}")
             
             if validator(resp):
+                return True
+            if _congested_provider_status(resp.status_code):
+                if resp.status_code != 429 and attempt < max_retries - 1:
+                    logger.warning(f"{probe_type} model {model_name} returned {resp.status_code}. Retrying...")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                logger.warning(
+                    "%s probe for %s returned %s; treating the listed model as ready",
+                    probe_type,
+                    model_name,
+                    resp.status_code,
+                )
                 return True
 
             # If not 200, but also not a definitive client error (404, 401, 403), retry
@@ -640,6 +666,14 @@ async def check_chat_model_ready(model_name: str) -> bool:
     if cached_status is not None:
         return cached_status
 
+    async with _lock_for_model_probe(cache_key):
+        cached_status = _check_model_ready_cache(cache_key)
+        if cached_status is not None:
+            return cached_status
+        return await _probe_chat_model_ready(model_name, cache_key)
+
+
+async def _probe_chat_model_ready(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("llm") as client:
@@ -685,14 +719,22 @@ async def check_model_supports_tools(model_name: str) -> bool:
         False – the model explicitly reported it does not support tools (HTTP 400
                 "does not support tools"), or the model is unreachable / not found.
 
-    The result is cached for 60 s (success) or 15 s (failure) to avoid
-    hammering the server on every thread load.
+    The result is cached for the process lifetime so model changes do not
+    re-probe a known id.
     """
     cache_key = f"tools:{model_name}"
     cached_status = _check_model_ready_cache(cache_key)
     if cached_status is not None:
         return cached_status
 
+    async with _lock_for_model_probe(cache_key):
+        cached_status = _check_model_ready_cache(cache_key)
+        if cached_status is not None:
+            return cached_status
+        return await _probe_model_supports_tools(model_name, cache_key)
+
+
+async def _probe_model_supports_tools(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("llm") as client:
@@ -742,84 +784,11 @@ async def check_model_supports_tools(model_name: str) -> bool:
                 "ToolSupport",
                 max_retries=2,
             )
-            # Use a shorter TTL for tool-support cache (60 s) so model swaps are detected quickly
-            _model_ready_cache[cache_key] = (result, time.time())
-            return result
+            return _update_model_ready_cache(cache_key, result)
 
     except Exception:
         logging.exception("Exception during tool-support check")
         return _update_model_ready_cache(cache_key, False)
-
-
-async def check_model_can_invoke_tools(model_name: str) -> bool:
-    """Verify that a model returns an actual native function call when required."""
-    cache_key = f"tool-invocation:{model_name}"
-    cached_status = _check_model_ready_cache(cache_key)
-    if cached_status is not None:
-        return cached_status
-
-    base_url = _get_base_url()
-    try:
-        async with _managed_http_client("llm") as client:
-            if not await _check_model_exists(client, base_url, model_name):
-                return _update_model_ready_cache(cache_key, False)
-            probe_name = "askpdf_tool_capability_probe"
-            payload = {
-                "model": model_name,
-                "messages": [{"role": "user", "content": "Call the provided capability probe tool now."}],
-                "tools": [{
-                    "type": "function",
-                    "function": {
-                        "name": probe_name,
-                        "description": "Verifies native tool invocation support.",
-                        "parameters": {"type": "object", "properties": {}, "required": []},
-                    },
-                }],
-                # LM Studio's OpenAI-compatible endpoint accepts the string
-                # form and rejects the function-object form.
-                "tool_choice": "required",
-                # Reasoning models may consume a meaningful prefix before
-                # emitting the required call. Keep this bounded but usable.
-                "max_tokens": 256,
-            }
-
-            def invocation_validator(resp: httpx.Response) -> bool:
-                if resp.status_code != 200:
-                    return False
-                try:
-                    return _response_invokes_tool(resp.json(), probe_name)
-                except (AttributeError, IndexError, TypeError, ValueError):
-                    return False
-
-            result = await _probe_with_retry(
-                client,
-                f"{base_url}/chat/completions",
-                payload,
-                invocation_validator,
-                model_name,
-                "ToolInvocation",
-                max_retries=1,
-            )
-            return _update_model_ready_cache(cache_key, result)
-    except Exception:
-        logger.exception("Exception during native tool-invocation check")
-        return _update_model_ready_cache(cache_key, False)
-
-
-def _response_invokes_tool(payload: object, expected_name: str) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        return False
-    message = choices[0].get("message")
-    calls = message.get("tool_calls") if isinstance(message, dict) else None
-    return isinstance(calls, list) and any(
-        isinstance(call, dict)
-        and isinstance(call.get("function"), dict)
-        and call["function"].get("name") == expected_name
-        for call in calls
-    )
 
 
 async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -> bool:
@@ -842,7 +811,15 @@ async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -
         cached_status = _check_model_ready_cache(cache_key)
         if cached_status is not None:
             return cached_status
+        async with _lock_for_model_probe(cache_key):
+            cached_status = _check_model_ready_cache(cache_key)
+            if cached_status is not None:
+                return cached_status
+            return await _probe_embedding_model_ready(model_name, cache_key)
+    return await _probe_embedding_model_ready(model_name, cache_key)
 
+
+async def _probe_embedding_model_ready(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("embeddings") as client:
