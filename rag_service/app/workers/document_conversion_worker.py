@@ -1,4 +1,4 @@
-"""Independent worker for durable PDF conversion jobs."""
+"""In-process drain loop for durable PDF conversion jobs."""
 
 from __future__ import annotations
 
@@ -80,10 +80,3 @@ async def conversion_job_worker(stop_event: asyncio.Event, *, interval: float = 
             pass
 
 
-async def _run() -> None:
-    stop_event = asyncio.Event()
-    await conversion_job_worker(stop_event)
-
-
-if __name__ == "__main__":
-    asyncio.run(_run())

@@ -58,6 +58,7 @@ from app.services.memory_service import (
 )
 from app.services.memory_repair_scheduler import shutdown_memory_repairs
 from app.services.embedding_materialization_service import embedding_job_worker
+from app.workers.document_conversion_worker import conversion_job_worker
 from app.services.agent_task_runtime import run_task_worker
 from app.mcp.server import get_http_app
 from app.mcp.registry import descriptor, enabled_definitions
@@ -182,6 +183,8 @@ async def lifespan(app: FastAPI):
     memory_maintenance_task = None
     embedding_job_stop = None
     embedding_job_task = None
+    conversion_job_stop = None
+    conversion_job_task = None
     agent_task_worker_stop = None
     agent_task_worker = None
     runtime_readiness_stop = None
@@ -219,6 +222,8 @@ async def lifespan(app: FastAPI):
         )
         embedding_job_stop = asyncio.Event()
         embedding_job_task = asyncio.create_task(embedding_job_worker(embedding_job_stop))
+        conversion_job_stop = asyncio.Event()
+        conversion_job_task = asyncio.create_task(conversion_job_worker(conversion_job_stop))
         agent_task_worker_stop = asyncio.Event()
         app.state.agent_task_worker_status = "running"
         agent_task_worker = asyncio.create_task(
@@ -293,6 +298,9 @@ async def lifespan(app: FastAPI):
         if embedding_job_task is not None and embedding_job_stop is not None:
             embedding_job_stop.set()
             await embedding_job_task
+        if conversion_job_task is not None and conversion_job_stop is not None:
+            conversion_job_stop.set()
+            await conversion_job_task
         try:
             await shutdown_memory_repairs()
         except Exception:

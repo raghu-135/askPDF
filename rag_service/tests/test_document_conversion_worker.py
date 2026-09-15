@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from datetime import datetime, timezone
@@ -9,6 +11,25 @@ from sqlalchemy.future import select
 from app.db.models_sqlmodel import CanonicalDocument, DocumentChunkManifest, DocumentProcessingJob, File
 
 from app.workers import document_conversion_worker as worker
+
+
+def test_rag_service_lifespan_runs_conversion_jobs_in_process():
+    import main as application
+
+    assert application.conversion_job_worker is worker.conversion_job_worker
+    assert "conversion_job_worker(conversion_job_stop)" in inspect.getsource(application.lifespan)
+
+
+@pytest.mark.asyncio
+async def test_conversion_job_worker_stops_when_signaled(monkeypatch):
+    drain = AsyncMock(return_value=0)
+    monkeypatch.setattr(worker, "drain_conversion_jobs", drain)
+    stop = asyncio.Event()
+    task = asyncio.create_task(worker.conversion_job_worker(stop, interval=0.01))
+    await asyncio.sleep(0.03)
+    stop.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert drain.await_count >= 1
 
 
 @pytest.mark.asyncio

@@ -83,8 +83,8 @@ class TestAPIIntegration:
         assert upload["sentences"] is None
         assert file_hash
 
-        # Conversion and embedding are owned by durable workers. Process both
-        # queues explicitly after the request-owned enqueue.
+        # Conversion and embedding are durable in-process queues. Drain both
+        # explicitly after the request-owned enqueue.
         from app.services.file_processing_service import _background_index
         from app.services.embedding_materialization_service import drain_embedding_jobs
         from app.workers.document_conversion_worker import drain_conversion_jobs

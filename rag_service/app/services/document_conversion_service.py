@@ -94,7 +94,7 @@ async def enqueue_pdf_conversion(
     force_rebuild: bool = False,
     retry_failed: bool = False,
 ):
-    """Persist a conversion target; execution belongs to the conversion worker."""
+    """Persist a conversion target; rag-service drains it in-process."""
     fingerprint = current_extraction_fingerprint(data, merge_multi_bbox=merge_multi_bbox)
     generation = stable_identity("conversion", file_hash, fingerprint)
     repo = get_canonical_document_repo()
