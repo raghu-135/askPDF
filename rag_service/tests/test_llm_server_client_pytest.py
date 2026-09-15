@@ -7,12 +7,16 @@ import httpx
 import pytest
 
 from app.models.llm_server_client import (
+    LOCAL_EMBEDDING_MODELS,
     ReasoningChatOpenAI,
     _chat_probe_accepted,
     _congested_provider_status,
+    _embedding_probe_accepted,
     _model_ready_cache,
     check_chat_model_ready,
+    check_embedding_model_ready,
     close_model_client,
+    fetch_available_models,
     get_llm,
     llm_provider_auth,
     openai_sdk_default_headers,
@@ -177,3 +181,107 @@ async def test_closing_implicit_llm_wrapper_does_not_close_shared_transport():
     await close_model_client(first)
 
     assert not shared_transport.is_closed
+
+
+@pytest.mark.asyncio
+async def test_openrouter_model_list_includes_registered_embedding_catalog(monkeypatch):
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/embeddings/models"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "qwen/qwen3-embedding-8b"},
+                        {"id": "sentence-transformers/all-minilm-l6-v2"},
+                        {"id": "openai/text-embedding-3-small"},
+                    ]
+                },
+            )
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o-mini"}]})
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
+    result = await fetch_available_models()
+    assert result["embedding_models"] == [
+        "qwen/qwen3-embedding-8b",
+        "sentence-transformers/all-minilm-l6-v2",
+    ]
+    assert "openai/text-embedding-3-small" not in result["embedding_models"]
+    assert result["local_embedding_models"] == LOCAL_EMBEDDING_MODELS
+    assert "openai/gpt-4o-mini" in result["llm_models"]
+
+
+@pytest.mark.asyncio
+async def test_openrouter_embedding_readiness_uses_embeddings_catalog(monkeypatch):
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model_id = "qwen/qwen3-embedding-4b"
+    _model_ready_cache.clear()
+    embed_posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/embeddings/models"):
+            return httpx.Response(200, json={"data": [{"id": model_id}]})
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o-mini"}]})
+        if request.method == "POST" and path.endswith("/embeddings"):
+            embed_posts.append(path)
+            return httpx.Response(
+                200,
+                json={"model": model_id, "data": [{"embedding": [0.1, 0.2], "index": 0}]},
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
+    assert await check_embedding_model_ready(model_id) is True
+    assert embed_posts == ["/api/v1/embeddings"]
+
+
+def test_embedding_probe_accepts_huggingface_casing():
+    assert _embedding_probe_accepted(
+        "qwen/qwen3-embedding-4b",
+        {"model": "Qwen/Qwen3-Embedding-4B", "data": [{"embedding": [0.1], "index": 0}]},
+    )
+    assert not _embedding_probe_accepted(
+        "qwen/qwen3-embedding-4b",
+        {"model": "Qwen/Qwen3-Embedding-4B", "data": []},
+    )
+
+
+@pytest.mark.asyncio
+async def test_openrouter_embedding_readiness_accepts_huggingface_model_echo(monkeypatch):
+    monkeypatch.setenv("LLM_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_AUTH_MODE", "required")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model_id = "qwen/qwen3-embedding-4b"
+    _model_ready_cache.clear()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/embeddings/models"):
+            return httpx.Response(200, json={"data": [{"id": model_id}]})
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o-mini"}]})
+        if request.method == "POST" and path.endswith("/embeddings"):
+            return httpx.Response(
+                200,
+                json={
+                    "model": "Qwen/Qwen3-Embedding-4B",
+                    "data": [{"embedding": [0.1, 0.2], "index": 0}],
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
+    assert await check_embedding_model_ready(model_id) is True

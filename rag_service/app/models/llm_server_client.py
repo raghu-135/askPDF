@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
@@ -17,6 +17,7 @@ from app.services.memory_policy import (
     DEFAULT_THREAD_MEMORY_SETTINGS,
     normalize_thread_memory_settings,
 )
+from app.services.embedding_tokenizer_registry import is_registered_embedding_model
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -274,6 +275,38 @@ def _get_base_url() -> str:
     base_url = os.getenv("LLM_API_URL")
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
 
+
+def _is_openrouter_url(url: str) -> bool:
+    return "openrouter.ai" in str(url or "").casefold()
+
+
+def _model_ids_from_payload(data: object) -> List[str]:
+    models = data.get("data", []) if isinstance(data, dict) else data
+    ids: List[str] = []
+    for item in models if isinstance(models, list) else []:
+        if isinstance(item, dict) and item.get("id") not in (None, ""):
+            ids.append(str(item["id"]))
+        elif isinstance(item, str) and item.strip():
+            ids.append(item.strip())
+    return ids
+
+
+async def _fetch_openrouter_embedding_ids(client, base_url: str, headers: Dict[str, str]) -> List[str]:
+    try:
+        resp = await client.get(f"{base_url}/embeddings/models", headers=headers or None)
+    except Exception:
+        logger.warning("OpenRouter embedding catalog request failed", exc_info=True)
+        return []
+    if resp.status_code != 200:
+        logger.warning("OpenRouter embedding catalog returned %s", resp.status_code)
+        return []
+    try:
+        return _model_ids_from_payload(resp.json())
+    except Exception:
+        logger.warning("OpenRouter embedding catalog payload was unreadable", exc_info=True)
+        return []
+
+
 async def fetch_available_models():
     """
     Fetch available models from the LLM API/server (OpenAI-compatible) and categorize as embedding, llm, or unknown.
@@ -300,9 +333,23 @@ async def fetch_available_models():
             if resp.status_code == 200:
                 data = resp.json()
                 # OpenAI-compatible: models are in data['data']
-                models = data.get('data', []) if isinstance(data, dict) else data
-                model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
-                remote_embedding_models = [m for m in model_ids if is_embedding_model_by_keyword(m) and m not in LOCAL_EMBEDDING_MODELS]
+                model_ids = _model_ids_from_payload(data)
+                provider_embedding_ids = {
+                    model_id
+                    for model_id in model_ids
+                    if is_embedding_model_by_keyword(model_id)
+                }
+                if _is_openrouter_url(llm_api_url):
+                    provider_embedding_ids.update(
+                        await _fetch_openrouter_embedding_ids(client, llm_api_url, headers)
+                    )
+
+                remote_embedding_models = [
+                    model_id
+                    for model_id in sorted(provider_embedding_ids)
+                    if model_id not in LOCAL_EMBEDDING_MODELS
+                    and is_registered_embedding_model(model_id)
+                ]
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
                 not_embedding_models = [m for m in model_ids if m not in remote_embedding_models and m not in LOCAL_EMBEDDING_MODELS]
                 not_llm_models = [m for m in model_ids if m not in llm_models]
@@ -554,19 +601,31 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         f"CONTEXT:\n{context}"
     )
 
-async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_name: str) -> bool:
-    """Helper to check if a model ID exists in the /models endpoint."""
-    try:
-        _api_key, headers = llm_provider_auth()
-        resp = await client.get(f"{base_url}/models", headers=headers or None, timeout=15.0)
+async def _check_model_exists(
+    client: httpx.AsyncClient,
+    base_url: str,
+    model_name: str,
+    extra_catalogs: Sequence[str] = (),
+) -> bool:
+    """Return whether the model id appears in one of the provider catalogs."""
+    catalogs = [f"{base_url}/models", *extra_catalogs]
+    _api_key, headers = llm_provider_auth()
+    for catalog_url in catalogs:
+        try:
+            resp = await client.get(catalog_url, headers=headers or None, timeout=15.0)
+        except Exception:
+            logger.warning("Model catalog request failed for %s", catalog_url, exc_info=True)
+            continue
         if resp.status_code != 200:
-            return False
-        data = resp.json()
-        models = data.get('data', []) if isinstance(data, dict) else data
-        model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
-        return model_name in model_ids
-    except Exception:
-        return False
+            continue
+        try:
+            model_ids = _model_ids_from_payload(resp.json())
+        except Exception:
+            logger.warning("Model catalog payload was unreadable for %s", catalog_url, exc_info=True)
+            continue
+        if model_name in model_ids:
+            return True
+    return False
 
 def _congested_provider_status(status_code: int) -> bool:
     """Return whether a probe status means the provider saw the model, not that it is missing.
@@ -626,6 +685,26 @@ async def _probe_with_retry(
             logger.exception(f"Exception during {probe_type} probe for {model_name}: %s", e)
             break
     return False
+
+
+def _embedding_probe_accepted(requested_model: str, payload: object) -> bool:
+    """Return whether an OpenAI-compatible embeddings response proves the model is live.
+
+    Hosted routers often echo the Hugging Face id (``Qwen/Qwen3-Embedding-4B``)
+    instead of the provider id (``qwen/qwen3-embedding-4b``). A 200 with
+    embedding data is still a successful probe.
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return False
+    resp_model = str(payload.get("model") or "")
+    requested = requested_model.lower()
+    resolved = resp_model.lower()
+    if resolved and requested not in resolved and resolved not in requested:
+        logger.warning("Embedding probe resolved model %s -> %s", requested_model, resp_model)
+    return True
 
 
 def _chat_probe_accepted(requested_model: str, payload: object) -> bool:
@@ -823,20 +902,24 @@ async def _probe_embedding_model_ready(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("embeddings") as client:
-            if not await _check_model_exists(client, base_url, model_name):
+            extra_catalogs = (
+                (f"{base_url}/embeddings/models",)
+                if _is_openrouter_url(base_url)
+                else ()
+            )
+            if not await _check_model_exists(
+                client,
+                base_url,
+                model_name,
+                extra_catalogs=extra_catalogs,
+            ):
                 return _update_model_ready_cache(cache_key, False)
 
             def embed_validator(resp: httpx.Response) -> bool:
                 if resp.status_code != 200:
                     return False
                 try:
-                    data = resp.json()
-                    resp_model = data.get("model", "")
-                    # Verify integrity: if the model name in the response same as the requested model name?
-                    if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.error(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
-                    return True
+                    return _embedding_probe_accepted(model_name, resp.json())
                 except Exception:
                     return False
 

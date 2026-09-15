@@ -1,3 +1,5 @@
+name: askpdf-test
+
 services:
   frontend-test-runner:
     image: node:22-bookworm-slim

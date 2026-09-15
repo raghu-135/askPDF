@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Sequence
 
 from app.services.document_pipeline import TokenCounter
+from app.services.embedding_tokenizer_registry import lookup_embedding_tokenizer_settings
 
 
 class EmbeddingTokenizerUnavailableError(RuntimeError):
@@ -70,17 +70,6 @@ class EmbeddingTokenizerConfig:
         )
 
 
-def _external_mapping() -> dict[str, Any]:
-    raw = os.environ.get("EMBEDDING_TOKENIZER_CONFIG_JSON", "").strip()
-    if not raw:
-        return {}
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("EMBEDDING_TOKENIZER_CONFIG_JSON must be valid JSON") from exc
-    return value if isinstance(value, dict) else {}
-
-
 @lru_cache(maxsize=32)
 def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, TokenCounter]:
     """Resolve the actual local tokenizer or reject an unknown external model."""
@@ -100,11 +89,11 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
                 "suffix": os.environ.get("LOCAL_EMBEDDING_FORMAT_SUFFIX", ""),
             }
         else:
-            settings = _external_mapping().get(model) or {}
+            settings = lookup_embedding_tokenizer_settings(model) or {}
             if not settings:
                 raise ValueError(
                     f"No tokenizer configuration is registered for external embedding model '{model}'. "
-                    "Set EMBEDDING_TOKENIZER_CONFIG_JSON with tokenizer, effective_input_limit, and formatting."
+                    "Add it to the built-in registry or set EMBEDDING_TOKENIZER_CONFIG_JSON."
                 )
 
         identity = str(settings.get("tokenizer") or settings.get("identity") or "").strip()
