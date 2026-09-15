@@ -3,22 +3,26 @@
 ## Prerequisites
 
 - Docker and Docker Compose
-- An OpenAI-compatible local model provider:
-  Docker Model Runner, Ollama, or LM Studio
+- An OpenAI-compatible chat provider: LM Studio, Ollama, Docker Model Runner,
+  or a hosted API such as OpenRouter
 
 ## Configure the environment
 
 Copy the example environment file:
 
     cp .env.example .env
+    python3 scripts/fill_env_secrets.py
+
+That replaces the `replace-with-...` service secrets (admin token, runtime
+tokens, MCP context secret). It does not invent `OPENAI_API_KEY`.
 
 At minimum, set the LLM provider block in `.env`:
 
 - `LLM_API_URL`
 - `OPENAI_API_KEY` when the server requires a Bearer token; leave empty for local servers
 
-Replace the other placeholder secrets. The complete variable inventory and
-service ownership are documented in [Configuration](configuration.md).
+The complete variable inventory and service ownership are documented in
+[Configuration](configuration.md).
 See the README for copy-paste local vs OpenRouter examples.
 
 ### Docker Model Runner
@@ -45,7 +49,9 @@ Start the local server, download a chat model and embedding model, then use:
     OPENAI_API_KEY=
 
 The selected chat model must support tool calling. The control plane also
-requires a compatible embedding model and may use a local reranker.
+requires a compatible embedding model and may use a local reranker. Remote
+embedding models need a registered Hugging Face tokenizer; the rag-service
+image prefetches those tokenizers at build time.
 
 ### OpenRouter (or other hosted OpenAI-compatible APIs)
 
@@ -64,8 +70,8 @@ you add them via EMBEDDING_TOKENIZER_CONFIG_JSON and cache that tokenizer.
 Open http://localhost:3000.
 
 The default Compose stack includes the frontend, control plane, PostgreSQL,
-Weaviate, browser capture, and LangGraph runtime. Hermes services are enabled
-when the Hermes Compose profile is enabled.
+Weaviate, browser capture, and LangGraph runtime. `.env.example` sets
+`COMPOSE_PROFILES=hermes`, so Hermes starts unless you clear that variable.
 
 ## Stop and restart
 
@@ -82,10 +88,15 @@ For frontend hot reload, use the development Compose override:
 
 ## Operational checks
 
-- Control plane: http://localhost:8000/health
-- LangGraph startup/readiness: http://localhost:8100/startupz and /readyz
-- Hermes readiness: http://localhost:8200/readyz when enabled
+- Frontend: http://localhost:3000
+- Control plane: http://127.0.0.1:8000/health (bound to localhost)
+- Control-plane readiness, including the LangGraph probe: http://127.0.0.1:8000/ready
 
-Keep runtime and control-plane ports private in shared or production
-deployments. See [Security](security/tool-approval.md) and
+LangGraph `/startupz` and `/readyz` and Hermes `/readyz` are container-local.
+The default `docker-compose.yml` does not publish `:8100` or `:8200` on the
+host. Browser capture is on http://127.0.0.1:8090. Weaviate (`:8080`) and
+PostgreSQL (`:5432`) are published on all interfaces in the example Compose
+file; keep them off shared networks.
+
+See [Security](security/tool-approval.md) and
 [Runtime operations](runtimes/operations.md).

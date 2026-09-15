@@ -32,7 +32,9 @@ This directory contains the canonical human-facing documentation for askPDF.
 ## Documentation ownership rules
 
 - Source code and Pydantic models define executable behavior and API contracts.
-- .env.example defines variable names and example values.
+- .env.example defines operator-set variable names and example values.
+- docker-compose.yml defines injected service URLs, published ports, and
+  healthchecks.
 - SQLModel definitions and Alembic migrations define the database schema.
 - Runtime capability declarations define supported operations.
 - Markdown files under prompt directories are executable prompt assets and are

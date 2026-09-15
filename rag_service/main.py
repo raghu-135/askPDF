@@ -1,5 +1,5 @@
 """
-main.py - FastAPI entrypoint for the Processing Service (Modular version)
+main.py - FastAPI entrypoint for the askPDF control plane.
 
 This module handles:
 - Service initialization and lifespan

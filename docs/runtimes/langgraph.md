@@ -35,7 +35,8 @@ Production runtime deployments require:
 
 Runtime-only credentials must not be supplied to the control-plane container.
 The runtime fails closed when durable checkpoint storage or required migration
-tables are unavailable.
+tables are unavailable. The default Compose file does not publish the
+LangGraph HTTP port on the host.
 
 ## HTTP/SSE behavior
 

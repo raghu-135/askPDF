@@ -7,8 +7,12 @@ service each have separate health/readiness behavior. A service may be alive
 while not ready to accept work because a database, MCP endpoint, model
 provider, checkpoint store, or upstream runtime is unavailable.
 
-Use the service-specific health checks defined in docker-compose.yml and keep
-runtime ports private.
+Use the service-specific health checks defined in docker-compose.yml. Those
+probes run inside each container. The host-published ports in the example
+stack are frontend `:3000`, control plane `127.0.0.1:8000`, browser capture
+`127.0.0.1:8090`, Weaviate `:8080`, and PostgreSQL `:5432`. LangGraph and
+Hermes remain on the Compose network. The default stack does not publish
+LangGraph `:8100` or Hermes `:8200` on the host.
 
 ## Leases and fencing
 

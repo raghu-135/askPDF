@@ -15,6 +15,9 @@
       └── hermes-runtime
 
 The Compose topology and service ports are defined in docker-compose.yml.
+LangGraph and Hermes listen only on the Compose network. The control plane
+is bound to localhost. Weaviate and PostgreSQL are published on the host in
+the example file.
 
 ## Responsibilities
 
@@ -35,6 +38,10 @@ token.
 rag_service owns product APIs, authentication, projects, threads, files,
 parsing and indexing jobs, workflow definitions, task state, artifacts,
 memories, MCP tool authorization, and product-facing run projections.
+
+Document conversion, embedding materialization, and AgentTask workers run
+inside the rag-service process. Runtimes call back into rag-service over
+loopback HTTP MCP for tools.
 
 The main application setup and router mounting are in rag_service/main.py.
 
@@ -98,13 +105,16 @@ store execution/checkpoint state owned by their respective runtime.
 - Tool approval is enforced at the MCP boundary, not inside individual tools.
 - Built-in workflow definitions are seeded and refreshed by the control plane.
 - Embedding model identity is part of the project/thread data contract.
+- Remote embedding packing uses a locally cached tokenizer; unknown models
+  are rejected rather than downloaded at query time.
 
 Related implementation:
 
 - rag_service/main.py
 - rag_service/app/product_orchestration/
 - rag_service/app/runtime/
-- rag_service/app/agent/canvas_layout_skills.py
+- rag_service/app/services/embedding_tokenizer_registry.py
+- rag_service/scripts/download_embedding_tokenizers.py
 - [Research canvases](research-canvases.md)
 - runtime_protocol/
 - langgraph_runtime/api.py

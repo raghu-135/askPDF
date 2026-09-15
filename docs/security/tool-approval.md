@@ -79,3 +79,18 @@ frontends or planner heuristics should not be needed. Graph-internal tools
 (`mcp_enabled: false`) cannot use this wrapper.
 
 The relevant implementation is in rag_service/app/mcp/ and rag_service/app/tools/.
+
+## Network exposure
+
+The example `docker-compose.yml` binds:
+
+- frontend `:3000` on all interfaces
+- rag-service `:8000` to `127.0.0.1`
+- browser-capture `:8090` to `127.0.0.1`
+- Weaviate `:8080` and `:50051` on all interfaces, with anonymous access
+- PostgreSQL `:5432` on all interfaces, with Compose default credentials
+
+LangGraph `:8100` and Hermes `:8200` stay on the Compose network. Anyone who
+can reach the frontend is the operator. Do not treat published Weaviate or
+Postgres ports as a private data plane on a shared host.
+

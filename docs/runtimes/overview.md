@@ -19,8 +19,9 @@ events, errors, authentication, tool approval, and continuation types.
 
 LangGraph is the default execution engine for the main agent workflows.
 Hermes is an additional engine for supported deep-research task definitions.
-Their capability surfaces are intentionally different; callers must use
-capability admission rather than assuming every runtime supports every operation.
+`.env.example` enables the Compose `hermes` profile. Their capability
+surfaces are intentionally different; callers must use capability admission
+rather than assuming every runtime supports every operation.
 
 See:
 

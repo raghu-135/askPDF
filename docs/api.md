@@ -16,7 +16,9 @@ this page documents the stable endpoint groups and important behavior.
 | Memories | scoped search, review, delete, retry indexing |
 | Memory manager | plans, apply, reviews, continuation, status |
 | Workflows | catalog, validation, source, save, delete |
+| Agent runtimes | GET /api/agent-runtimes, runtime and workflow capabilities |
 | Agent runs | events, state, follow-ups, interrupts, steering, cancel, resume |
+| Prompt preview | GET /api/threads/prompt-tools, POST /api/threads/prompt-preview |
 | Agent tasks | create, commands, todos, runs, artifacts, evidence, reviews |
 | Models | model list and chat/embedding health |
 | Tools | tool contract discovery |
@@ -69,7 +71,8 @@ See [Runtime protocol](contracts/runtime-protocol.md) and
 
 The control plane mounts internal MCP and Hermes-MCP surfaces. They are not
 public application endpoints and require runtime execution credentials at their
-own boundary.
+own boundary. Workflow-builder test-run and catalog routes under
+`/internal/agent-workflows` are similarly not browser APIs.
 
 When adding an endpoint:
 

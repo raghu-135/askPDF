@@ -13,15 +13,23 @@ running because test services do not publish the same host ports.
 
 ## Test groups
 
-- unit and mock-based tests
-- PostgreSQL/database and repository tests
-- API tests
-- MCP and runtime-contract tests
-- model-aware integration tests
-- schema and migration guardrails
-- LangGraph runtime integration and recovery
-- Hermes runtime proof and restart recovery
-- frontend Node tests, including canvas-spec and document-tab coverage
+- unit and mock-based tests (`--unit`)
+- PostgreSQL/database and repository tests (`--db`)
+- API tests (`--api`)
+- model-aware integration tests (`--integration`)
+- schema and migration guardrails (`--schema`)
+- frontend Node tests (`--frontend`), including canvas-spec and document-tab coverage
+- LangGraph runtime integration and recovery (`--langgraph-runtime`;
+  `--external-runtime` is an alias)
+- LangGraph against a configured real provider (`--langgraph-runtime-real`)
+- Hermes runtime proof and restart recovery (`--hermes-runtime`)
+- standalone collection (`--standalone`)
+
+With no flags, the runner runs frontend tests, the default control-plane
+pytest group (`TEST_GROUP` defaults to `all`), and standalone checks.
+`--all` / `--all-tests` selects that same control-plane group. Isolated
+LangGraph and Hermes Compose proofs still require `--langgraph-runtime` and
+`--hermes-runtime`.
 
 Canvas backend coverage lives in test_canvas_spec_pytest.py,
 test_canvas_emit_pytest.py, test_canvas_layout_skills_pytest.py, and
@@ -38,22 +46,25 @@ assigned or explicitly excluded.
     ./run_tests.sh --db
     ./run_tests.sh --api
     ./run_tests.sh --schema
+    ./run_tests.sh --frontend
     ./run_tests.sh --langgraph-runtime
     ./run_tests.sh --hermes-runtime
     ./run_tests.sh --all
 
 Use the options documented in run_tests.sh for individual files, tests,
-coverage, verbosity, and retained test containers.
+coverage, verbosity, and retained test containers
+(`ASKPDF_KEEP_TEST_CONTAINERS=1`).
 
 ## CI
 
 GitHub Actions is configured in .github/workflows/ci.yml. It builds the service
-images, verifies import boundaries, runs the default test suite, and exercises
-runtime-specific lanes.
+images, verifies import boundaries, runs the default test suite, collects
+control-plane and LangGraph tests, runs the LangGraph runtime proof, and runs
+a separate Hermes runtime-proof job.
 
-## Documentation-related gaps
+## Coverage that is still thin
 
 The application test suite is strong around backend contracts and runtime
-recovery. Continue improving browser-level coverage for upload → indexing →
-chat → citation/highlight → TTS, multi-user authorization isolation, and
-production-scale PDF/model performance.
+recovery. Browser-level coverage for upload → indexing → chat →
+citation/highlight → TTS, multi-user authorization isolation, and
+production-scale PDF/model performance remain thinner than the contract tests.

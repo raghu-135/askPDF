@@ -118,6 +118,6 @@ jobs:
       - name: Run deterministic Hermes proof
         run: ./run_tests.sh --hermes-runtime
 
-      - name: Stop Phase 7 services
+      - name: Stop Hermes proof services
         if: always()
         run: docker compose -p askpdf-hermes-ci -f docker-compose.runtime-integration.yml down --volumes --remove-orphans

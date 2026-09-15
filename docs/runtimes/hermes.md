@@ -1,8 +1,9 @@
 # Hermes runtime
 
 Hermes is a separate runtime gateway around a pinned upstream
-NousResearch/hermes-agent revision. The exact revision is defined in
-docker-compose.yml and must remain synchronized with the adapter contract.
+NousResearch/hermes-agent revision. `HERMES_UPSTREAM_REVISION` in `.env`
+(and `.env.example`) is the source of truth; `docker-compose.yml` builds
+from that SHA and must stay synchronized with the adapter contract.
 
 ## Responsibilities
 

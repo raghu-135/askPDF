@@ -37,8 +37,8 @@ Revisions use `supersedes_id`. List defaults to current (non-superseded)
 documents. Idempotent creates use `idempotency_key` (agent publishes hash the
 spec when the caller omits one).
 
-Alembic head for this change is `c7f2a9d4e1b8`. Implementation:
-rag_service/app/services/canvas_service.py and
+The introducing migration is `c7f2a9d4e1b8_store_research_canvases_as_artifacts`.
+Implementation: rag_service/app/services/canvas_service.py and
 rag_service/app/api/canvases.py.
 
 ## Workbench and chat

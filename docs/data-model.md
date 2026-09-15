@@ -45,7 +45,8 @@ overrides, indexing state, and source references. Effective memories are
 materialized into model-specific Weaviate collections.
 
 Document, chat, web-search, and memory vectors are separated by embedding model
-to prevent dimension/model mismatches.
+to prevent dimension/model mismatches. Chunk packing for remote models uses the
+matching local Hugging Face tokenizer from the embedding tokenizer registry.
 
 ## Runtime persistence
 

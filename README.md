@@ -26,10 +26,14 @@ Prerequisites:
 Set up the environment and start the stack:
 
     cp .env.example .env
+    python3 scripts/fill_env_secrets.py
     # Edit .env: LLM_API_URL, and OPENAI_API_KEY when the server requires it.
     docker compose up --build
 
 Open http://localhost:3000.
+
+`.env.example` sets `COMPOSE_PROFILES=hermes`, so Hermes starts with the
+default stack. Clear that variable to run without Hermes.
 
 ### LLM provider authentication
 
