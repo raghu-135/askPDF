@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { Readable } from "node:stream";
+import { eventStreamProxyHeaders, isEventStreamContentType } from "../../../lib/event-stream-proxy";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -12,12 +13,16 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
+const EVENT_STREAM_BUFFERING_HEADERS = new Set(["content-encoding", "content-length"]);
+
 export const config = {
-  api: { bodyParser: false },
+  api: { bodyParser: false, responseLimit: false },
 };
 
-function headerEntries(headers: Headers): Array<[string, string]> {
-  return Array.from(headers.entries()).filter(([name]) => !HOP_BY_HOP_HEADERS.has(name));
+function headerEntries(headers: Headers, skip = new Set<string>()): Array<[string, string]> {
+  return Array.from(headers.entries()).filter(([name]) => (
+    !HOP_BY_HOP_HEADERS.has(name) && !skip.has(name.toLowerCase())
+  ));
 }
 
 function backendUrl(req: NextApiRequest): URL {
@@ -33,6 +38,33 @@ function backendUrl(req: NextApiRequest): URL {
     }
   }
   return target;
+}
+
+async function writeEventStream(upstream: Response, res: NextApiResponse) {
+  const contentType = upstream.headers.get("content-type");
+  for (const [name, value] of headerEntries(upstream.headers, EVENT_STREAM_BUFFERING_HEADERS)) {
+    res.setHeader(name, value);
+  }
+  for (const [name, value] of Object.entries(eventStreamProxyHeaders(contentType))) {
+    res.setHeader(name, value);
+  }
+  res.flushHeaders();
+  if (!upstream.body) {
+    res.end();
+    return;
+  }
+  const reader = upstream.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      res.write(Buffer.from(value));
+      (res as NextApiResponse & { flush?: () => void }).flush?.();
+    }
+  } finally {
+    res.end();
+  }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,11 +92,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } as RequestInit & { duplex: "half" });
 
     res.status(upstream.status);
-    for (const [name, value] of headerEntries(upstream.headers)) res.setHeader(name, value);
     if (!upstream.body || method === "HEAD") {
+      for (const [name, value] of headerEntries(upstream.headers)) res.setHeader(name, value);
       res.end();
       return;
     }
+    if (isEventStreamContentType(upstream.headers.get("content-type"))) {
+      await writeEventStream(upstream, res);
+      return;
+    }
+    for (const [name, value] of headerEntries(upstream.headers)) res.setHeader(name, value);
     Readable.fromWeb(upstream.body as never).pipe(res);
   } catch (error) {
     console.error("Frontend API proxy request failed", error);

@@ -96,7 +96,8 @@ import {
     liveTraceStatusFromEvent,
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
-import { isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
+import { formatAgentTraceIdentity, formatOpenTraceControlLabel } from '../lib/trace-open-label';
+import { canOpenTraceTab, isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
 import {
     ConversationComposer,
     ConversationHeader,
@@ -522,11 +523,12 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                             onClick={() => void onOpenAgentRun(msg)}
                             sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
                         >
-                            {liveForMessage?.canceling
-                                ? 'Stopping after current step…'
-                                : liveForMessage?.running
-                                    ? 'Open live trace'
-                                    : `Open trace · ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`}
+                            {formatOpenTraceControlLabel({
+                                running: liveForMessage?.running,
+                                canceling: liveForMessage?.canceling,
+                                workflowId: formatAgentWorkflowLabel(msg),
+                                route: msg.agent_route,
+                            })}
                         </Button>
                     </Box>
                 )}
@@ -761,13 +763,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         snapshot: { runId: string; events: AgentExecutionStreamEnvelope[]; running: boolean; status: string },
         extras: Omit<ChatTraceDescriptor, 'id' | 'running' | 'status'>,
     ) => {
-        if (!onOpenTrace || !isValidTraceId(snapshot.runId)) return;
+        if (!onOpenTrace) return;
+        const tabId = traceTabIdForRun(snapshot.runId, extras.messageId);
+        if (!canOpenTraceTab(tabId)) return;
         const requested = extras.messageId === workspaceTraceMessageIdRef.current;
         const activate = extras.activate === true || requested;
-        if (activate) liveTraceActivatedRunRef.current = snapshot.runId;
+        if (activate && isValidTraceId(snapshot.runId)) liveTraceActivatedRunRef.current = snapshot.runId;
         onOpenTrace({
             ...extras,
-            id: snapshot.runId,
+            id: tabId,
             threadId: extras.threadId || activeThread?.id,
             status: snapshot.status,
             liveTraceView: extras.liveTraceView || buildLiveTraceView(snapshot.events),
@@ -1798,7 +1802,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             role: MessageRole.Assistant,
             content: '',
             created_at: new Date().toISOString(),
+            agent_workflow_id: normalizeAgentWorkflowForUi(agentWorkflowId) || undefined,
         };
+        const liveChatTraceIdentity = (chatResponse?: ThreadChatResponse) => formatAgentTraceIdentity({
+            workflowId: chatResponse?.agent_workflow_id || tempAssistantMsg.agent_workflow_id || agentWorkflowId,
+            route: chatResponse?.agent_route || chatResponse?.route,
+        });
 
         resetLiveExecutionEvents();
         setLiveExecution({ messageId: tempAssistantMsg.id, running: true });
@@ -1866,7 +1875,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (event.event !== 'heartbeat') {
                         publishLiveTrace(snapshot, {
                             messageId: tempAssistantMsg.id,
-                            label: response?.agent_workflow_id || agentWorkflowId || 'agent',
+                            label: liveChatTraceIdentity(response),
                             routeReason: response?.agent_route_reason,
                             traceRefs: response?.agent_trace_refs,
                             error: terminalStreamError,
@@ -1880,7 +1889,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (!traceWasOpenForTempMessage || !response?.agent_run_id || !activeThread) return;
                 setWorkspaceTraceMessageId(messageId);
                 workspaceTraceMessageIdRef.current = messageId;
-                const label = `${response.agent_workflow_id || agentWorkflowId || 'agent'}${(response.agent_route || response.route) ? ` · ${response.agent_route || response.route}` : ''}`;
+                const label = liveChatTraceIdentity(response);
                 try {
                     const run = await getAgentRun(response.agent_run_id, activeThread.id);
                     setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
@@ -1946,7 +1955,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             id: cancelledRunId,
                             threadId: activeThread.id,
                             messageId: tempAssistantMsg.id,
-                            label: response.agent_workflow_id || agentWorkflowId || 'agent',
+                            label: liveChatTraceIdentity(response),
                             status: 'cancelled',
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
@@ -2017,7 +2026,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             id: run.id,
                             threadId: activeThread.id,
                             messageId: localAssistantMessageId,
-                            label: `${response.agent_workflow_id || agentWorkflowId || 'agent'}${(response.agent_route || response.route) ? ` · ${response.agent_route || response.route}` : ''}`,
+                            label: liveChatTraceIdentity(response),
                             status: run.status,
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
@@ -2043,7 +2052,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             id: response.agent_run_id,
                             threadId: activeThread.id,
                             messageId: localAssistantMessageId,
-                            label: `${response.agent_workflow_id || agentWorkflowId || 'agent'}${(response.agent_route || response.route) ? ` · ${response.agent_route || response.route}` : ''}`,
+                            label: liveChatTraceIdentity(response),
                             status: 'review',
                             routeReason: response.agent_route_reason,
                             traceRefs: response.agent_trace_refs,
@@ -2379,8 +2388,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     const formatAgentWorkflowLabel = useCallback((msg: ChatMessage) => {
-        return msg.agent_workflow_id || 'agent';
-    }, []);
+        return formatAgentTraceIdentity({
+            workflowId: msg.agent_workflow_id || testRuntime?.baseWorkflowId || agentWorkflowId,
+        });
+    }, [agentWorkflowId, testRuntime?.baseWorkflowId]);
+
+    const formatMessageTraceIdentity = useCallback((msg: ChatMessage, response?: ThreadChatResponse) => (
+        formatAgentTraceIdentity({
+            workflowId: response?.agent_workflow_id || msg.agent_workflow_id || testRuntime?.baseWorkflowId || agentWorkflowId,
+            route: response?.agent_route || response?.route || msg.agent_route,
+        })
+    ), [agentWorkflowId, testRuntime?.baseWorkflowId]);
 
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
@@ -2393,7 +2411,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             id: tabId,
             threadId: activeThread?.id,
             messageId: msg.id,
-            label: `${msg.agent_workflow_id || 'agent'}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
+            label: formatMessageTraceIdentity(msg),
             status: liveForMessage?.running ? 'running' : (isValidTraceId(runId) ? agentRunDetails[runId]?.status : 'running'),
             routeReason: msg.agent_route_reason,
             traceRefs: msg.agent_trace_refs,
@@ -2431,6 +2449,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         agentRunErrors,
         agentRunLoading,
         handleAgentRunDetailsChange,
+        formatMessageTraceIdentity,
         liveExecution,
         liveTraceView,
         onOpenTrace,
@@ -2454,7 +2473,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             id: tabId,
             threadId: activeThread?.id,
             messageId: msg.id,
-            label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
+            label: formatMessageTraceIdentity(msg),
             status: liveForMessage?.running ? 'running' : (isValidTraceId(runId) ? agentRunDetails[runId]?.status : 'running'),
             routeReason: msg.agent_route_reason,
             traceRefs: msg.agent_trace_refs,
@@ -2471,7 +2490,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         agentRunDetails,
         agentRunErrors,
         agentRunLoading,
-        formatAgentWorkflowLabel,
+        formatMessageTraceIdentity,
         handleAgentRunDetailsChange,
         liveExecution,
         liveTraceView,
