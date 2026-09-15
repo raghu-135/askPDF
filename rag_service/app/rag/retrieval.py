@@ -11,6 +11,12 @@ from runtime_protocol.tool_contract import MAX_TOOL_RESULT_STRING_LENGTH
 
 logger = logging.getLogger(__name__)
 RETRIEVAL_CONTENT_BUDGET = MAX_TOOL_RESULT_STRING_LENGTH - 2048
+SEARCH_EVIDENCE_HIT_CHAR_LIMIT = 1500
+_OMITTED_SOURCE_INSTRUCTION = (
+    "Omitted source bodies due to size: {source_ids}. "
+    "Call read_context with those source_id values and expansion=table when the source is tabular, "
+    "otherwise expansion=section. Do not repeat search_knowledge with a similar query."
+)
 _DOCUMENT_VECTOR_TEMPORAL_FIELDS = {
     "document_available_in_thread_at",
     "document_indexed_at",
@@ -37,6 +43,98 @@ def bounded_retrieval_text(parts: List[str], *, budget: int = RETRIEVAL_CONTENT_
         truncated = True
         break
     return "\n\n".join(selected), truncated
+
+
+def clip_retrieval_hit(value: str, *, hit_limit: int = SEARCH_EVIDENCE_HIT_CHAR_LIMIT) -> tuple[str, bool]:
+    text = str(value or "")
+    if len(text) <= hit_limit:
+        return text, False
+    return text[:hit_limit].rstrip() + "…", True
+
+
+def bounded_retrieval_hits(
+    parts: List[str],
+    *,
+    budget: int = RETRIEVAL_CONTENT_BUDGET,
+    hit_limit: int = SEARCH_EVIDENCE_HIT_CHAR_LIMIT,
+) -> tuple[list[tuple[int, str]], list[int], bool]:
+    """Keep ranked hits that fit, clipping each body and recording omitted indexes."""
+
+    selected: list[tuple[int, str]] = []
+    used = 0
+    truncated = False
+    for index, part in enumerate(parts):
+        value = str(part or "")
+        if not value:
+            continue
+        clipped, clipped_hit = clip_retrieval_hit(value, hit_limit=hit_limit)
+        separator = 2 if selected else 0
+        if used + separator + len(clipped) <= budget:
+            selected.append((index, clipped))
+            used += separator + len(clipped)
+            truncated = truncated or clipped_hit
+            continue
+        truncated = True
+        omitted = [item for item in range(index, len(parts)) if str(parts[item] or "")]
+        return selected, omitted, truncated
+    return selected, [], truncated
+
+
+def format_search_knowledge_content(
+    sources: List[Dict[str, Any]],
+    content_parts: List[str],
+    *,
+    budget: int = RETRIEVAL_CONTENT_BUDGET,
+) -> tuple[str, bool]:
+    """Build LLM-visible search text with a full source catalog and bounded bodies."""
+
+    def catalog_line(index: int, status: str) -> str:
+        source = sources[index] if index < len(sources) else {}
+        bits: list[str] = []
+        page_start = source.get("page_start")
+        page_end = source.get("page_end")
+        pages = source.get("pages") or []
+        if page_start:
+            bits.append(f"pages {page_start}-{page_end or page_start}")
+        elif pages:
+            bits.append(f"pages {min(pages)}-{max(pages)}")
+        if source.get("table_id"):
+            bits.append(f"table_id={source['table_id']}")
+        section_id = source.get("section_id") or source.get("parent_id")
+        if section_id:
+            bits.append(f"section_id={section_id}")
+        bits.append(status)
+        extra = "; ".join(str(bit) for bit in bits if bit)
+        source_id = source.get("source_id") or f"source-{index}"
+        return f"- {source_id}" + (f" ({extra})" if extra else "")
+
+    draft_catalog = "Ranked sources:\n" + "\n".join(catalog_line(index, "included") for index in range(len(sources)))
+    hit_budget = max(1, budget - len(draft_catalog) - 480)
+    included_indexes, omitted_indexes, truncated = bounded_retrieval_hits(content_parts, budget=hit_budget)
+    included = {index for index, _body in included_indexes}
+    catalog = "Ranked sources:\n" + "\n".join(
+        catalog_line(index, "included" if index in included else "omitted")
+        for index in range(len(sources))
+    )
+    bodies = "\n\n".join(body for _index, body in included_indexes)
+    omitted_ids = [
+        str(sources[index].get("source_id") or "")
+        for index in omitted_indexes
+        if index < len(sources) and sources[index].get("source_id")
+    ]
+    footer = _OMITTED_SOURCE_INSTRUCTION.format(source_ids=", ".join(omitted_ids)) if omitted_ids else ""
+    if omitted_ids:
+        truncated = True
+    parts = [catalog]
+    if bodies:
+        parts.append(bodies)
+    if footer:
+        parts.append(footer)
+    content = "\n\n".join(parts)
+    if len(content) > budget:
+        content = content[:budget].rstrip() + "…"
+        truncated = True
+    return content, truncated
 
 
 async def get_document_name_lookup(thread_id: str) -> Dict[str, str]:

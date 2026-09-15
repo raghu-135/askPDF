@@ -201,13 +201,20 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
     assert structure["rows"] == [["A", "B"]]
 
 
-def test_oversized_table_rows_repeat_headers_and_preserve_synthetic_provenance():
+def test_pipeline_versions_are_extraction_v5_and_table_pack_v6():
+    from app.services.document_pipeline import EXTRACTION_PIPELINE_VERSION, RETRIEVAL_CHUNKING_VERSION
+
+    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v5"
+    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v6"
+
+
+def test_oversized_table_rows_prefix_headers_once_and_preserve_synthetic_provenance():
     payload = {
         "elements": [{
             "element_id": "table-1",
             "element_type": "table",
             "label": "table",
-            "text": "canonical table text",
+            "text": "Table headers: Metric | Value",
             "pages": [4],
             "table_structure": {
                 "headers": ["Metric", "Value"],
@@ -219,6 +226,8 @@ def test_oversized_table_rows_repeat_headers_and_preserve_synthetic_provenance()
 
     sentences = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
     assert sentences[0]["table_row_id"] == "table-1:row:1"
+    assert sentences[0]["text"].startswith("Row 1:")
+    assert "Table headers:" not in sentences[0]["text"]
     assert sentences[0]["source_spans"] == []
     assert sentences[0]["alignment_precision"] == "synthetic"
 
@@ -229,10 +238,64 @@ def test_oversized_table_rows_repeat_headers_and_preserve_synthetic_provenance()
         document_identity="file:generation",
     )
     assert len(chunks) > 1
-    assert all("Table headers: Metric | Value" in chunk["body_text"] for chunk in chunks)
+    assert all(chunk["body_text"].count("Table headers: Metric | Value") == 1 for chunk in chunks)
+    assert all(chunk["body_text"].count("Row 1:") == 1 for chunk in chunks)
     assert all(chunk["table_row_id"] == "table-1:row:1" for chunk in chunks)
     assert all(chunk["source_spans"] == [] for chunk in chunks)
     assert len({chunk["chunk_id"] for chunk in chunks}) == len(chunks)
+
+
+def test_table_chunks_share_one_header_and_flush_before_the_table_pack_ceiling():
+    rows = [{"id": index, "text": f"Row {index}: value-{index}", "section_id": "s", "table_id": "table-1", "table_headers": "Method | Score", "table_row_prefix": f"Row {index}: ", "table_row_body": f"value-{index}"} for index in range(1, 80)]
+    chunks = pack_retrieval_chunks(rows, token_counter=_counter(), embedding_token_limit=512)
+    assert len(chunks) > 1
+    assert all(chunk["body_text"].startswith("Table headers: Method | Score\nRow ") for chunk in chunks)
+    assert all(chunk["body_text"].count("Table headers:") == 1 for chunk in chunks)
+    assert all(chunk["token_count"] <= 192 for chunk in chunks)
+
+
+def test_sibling_word_leaves_merge_into_one_block():
+    class FakeDocument:
+        def export_to_dict(self):
+            return {
+                "texts": [
+                    {"self_ref": "#/texts/0", "label": "text", "text": "The", "prov": [{"page_no": 1}]},
+                    {"self_ref": "#/texts/1", "label": "text", "text": "University", "prov": [{"page_no": 1}]},
+                    {"self_ref": "#/texts/2", "label": "text", "text": "This is a complete sentence.", "prov": [{"page_no": 1}]},
+                ],
+                "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}, {"$ref": "#/texts/2"}]},
+            }
+
+    payload = build_canonical_payload(FakeDocument(), filename="paper.pdf")
+    assert [item["text"] for item in payload["elements"]] == [
+        "The University",
+        "This is a complete sentence.",
+    ]
+
+
+def test_consecutive_duplicate_tables_are_collapsed():
+    from docling_core.types.doc import DoclingDocument, TableCell, TableData
+
+    def table_data():
+        return TableData(
+            num_rows=1,
+            num_cols=1,
+            table_cells=[
+                TableCell(
+                    text="Only",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=1,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                ),
+            ],
+        )
+
+    document = DoclingDocument(name="dup-tables")
+    document.add_table(data=table_data())
+    document.add_table(data=table_data())
+    payload = build_canonical_payload(document, filename="tables.pdf")
+    assert len([item for item in payload["elements"] if item["label"] == "table"]) == 1
 
 
 def test_document_identity_prevents_cross_file_element_and_chunk_collisions():

@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v4"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v5"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "section-pack-v5"
+RETRIEVAL_CHUNKING_VERSION = "table-pack-v6"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -45,6 +45,20 @@ CONTAINER_LABELS = frozenset({
 SKIPPED_LABELS = frozenset({"picture"})
 STRUCTURAL_CONTEXT_TOKEN_LIMIT = 96
 DEFAULT_EMBEDDING_TOKEN_LIMIT = 512
+# Keep table chunks smaller than the embedding budget so ranked hits fit the tool window.
+TABLE_PACK_TOKEN_LIMIT = 192
+_BLOCK_BOUNDARY_LABELS = frozenset({
+    "section_header",
+    "title",
+    "chapter_header",
+    "list_item",
+    "code",
+    "checkbox",
+    "formula",
+    "table",
+    "caption",
+    "footnote",
+})
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -311,6 +325,71 @@ def _collapsed_container_item(
     return collapsed
 
 
+def _is_mergeable_word_crumb(
+    ref: str,
+    item: Mapping[str, Any],
+    collections: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """True when a leaf is a short token that should join with sibling crumbs."""
+    label = str(item.get("label") or "").strip().casefold()
+    if (
+        label in SKIPPED_LABELS
+        or label in _BLOCK_BOUNDARY_LABELS
+        or ref.startswith("#/tables/")
+        or ref.startswith("#/pictures/")
+        or ref.startswith("#/formulas/")
+        or _is_container_ref(ref, item)
+    ):
+        return False
+    nested = [
+        child
+        for child in _exported_child_refs(item, collections)
+        if child.startswith("#/tables/")
+        or child.startswith("#/groups/")
+        or _is_container_ref(child, collections[child])
+    ]
+    if nested:
+        return False
+    text = _text_for_raw_item(item)
+    if not text or any(mark in text for mark in ".!?"):
+        return False
+    words = text.split()
+    return 1 <= len(words) <= 4 and len(text) <= 48
+
+
+def _merged_word_crumb_item(
+    refs: Sequence[str],
+    collections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    parts: list[str] = []
+    pages: list[int] = []
+    first = collections[refs[0]]
+    for ref in refs:
+        item = collections[ref]
+        text = _text_for_raw_item(item)
+        if text:
+            parts.append(text)
+        pages.extend(_pages_from_provenance(item.get("prov")))
+    merged = dict(first)
+    joined = " ".join(parts)
+    merged["text"] = joined
+    merged["orig"] = joined
+    merged["label"] = "text"
+    if pages:
+        merged["prov"] = [{"page_no": page} for page in sorted(set(pages))]
+    return merged
+
+
+def _table_export_identity(element: Mapping[str, Any]) -> str:
+    structure = element.get("table_structure") if isinstance(element.get("table_structure"), Mapping) else {}
+    return json.dumps(
+        {"headers": structure.get("headers") or [], "rows": structure.get("rows") or []},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
     """Yield block-level body items, skipping word/line children and empty groups."""
     seen: set[str] = set()
@@ -373,13 +452,42 @@ def _iter_exported_items(docling_json: Mapping[str, Any]) -> Iterable[tuple[str,
         for child in child_refs:
             yield from consider(child)
 
+    def emit_crumb_group(refs: list[str]) -> Iterable[tuple[str, Mapping[str, Any]]]:
+        if not refs:
+            return
+        if len(refs) == 1:
+            yield from consider(refs[0])
+            return
+        for ref in refs:
+            item = collections.get(ref)
+            if item is None:
+                continue
+            seen.add(ref)
+            for child in _exported_child_refs(item, collections):
+                _mark_descendants_seen(child, collections, seen)
+        yield refs[0], _merged_word_crumb_item(refs, collections)
+
     def walk(node: Any) -> Iterable[tuple[str, Mapping[str, Any]]]:
         if isinstance(node, Mapping) and "$ref" in node:
             yield from consider(str(node["$ref"]))
             return
-        if isinstance(node, Mapping):
-            for child in node.get("children") or []:
-                yield from walk(child)
+        if not isinstance(node, Mapping):
+            return
+        pending: list[str] = []
+        for child in node.get("children") or []:
+            child_ref = _ref_value(child) if isinstance(child, Mapping) else ""
+            if (
+                child_ref
+                and child_ref not in seen
+                and child_ref in collections
+                and _is_mergeable_word_crumb(child_ref, collections[child_ref], collections)
+            ):
+                pending.append(child_ref)
+                continue
+            yield from emit_crumb_group(pending)
+            pending = []
+            yield from walk(child)
+        yield from emit_crumb_group(pending)
 
     yield from walk(docling_json.get("body") or {})
     for ref, item in collections.items():
@@ -416,6 +524,19 @@ def build_canonical_payload(
                 "table_structure": _table_structure_for_raw_item(raw) if label == "table" else None,
             }
         )
+
+    deduped: list[dict[str, Any]] = []
+    for item in elements:
+        if (
+            item["label"] == "table"
+            and deduped
+            and deduped[-1]["label"] == "table"
+            and _table_export_identity(item) == _table_export_identity(deduped[-1])
+        ):
+            continue
+        item["element_order"] = len(deduped)
+        deduped.append(item)
+    elements = deduped
 
     element_ids_by_ref = {item["source_ref"]: item["element_id"] for item in elements}
     for item in elements:
@@ -551,6 +672,34 @@ def _element_tags(element: Mapping[str, Any], element_type: str) -> tuple[list[s
     return tags, provenance
 
 
+def _table_header_line(item: Mapping[str, Any]) -> str:
+    caption = str(item.get("table_caption") or "").strip()
+    headers = str(item.get("table_headers") or "").strip()
+    parts = [part for part in (caption, f"Table headers: {headers}" if headers else "") if part]
+    return "\n".join(parts)
+
+
+def _group_body(items: Sequence[Mapping[str, Any]]) -> str:
+    if not items:
+        return ""
+    if items[0].get("table_id"):
+        header = _table_header_line(items[0])
+        rows = "\n".join(str(item.get("text") or "").strip() for item in items if str(item.get("text") or "").strip())
+        return f"{header}\n{rows}".strip() if header else rows
+    return " ".join(str(item.get("text") or "").strip() for item in items if str(item.get("text") or "").strip()).strip()
+
+
+def _table_caption_from_element_text(text: str) -> str:
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Table headers:") or stripped.startswith("Row "):
+            return ""
+        return stripped
+    return ""
+
+
 def project_sentences(
     payload: Mapping[str, Any],
     *,
@@ -588,7 +737,7 @@ def project_sentences(
                     continue
                 header_text = " | ".join(value or f"Column {index + 1}" for index, value in enumerate(headers))
                 row_text = _table_row_render(headers, values, row_index, cells)
-                row_prefix = f"Table headers: {header_text}\nRow {row_index}: " if header_text else f"Row {row_index}: "
+                row_prefix = f"Row {row_index}: "
                 row_cells = [
                     f"{element.get('element_id')}:cell:{cell_index}"
                     for cell_index, cell in enumerate(cells)
@@ -598,6 +747,7 @@ def project_sentences(
                     "text": f"{row_prefix}{row_text}",
                     "table_row_id": f"{element.get('element_id')}:row:{row_index}",
                     "table_headers": header_text,
+                    "table_caption": _table_caption_from_element_text(text),
                     "table_row_prefix": row_prefix,
                     "table_row_body": row_text,
                     "table_cell_ids": row_cells,
@@ -633,6 +783,7 @@ def project_sentences(
                     "table_id": table_id,
                     "table_row_id": table_row_id,
                     "table_headers": item.get("table_headers"),
+                    "table_caption": item.get("table_caption"),
                     "table_row_prefix": item.get("table_row_prefix"),
                     "table_row_body": item.get("table_row_body"),
                     "table_cell_ids": list(item.get("table_cell_ids") or []),
@@ -795,7 +946,7 @@ def pack_retrieval_chunks(
         available = embedding_token_limit - counter.count(prefix)
         if available <= 0:
             raise ValueError("embedding token budget is exhausted by structural context")
-        body = " ".join(str(item.get("text") or "").strip() for item in group).strip()
+        body = _group_body(group)
         if counter.count(body) <= available:
             emit(group, body)
         else:
@@ -805,11 +956,13 @@ def pack_retrieval_chunks(
                 raise ValueError("chunk packer attempted to split multiple sentences")
             item = group[0]
             if item.get("table_row_id"):
-                row_prefix = str(item.get("table_row_prefix") or "")
+                header = _table_header_line(item)
+                row_label = str(item.get("table_row_prefix") or "")
+                row_prefix = f"{header}\n{row_label}" if header else row_label
                 row_body = str(item.get("table_row_body") or "").strip()
                 row_available = available - counter.count(row_prefix)
                 if not row_body or row_available <= 0:
-                    raise ValueError("table row cannot fit with repeated headers and structural context")
+                    raise ValueError("table row cannot fit with table headers and structural context")
                 pieces = list(counter.split(row_body, row_available))
                 bounded_row_pieces: list[str] = []
                 for row_piece in pieces:
@@ -829,7 +982,7 @@ def pack_retrieval_chunks(
                             else:
                                 high = middle - 1
                         if best == cursor:
-                            raise ValueError("table row fragment cannot fit with repeated headers")
+                            raise ValueError("table row fragment cannot fit with table headers")
                         bounded_row_pieces.append(row_piece[cursor:best])
                         cursor = best
                 for piece_index, row_piece in enumerate(bounded_row_pieces):
@@ -911,6 +1064,12 @@ def pack_retrieval_chunks(
 
     previous_section: Any = object()
     previous_table: Any = object()
+
+    def pack_limit_for(items: Sequence[Mapping[str, Any]]) -> int:
+        if items and items[0].get("table_id"):
+            return min(embedding_token_limit, TABLE_PACK_TOKEN_LIMIT)
+        return embedding_token_limit
+
     for sentence in sentences:
         section = sentence.get("section_id")
         table = sentence.get("table_id")
@@ -920,12 +1079,19 @@ def pack_retrieval_chunks(
             flush()
         if group:
             prefix = _context_prefix(document_title, group[0].get("heading_path") or [], counter) + "\n"
-            candidate = " ".join([*(str(item.get("text") or "").strip() for item in group), str(sentence.get("text") or "").strip()]).strip()
-            if counter.count(prefix) + counter.count(candidate) > embedding_token_limit:
+            candidate_items = [*group, sentence]
+            candidate = _group_body(candidate_items)
+            if counter.count(prefix) + counter.count(candidate) > pack_limit_for(candidate_items):
                 flush()
-        if not group and counter.count(str(sentence.get("text") or "").strip()) + counter.count(
-            _context_prefix(document_title, sentence.get("heading_path") or [], counter) + "\n"
-        ) > embedding_token_limit:
+        prefix = _context_prefix(document_title, sentence.get("heading_path") or [], counter) + "\n"
+        singleton = _group_body([sentence])
+        embedding_cost = counter.count(prefix) + counter.count(singleton)
+        if not group and embedding_cost > embedding_token_limit:
+            group.append(sentence)
+            flush()
+            previous_section, previous_table = section, table
+            continue
+        if not group and embedding_cost > pack_limit_for([sentence]):
             group.append(sentence)
             flush()
             previous_section, previous_table = section, table
@@ -941,6 +1107,7 @@ __all__ = [
     "CANONICAL_SCHEMA_VERSION",
     "CHUNK_MAX_SENTENCES",
     "DEFAULT_EMBEDDING_TOKEN_LIMIT",
+    "TABLE_PACK_TOKEN_LIMIT",
     "EXTRACTION_PIPELINE_VERSION",
     "READING_EXCLUDED_LABELS",
     "RETRIEVAL_CHUNKING_VERSION",

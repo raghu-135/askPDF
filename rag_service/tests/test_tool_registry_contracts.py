@@ -16,6 +16,17 @@ def _builtin_spec(builtin_key: str):
     raise AssertionError(f"Missing builtin workflow fixture: {builtin_key}")
 
 
+def test_search_and_read_context_prompts_expand_omitted_sources():
+    search = TOOL_FRIENDLY_CONFIG["search_knowledge"]["default_prompt"]
+    read = TOOL_FRIENDLY_CONFIG["read_context"]["default_prompt"]
+    assert "tool_response_truncated" in search
+    assert "read_context" in search
+    assert "omitted" in search
+    assert "Do not repeat a similar search_knowledge" in search
+    assert "omitted catalog ids" in read
+    assert "expansion=table" in read
+
+
 def test_tool_contract_metadata_covers_user_facing_tool_ids():
     friendly_ids = {
         config["id"]

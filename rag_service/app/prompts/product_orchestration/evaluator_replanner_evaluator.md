@@ -18,6 +18,7 @@ This is a bounded evaluator. Decide whether the gathered evidence can support a 
 - Mark contradiction risk high when sources disagree in a way the final answer must surface.
 - Do not recommend live web search when live web search is disabled.
 - Prefer answering with explicit gaps over replanning when the missing evidence cannot be retrieved by available worker nodes.
+- A truncated document search is not an evidence gap when omitted source_ids remain. Recommend read_context on those ids (expansion=table or section) instead of another similar search_knowledge query.
 - Keep all lists short and concrete.
 
 ## Worker Nodes Available

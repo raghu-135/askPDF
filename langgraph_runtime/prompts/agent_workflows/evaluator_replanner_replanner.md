@@ -18,6 +18,7 @@ This is a bounded replanner. Revise only worker selection. The runtime executes 
 - Do not use worker ids outside the available worker nodes.
 - Use as many relevant workers as needed to address the gaps comprehensively. When uncertain whether a relevant worker could help, include it rather than minimizing the plan.
 - If no worker can address the gap, skip every worker and explain why.
+- If document search was truncated but listed omitted source_ids, keep retrieval_worker selected with a query that reads those sources via read_context rather than repeating a similar search_knowledge query.
 
 ## Worker Nodes Available
 

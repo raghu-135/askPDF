@@ -397,7 +397,7 @@ TOOL_FRIENDLY_CONFIG = {
     "search_knowledge": {
         "id": "document_search_knowledge", "display_name": "Search Knowledge",
         "description": "Search attached PDFs at document, section, or precise chunk level. Use chunk for direct evidence, document or section for structural discovery, then read_context to expand a returned source.",
-        "default_prompt": "Search attached documents directly. Use level=chunk for precise evidence, level=section or document for discovery, and pass document_id or typed filters only when they are relevant. Do not treat outline entries or tags as evidence.",
+        "default_prompt": "Search attached documents directly. Use level=chunk for precise evidence, level=section or document for discovery, and pass document_id or typed filters only when they are relevant. Do not treat outline entries or tags as evidence. Ranked results include a source catalog; after tool_response_truncated, call read_context on omitted or tabular source_ids (expansion=table for tables, otherwise expansion=section). Do not repeat a similar search_knowledge query.",
         "mcp_server": "first_party_context", "mcp_tool": "search_knowledge", "mcp_enabled": True, "contract_version": "1",
     },
     "inspect_document": {
@@ -409,7 +409,7 @@ TOOL_FRIENDLY_CONFIG = {
     "read_context": {
         "id": "document_context", "display_name": "Read Context",
         "description": "Read the original body text for a returned document source with bounded chunk, section, or table expansion and continuation.",
-        "default_prompt": "Use with a source_id returned by search_knowledge. Expand through the source's parent section or table when needed, keep within the requested token budget, and cite source IDs/pages from the returned evidence.",
+        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence.",
         "mcp_server": "first_party_context", "mcp_tool": "read_context", "mcp_enabled": True, "contract_version": "1",
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {

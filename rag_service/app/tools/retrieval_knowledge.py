@@ -10,7 +10,7 @@ from typing import Any
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
-from app.rag.retrieval import bounded_retrieval_text
+from app.rag.retrieval import format_search_knowledge_content
 from app.tools.contracts import InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
@@ -139,6 +139,8 @@ def _source_from_chunk(
         or metadata.get("source_element_ids")
         or []
     )
+    table_id = metadata.get("table_id") or get("table_id")
+    section_id = metadata.get("section_id") or get("section_id")
     return {
         "source_id": source_id,
         "file_hash": get("file_hash"),
@@ -152,6 +154,8 @@ def _source_from_chunk(
         "tags": list(metadata.get("tags") or get("tags", []) or []),
         "tag_provenance": dict(metadata.get("tag_provenance") or {}),
         "heading_path": list(metadata.get("heading_path") or get("heading_path", []) or []),
+        "table_id": table_id,
+        "section_id": section_id,
         "generation": generation,
         "manifest_id": manifest_id,
         "extraction_fingerprint": extraction_fingerprint,
@@ -402,7 +406,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                 }
                 sources.append(source)
                 content_parts.append(f"[Discovery: {title}]\n{title}")
-        content, truncated = bounded_retrieval_text(content_parts)
+        content, truncated = format_search_knowledge_content(sources, content_parts)
         artifacts = {
             "matches": sources,
             "document_sources": sources,

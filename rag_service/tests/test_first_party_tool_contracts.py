@@ -191,6 +191,89 @@ async def test_search_knowledge_chunk_level_returns_body_text_over_structural_co
     assert "Document section: Introduction" not in payload["content"]
 
 
+def _knowledge_chunk(source_id: str, body: str, *, table_id: str | None = None) -> dict:
+    return {
+        "file_hash": "file-1",
+        "chunk_id": source_id,
+        "source_id": source_id,
+        "score": 0.9,
+        "text": "structural context",
+        "manifest_id": "manifest-file-1",
+        "generation": "generation-1",
+        "metadata": {
+            "body_text": body,
+            "pages": [2],
+            "extraction_fingerprint": "extract-1",
+            "chunking_fingerprint": "chunk-1",
+            "table_id": table_id,
+            "section_id": "sec-1",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
+    hits = [
+        _knowledge_chunk(f"src-{index}", "x" * 2000, table_id="table-1" if index == 0 else None)
+        for index in range(20)
+    ]
+    fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
+
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+        async def rerank(self, _query, chunks): return chunks
+
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="table", level="chunk", max_results=20),
+        _context(caller_node="retrieval_worker"), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
+
+    assert payload["ok"] is True
+    assert "tool_response_truncated" in payload["warnings"]
+    assert "Ranked sources:" in payload["content"]
+    assert "src-0" in payload["content"]
+    assert "src-19" in payload["content"]
+    assert "omitted" in payload["content"]
+    assert "table_id=table-1" in payload["content"]
+    assert "Call read_context" in payload["content"]
+    assert "Do not repeat search_knowledge" in payload["content"]
+    assert payload["content"].count("x" * 2000) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_small_hits_include_full_bodies(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
+    hits = [
+        _knowledge_chunk("src-a", "alpha evidence"),
+        _knowledge_chunk("src-b", "beta evidence"),
+    ]
+    fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
+
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+        async def rerank(self, _query, chunks): return chunks
+
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="evidence", level="chunk", max_results=2),
+        _context(caller_node="retrieval_worker"), services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
+
+    assert payload["ok"] is True
+    assert "tool_response_truncated" not in payload["warnings"]
+    assert "alpha evidence" in payload["content"]
+    assert "beta evidence" in payload["content"]
+    assert "src-a" in payload["content"]
+    assert "src-b" in payload["content"]
+    assert "omitted" not in payload["content"]
+
+
 @pytest.mark.asyncio
 async def test_search_knowledge_enforces_document_ownership(monkeypatch):
     _patch_ready_manifest(monkeypatch)

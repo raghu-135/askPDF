@@ -52,3 +52,19 @@ def test_known_inactive_tool_instruction_is_not_mistaken_for_unknown_identifier(
     normalized = normalize_tool_instructions({"live_web_recon": "Use fresh sources"}, tool_items=["search_knowledge"])
     assert "live_web_recon" not in normalized
     assert "document_search_knowledge" in normalized
+
+
+def test_evaluator_replanner_prompts_treat_truncated_search_as_read_context_work():
+    from pathlib import Path
+
+    rag_prompts = Path(__file__).resolve().parents[1] / "app" / "prompts" / "product_orchestration"
+    evaluator = (rag_prompts / "evaluator_replanner_evaluator.md").read_text()
+    replanner = (rag_prompts / "evaluator_replanner_replanner.md").read_text()
+    assert "truncated document search is not an evidence gap" in evaluator
+    assert "read_context" in evaluator
+    assert "omitted source_ids" in replanner
+    assert "read_context" in replanner
+    langgraph_prompts = Path(__file__).resolve().parents[2] / "langgraph_runtime" / "prompts" / "agent_workflows"
+    if langgraph_prompts.exists():
+        assert "truncated document search is not an evidence gap" in (langgraph_prompts / "evaluator_replanner_evaluator.md").read_text()
+        assert "omitted source_ids" in (langgraph_prompts / "evaluator_replanner_replanner.md").read_text()

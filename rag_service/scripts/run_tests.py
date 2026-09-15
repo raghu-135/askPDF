@@ -40,6 +40,7 @@ UNIT_TEST_FILES = [
     "test_canonical_trace_projection_pytest.py",
     "test_content_store_pytest.py",
     "test_external_research_tools.py",
+    "test_execution_stream_live_delivery_pytest.py",
     "test_memory_manager_budget_pytest.py",
     "test_runtime_hardening_pytest.py",
     "test_runtime_operation_repository_pytest.py",
