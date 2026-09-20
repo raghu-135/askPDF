@@ -1075,6 +1075,85 @@ class WeaviateAdapter:
         logger.debug(f"Retrieved {len(out)} chunks")
         return out
 
+    def _document_chunk_record(self, obj: Any) -> Dict[str, Any]:
+        """Normalize one Weaviate document object for inspection or retrieval."""
+        p = obj.properties
+        metadata = _parse_metadata(p.get("metadata_json"))
+        result: Dict[str, Any] = {
+            "text": p.get("text", ""),
+            "file_hash": p.get("file_hash"),
+            "chunk_id": p.get("chunk_id"),
+            "chunk_identity": p.get("chunk_identity"),
+            "source_id": p.get("source_id") or metadata.get("source_id"),
+            "manifest_id": p.get("manifest_id") or metadata.get("manifest_id"),
+            "generation": p.get("generation") or metadata.get("generation"),
+            "section_id": p.get("section_id") or metadata.get("section_id"),
+            "table_id": p.get("table_id") or metadata.get("table_id"),
+            "type": p.get("type", "knowledge_source"),
+            "source_kind": p.get("source_kind", "pdf"),
+            "url": p.get("url"),
+            "title": p.get("title"),
+            "tags": list(p.get("tags") or []),
+            "metadata": metadata,
+        }
+        for field in (
+            "page_start",
+            "page_end",
+            "pages",
+        ):
+            value = p.get(field)
+            if value in (None, ""):
+                value = metadata.get(field)
+            if value not in (None, ""):
+                result[field] = value
+        return result
+
+    async def get_document_chunks_for_file(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Fetch indexed document chunks for inspection (read-only, no query vector).
+
+        Returns a page of chunks sorted by chunk_id plus total_count for the file.
+        """
+        _validate_not_empty(file_hash, "file_hash")
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+        filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
+
+        try:
+            total_response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
+            total_count = int(getattr(total_response, "total_count", 0) or 0)
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filt,
+                limit=limit,
+                offset=offset,
+            )
+        except WeaviateBaseError as e:
+            logger.error("Failed to fetch document chunks for file '%s': %s", file_hash, e)
+            raise VectorDBQueryError("Could not fetch document chunks") from e
+
+        chunks = [self._document_chunk_record(obj) for obj in response.objects]
+        chunks.sort(key=lambda item: item.get("chunk_id", 0))
+        return {
+            "file_hash": file_hash,
+            "embedding_model": embedding_model,
+            "total_count": total_count,
+            "limit": limit,
+            "offset": offset,
+            "chunks": chunks,
+        }
+
     async def search_chat_memory(
         self,
         thread_id: str,

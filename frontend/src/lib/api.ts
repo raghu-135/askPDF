@@ -188,6 +188,9 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
   return res.json();
 }
 
+export type { FileChunksResponse, VectorChunk } from './file-chunks-url';
+export { buildFileChunksUrl, getFileChunks } from './file-chunks-url';
+
 // ============ Thread API ============
 
 export interface Thread {

@@ -25,7 +25,8 @@ import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbar, WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
-import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
+import WorkspaceTabs, { type DocumentWorkspaceTab } from '../components/workbench/WorkspaceTabs';
+import DocumentChunkInspectorDialog from '../components/document/DocumentChunkInspectorDialog';
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
@@ -99,6 +100,7 @@ export default function Home() {
   } = useTraceTabs();
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
   const [canvasRefreshVersion, setCanvasRefreshVersion] = useState(0);
+  const [chunkInspectorTab, setChunkInspectorTab] = useState<DocumentWorkspaceTab | null>(null);
 
   const confirmDiscardMemoryCurator = useCallback(() => (
     !memoryManagerDirtyRef.current
@@ -110,6 +112,17 @@ export default function Home() {
     : activeProject
       ? `project:${activeProject.id}`
       : 'home';
+
+  const chunkInspectorTarget = useMemo(() => {
+    if (activeProject) return { scope: 'project' as const, id: activeProject.id };
+    if (activeThread) return { scope: 'thread' as const, id: activeThread.id };
+    return null;
+  }, [activeProject, activeThread]);
+
+  const handleInspectChunks = useCallback((tab: DocumentWorkspaceTab) => {
+    if (!chunkInspectorTarget) return;
+    setChunkInspectorTab(tab);
+  }, [chunkInspectorTarget]);
 
   const rememberNonMemoryTab = useCallback((tabId: string | null, contextKey = workspaceContextKey) => {
     if (!tabId || tabId === 'memory-tab') return;
@@ -861,6 +874,7 @@ export default function Home() {
               onDocumentRemove={handleTabRemove}
               onDocumentPromote={handlePromoteDocument}
               onDocumentRetry={handleRetryDocument}
+              onInspectChunks={chunkInspectorTarget ? handleInspectChunks : undefined}
               documentContext={activeProject ? 'project' : 'thread'}
               onAddBrowserToThread={handleAddBrowserToThread}
               isBrowserCapturing={isBrowserCapturing}
@@ -1009,6 +1023,16 @@ export default function Home() {
             )
           }
         />
+        {chunkInspectorTab && chunkInspectorTarget ? (
+          <DocumentChunkInspectorDialog
+            open
+            onClose={() => setChunkInspectorTab(null)}
+            fileHash={chunkInspectorTab.fileHash}
+            fileName={chunkInspectorTab.fileName}
+            scope={chunkInspectorTarget.scope}
+            scopeId={chunkInspectorTarget.id}
+          />
+        ) : null}
       </Box>
     </ThemeProvider>
   );

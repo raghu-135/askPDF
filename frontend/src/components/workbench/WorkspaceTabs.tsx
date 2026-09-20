@@ -30,6 +30,7 @@ import BugReportIcon from '@mui/icons-material/BugReport';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import ErrorIcon from '@mui/icons-material/Error';
 import ReplayIcon from '@mui/icons-material/Replay';
+import DataObjectIcon from '@mui/icons-material/DataObject';
 import { truncateFileName } from '../../lib/pdf-utils';
 import type { BackendSentence, BBox } from '../../lib/bbox-derivation';
 import {
@@ -101,6 +102,7 @@ export default React.memo(function WorkspaceTabs({
   onDocumentRemove,
   onDocumentPromote,
   onDocumentRetry,
+  onInspectChunks,
   onAddBrowserToThread,
   isBrowserCapturing = false,
   documentContext = 'thread',
@@ -112,6 +114,7 @@ export default React.memo(function WorkspaceTabs({
   onDocumentRemove?: (tabId: string) => void;
   onDocumentPromote?: (tabId: string) => void;
   onDocumentRetry?: (tabId: string) => void;
+  onInspectChunks?: (tab: DocumentWorkspaceTab) => void;
   onAddBrowserToThread?: () => void;
   isBrowserCapturing?: boolean;
   documentContext?: 'thread' | 'project';
@@ -428,6 +431,17 @@ export default React.memo(function WorkspaceTabs({
         onClose={closeDocumentMenu}
         onClick={(event) => event.stopPropagation()}
       >
+        {activeDocumentMenuTab && onInspectChunks && (
+          <MenuItem
+            onClick={() => {
+              onInspectChunks(activeDocumentMenuTab);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><DataObjectIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Inspect vector chunks</ListItemText>
+          </MenuItem>
+        )}
         {activeDocumentMenuTab?.sourceType === ThreadFileSourceType.Browser && activeDocumentMenuTab.sourceUrl && (
           <MenuItem
             onClick={() => {

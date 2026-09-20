@@ -9,6 +9,7 @@ Endpoints:
 - GET /api/threads/{thread_id}/files/{file_hash}/download - Download PDF
 - GET /api/threads/{thread_id}/files/{file_hash}/sentences - Get parsed sentences
 - GET /api/threads/{thread_id}/files/{file_hash}/status - Get file status
+- GET /api/threads/{thread_id}/files/{file_hash}/chunks - Inspect indexed vector chunks
 - DELETE /api/threads/{thread_id}/files/{file_hash} - Remove file from thread
 - GET /api/threads/{thread_id}/files/{file_hash}/annotations - Get annotations
 - PUT /api/threads/{thread_id}/files/{file_hash}/annotations - Update annotations
@@ -73,10 +74,13 @@ from app.services.embedding_model_service import (
 from app.models.llm_server_client import check_embedding_model_ready
 from app.services.content_store import get_content_store, pdf_content_key
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
+from app.db.vector import get_vector_db
+from app.db.vector.config import VectorDBQueryError
 
 router = APIRouter(tags=["files"])
 
 INDEXING_IN_PROGRESS = "in_progress"
+FILE_CHUNKS_MAX_LIMIT = 500
 
 
 async def _require_ready_thread(thread_id: str):
@@ -632,6 +636,85 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/threads/{thread_id}/files/{file_hash}/chunks")
+async def get_thread_file_chunks_endpoint(
+    thread_id: str,
+    file_hash: str,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Return indexed Weaviate document chunks for read-only inspection."""
+    if limit <= 0 or limit > FILE_CHUNKS_MAX_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {FILE_CHUNKS_MAX_LIMIT}",
+        )
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative")
+    try:
+        context = await require_thread_embedding_ready(thread_id)
+        if not await is_file_accessible_to_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not accessible to this thread")
+        db = get_vector_db()
+        return await db.get_document_chunks_for_file(
+            file_hash,
+            context.embedding_model,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "embedding_model_unavailable", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VectorDBQueryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/files/{file_hash}/chunks")
+async def get_project_file_chunks_endpoint(
+    project_id: str,
+    file_hash: str,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Return indexed Weaviate document chunks for read-only inspection."""
+    if limit <= 0 or limit > FILE_CHUNKS_MAX_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {FILE_CHUNKS_MAX_LIMIT}",
+        )
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative")
+    try:
+        project, _ = await _require_project_file(project_id, file_hash)
+        db = get_vector_db()
+        return await db.get_document_chunks_for_file(
+            file_hash,
+            project.embedding_model,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VectorDBQueryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/threads/{thread_id}/files/{file_hash}/annotations")

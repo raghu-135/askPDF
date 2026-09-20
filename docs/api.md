@@ -10,7 +10,7 @@ this page documents the stable endpoint groups and important behavior.
 | --- | --- |
 | Projects | GET/POST /api/projects, clone, lifecycle, project threads |
 | Threads | GET/POST /api/threads, fork, settings, indexing status |
-| Files | upload, attach, download, parse status, delete, annotations |
+| Files | upload, attach, download, parse status, chunks inspection, delete, annotations |
 | Chat | POST /api/threads/{thread_id}/chat |
 | Canvases | POST/GET /api/threads/{thread_id}/canvases |
 | Memories | scoped search, review, delete, retry indexing |
