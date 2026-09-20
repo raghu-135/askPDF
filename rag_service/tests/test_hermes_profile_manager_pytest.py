@@ -35,23 +35,29 @@ def test_bootstrap_generates_minimal_owner_only_environment(monkeypatch, tmp_pat
     template_root = Path(profile_manager.__file__).resolve().parent
     monkeypatch.setenv("HERMES_CONFIG_TEMPLATE_ROOT", str(template_root))
     monkeypatch.setenv("HERMES_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     monkeypatch.setenv("HERMES_API_TOKEN", "upstream-hermes-token-32-characters")
+    monkeypatch.setenv("LLM_API_URL", "http://provider.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-key")
 
     render_bootstrap_config()
 
+    expected_env = (
+        "API_SERVER_KEY=upstream-hermes-token-32-characters\n"
+        "OPENAI_BASE_URL=http://provider.test/v1\n"
+        "OPENAI_API_KEY=provider-key\n"
+    )
     for path in (
         tmp_path / ".env",
         tmp_path / "profiles/askpdf-deep-offline/.env",
         tmp_path / "profiles/askpdf-deep-external/.env",
     ):
-        assert path.read_text() == "API_SERVER_KEY=upstream-hermes-token-32-characters\n"
+        assert path.read_text() == expected_env
         assert path.stat().st_mode & 0o777 == 0o600
+    assert 'provider: custom' in (tmp_path / "config.yaml").read_text()
 
 
-@pytest.mark.parametrize("value", [8192, 32768, 131072])
+@pytest.mark.parametrize("value", [64000, 65536, 131072])
 def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Path, value: int):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", str(value))
     monkeypatch.setenv("HERMES_API_TOKEN", "gateway-secret")
@@ -81,6 +87,7 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     assert 'X-AskPDF-Execution-Context: "signed.token"' in config
     profile_env = (tmp_path / name / ".env").read_text()
     assert "API_SERVER_KEY=gateway-secret" in profile_env
+    assert "OPENAI_BASE_URL=http://provider.test/v1" in profile_env
     assert "LLM_API_URL=" not in profile_env
     assert "ASKPDF_MCP_EXECUTION_CONTEXT" not in profile_env
     assert "OPENAI_API_KEY=provider-secret" in profile_env
@@ -101,7 +108,7 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     assert (tmp_path / name / ".askpdf-retired.json").is_file()
 
 
-@pytest.mark.parametrize("value", ["", "true", "2047", "bad"])
+@pytest.mark.parametrize("value", ["", "true", "2047", "32768", "bad"])
 def test_profile_context_rejects_invalid_values(monkeypatch, value):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", value)
     with pytest.raises(RuntimeError):
@@ -109,15 +116,15 @@ def test_profile_context_rejects_invalid_values(monkeypatch, value):
 
 
 def test_run_profiles_are_isolated_and_stale_profiles_are_swept(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "24576")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     monkeypatch.setenv("HERMES_API_TOKEN", "gateway-secret")
     monkeypatch.setenv("LLM_API_URL", "http://provider.test/v1")
     monkeypatch.setenv("HERMES_PROFILE_UID", str(os.getuid()))
     monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
     monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
     manager = RunProfileManager(str(tmp_path))
-    first = manager.create(run_id="run-one", context_token="one.token", managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "model-one", "lmstudio", 24576))
-    second = manager.create(run_id="run-two", context_token="two.token", managed_profile=_managed("askpdf-deep-external", ["search_web"], "model-two", "lmstudio", 24576))
+    first = manager.create(run_id="run-one", context_token="one.token", managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "model-one", "lmstudio", 64000))
+    second = manager.create(run_id="run-two", context_token="two.token", managed_profile=_managed("askpdf-deep-external", ["search_web"], "model-two", "lmstudio", 64000))
     assert first.name != second.name
     assert 'X-AskPDF-Execution-Context: "one.token"' in (tmp_path / first.name / "config.yaml").read_text()
     assert 'X-AskPDF-Execution-Context: "two.token"' in (tmp_path / second.name / "config.yaml").read_text()
@@ -141,13 +148,18 @@ def test_activated_header_proof_distinguishes_sequential_profiles():
     assert "two.token" not in str(second_digest)
 
 
-def test_generic_provider_preserves_pinned_hermes_64k_floor(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+def test_run_profile_accepts_operator_owned_context_window(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     monkeypatch.setenv("HERMES_API_TOKEN", "gateway-secret")
     monkeypatch.setenv("LLM_API_URL", "http://provider.test/v1")
+    monkeypatch.setenv("HERMES_PROFILE_UID", str(os.getuid()))
+    monkeypatch.setenv("HERMES_PROFILE_GID", str(os.getgid()))
+    monkeypatch.setenv("ASKPDF_MCP_URL", "http://mcp.test/internal/mcp/")
     manager = RunProfileManager(str(tmp_path))
-    with pytest.raises(RuntimeError, match="at least 64000"):
-        manager.create(
-            run_id="run-generic", context_token="signed.token",
-            managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "generic-model", "custom", 32768),
-        )
+    profile = manager.create(
+        run_id="run-generic", context_token="signed.token",
+        managed_profile=_managed("askpdf-deep-offline", ["search_documents"], "generic-model", "custom", 64000),
+    )
+    config = (tmp_path / profile.name / "config.yaml").read_text()
+    assert "context_length: 64000" in config
+    assert 'provider: "custom"' in config

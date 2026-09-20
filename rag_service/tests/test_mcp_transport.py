@@ -54,7 +54,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
     from app.agent.tool_contract import ToolResult
 
     monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "8192")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     definition = server_module.MCP_TOOL_DEFINITIONS["get_thread_shape"]
 
     async def handler(request, context):
@@ -72,7 +72,7 @@ async def test_hermes_mcp_catalog_is_filtered_and_uses_transport_context(monkeyp
         require_execution_token=True,
     )
     token = issue_execution_context_token(
-        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=8192),
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1", embedding_model="embed", context_window=64000),
         task_id="task-1", allowed_tools=["get_thread_shape"],
     )
     async with mcp_app.router.lifespan_context(mcp_app):

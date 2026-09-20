@@ -186,12 +186,12 @@ services:
     environment:
       - HERMES_DATA_ROOT=/opt/data
       - HERMES_CONFIG_TEMPLATE_ROOT=/app/hermes_runtime
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:?HERMES_MODEL_PROVIDER must be set in .env}
       - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
       - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
       - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
     entrypoint: *env-secrets-entrypoint
@@ -218,6 +218,8 @@ services:
       - ASKPDF_HERMES_COMPAT_ENABLED=1
       - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
       - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     env_file: []
     entrypoint:
@@ -257,7 +259,6 @@ services:
       - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:?ASKPDF_MCP_REQUIRED must be set in .env}
       - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
-      - HERMES_MODEL_PROVIDER=${HERMES_MODEL_PROVIDER:?HERMES_MODEL_PROVIDER must be set in .env}
       - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:?HERMES_RUNTIME_VERSION must be set in .env}
       - HERMES_RUNTIME_WORKERS=${HERMES_RUNTIME_WORKERS:?HERMES_RUNTIME_WORKERS must be set in .env}

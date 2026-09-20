@@ -56,8 +56,7 @@ def _environment() -> dict[str, str]:
         "LANGGRAPH_RUNTIME_TOKEN": "r" * 32,
         "LANGGRAPH_RUNTIME_BINDING_SECRET": "b" * 32,
         "LLM_API_URL": "http://127.0.0.1:1234/v1",
-        "HERMES_MODEL_CONTEXT_LENGTH": "32768",
-        "HERMES_MODEL_PROVIDER": "lmstudio",
+        "HERMES_MODEL_CONTEXT_LENGTH": "64000",
         "MCP_EXECUTION_CONTEXT_SECRET": "x" * 32,
         "ASKPDF_ADMIN_TOKEN": "u" * 32,
         "ASKPDF_CORS_ORIGINS": "http://localhost:3000",
@@ -268,8 +267,7 @@ def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
     validated = validate_runtime_environment(
         service="hermes_profile",
         environ={
-            "HERMES_MODEL_CONTEXT_LENGTH": "32768",
-            "HERMES_MODEL_PROVIDER": "lmstudio",
+            "HERMES_MODEL_CONTEXT_LENGTH": "64000",
             "HERMES_API_TOKEN": "a" * 32,
             "HERMES_PROFILE_ROOT": "/opt/data/profiles",
             "HERMES_PROFILE_UID": "10000",
@@ -277,7 +275,7 @@ def test_hermes_profile_bootstrap_does_not_require_http_runtime_settings():
         },
     )
 
-    assert validated.get("HERMES_MODEL_PROVIDER") == "lmstudio"
+    assert validated.get("HERMES_MODEL_CONTEXT_LENGTH") == "64000"
 
 
 @pytest.mark.parametrize("name", [
@@ -311,5 +309,6 @@ def test_unused_environment_names_are_not_documented():
         "AGENT_RUNTIME_SCHEMA_AUTO_CREATE",
         "LLM_AUTH_MODE",
         "LLM_KEYLESS_PROVIDER",
+        "HERMES_MODEL_PROVIDER",
     ):
         assert name not in text

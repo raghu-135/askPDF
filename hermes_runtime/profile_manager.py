@@ -16,8 +16,8 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 from runtime_protocol.hermes_contract import (
-    HERMES_CONFIG_SCHEMA_VERSION, HERMES_PROFILE_NAMES, provider_requires_api_key,
-    validate_provider_context,
+    HERMES_CHAT_PROVIDER, HERMES_CONFIG_SCHEMA_VERSION, HERMES_MIN_CONTEXT_LENGTH,
+    HERMES_PROFILE_NAMES, validate_hermes_context_length,
 )
 from runtime_protocol.configuration import validate_runtime_environment
 from runtime_protocol.llm_provider import llm_provider_configuration
@@ -71,24 +71,25 @@ def configured_context_length() -> int:
         value = int(raw, 10)
     except ValueError as exc:
         raise RuntimeError("HERMES_MODEL_CONTEXT_LENGTH must be an integer") from exc
-    if value < 2048:
-        raise RuntimeError("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
+    if value < HERMES_MIN_CONTEXT_LENGTH:
+        raise RuntimeError(
+            f"HERMES_MODEL_CONTEXT_LENGTH must be at least {HERMES_MIN_CONTEXT_LENGTH}"
+        )
     return value
 
 
 def render_bootstrap_config() -> None:
     """Materialize checked-in templates with a concrete numeric context length."""
 
-    provider = configured_provider()
+    llm = llm_provider_configuration()
     required_secrets = {
         "HERMES_API_TOKEN": os.getenv("HERMES_API_TOKEN", "").strip(),
     }
-    if provider_requires_api_key(provider):
-        required_secrets["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "").strip()
     missing = [name for name, value in required_secrets.items() if not value]
     if missing:
         raise RuntimeError("Hermes profile requires: " + ", ".join(missing))
     context_length = configured_context_length()
+    validate_hermes_context_length(context_length)
     template_root = Path(os.getenv("HERMES_CONFIG_TEMPLATE_ROOT", "/app/hermes_runtime"))
     data_root = Path(os.getenv("HERMES_DATA_ROOT", "/opt/data"))
     targets = {
@@ -97,20 +98,20 @@ def render_bootstrap_config() -> None:
         template_root / "profiles/askpdf-deep-external/config.yaml": data_root / "profiles/askpdf-deep-external/config.yaml",
     }
     for source, target in targets.items():
-        validate_provider_context(provider, context_length)
         rendered = (
             source.read_text()
             .replace("__HERMES_MODEL_CONTEXT_LENGTH__", str(context_length))
-            .replace("__HERMES_MODEL_PROVIDER__", provider)
         )
         if "${HERMES_MODEL_CONTEXT_LENGTH}" in rendered:
             raise RuntimeError(f"unrendered Hermes context length in {source}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
-    profile_environment = [f"API_SERVER_KEY={required_secrets['HERMES_API_TOKEN']}"]
-    provider_key = required_secrets.get("OPENAI_API_KEY")
-    if provider_key:
-        profile_environment.append(f"OPENAI_API_KEY={provider_key}")
+    profile_environment = [
+        f"API_SERVER_KEY={required_secrets['HERMES_API_TOKEN']}",
+        f"OPENAI_BASE_URL={llm.base_url}",
+    ]
+    if llm.credential:
+        profile_environment.append(f"OPENAI_API_KEY={llm.credential}")
     rendered_environment = "\n".join(profile_environment) + "\n"
     for target in (
         data_root / ".env",
@@ -120,13 +121,6 @@ def render_bootstrap_config() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered_environment)
         target.chmod(0o600)
-
-
-def configured_provider() -> str:
-    provider = os.getenv("HERMES_MODEL_PROVIDER", "").strip().lower()
-    if not provider or any(character.isspace() for character in provider):
-        raise RuntimeError("HERMES_MODEL_PROVIDER must be a provider identifier")
-    return provider
 
 
 def configured_mcp_url(endpoint: str) -> str:
@@ -171,25 +165,20 @@ class RunProfileManager:
         policy_profile = str(mcp.get("runtime_profile") or "")
         allowed_tools = [str(value) for value in mcp.get("allowed_tool_ids") or []]
         selected_model = str(model_policy.get("model") or "").strip()
-        selected_provider = str(model_policy.get("provider") or "").strip()
-        if not selected_model or not selected_provider:
-            raise RuntimeError("Hermes run profiles require a selected model and provider")
-        selected_provider = selected_provider.lower()
+        if not selected_model:
+            raise RuntimeError("Hermes run profiles require a selected model")
         context_length = int(policy.get("context_window") or configured_context_length())
         try:
-            validate_provider_context(selected_provider, context_length)
+            validate_hermes_context_length(context_length)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         provider = llm_provider_configuration()
         provider_url = provider.base_url
-        # Run profiles always talk to LLM_API_URL as an OpenAI-compatible
-        # endpoint. Hermes' native lmstudio/openrouter adapters 404 against
-        # that URL; `custom` uses base_url + the selected model id.
-        chat_provider = "custom"
+        chat_provider = HERMES_CHAT_PROVIDER
         provider_api_key = provider.credential
         secret_values = (
             api_server_key, context_token, provider_url, provider_api_key,
-            selected_model, selected_provider,
+            selected_model,
         )
         if any(character in value for value in secret_values for character in "\r\n"):
             raise RuntimeError("Hermes run-profile secrets must be single-line values")
@@ -257,6 +246,7 @@ class RunProfileManager:
         env_file = temporary / ".env"
         profile_environment = [
             f"API_SERVER_KEY={api_server_key}",
+            f"OPENAI_BASE_URL={provider_url}",
         ]
         if provider_api_key:
             profile_environment.append(f"OPENAI_API_KEY={provider_api_key}")

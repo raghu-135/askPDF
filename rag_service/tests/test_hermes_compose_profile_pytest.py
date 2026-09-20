@@ -51,6 +51,8 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["context"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
+    assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
+    assert "OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in hermes["volumes"]
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
@@ -107,17 +109,17 @@ def test_hermes_bootstrap_has_explicit_complete_environment():
     bootstrap = services["hermes-config-init"]
     assert bootstrap.get("env_file") == []
     assert {
-        "HERMES_DATA_ROOT", "HERMES_CONFIG_TEMPLATE_ROOT", "HERMES_MODEL_PROVIDER",
+        "HERMES_DATA_ROOT", "HERMES_CONFIG_TEMPLATE_ROOT",
         "HERMES_MODEL_CONTEXT_LENGTH", "HERMES_PROFILE_ROOT", "HERMES_PROFILE_UID",
         "HERMES_PROFILE_GID", "HERMES_API_TOKEN",
-        "OPENAI_API_KEY",
+        "LLM_API_URL", "OPENAI_API_KEY",
     } <= {entry.split("=", 1)[0] for entry in bootstrap["environment"]}
 
 
 def test_runtime_integration_bootstrap_allowlists_provider_credential():
     bootstrap = _compose("docker-compose.runtime-integration.yml")["services"]["hermes-config-init"]
     assert "OPENAI_API_KEY" in bootstrap["environment"]
-    assert bootstrap["environment"]["HERMES_MODEL_PROVIDER"] == "lmstudio"
+    assert "LLM_API_URL" in bootstrap["environment"]
 
 
 def test_pinned_contract_copies_match_authoritative_module():

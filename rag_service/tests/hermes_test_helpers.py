@@ -33,7 +33,7 @@ def runtime_payload(run_id: str, question: str = "deterministic proof") -> dict[
                     "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                     "system_prompt": "Use approved tools.",
                     "model": LEGACY_PROFILE_MODEL,
-                    "provider": "lmstudio",
+                    "provider": "custom",
                 },
             },
         },

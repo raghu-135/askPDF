@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlparse
-from runtime_protocol.hermes_contract import HERMES_REVISION
+from runtime_protocol.hermes_contract import HERMES_MIN_CONTEXT_LENGTH, HERMES_REVISION
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -331,22 +331,15 @@ def validate_runtime_environment(
                 _url("MCP_LOOPBACK_URL", values, errors)
 
     if service == "hermes_profile":
-        provider = _required("HERMES_MODEL_PROVIDER", values, errors)
-        if provider is not None and (any(character.isspace() for character in provider) or not re.fullmatch(r"[a-zA-Z0-9_.-]+", provider)):
-            errors.append("HERMES_MODEL_PROVIDER must be a nonempty provider identifier")
         context = _positive_int("HERMES_MODEL_CONTEXT_LENGTH", values, errors)
-        if context is not None:
-            if context < 2048:
-                errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
-            elif provider is not None and provider.lower() != "lmstudio" and context < 64000:
-                errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 64000 for the selected Hermes provider")
+        if context is not None and context < HERMES_MIN_CONTEXT_LENGTH:
+            errors.append(
+                f"HERMES_MODEL_CONTEXT_LENGTH must be at least {HERMES_MIN_CONTEXT_LENGTH}"
+            )
         _secret("HERMES_API_TOKEN", values, errors)
         _required("HERMES_PROFILE_ROOT", values, errors)
         _positive_int("HERMES_PROFILE_UID", values, errors)
         _positive_int("HERMES_PROFILE_GID", values, errors)
-        provider_name = (provider or "").lower()
-        if provider_name != "lmstudio" and not values.get("OPENAI_API_KEY", "").strip():
-            errors.append("OPENAI_API_KEY is required for the selected Hermes provider")
 
     if service == "langgraph":
         for name in LANGGRAPH_LIMIT_NAMES:
@@ -395,15 +388,11 @@ def validate_runtime_environment(
             _url("ASKPDF_MCP_HEALTH_URL", values, errors)
         else:
             _url("HERMES_RUNTIME_URL", values, errors)
-        provider = _required("HERMES_MODEL_PROVIDER", values, errors)
-        if provider is not None and (any(character.isspace() for character in provider) or not re.fullmatch(r"[a-zA-Z0-9_.-]+", provider)):
-            errors.append("HERMES_MODEL_PROVIDER must be a nonempty provider identifier")
         context = _positive_int("HERMES_MODEL_CONTEXT_LENGTH", values, errors)
-        if context is not None:
-            if context < 2048:
-                errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 2048")
-            elif provider is not None and provider.lower() != "lmstudio" and context < 64000:
-                errors.append("HERMES_MODEL_CONTEXT_LENGTH must be at least 64000 for the selected Hermes provider")
+        if context is not None and context < HERMES_MIN_CONTEXT_LENGTH:
+            errors.append(
+                f"HERMES_MODEL_CONTEXT_LENGTH must be at least {HERMES_MIN_CONTEXT_LENGTH}"
+            )
         _boolean("ASKPDF_MCP_REQUIRED", values, errors)
         if service == "hermes":
             _secret("HERMES_RUNTIME_TOKEN", values, errors)
@@ -434,9 +423,6 @@ def validate_runtime_environment(
             storage = values.get("HERMES_RUNTIME_STORAGE_BACKEND", "").strip().lower()
             if storage and storage != "file":
                 errors.append("HERMES_RUNTIME_STORAGE_BACKEND must be 'file'")
-        provider_name = (provider or "").lower()
-        if provider_name != "lmstudio" and not values.get("OPENAI_API_KEY", "").strip():
-            errors.append("OPENAI_API_KEY is required for the selected Hermes provider")
 
     if errors:
         raise RuntimeConfigurationError(sorted(set(errors)))

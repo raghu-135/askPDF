@@ -3,7 +3,7 @@
 _config_version: 37
 model:
   default: askpdf-runtime-selected
-  provider: __HERMES_MODEL_PROVIDER__
+  provider: custom
   base_url: ${LLM_API_URL}
   context_length: __HERMES_MODEL_CONTEXT_LENGTH__
 platforms:

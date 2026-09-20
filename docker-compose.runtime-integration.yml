@@ -70,7 +70,6 @@ services:
       ASKPDF_ADMIN_TOKEN: integration-control-plane-token-012345678901234567890123
       COMPOSE_PROFILES: ${HERMES_RUNTIME_COMPOSE_PROFILES:-}
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_MODEL_PROVIDER: lmstudio
       MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
       HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
@@ -271,12 +270,12 @@ services:
     environment:
       HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_MODEL_PROVIDER: lmstudio
       HERMES_DATA_ROOT: /opt/data
       HERMES_CONFIG_TEMPLATE_ROOT: /app/hermes_runtime
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"
+      LLM_API_URL: http://fake-llm:9000/v1
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - runtime_integration_hermes_data:/opt/data
@@ -292,8 +291,8 @@ services:
       API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       OPENAI_API_KEY: askpdf-hermes-integration-local
       LLM_API_URL: http://fake-llm:9000/v1
+      OPENAI_BASE_URL: http://fake-llm:9000/v1
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_MODEL_PROVIDER: lmstudio
       GATEWAY_MULTIPLEX_PROFILES: "true"
       HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
       ASKPDF_HERMES_COMPAT_ENABLED: "1"
@@ -344,7 +343,6 @@ services:
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_MODEL_PROVIDER: lmstudio
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"
@@ -459,8 +457,7 @@ services:
       DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS: "600000"
       DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS: "600000"
       DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS: "600000"
-      HERMES_MODEL_PROVIDER: lmstudio
-      HERMES_MODEL_CONTEXT_LENGTH: "32768"
+      HERMES_MODEL_CONTEXT_LENGTH: "64000"
       DEEP_AGENT_HERMES_MAX_MODEL_CALLS: "10000"
       DEEP_AGENT_HERMES_MAX_MODEL_TOKENS: "500000"
       DEEP_AGENT_HERMES_MAX_TOOL_CALLS: "100"
@@ -581,3 +578,4 @@ configs:
     content: |
       API_SERVER_KEY=7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       OPENAI_API_KEY=askpdf-hermes-integration-local
+      OPENAI_BASE_URL=http://fake-llm:9000/v1

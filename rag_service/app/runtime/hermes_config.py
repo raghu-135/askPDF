@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-from runtime_protocol.hermes_contract import (
-    HERMES_MIN_CONTEXT_LENGTH, validate_provider_context,
-)
+from runtime_protocol.hermes_contract import HERMES_MIN_CONTEXT_LENGTH
 
 
 class HermesConfigurationError(ValueError):
@@ -54,31 +52,9 @@ def hermes_model_context_length(*, required: bool = True) -> int | None:
     return value
 
 
-def hermes_model_provider() -> str:
-    """Return the Hermes provider selected at the deployment boundary."""
-
-    provider = os.getenv("HERMES_MODEL_PROVIDER", "").strip().lower()
-    if not provider or any(character.isspace() for character in provider):
-        raise HermesConfigurationError(
-            "hermes_model_provider_invalid",
-            "Hermes model provider must be a non-empty provider identifier",
-        )
-    return provider
-
-
-def validate_hermes_model_compatibility() -> tuple[int, str]:
-    """Validate constraints imposed by the pinned Hermes revision."""
+def validate_hermes_model_compatibility() -> int:
+    """Validate the operator-owned Hermes context window."""
 
     context_length = hermes_model_context_length()
     assert context_length is not None
-    provider = hermes_model_provider()
-    # bdd0a79 permits an explicitly configured smaller window only for its
-    # first-class LM Studio provider. All other providers enforce the 64K floor.
-    try:
-        validate_provider_context(provider, context_length)
-    except ValueError as exc:
-        raise HermesConfigurationError(
-            "hermes_context_length_provider_incompatible",
-            f"{exc}; LM Studio permits an explicitly configured smaller value",
-        ) from exc
-    return context_length, provider
+    return context_length

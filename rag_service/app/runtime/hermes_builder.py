@@ -18,7 +18,8 @@ from runtime_protocol.contracts import (
     validated_disabled_operation_ids,
 )
 from runtime_protocol.errors import RuntimeError
-from app.runtime.hermes_config import hermes_model_context_length, hermes_model_provider
+from runtime_protocol.hermes_contract import HERMES_CHAT_PROVIDER, HERMES_MIN_CONTEXT_LENGTH
+from app.runtime.hermes_config import hermes_model_context_length
 from app.runtime.hermes_profile import resolve_hermes_profile
 from app.agent.canvas_layout_skills import apply_canvas_layout_skills
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
@@ -45,7 +46,7 @@ class HermesBuilderProvider:
         context_window = hermes_model_context_length(required=False)
         return (
             {"id": "llm_model", "label": "Model", "type": "model", "required": True},
-            {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": context_window, "minimum": 2048, "read_only": True},
+            {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": context_window, "minimum": HERMES_MIN_CONTEXT_LENGTH, "read_only": True},
             {"id": "web_search_mode", "label": "Web search", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_web_search(definition)},
         )
 
@@ -169,7 +170,7 @@ class HermesBuilderProvider:
         ).strip()
         if selected_model:
             config["model"] = selected_model
-            config["provider"] = hermes_model_provider()
+            config["provider"] = HERMES_CHAT_PROVIDER
         config.update(filtered_overrides)
         # Hermes owns its context window at deployment scope. A generic task
         # request may carry a UI default, but it must not become the MCP

@@ -251,7 +251,7 @@ async def test_http_adapter_expands_contract_ids_to_mcp_tool_grants(monkeypatch)
 
     monkeypatch.setenv("MCP_EXECUTION_CONTEXT_SECRET", "x" * 32)
     # LangGraph task context windows are independent of the Hermes model limit.
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     adapter = HttpLangGraphRuntimeAdapter("http://runtime")
     prepared = await adapter.prepare_request(
         _request(),

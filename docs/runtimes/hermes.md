@@ -46,7 +46,11 @@ When enabled, configure distinct values for:
 - OPENAI_API_KEY when the shared LLM server requires a Bearer token
 
 Hermes uses the selected askPDF thread model and the existing
-OpenAI-compatible LLM_API_URL. Readiness verifies both the upstream service and
+OpenAI-compatible LLM_API_URL. The gateway talks to that URL as Hermes'
+`custom` provider (`OPENAI_BASE_URL`). Pinned Hermes requires
+`HERMES_MODEL_CONTEXT_LENGTH` of at least 64000; that value is written into
+`model.context_length` so a catalog listing of 32k cannot reject a larger
+hosted model. Readiness verifies both the upstream service and
 the configured MCP dependency.
 
 ## Security boundary

@@ -11,8 +11,7 @@ from app.runtime.hermes_builder import HermesBuilderProvider
 def hermes_budget_configuration(monkeypatch):
     """Keep direct builder tests explicit about required Hermes deployment limits."""
 
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     for suffix in (
         "MAX_MODEL_CALLS",
         "MAX_MODEL_TOKENS",
@@ -116,7 +115,6 @@ async def test_hermes_resolution_rejects_langgraph_request_overrides():
 
 @pytest.mark.asyncio
 async def test_hermes_resolution_inherits_thread_model_through_deployment_provider(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     resolved = await HermesBuilderProvider().resolve(
         _definition(),
         _spec(),
@@ -124,10 +122,10 @@ async def test_hermes_resolution_inherits_thread_model_through_deployment_provid
     )
 
     assert resolved["config"]["model"] == "askpdf-selected-model"
-    assert resolved["config"]["provider"] == "lmstudio"
+    assert resolved["config"]["provider"] == "custom"
     assert resolved["managed_profile"]["model_policy"] == {
         "model": "askpdf-selected-model",
-        "provider": "lmstudio",
+        "provider": "custom",
     }
     assert "# askPDF Deep Research Policy (v1)" in resolved["config"]["system_prompt"]
     assert "Hermes MCP execution protocol" in resolved["config"]["system_prompt"]
@@ -149,7 +147,6 @@ async def test_hermes_resolution_inherits_thread_model_through_deployment_provid
 
 @pytest.mark.asyncio
 async def test_hermes_resolution_prefers_request_selected_model(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     resolved = await HermesBuilderProvider().resolve(
         _definition(),
         _spec(),
@@ -158,7 +155,7 @@ async def test_hermes_resolution_prefers_request_selected_model(monkeypatch):
     )
 
     assert resolved["config"]["model"] == "askpdf-request-model"
-    assert resolved["config"]["provider"] == "lmstudio"
+    assert resolved["config"]["provider"] == "custom"
 
 
 def test_hermes_explicit_unsupported_override_is_rejected():

@@ -6,7 +6,7 @@ from app.runtime.hermes_config import (
     hermes_model_context_length,
     validate_hermes_model_compatibility,
 )
-from runtime_protocol.hermes_contract import provider_requires_api_key
+from runtime_protocol.hermes_contract import HERMES_CHAT_PROVIDER
 
 
 @pytest.mark.parametrize("profiles", ["hermes", "langgraph,hermes", " HERMES "])
@@ -21,21 +21,18 @@ def test_hermes_is_disabled_without_exact_compose_profile(monkeypatch, profiles)
     assert hermes_runtime_enabled() is False
 
 
-def test_lmstudio_is_the_pinned_keyless_provider():
-    assert provider_requires_api_key("lmstudio") is False
-    assert provider_requires_api_key(" LMSTUDIO ") is False
-    assert provider_requires_api_key("custom") is True
+def test_hermes_chat_uses_the_shared_custom_provider():
+    assert HERMES_CHAT_PROVIDER == "custom"
 
 
-@pytest.mark.parametrize("configured", ["8192", "32768", "131072"])
+@pytest.mark.parametrize("configured", ["64000", "65536", "131072"])
 def test_hermes_context_length_uses_exact_deployment_value(monkeypatch, configured):
     monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", configured)
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
     assert hermes_model_context_length() == int(configured)
-    assert validate_hermes_model_compatibility() == (int(configured), "lmstudio")
+    assert validate_hermes_model_compatibility() == int(configured)
 
 
-@pytest.mark.parametrize("configured", [None, "", "true", "false", "2047", "8k"])
+@pytest.mark.parametrize("configured", [None, "", "true", "false", "2047", "32768", "8k"])
 def test_hermes_context_length_rejects_missing_or_invalid_values(monkeypatch, configured):
     if configured is None:
         monkeypatch.delenv("HERMES_MODEL_CONTEXT_LENGTH", raising=False)
@@ -43,11 +40,3 @@ def test_hermes_context_length_rejects_missing_or_invalid_values(monkeypatch, co
         monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", configured)
     with pytest.raises(HermesConfigurationError):
         hermes_model_context_length()
-
-
-def test_non_lmstudio_provider_obeys_pinned_64k_floor(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "custom")
-    with pytest.raises(HermesConfigurationError) as exc_info:
-        validate_hermes_model_compatibility()
-    assert exc_info.value.code == "hermes_context_length_provider_incompatible"

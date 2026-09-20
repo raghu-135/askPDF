@@ -96,8 +96,7 @@ async def test_hermes_adapter_validates_the_canonical_builtin_definition(monkeyp
 @pytest.mark.asyncio
 async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._json = AsyncMock(return_value={
         "capabilities": json_payload({
@@ -148,8 +147,7 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
 @pytest.mark.asyncio
 async def test_hermes_malformed_capabilities_are_structured(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._json = AsyncMock(return_value={"capabilities": {"operations": {"run.start": {"enabled": True}}}})
 
@@ -632,8 +630,7 @@ def test_cancel_keeps_profile_when_upstream_stop_is_unconfirmed(monkeypatch, tmp
 @pytest.mark.asyncio
 async def test_hermes_controls_use_neutral_contracts(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     calls = []
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
 
@@ -678,8 +675,7 @@ async def test_hermes_live_steering_makes_no_transport_request():
 @pytest.mark.asyncio
 async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     async def tool_capable(_model):
         return True
     monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", tool_capable)
@@ -726,8 +722,7 @@ async def test_hermes_stream_replays_from_last_event_id(monkeypatch):
 @pytest.mark.asyncio
 async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     async def tool_incapable(_model):
         return False
     monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", tool_incapable)
@@ -747,8 +742,7 @@ async def test_hermes_start_rejects_model_without_native_tool_invocation(monkeyp
 @pytest.mark.asyncio
 async def test_hermes_deep_task_defers_approval_to_actual_tool_invocation(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     monkeypatch.setattr("app.runtime.hermes_adapter.check_model_supports_tools", AsyncMock(return_value=True))
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._stream = AsyncMock(return_value="started")
@@ -797,8 +791,7 @@ def test_hermes_proof_rejects_non_file_storage(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_hermes_cancel_and_inspect_require_upstream_binding(monkeypatch):
     monkeypatch.setenv("COMPOSE_PROFILES", "hermes")
-    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "32768")
-    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "lmstudio")
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
     operations = (
@@ -837,6 +830,7 @@ def _readiness_response(monkeypatch, tmp_path, *, hermes_status, mcp_status=200,
         return async_client(transport=httpx.MockTransport(handler))
 
     monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "hermes-readiness.json"))
+    monkeypatch.setenv("HERMES_MODEL_CONTEXT_LENGTH", "64000")
     context_length = os.environ["HERMES_MODEL_CONTEXT_LENGTH"]
     rendered_config = tmp_path / "hermes-config.yaml"
     rendered_config.write_text(f"model:\n  context_length: {rendered_context or context_length}\n")
@@ -874,7 +868,6 @@ def test_hermes_readiness_rejects_rendered_context_mismatch(monkeypatch, tmp_pat
         "status": "failed",
         "configured_context_length": configured,
         "rendered_context_length": configured + 1,
-        "provider": os.getenv("HERMES_MODEL_PROVIDER", "custom"),
     }
 
 

@@ -29,14 +29,12 @@ from hermes_runtime.execution_store import (
 )
 from hermes_runtime.operational_limits import required_positive_float, required_positive_int
 from runtime_protocol.protocol import decode_event_frame
-from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REVISION, HERMES_TERMINAL_EVENTS
+from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REVISION, HERMES_TERMINAL_EVENTS, validate_hermes_context_length
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,
     configured_mcp_url,
     configured_context_length,
-    configured_provider,
-    validate_provider_context,
 )
 from runtime_protocol import (
     json_envelope,
@@ -675,8 +673,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
         storage_ready = bool(state["storage_healthy"])
         try:
             context_length = configured_context_length()
-            provider = configured_provider()
-            validate_provider_context(provider, context_length)
+            validate_hermes_context_length(context_length)
             rendered_context_length = _rendered_model_context_length()
             context_ready = rendered_context_length == context_length
         except (OSError, RuntimeError, ValueError):
@@ -705,7 +702,6 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "status": "ok" if context_ready else "failed",
                         "configured_context_length": context_length,
                         "rendered_context_length": rendered_context_length,
-                        "provider": provider if context_length is not None else None,
                     },
                 },
             },

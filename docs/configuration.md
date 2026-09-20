@@ -55,6 +55,9 @@ are not operator `.env` entries:
 - EMBEDDING_DEVICE and RERANKER_DEVICE select CPU, CUDA, or MPS where supported.
 - LLM_API_URL points to Docker Model Runner, Ollama, LM Studio, OpenRouter, or
   another OpenAI-compatible provider. The app appends `/v1` when needed.
+  Hermes receives the same URL as `OPENAI_BASE_URL` so it does not fall back
+  to a local LM Studio default inside the container. Hermes also requires
+  `HERMES_MODEL_CONTEXT_LENGTH` of at least 64000.
 - OPENAI_API_KEY, when set, is sent as `Authorization: Bearer` on catalog,
   chat, and embedding calls from every service. Leave it empty for local
   servers. Model-list endpoints may be public; chat probes always use this auth.
