@@ -5,12 +5,19 @@ import { Accordion, AccordionDetails, AccordionSummary, Typography } from '@mui/
 export function ConversationDisclosure({
   label,
   children,
+  defaultExpanded = false,
 }: {
   label: string;
   children: React.ReactNode;
+  defaultExpanded?: boolean;
 }) {
   return (
-    <Accordion disableGutters elevation={0} sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}>
+    <Accordion
+      defaultExpanded={defaultExpanded}
+      disableGutters
+      elevation={0}
+      sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}
+    >
       <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 32, px: 0 }}>
         <Typography variant="caption">{label}</Typography>
       </AccordionSummary>

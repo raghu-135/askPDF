@@ -3,12 +3,12 @@ import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
   CircularProgress,
+  Collapse,
   FormControl,
   FormControlLabel,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
@@ -20,8 +20,12 @@ import {
   useTheme,
 } from '@mui/material';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import CloseIcon from '@mui/icons-material/Close';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
+import { ConversationDisclosure } from '../conversation/ConversationDisclosure';
 import {
   getThreadEmbeddingProjection,
   type EmbeddingPoint3D,
@@ -149,6 +153,7 @@ export default function EmbeddingSpaceViewer({
   const [showClusters, setShowClusters] = useState(true);
   const [labelOverride, setLabelOverride] = useState<boolean | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [graphCanvasMounted, setGraphCanvasMounted] = useState(false);
   const [canvasNodes, setCanvasNodes] = useState<GraphNode[]>([]);
   const [canvasEdges, setCanvasEdges] = useState<GraphEdge[]>([]);
@@ -170,6 +175,7 @@ export default function EmbeddingSpaceViewer({
       setTruncated(response.truncated);
       setEmbeddingModel(response.embedding_model);
       setSelectedNodeId(null);
+      setDetailsExpanded(false);
       clearSelectionsRef.current();
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load embedding projection');
@@ -346,6 +352,16 @@ export default function EmbeddingSpaceViewer({
     if (!selectedNodeId) return null;
     return points.find((point) => point.id === selectedNodeId) || null;
   }, [points, selectedNodeId]);
+
+  useEffect(() => {
+    setDetailsExpanded(Boolean(selectedNodeId));
+  }, [selectedNodeId]);
+
+  const handleCloseDetails = useCallback(() => {
+    setSelectedNodeId(null);
+    setDetailsExpanded(false);
+    clearSelections();
+  }, [clearSelections]);
 
   const handleJumpToDocument = (point: EmbeddingPoint3D) => {
     if (!onOpenDocumentCitation) return;
@@ -662,8 +678,8 @@ export default function EmbeddingSpaceViewer({
         </Typography>
       ) : null}
 
-      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}>
-        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', bgcolor: 'background.default' }}>
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', overflow: 'hidden', bgcolor: 'background.default' }}>
           {graphCanvasMounted ? (
             <Box sx={{ position: 'absolute', inset: 0 }}>
               <GraphCanvas
@@ -713,40 +729,67 @@ export default function EmbeddingSpaceViewer({
               )}
             </Box>
           ) : null}
-        </Box>
-
-        {selectedPoint ? (
-          <Card
-            variant="outlined"
-            sx={{
-              width: 340,
-              m: 1.5,
-              alignSelf: 'stretch',
-              overflow: 'auto',
-              boxShadow: 2,
-              zIndex: 10,
-            }}
-          >
-            <CardContent>
-              <Stack spacing={1}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Chunk details</Typography>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setSelectedNodeId(null);
-                      clearSelections();
-                    }}
-                  >
-                    Close
-                  </Button>
+          {selectedPoint ? (
+            <Box
+              sx={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 2,
+                maxHeight: '42%',
+                display: 'flex',
+                flexDirection: 'column',
+                bgcolor: 'background.paper',
+                borderTop: 1,
+                borderColor: 'divider',
+                boxShadow: 3,
+                contain: 'layout',
+                overscrollBehavior: 'contain',
+              }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              <Box sx={{ px: 1.25, py: 0.5 }}>
+                <Stack direction="row" spacing={0.75} alignItems="center" useFlexGap>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                    Chunk
+                  </Typography>
+                  <Box sx={{ flex: 1, minWidth: 8 }} />
+                  {onOpenDocumentCitation && isDocumentPoint(selectedPoint, documents) ? (
+                    <Button size="small" variant="contained" onClick={() => handleJumpToDocument(selectedPoint)}>
+                      Jump to document
+                    </Button>
+                  ) : null}
+                  <Tooltip title={detailsExpanded ? 'Collapse details' : 'Expand details'}>
+                    <IconButton
+                      size="small"
+                      aria-label={detailsExpanded ? 'Collapse details' : 'Expand details'}
+                      aria-expanded={detailsExpanded}
+                      onClick={() => setDetailsExpanded((open) => !open)}
+                    >
+                      {detailsExpanded ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Clear selection">
+                    <IconButton size="small" aria-label="Clear selection" onClick={handleCloseDetails}>
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 </Stack>
-                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                  <Chip size="small" label={selectedPoint.file_name || selectedPoint.file_hash.slice(0, 10)} />
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  alignItems="center"
+                  useFlexGap
+                  flexWrap="wrap"
+                  sx={{ mt: 0.5, gap: 0.75 }}
+                >
                   <Chip size="small" variant="outlined" label={`chunk ${selectedPoint.chunk_id ?? '?'}`} />
                   {pageLabel(selectedPoint) ? (
                     <Chip size="small" variant="outlined" label={pageLabel(selectedPoint)} />
                   ) : null}
+                  <Chip size="small" label={selectedPoint.file_name || selectedPoint.file_hash.slice(0, 10)} />
                   {selectedPoint.table_id ? (
                     <Chip size="small" variant="outlined" color="warning" label={`table ${selectedPoint.table_id}`} />
                   ) : null}
@@ -754,47 +797,52 @@ export default function EmbeddingSpaceViewer({
                     <Chip size="small" variant="outlined" color="secondary" label={`section ${selectedPoint.section_id}`} />
                   ) : null}
                 </Stack>
-                <Typography
-                  component="pre"
-                  variant="caption"
+              </Box>
+              <Collapse in={detailsExpanded} unmountOnExit sx={{ minHeight: 0, overflow: 'hidden' }}>
+                <Box
                   sx={{
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    maxHeight: 180,
+                    px: 1.5,
+                    pb: 1,
                     overflow: 'auto',
-                    bgcolor: 'action.hover',
-                    p: 1,
-                    borderRadius: 1,
-                    fontFamily: 'monospace',
+                    maxHeight: 'min(32vh, 280px)',
+                    overscrollBehavior: 'contain',
                   }}
                 >
-                  {selectedPoint.text || '(empty text)'}
-                </Typography>
-                <JsonPreview
-                  value={{
-                    source_kind: selectedPoint.source_kind,
-                    section_id: selectedPoint.section_id,
-                    table_id: selectedPoint.table_id,
-                    x: selectedPoint.x,
-                    y: selectedPoint.y,
-                    z: selectedPoint.z,
-                    char_count: selectedPoint.text.length,
-                  }}
-                  maxHeight={160}
-                />
-                {onOpenDocumentCitation && isDocumentPoint(selectedPoint, documents) ? (
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => handleJumpToDocument(selectedPoint)}
-                  >
-                    Jump to document
-                  </Button>
-                ) : null}
-              </Stack>
-            </CardContent>
-          </Card>
-        ) : null}
+                  <ConversationDisclosure label="Text" defaultExpanded>
+                    <Typography
+                      component="pre"
+                      variant="caption"
+                      sx={{
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        bgcolor: 'action.hover',
+                        p: 1,
+                        borderRadius: 1,
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      {selectedPoint.text || '(empty text)'}
+                    </Typography>
+                  </ConversationDisclosure>
+                  <ConversationDisclosure label="Metadata" defaultExpanded>
+                    <JsonPreview
+                      value={{
+                        source_kind: selectedPoint.source_kind,
+                        section_id: selectedPoint.section_id,
+                        table_id: selectedPoint.table_id,
+                        x: selectedPoint.x,
+                        y: selectedPoint.y,
+                        z: selectedPoint.z,
+                        char_count: selectedPoint.text.length,
+                      }}
+                      maxHeight={140}
+                    />
+                  </ConversationDisclosure>
+                </Box>
+              </Collapse>
+            </Box>
+          ) : null}
+        </Box>
       </Box>
     </Box>
   );
