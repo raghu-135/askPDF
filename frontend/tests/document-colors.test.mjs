@@ -36,10 +36,11 @@ test('assignDocumentColors produces a unique fill for each document as the set g
   assert.match(colors['doc-0'], /^#[0-9a-f]{6}$/);
 });
 
-test('chunkGraphLabel shortens the file name and uses a compact chunk id', () => {
+test('chunkGraphLabel shows a short preview of the chunk text', () => {
   assert.equal(
-    chunkGraphLabel('very-long-document-name.pdf', 'abcdef12', 7),
-    'very-long-documen… · c7',
+    chunkGraphLabel('  6.4 Cost Efficiency Beyond scores , we examine inference  '),
+    '6.4 Cost Efficiency Beyond…',
   );
+  assert.equal(chunkGraphLabel(''), '(empty)');
   assert.equal(truncateLabel('short.pdf', 18), 'short.pdf');
 });

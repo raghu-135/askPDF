@@ -31,19 +31,60 @@ import type { PdfTab } from '../../lib/document-tabs';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
 import {
   GraphCanvas,
-  Sphere,
   darkTheme,
   lightTheme,
   useSelection,
+  type ClusterRenderer,
   type GraphCanvasRef,
   type GraphEdge,
   type GraphNode,
-  type NodeRendererProps,
   type Theme,
 } from 'reagraph';
+import { DoubleSide } from 'three';
 import { assignDocumentColors, chunkGraphLabel } from './document-colors';
 
 type ColorMode = 'document' | 'kind';
+
+const DENSE_NODE_COUNT = 40;
+
+function ClusterHull({
+  color,
+  innerRadius,
+  opacity,
+  outerRadius,
+  padding,
+}: {
+  color: string;
+  innerRadius: number;
+  opacity: number;
+  outerRadius: number;
+  padding: number;
+}) {
+  return (
+    <>
+      <mesh>
+        <ringGeometry args={[outerRadius, 0, 64]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          depthTest={false}
+          opacity={opacity * 0.1}
+          side={DoubleSide}
+        />
+      </mesh>
+      <mesh>
+        <ringGeometry args={[outerRadius, innerRadius + padding, 64]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          depthTest={false}
+          opacity={opacity * 0.55}
+          side={DoubleSide}
+        />
+      </mesh>
+    </>
+  );
+}
 
 function pageLabel(point: EmbeddingPoint3D): string {
   if (point.page_start != null) {
@@ -82,8 +123,9 @@ export default function EmbeddingSpaceViewer({
   const [colorMode, setColorMode] = useState<ColorMode>('document');
   const [searchFilter, setSearchFilter] = useState('');
   const [showSequenceEdges, setShowSequenceEdges] = useState(true);
-  const [showSimilarityEdges, setShowSimilarityEdges] = useState(true);
-  const [clusterOverride, setClusterOverride] = useState<boolean | null>(null);
+  const [showSimilarityEdges, setShowSimilarityEdges] = useState(false);
+  const [showClusters, setShowClusters] = useState(true);
+  const [labelOverride, setLabelOverride] = useState<boolean | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const clearSelectionsRef = useRef<() => void>(() => {});
 
@@ -180,7 +222,8 @@ export default function EmbeddingSpaceViewer({
     return hashes;
   }, [visiblePoints]);
 
-  const showClusters = clusterOverride ?? uniqueVisibleHashes.length > 1;
+  const showLabels = labelOverride ?? visiblePoints.length <= DENSE_NODE_COUNT;
+  const isDense = visiblePoints.length > DENSE_NODE_COUNT;
 
   const nodes: GraphNode[] = useMemo(() => {
     return visiblePoints.map((point) => {
@@ -191,8 +234,10 @@ export default function EmbeddingSpaceViewer({
       const cluster = clusterNames.get(point.file_hash) || point.file_hash;
       return {
         id: point.id,
-        label: chunkGraphLabel(point.file_name, point.file_hash, point.chunk_id),
-        subLabel: pageStr || undefined,
+        label: showLabels
+          ? chunkGraphLabel(point.text)
+          : undefined,
+        subLabel: showLabels ? (pageStr || undefined) : undefined,
         fill,
         cluster,
         data: {
@@ -205,7 +250,7 @@ export default function EmbeddingSpaceViewer({
         fz: typeof point.z === 'number' ? point.z * 250 : undefined,
       };
     });
-  }, [clusterNames, colorMode, documentColors, uniqueVisibleHashes, visiblePoints]);
+  }, [clusterNames, colorMode, documentColors, showLabels, uniqueVisibleHashes, visiblePoints]);
 
   const graphEdges: GraphEdge[] = useMemo(() => {
     return edges
@@ -228,7 +273,6 @@ export default function EmbeddingSpaceViewer({
           target: edge.target,
           size: isSequence ? 0.45 : 0.7,
           fill: color,
-          arrowPlacement: 'end' as const,
           dashed: !isSequence,
           dashArray: isSequence ? undefined : ([5, 4] as [number, number]),
         };
@@ -248,7 +292,7 @@ export default function EmbeddingSpaceViewer({
     type: 'single',
     pathHoverType: 'direct',
     pathSelectionType: 'out',
-    focusOnSelect: 'singleOnly',
+    focusOnSelect: false,
     onSelection: (ids) => {
       const nodeId = ids.find((id) => visiblePointIds.has(id)) ?? null;
       setSelectedNodeId(nodeId);
@@ -290,6 +334,24 @@ export default function EmbeddingSpaceViewer({
     setFileHashFilter((current) => (current === hash ? '' : hash));
   }, []);
 
+  const clusterFillByName = useMemo(() => {
+    const fills: Record<string, string> = {};
+    clusterNames.forEach((name, hash) => {
+      fills[name] = documentColors[hash] || '#64748b';
+    });
+    return fills;
+  }, [clusterNames, documentColors]);
+
+  const renderCluster = useCallback<ClusterRenderer>(({ innerRadius, label, opacity, outerRadius, padding }) => (
+    <ClusterHull
+      color={clusterFillByName[label?.text || ''] || '#64748b'}
+      innerRadius={innerRadius}
+      opacity={opacity}
+      outerRadius={outerRadius}
+      padding={padding}
+    />
+  ), [clusterFillByName]);
+
   const graphTheme: Theme = useMemo(() => {
     const base = isDark ? darkTheme : lightTheme;
     return {
@@ -300,9 +362,9 @@ export default function EmbeddingSpaceViewer({
       },
       node: {
         ...base.node,
-        opacity: 0.96,
+        opacity: 0.55,
         selectedOpacity: 1,
-        inactiveOpacity: 0.22,
+        inactiveOpacity: 0.18,
       },
       edge: {
         ...base.edge,
@@ -310,13 +372,15 @@ export default function EmbeddingSpaceViewer({
         selectedOpacity: 0.95,
         inactiveOpacity: 0.08,
       },
+      cluster: {
+        ...base.cluster,
+        opacity: 0.55,
+        selectedOpacity: 0.9,
+        inactiveOpacity: 0.12,
+        label: undefined,
+      },
     };
   }, [isDark, muiTheme.palette.background.default]);
-
-  const renderNode = useCallback(
-    (props: NodeRendererProps) => <Sphere {...props} selected={false} />,
-    [],
-  );
 
   const legendItems = useMemo(() => {
     const hashes: string[] = [];
@@ -423,10 +487,21 @@ export default function EmbeddingSpaceViewer({
             <Switch
               size="small"
               checked={showClusters}
-              onChange={(e) => setClusterOverride(e.target.checked)}
+              onChange={(e) => setShowClusters(e.target.checked)}
             />
           }
           label={<Typography variant="caption">Clusters</Typography>}
+        />
+
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={showLabels}
+              onChange={(e) => setLabelOverride(e.target.checked)}
+            />
+          }
+          label={<Typography variant="caption">Labels</Typography>}
         />
 
         <Button
@@ -518,18 +593,20 @@ export default function EmbeddingSpaceViewer({
               edges={graphEdges}
               layoutType="forceDirected3d"
               cameraMode="rotate"
+              animated={false}
               sizingType="attribute"
               sizingAttribute="charCount"
-              minNodeSize={5}
-              maxNodeSize={14}
+              minNodeSize={4}
+              maxNodeSize={9}
               clusterAttribute={showClusters ? 'cluster' : undefined}
-              labelType="auto"
+              labelType={showLabels ? 'auto' : 'none'}
+              edgeArrowPosition={isDense ? 'none' : 'end'}
               selections={selections}
               actives={actives}
               onNodeClick={handleNodeClick}
               onCanvasClick={onCanvasClick}
               theme={graphTheme}
-              renderNode={renderNode}
+              onRenderCluster={showClusters ? renderCluster : undefined}
             />
           )}
         </Box>
