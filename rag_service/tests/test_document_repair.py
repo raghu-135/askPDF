@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import hashlib
 
 import pytest
 
@@ -326,7 +327,7 @@ async def test_document_embedding_waits_for_conversion_without_charging_retry(mo
     monkeypatch.setattr(document_projection_service, "evaluate_document_freshness", AsyncMock(return_value=freshness))
     monkeypatch.setattr(document_projection_service, "ensure_retrieval_projection", AsyncMock(side_effect=pending))
     deferred = AsyncMock()
-    monkeypatch.setattr(embedding_materialization_service, "defer_document_embedding_job", deferred)
+    monkeypatch.setattr(embedding_materialization_service, "defer_embedding_job", deferred)
     await embedding_materialization_service.process_embedding_job(job)
     deferred.assert_awaited_once_with(job, reason="waiting for canonical document conversion")
 
@@ -347,7 +348,7 @@ async def test_document_embedding_refreshes_stale_thread_version_without_indexin
         AsyncMock(return_value={"canonical_ready": True, "source_version": "new-version"}),
     )
     deferred = AsyncMock()
-    monkeypatch.setattr(embedding_materialization_service, "defer_document_embedding_job", deferred)
+    monkeypatch.setattr(embedding_materialization_service, "defer_embedding_job", deferred)
     await embedding_materialization_service.process_embedding_job(job)
     deferred.assert_awaited_once_with(
         job,
@@ -497,6 +498,214 @@ async def test_reconcile_enqueues_missing_thread_version_pointer(monkeypatch):
         "requeue_completed": True,
     }]
     assert counts["documents"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_enqueues_chat_memory_without_compact_text(monkeypatch):
+    queued = []
+    turn = SimpleNamespace(
+        id="turn-a",
+        payload={"question": "What is PCA?", "answer": "A projection.", "metadata": {}},
+    )
+
+    async def enqueue(**kwargs):
+        queued.append(kwargs)
+
+    monkeypatch.setattr(embedding_materialization_service, "require_embedding_model_ready", AsyncMock())
+    monkeypatch.setattr("app.db.get_effective_thread_files", AsyncMock(return_value=[]))
+    monkeypatch.setattr(embedding_materialization_service, "ensure_embedding_job", enqueue)
+    monkeypatch.setattr(
+        embedding_materialization_service,
+        "get_vector_db",
+        lambda: SimpleNamespace(has_chat_memory_indexed=AsyncMock(return_value=False)),
+    )
+    monkeypatch.setattr("app.db.get_thread_turns", AsyncMock(return_value=[turn]))
+    monkeypatch.setattr(embedding_materialization_service, "async_session_maker", _empty_sessionmaker())
+
+    counts = await embedding_materialization_service.reconcile_thread_embedding_targets("thread-a", "model-a")
+
+    compact = "Q: What is PCA?\nA: A projection."
+    expected_version = hashlib.sha256(f"{compact}\nA projection.".encode()).hexdigest()
+    assert counts["chat_memories"] == 1
+    assert queued == [{
+        "resource_type": "chat_memory",
+        "resource_id": "turn-a",
+        "scope_id": "thread-a",
+        "embedding_model": "model-a",
+        "source_version": expected_version,
+        "requeue_completed": False,
+    }]
+
+
+def test_chat_memory_source_version_matches_compact_hash():
+    version = embedding_materialization_service.chat_memory_source_version("What is PCA?", "A projection.")
+    compact = embedding_materialization_service.chat_memory_source_text("What is PCA?", "A projection.")
+    assert version == hashlib.sha256(f"{compact}\nA projection.".encode()).hexdigest()
+
+
+def test_document_enqueue_callers_share_helper():
+    import inspect
+
+    from app.api import files as files_api
+    from app.api import threads as threads_api
+    from app.services import file_processing_service
+    from app.tools import retrieval_knowledge
+
+    assert "enqueue_document_embedding_if_needed" in inspect.getsource(
+        file_processing_service._enqueue_document_embedding_job
+    )
+    assert "enqueue_document_embedding_if_needed" in inspect.getsource(
+        retrieval_knowledge._schedule_document_repair
+    )
+    assert "enqueue_document_embedding_if_needed" in inspect.getsource(
+        embedding_materialization_service.list_unready_document_targets
+    )
+    assert "enqueue_document_embedding_if_needed" in inspect.getsource(files_api)
+    assert "enqueue_document_embedding_if_needed" in inspect.getsource(threads_api)
+
+
+def test_live_chat_indexers_share_persisted_turn_helper():
+    import inspect
+
+    from app.services import agent_runtime_projection
+    from app.services import agent_task_chat_publish
+
+    assert "index_persisted_chat_turn" in inspect.getsource(agent_runtime_projection)
+    assert "index_persisted_chat_turn" in inspect.getsource(agent_task_chat_publish)
+
+
+@pytest.mark.asyncio
+async def test_process_rejects_unknown_resource_type():
+    job = SimpleNamespace(resource_type="web_search", id="job-1")
+    with pytest.raises(RuntimeError, match="Unsupported embedding job resource type"):
+        await embedding_materialization_service.process_embedding_job(job)
+
+
+@pytest.mark.asyncio
+async def test_chat_memory_job_defers_when_source_version_changes(monkeypatch):
+    job = SimpleNamespace(
+        id="job-1",
+        resource_type="chat_memory",
+        resource_id="turn-a",
+        scope_id="thread-a",
+        embedding_model="model-a",
+        source_version="stale-version",
+    )
+    turn = SimpleNamespace(
+        id="turn-a",
+        thread_id="thread-a",
+        payload={"question": "What is PCA?", "answer": "A projection.", "metadata": {}},
+        completed_at=None,
+        created_at=None,
+    )
+    deferred = AsyncMock()
+
+    class Session:
+        async def get(self, _model, resource_id):
+            assert resource_id == "turn-a"
+            return turn
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(embedding_materialization_service, "async_session_maker", lambda: Session())
+    monkeypatch.setattr(embedding_materialization_service, "defer_embedding_job", deferred)
+
+    await embedding_materialization_service.process_embedding_job(job)
+
+    current = embedding_materialization_service.chat_memory_source_version("What is PCA?", "A projection.")
+    deferred.assert_awaited_once_with(job, source_version=current, reason="chat memory source changed")
+
+
+@pytest.mark.asyncio
+async def test_web_search_index_skips_existing_snippet(monkeypatch):
+    from app.db.vector.adapter import web_search_snippet_hash, web_search_vector_uuid
+    from app.rag import indexer
+
+    existing_id = web_search_vector_uuid("model-a", "thread-a", web_search_snippet_hash("same snippet"))
+    embedded = []
+    inserted = []
+
+    class DB:
+        collection_manager = SimpleNamespace(validate_vectors_for_model=AsyncMock(return_value=True))
+
+        async def existing_web_search_object_ids(self, _model, _ids):
+            return {existing_id}
+
+        async def index_web_search_chunks(self, **kwargs):
+            inserted.append(kwargs)
+            return len(kwargs["texts"])
+
+    monkeypatch.setattr(indexer, "get_vector_db", lambda: DB())
+    monkeypatch.setattr(
+        indexer,
+        "generate_embeddings",
+        AsyncMock(side_effect=lambda texts, model: embedded.append(list(texts)) or [[0.1] for _ in texts]),
+    )
+
+    result = await indexer.index_web_search_for_thread(
+        thread_id="thread-a",
+        query="q",
+        texts=["same snippet", "new snippet"],
+        urls=["https://a.example", "https://b.example"],
+        titles=["A", "B"],
+        embedding_model="model-a",
+    )
+
+    assert result["status"] == "success"
+    assert result["chunks_count"] == 1
+    assert embedded == [["new snippet"]]
+    assert inserted[0]["texts"] == ["new snippet"]
+    assert inserted[0]["urls"] == ["https://b.example"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_index_skips_embed_when_all_snippets_exist(monkeypatch):
+    from app.db.vector.adapter import web_search_snippet_hash, web_search_vector_uuid
+    from app.rag import indexer
+
+    existing_id = web_search_vector_uuid("model-a", "thread-a", web_search_snippet_hash("same snippet"))
+    generate = AsyncMock()
+    insert = AsyncMock()
+
+    class DB:
+        collection_manager = SimpleNamespace(validate_vectors_for_model=AsyncMock(return_value=True))
+
+        async def existing_web_search_object_ids(self, _model, _ids):
+            return {existing_id}
+
+        index_web_search_chunks = insert
+
+    monkeypatch.setattr(indexer, "get_vector_db", lambda: DB())
+    monkeypatch.setattr(indexer, "generate_embeddings", generate)
+
+    result = await indexer.index_web_search_for_thread(
+        thread_id="thread-a",
+        query="q",
+        texts=["same snippet"],
+        urls=["https://a.example"],
+        titles=["A"],
+        embedding_model="model-a",
+    )
+
+    assert result == {"status": "success", "chunks_count": 0}
+    generate.assert_not_awaited()
+    insert.assert_not_awaited()
+
+
+def test_web_search_vector_uuid_is_content_and_thread_scoped():
+    from app.db.vector.adapter import web_search_snippet_hash, web_search_vector_uuid
+
+    digest = web_search_snippet_hash("  Hello   world ")
+    assert digest == web_search_snippet_hash("Hello world")
+    first = web_search_vector_uuid("model-a", "thread-a", digest)
+    other_thread = web_search_vector_uuid("model-a", "thread-b", digest)
+    assert first != other_thread
+    assert first == web_search_vector_uuid("model-a", "thread-a", digest)
+    assert first != web_search_vector_uuid("model-a", "thread-a", web_search_snippet_hash("different"))
 
 
 def _empty_sessionmaker():

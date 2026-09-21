@@ -40,6 +40,7 @@ from app.runtime.catalog import definition_from_workflow
 from app.db import (
     EmbeddingReadinessStatus,
     FileSourceType,
+    MemoryScopeType,
     ProcessStatus,
     delete_thread,
     assign_thread_to_project,
@@ -81,7 +82,13 @@ from app.services.embedding_model_service import (
     EmbeddingModelUnavailableError,
     require_thread_embedding_ready,
 )
-from app.services.embedding_projection_service import compute_projection_edges, project_embeddings_3d
+from app.services.embedding_projection_service import (
+    compute_projection_edges,
+    merge_embedding_family_points,
+    project_embeddings_3d,
+    resolve_embedding_source_families,
+)
+from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.rag.indexer import trigger_reembed_for_missing_sources
 from app.services.file_cleanup_service import cleanup_detached_file
 from app.services.memory_service import hard_delete_thread_memory_resources
@@ -423,15 +430,17 @@ async def get_thread_embeddings_projection_endpoint(
     thread_id: str,
     file_hash: Optional[str] = None,
     source_kind: Optional[str] = None,
+    source_family: Optional[str] = None,
     limit: int = EMBEDDING_PROJECTION_DEFAULT_LIMIT,
 ):
-    """Return 3D-projected document chunk embeddings for the thread workspace viewer."""
+    """Return 3D-projected embeddings for the thread workspace viewer."""
     if limit <= 0 or limit > EMBEDDING_PROJECTION_MAX_LIMIT:
         raise HTTPException(
             status_code=400,
             detail=f"limit must be between 1 and {EMBEDDING_PROJECTION_MAX_LIMIT}",
         )
     try:
+        families = resolve_embedding_source_families(source_family)
         context = await require_thread_embedding_ready(thread_id)
         files = await get_effective_thread_files(thread_id)
         file_name_lookup = {
@@ -439,26 +448,57 @@ async def get_thread_embeddings_projection_endpoint(
             for file in files
         }
         accessible_hashes = list(file_name_lookup.keys())
-        if not accessible_hashes:
-            return EmbeddingProjectionResponse(
-                thread_id=thread_id,
-                embedding_model=context.embedding_model,
-                point_count=0,
-                truncated=False,
-                points=[],
-            )
-
         target_hashes = accessible_hashes
-        if file_hash:
+        if file_hash and "documents" in families:
             if file_hash not in file_name_lookup:
                 raise HTTPException(status_code=404, detail="File is not accessible to this thread")
             target_hashes = [file_hash]
 
         db = get_vector_db()
-        raw_points = await db.get_thread_vector_points(
-            context.embedding_model,
-            file_hashes=target_hashes,
-            source_kind=source_kind,
+        family_points: dict[str, list[dict]] = {}
+        if "documents" in families and target_hashes:
+            family_points["documents"] = await db.get_thread_vector_points(
+                context.embedding_model,
+                file_hashes=target_hashes,
+                source_kind=source_kind,
+                limit=limit,
+            )
+        if "chat" in families:
+            family_points["chat"] = await db.get_thread_chat_vector_points(
+                context.embedding_model,
+                thread_id=thread_id,
+                limit=limit,
+            )
+        if "web_search" in families:
+            family_points["web_search"] = await db.get_thread_web_search_vector_points(
+                context.embedding_model,
+                thread_id=thread_id,
+                limit=limit,
+            )
+        if "memory" in families:
+            project_id = getattr(context.project, "id", None)
+            scope_filters = [
+                {"scope_type": MemoryScopeType.THREAD.value, "scope_id": thread_id},
+            ]
+            if project_id:
+                scope_filters.append(
+                    {"scope_type": MemoryScopeType.PROJECT.value, "scope_id": str(project_id)}
+                )
+            scope_filters.append(
+                {
+                    "scope_type": MemoryScopeType.USER.value,
+                    "scope_id": LOCAL_USER_MEMORY_SCOPE_ID,
+                }
+            )
+            family_points["memory"] = await db.get_thread_memory_vector_points(
+                context.embedding_model,
+                scope_filters=scope_filters,
+                limit=limit,
+            )
+
+        raw_points, truncated = merge_embedding_family_points(
+            family_points,
+            family_order=families,
             limit=limit,
         )
         vectors = [point["vector"] for point in raw_points]
@@ -471,7 +511,11 @@ async def get_thread_embeddings_projection_endpoint(
                 z=coords[2],
                 chunk_id=point.get("chunk_id"),
                 file_hash=str(point.get("file_hash") or ""),
-                file_name=file_name_lookup.get(str(point.get("file_hash") or "")),
+                file_name=(
+                    file_name_lookup.get(str(point.get("file_hash") or ""))
+                    or point.get("file_name")
+                    or point.get("title")
+                ),
                 text=str(point.get("text") or ""),
                 page_start=point.get("page_start"),
                 page_end=point.get("page_end"),
@@ -498,7 +542,7 @@ async def get_thread_embeddings_projection_endpoint(
             thread_id=thread_id,
             embedding_model=context.embedding_model,
             point_count=len(response_points),
-            truncated=len(response_points) >= limit,
+            truncated=truncated,
             points=response_points,
             edges=response_edges,
         )
@@ -727,41 +771,8 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             }
 
         db = get_vector_db()
-        from app.services.document_projection_service import (
-            DocumentConversionPendingError,
-            ensure_retrieval_projection,
-            evaluate_retrieval_readiness,
-        )
-        from app.services.embedding_materialization_service import ensure_embedding_job, RESOURCE_DOCUMENT
-
-        async def schedule_pdf_repair(
-            target_file_hash: str,
-            readiness: dict,
-            *,
-            file_name: str | None = None,
-        ) -> None:
-            if readiness.get("ready"):
-                return
-            if not readiness.get("canonical_ready"):
-                try:
-                    await ensure_retrieval_projection(
-                        file_hash=target_file_hash,
-                        embedding_model=thread.embedding_model,
-                        file_name=file_name,
-                    )
-                except DocumentConversionPendingError:
-                    pass
-                return
-            if not readiness.get("source_version"):
-                raise RuntimeError(f"retrieval version is unavailable for {target_file_hash}")
-            await ensure_embedding_job(
-                resource_type=RESOURCE_DOCUMENT,
-                resource_id=target_file_hash,
-                scope_id=thread_id,
-                embedding_model=thread.embedding_model,
-                source_version=readiness["source_version"],
-                requeue_completed=True,
-            )
+        from app.services.document_projection_service import evaluate_retrieval_readiness
+        from app.services.embedding_materialization_service import enqueue_document_embedding_if_needed
 
         # Track files list for stats query
         files = []
@@ -792,10 +803,12 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 # completion can create the exact embedding target without
                 # requiring a second access or a stale status transition.
                 readiness = await evaluate_retrieval_readiness(file_hash, thread.embedding_model, thread_id=thread_id)
-                await schedule_pdf_repair(
-                    file_hash,
-                    readiness,
+                await enqueue_document_embedding_if_needed(
+                    file_hash=file_hash,
+                    thread_id=thread_id,
+                    embedding_model=thread.embedding_model,
                     file_name=getattr(file_record, "file_name", None),
+                    readiness=readiness,
                 )
                 status = EmbeddingReadinessStatus.READY.value if readiness.get("ready") else EmbeddingReadinessStatus.NOT_READY.value
             else:
@@ -818,10 +831,12 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     file_ready = ProcessStatus.is_completed(indexing_status)
                     if FileSourceType.uses_pdf_conversion(getattr(f, "source_type", None)):
                         readiness = await evaluate_retrieval_readiness(f.file_hash, thread.embedding_model, thread_id=thread_id)
-                        await schedule_pdf_repair(
-                            f.file_hash,
-                            readiness,
+                        await enqueue_document_embedding_if_needed(
+                            file_hash=f.file_hash,
+                            thread_id=thread_id,
+                            embedding_model=thread.embedding_model,
                             file_name=getattr(f, "file_name", None),
+                            readiness=readiness,
                         )
                         file_ready = bool(readiness.get("ready"))
                     if not file_ready:

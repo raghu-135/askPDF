@@ -160,6 +160,7 @@ async def test_chat_and_web_vectors_store_event_specific_timestamp_only():
         web_search_performed_at="2026-06-25T19:15:00Z",
     )
     web_props = adapter.points[0]["properties"]
+    assert adapter.points[0]["uuid"]
     assert web_props["web_search_performed_at"] == "2026-06-25T19:15:00Z"
     assert "timeline_event_at" not in web_props
     assert "timeline_event_type" not in web_props

@@ -191,36 +191,18 @@ async def _schedule_document_repair(
     thread_id: str,
     readiness: dict[str, Any],
 ) -> None:
-    from app.services.document_projection_service import (
-        DocumentConversionPendingError,
-        ensure_retrieval_projection,
-    )
-    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+    from app.services.embedding_materialization_service import enqueue_document_embedding_if_needed
 
-    if not readiness.get("canonical_ready"):
-        try:
-            await ensure_retrieval_projection(
-                file_hash=file_hash,
-                embedding_model=embedding_model,
-            )
-        except DocumentConversionPendingError:
-            return
-        return
     job = readiness.get("thread_job")
     if job is not None and job.status == "failed" and readiness.get("reason") == "thread_job_failed":
         raise RuntimeError(
             f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
         )
-    source_version = readiness.get("source_version")
-    if not source_version:
-        raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
-    await ensure_embedding_job(
-        resource_type=RESOURCE_DOCUMENT,
-        resource_id=file_hash,
-        scope_id=thread_id,
+    await enqueue_document_embedding_if_needed(
+        file_hash=file_hash,
+        thread_id=thread_id,
         embedding_model=embedding_model,
-        source_version=source_version,
-        requeue_completed=True,
+        readiness=readiness,
     )
 
 

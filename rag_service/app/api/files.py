@@ -535,15 +535,8 @@ async def get_file_status_endpoint(
         )
         status["document_processing"] = await _document_processing_payload(file_hash, embedding_model)
         if str(getattr(file, "source_type", "pdf")) == "pdf":
-            from app.services.document_projection_service import (
-                DocumentConversionPendingError,
-                ensure_retrieval_projection,
-                evaluate_retrieval_readiness,
-            )
-            from app.services.embedding_materialization_service import (
-                RESOURCE_DOCUMENT,
-                ensure_embedding_job,
-            )
+            from app.services.document_projection_service import evaluate_retrieval_readiness
+            from app.services.embedding_materialization_service import enqueue_document_embedding_if_needed
             from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
 
             try:
@@ -555,26 +548,13 @@ async def get_file_status_endpoint(
             except EmbeddingTokenizerUnavailableError:
                 readiness = None
             if readiness is not None and not readiness.get("ready"):
-                if not readiness.get("canonical_ready"):
-                    try:
-                        await ensure_retrieval_projection(
-                            file_hash=file_hash,
-                            embedding_model=embedding_model,
-                            file_name=getattr(file, "file_name", None),
-                        )
-                    except DocumentConversionPendingError:
-                        pass
-                elif not readiness.get("source_version"):
-                    raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
-                else:
-                    await ensure_embedding_job(
-                        resource_type=RESOURCE_DOCUMENT,
-                        resource_id=file_hash,
-                        scope_id=thread_id,
-                        embedding_model=embedding_model,
-                        source_version=readiness["source_version"],
-                        requeue_completed=True,
-                    )
+                await enqueue_document_embedding_if_needed(
+                    file_hash=file_hash,
+                    thread_id=thread_id,
+                    embedding_model=embedding_model,
+                    file_name=getattr(file, "file_name", None),
+                    readiness=readiness,
+                )
         parsing_status = (status.get("parsing") or {}).get("status", ProcessStatus.UNKNOWN.value)
         if not ProcessStatus.is_completed(parsing_status):
             parsed_data = await get_file_parsed_sentences(file_hash)

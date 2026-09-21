@@ -35,17 +35,21 @@ export type EmbeddingProjectionResponse = {
   edges: EmbeddingProjectionEdge[];
 };
 
+export type EmbeddingSourceFamily = 'all' | 'documents' | 'chat' | 'web_search' | 'memory';
+
 export async function getThreadEmbeddingProjection(
   threadId: string,
   options?: {
     fileHash?: string;
     sourceKind?: string;
+    sourceFamily?: EmbeddingSourceFamily;
     limit?: number;
   },
 ): Promise<EmbeddingProjectionResponse> {
   const params = new URLSearchParams();
   if (options?.fileHash) params.set('file_hash', options.fileHash);
   if (options?.sourceKind) params.set('source_kind', options.sourceKind);
+  if (options?.sourceFamily) params.set('source_family', options.sourceFamily);
   if (options?.limit != null) params.set('limit', String(options.limit));
   const query = params.toString();
   const suffix = query ? `?${query}` : '';

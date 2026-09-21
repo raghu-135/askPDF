@@ -27,9 +27,11 @@ this page documents the stable endpoint groups and important behavior.
 ## Embeddings projection
 
 GET /api/threads/{thread_id}/embeddings-projection returns 3D-projected
-document chunk embeddings along with sequential and semantic similarity edges
-for the thread workspace viewer. Optional query parameters: `file_hash`,
-`source_kind`, and `limit` (default 300, max 1000).
+embeddings from documents, chat memory, web search, and durable memory, along
+with sequential and semantic similarity edges for the thread workspace viewer.
+Optional query parameters: `file_hash`, `source_kind`, `source_family`
+(`all`, `documents`, `chat`, `web_search`, `memory`; default `all`), and
+`limit` (default 300, max 1000).
 
 The implementation is in rag_service/app/api/threads.py.
 

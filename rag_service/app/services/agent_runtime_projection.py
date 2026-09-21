@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping
 
-from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats, update_message_context_compact
-from app.rag.indexer import index_chat_memory_for_thread
+from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntimeProjection:
@@ -152,20 +159,30 @@ class AgentRuntimeProjection:
             )
         else:
             turn = existing
-        if projected.get("embedding_model") and projected.get("llm_model"):
-            indexed = await index_chat_memory_for_thread(
+        embedding_model = await _resolve_chat_memory_embedding_model(thread_id, projected)
+        llm_name = str(projected.get("llm_model") or run_context.get("llm_model") or "").strip() or None
+        if embedding_model:
+            from app.services.embedding_materialization_service import index_persisted_chat_turn
+
+            raw_window = projected.get("context_window")
+            if raw_window is None:
+                raw_window = run_context.get("context_window")
+            await index_persisted_chat_turn(
                 thread_id=thread_id,
-                message_id=turn.id,
+                turn_id=turn.id,
                 question=question,
                 answer=str(projected.get("final_answer") or projected.get("answer") or ""),
-                embedding_model=projected["embedding_model"],
-                llm_name=projected["llm_model"],
-                context_window=projected.get("context_window"),
+                embedding_model=embedding_model,
+                llm_name=llm_name,
+                context_window=raw_window if isinstance(raw_window, int) else None,
                 message_created_at=turn.completed_at or turn.created_at,
             )
-            compact = indexed.get("memory_compact_text") if isinstance(indexed, dict) else None
-            if compact:
-                await update_message_context_compact(turn.id, compact)
+        else:
+            logger.warning(
+                "Skipping chat-memory indexing for thread %s turn %s because no embedding model is available",
+                thread_id,
+                turn.id,
+            )
         try:
             await increment_qa_stats(thread_id, len(question or "") + len(str(projected.get("answer") or projected.get("final_answer") or "")))
         except Exception:
@@ -223,3 +240,15 @@ class AgentRuntimeProjection:
         )
         await self.rebuild_trace_from_events(run=run, result=projected)
         return projected
+
+
+async def _resolve_chat_memory_embedding_model(thread_id: str, projected: Mapping[str, Any]) -> str | None:
+    model = str(projected.get("embedding_model") or "").strip()
+    if model:
+        return model
+    try:
+        context = await require_thread_embedding_ready(thread_id)
+    except (EmbeddingModelResolutionError, EmbeddingModelUnavailableError) as exc:
+        logger.warning("Could not resolve embedding model for chat-memory indexing | thread_id=%s error=%s", thread_id, exc)
+        return None
+    return str(context.embedding_model or "").strip() or None

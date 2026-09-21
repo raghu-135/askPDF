@@ -474,6 +474,9 @@ class AgentRunService:
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
             "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+            "embedding_model": embedding_model,
+            "llm_model": getattr(req, "llm_model", None),
+            "context_window": getattr(req, "context_window", None),
         }
         if execution_event_sink is not None:
             await execution_event_sink.emit(
@@ -1002,6 +1005,10 @@ class AgentRunService:
                     run_context={
                         "agent_run_id": resolution.run.id,
                         "agent_workflow_id": resolution.run.workflow_id,
+                        "llm_model": (
+                            (resolution.run.metrics_json or {}).get("model")
+                            or (resolution.run.resolved_spec_json or {}).get("llm_model")
+                        ),
                     },
                     duration_ms=float(result.get("duration_ms") or 0),
                 )

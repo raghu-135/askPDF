@@ -10,6 +10,7 @@ Collections:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
@@ -61,6 +62,20 @@ def _document_vector_uuid(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
             f"askpdf:document:{embedding_model}:{file_hash}:{manifest_id}:{source_id}",
+        )
+    )
+
+
+def web_search_snippet_hash(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def web_search_vector_uuid(embedding_model: str, thread_id: str, content_hash: str) -> str:
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"askpdf:web:{embedding_model}:{thread_id}:{content_hash}",
         )
     )
 
@@ -609,8 +624,10 @@ class WeaviateAdapter:
         
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
+            content_hash = web_search_snippet_hash(text)
             points.append(
                 {
+                    "uuid": web_search_vector_uuid(embedding_model, thread_id, content_hash),
                     "vector": vector,
                     "properties": {
                         "thread_id": thread_id,
@@ -1238,6 +1255,226 @@ class WeaviateAdapter:
         )
         return points
 
+    async def get_thread_chat_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        thread_id: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch chat-memory chunk vectors for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(thread_id, "thread_id")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.CHAT_MEMORY,
+            embedding_model,
+            filters=wvc.query.Filter.by_property("thread_id").equal(thread_id),
+            limit=limit,
+            description="chat vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            message_id = str(props.get("message_id") or "")
+            chunk_id = props.get("chunk_id")
+            question = str(props.get("question") or "").strip()
+            text = str(props.get("text") or "")
+            points.append(
+                {
+                    "id": obj.get("id") or f"chat:{message_id}:{chunk_id}",
+                    "vector": vector,
+                    "chunk_id": chunk_id,
+                    "file_hash": f"chat:{message_id}" if message_id else "chat",
+                    "file_name": self._projection_label(question or text, fallback="Chat"),
+                    "text": text,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "chat",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": question,
+                    "metadata": {},
+                }
+            )
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
+    async def get_thread_web_search_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        thread_id: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch web-search chunk vectors for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(thread_id, "thread_id")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.WEB_SEARCH,
+            embedding_model,
+            filters=wvc.query.Filter.by_property("thread_id").equal(thread_id),
+            limit=limit,
+            description="web search vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            query = str(props.get("search_query") or "").strip()
+            title = str(props.get("title") or "").strip()
+            url = str(props.get("url") or "").strip()
+            chunk_id = props.get("chunk_id")
+            text = str(props.get("text") or "")
+            group_key = query or url or title or "web"
+            points.append(
+                {
+                    "id": obj.get("id") or f"web:{thread_id}:{group_key}:{chunk_id}",
+                    "vector": vector,
+                    "chunk_id": chunk_id,
+                    "file_hash": f"web:{group_key}",
+                    "file_name": self._projection_label(title or query or url, fallback="Web search"),
+                    "text": text,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "web_search",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": title or query,
+                    "metadata": {"url": url, "search_query": query} if (url or query) else {},
+                }
+            )
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
+    async def get_thread_memory_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        scope_filters: List[Dict[str, str]],
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch durable-memory vectors in the thread's readable scopes."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not scope_filters:
+            return []
+
+        scope_filter = None
+        for scope in scope_filters:
+            current = (
+                wvc.query.Filter.by_property("scope_type").equal(str(scope.get("scope_type") or ""))
+                & wvc.query.Filter.by_property("scope_id").equal(str(scope.get("scope_id") or ""))
+            )
+            scope_filter = current if scope_filter is None else scope_filter | current
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.MEMORY,
+            embedding_model,
+            filters=scope_filter,
+            limit=limit,
+            description="memory vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            memory_id = str(props.get("memory_id") or "")
+            content = str(props.get("content") or "")
+            scope_type = str(props.get("scope_type") or "memory")
+            points.append(
+                {
+                    "id": obj.get("id") or f"memory:{memory_id}",
+                    "vector": vector,
+                    "chunk_id": 0,
+                    "file_hash": f"memory:{memory_id}" if memory_id else "memory",
+                    "file_name": self._projection_label(content, fallback=f"Memory ({scope_type})"),
+                    "text": content,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "memory",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": scope_type,
+                    "metadata": {
+                        "scope_type": scope_type,
+                        "scope_id": str(props.get("scope_id") or ""),
+                    },
+                }
+            )
+        points.sort(key=lambda item: str(item.get("file_hash") or ""))
+        return points
+
+    async def _fetch_projection_objects(
+        self,
+        collection_name: str,
+        embedding_model: str,
+        *,
+        filters: Any,
+        limit: int,
+        description: str,
+    ) -> List[Dict[str, Any]]:
+        col = await self.collection_manager.get_collection(collection_name, embedding_model)
+        try:
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filters,
+                limit=limit,
+                include_vector=True,
+            )
+        except WeaviateBaseError as exc:
+            logger.error("Failed to fetch %s: %s", description, exc)
+            raise VectorDBQueryError(f"Could not fetch {description}") from exc
+
+        objects: List[Dict[str, Any]] = []
+        for obj in getattr(response, "objects", None) or []:
+            vector = self._extract_object_vector(obj)
+            if not vector:
+                continue
+            objects.append(
+                {
+                    "id": str(getattr(obj, "uuid", "") or ""),
+                    "properties": getattr(obj, "properties", None) or {},
+                    "vector": vector,
+                }
+            )
+        return objects
+
+    @staticmethod
+    def _projection_label(text: str, *, fallback: str, limit: int = 48) -> str:
+        compact = " ".join((text or "").split())
+        if not compact:
+            return fallback
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[: limit - 3]}..."
+
     async def search_chat_memory(
         self,
         thread_id: str,
@@ -1559,6 +1796,33 @@ class WeaviateAdapter:
         except Exception as e:
             logger.error("Failed to verify indexed chunk identities: %s", e)
             raise VectorDBQueryError("Could not verify indexed chunk identities") from e
+
+    async def existing_web_search_object_ids(
+        self,
+        embedding_model: str,
+        object_ids: List[str],
+    ) -> set[str]:
+        """Return the subset of web-search object ids that already exist."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        ids = [str(item) for item in object_ids if str(item or "").strip()]
+        if not ids:
+            return set()
+        try:
+            col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
+
+            def _existing() -> set[str]:
+                workers = min(_DOCUMENT_IDENTITY_VERIFY_WORKERS, max(1, len(ids)))
+                found: set[str] = set()
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for object_id, exists in zip(ids, pool.map(col.data.exists, ids)):
+                        if exists:
+                            found.add(object_id)
+                return found
+
+            return await asyncio.to_thread(_existing)
+        except Exception as e:
+            logger.error("Failed to check existing web search objects: %s", e)
+            raise VectorDBQueryError("Could not check existing web search objects") from e
 
     async def has_chat_memory_indexed(self, thread_id: str, message_id: str) -> bool:
         """Return whether at least one chat-memory chunk exists for a message in a thread.

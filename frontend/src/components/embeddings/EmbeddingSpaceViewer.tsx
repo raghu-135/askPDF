@@ -26,6 +26,7 @@ import {
   getThreadEmbeddingProjection,
   type EmbeddingPoint3D,
   type EmbeddingProjectionEdge,
+  type EmbeddingSourceFamily,
 } from '../../lib/embedding-projection';
 import type { PdfTab } from '../../lib/document-tabs';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
@@ -49,6 +50,14 @@ import { assignDocumentColors, chunkGraphLabel } from './document-colors';
 type ColorMode = 'document' | 'kind';
 
 const DENSE_NODE_COUNT = 40;
+const DOCUMENT_SOURCE_KINDS = new Set(['pdf', 'webpage', 'browser', 'browser_capture']);
+const SOURCE_FAMILY_OPTIONS: Array<{ value: EmbeddingSourceFamily; label: string }> = [
+  { value: 'all', label: 'All sources' },
+  { value: 'documents', label: 'Documents' },
+  { value: 'chat', label: 'Chat' },
+  { value: 'web_search', label: 'Web search' },
+  { value: 'memory', label: 'Memories' },
+];
 
 function ClusterHull({
   color,
@@ -99,9 +108,17 @@ function pageLabel(point: EmbeddingPoint3D): string {
 }
 
 function kindColor(point: EmbeddingPoint3D): string {
+  if (point.source_kind === 'chat') return '#14b8a6';
+  if (point.source_kind === 'web_search') return '#22c55e';
+  if (point.source_kind === 'memory') return '#eab308';
   if (point.table_id) return '#f97316';
   if (point.section_id) return '#a855f7';
   return '#3b82f6';
+}
+
+function isDocumentPoint(point: EmbeddingPoint3D, documents: readonly PdfTab[]): boolean {
+  if (documents.some((doc) => doc.fileHash === point.file_hash)) return true;
+  return DOCUMENT_SOURCE_KINDS.has(point.source_kind || '');
 }
 
 export default function EmbeddingSpaceViewer({
@@ -123,6 +140,8 @@ export default function EmbeddingSpaceViewer({
   const [truncated, setTruncated] = useState(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | null>(null);
   const [fileHashFilter, setFileHashFilter] = useState<string>('');
+  const [sourceFamily, setSourceFamily] = useState<EmbeddingSourceFamily>('all');
+  const [groupFilter, setGroupFilter] = useState<string>('');
   const [colorMode, setColorMode] = useState<ColorMode>('document');
   const [searchFilter, setSearchFilter] = useState('');
   const [showSequenceEdges, setShowSequenceEdges] = useState(true);
@@ -130,6 +149,9 @@ export default function EmbeddingSpaceViewer({
   const [showClusters, setShowClusters] = useState(true);
   const [labelOverride, setLabelOverride] = useState<boolean | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [graphCanvasMounted, setGraphCanvasMounted] = useState(false);
+  const [canvasNodes, setCanvasNodes] = useState<GraphNode[]>([]);
+  const [canvasEdges, setCanvasEdges] = useState<GraphEdge[]>([]);
   const clearSelectionsRef = useRef<() => void>(() => {});
 
   const isDark = muiTheme.palette.mode === 'dark';
@@ -140,6 +162,7 @@ export default function EmbeddingSpaceViewer({
     try {
       const response = await getThreadEmbeddingProjection(threadId, {
         fileHash: fileHashFilter || undefined,
+        sourceFamily,
         limit: 500,
       });
       setPoints(response.points);
@@ -155,7 +178,7 @@ export default function EmbeddingSpaceViewer({
     } finally {
       setLoading(false);
     }
-  }, [fileHashFilter, threadId]);
+  }, [fileHashFilter, sourceFamily, threadId]);
 
   useEffect(() => {
     void loadProjection();
@@ -163,15 +186,19 @@ export default function EmbeddingSpaceViewer({
 
   const visiblePoints = useMemo(() => {
     const needle = searchFilter.trim().toLowerCase();
-    if (!needle) return points;
-    return points.filter((point) => (
-      point.text.toLowerCase().includes(needle)
-      || String(point.chunk_id ?? '').includes(needle)
-      || (point.file_name || '').toLowerCase().includes(needle)
-      || (point.section_id || '').toLowerCase().includes(needle)
-      || (point.table_id || '').toLowerCase().includes(needle)
-    ));
-  }, [points, searchFilter]);
+    return points.filter((point) => {
+      if (groupFilter && point.file_hash !== groupFilter) return false;
+      if (!needle) return true;
+      return (
+        point.text.toLowerCase().includes(needle)
+        || String(point.chunk_id ?? '').includes(needle)
+        || (point.file_name || '').toLowerCase().includes(needle)
+        || (point.section_id || '').toLowerCase().includes(needle)
+        || (point.table_id || '').toLowerCase().includes(needle)
+        || (point.source_kind || '').toLowerCase().includes(needle)
+      );
+    });
+  }, [groupFilter, points, searchFilter]);
 
   const visiblePointIds = useMemo(
     () => new Set(visiblePoints.map((point) => point.id)),
@@ -226,7 +253,6 @@ export default function EmbeddingSpaceViewer({
   }, [visiblePoints]);
 
   const showLabels = labelOverride ?? visiblePoints.length <= DENSE_NODE_COUNT;
-  const isDense = visiblePoints.length > DENSE_NODE_COUNT;
 
   const nodes: GraphNode[] = useMemo(() => {
     return visiblePoints.map((point) => {
@@ -282,6 +308,13 @@ export default function EmbeddingSpaceViewer({
       });
   }, [edges, muiTheme.palette.mode, showSequenceEdges, showSimilarityEdges, visiblePointIds]);
 
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    setCanvasNodes(nodes);
+    setCanvasEdges(graphEdges);
+    setGraphCanvasMounted(true);
+  }, [graphEdges, nodes]);
+
   const {
     selections,
     actives,
@@ -290,8 +323,8 @@ export default function EmbeddingSpaceViewer({
     clearSelections,
   } = useSelection({
     ref: graphRef,
-    nodes,
-    edges: graphEdges,
+    nodes: canvasNodes,
+    edges: canvasEdges,
     type: 'single',
     pathHoverType: 'direct',
     pathSelectionType: 'out',
@@ -333,9 +366,15 @@ export default function EmbeddingSpaceViewer({
     graphRef.current?.fitNodesInView?.();
   }, []);
 
-  const handleDocumentChipClick = useCallback((hash: string) => {
-    setFileHashFilter((current) => (current === hash ? '' : hash));
-  }, []);
+  const handleGroupChipClick = useCallback((hash: string) => {
+    const isDocument = documents.some((doc) => doc.fileHash === hash);
+    setGroupFilter((current) => (current === hash ? '' : hash));
+    if (isDocument && (sourceFamily === 'all' || sourceFamily === 'documents')) {
+      setFileHashFilter((current) => (current === hash ? '' : hash));
+    } else {
+      setFileHashFilter('');
+    }
+  }, [documents, sourceFamily]);
 
   const clusterFillByName = useMemo(() => {
     const fills: Record<string, string> = {};
@@ -414,7 +453,9 @@ export default function EmbeddingSpaceViewer({
       seen.add(hash);
       hashes.push(hash);
     };
-    documents.forEach((doc) => addHash(doc.fileHash));
+    if (sourceFamily === 'all' || sourceFamily === 'documents') {
+      documents.forEach((doc) => addHash(doc.fileHash));
+    }
     points.forEach((point) => addHash(point.file_hash));
     return hashes.map((hash) => {
       const documentTab = documents.find((doc) => doc.fileHash === hash);
@@ -425,7 +466,7 @@ export default function EmbeddingSpaceViewer({
         fill: documentColors[hash],
       };
     });
-  }, [documentColors, documents, points]);
+  }, [documentColors, documents, points, sourceFamily]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -446,22 +487,49 @@ export default function EmbeddingSpaceViewer({
           Embedding space
         </Typography>
 
-        <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel id="embedding-file-filter-label">Document</InputLabel>
+        <FormControl size="small" sx={{ minWidth: 150 }}>
+          <InputLabel id="embedding-source-family-label">Source</InputLabel>
           <Select
-            labelId="embedding-file-filter-label"
-            label="Document"
-            value={fileHashFilter}
-            onChange={(event) => setFileHashFilter(event.target.value)}
+            labelId="embedding-source-family-label"
+            label="Source"
+            value={sourceFamily}
+            onChange={(event) => {
+              const next = event.target.value as EmbeddingSourceFamily;
+              setSourceFamily(next);
+              setGroupFilter('');
+              setFileHashFilter('');
+            }}
           >
-            <MenuItem value="">All documents</MenuItem>
-            {documents.map((doc) => (
-              <MenuItem key={doc.fileHash} value={doc.fileHash}>
-                {doc.fileName}
+            {SOURCE_FAMILY_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
               </MenuItem>
             ))}
           </Select>
         </FormControl>
+
+        {sourceFamily === 'all' || sourceFamily === 'documents' ? (
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel id="embedding-file-filter-label">Document</InputLabel>
+            <Select
+              labelId="embedding-file-filter-label"
+              label="Document"
+              value={fileHashFilter}
+              onChange={(event) => {
+                const next = String(event.target.value);
+                setFileHashFilter(next);
+                setGroupFilter(next);
+              }}
+            >
+              <MenuItem value="">All documents</MenuItem>
+              {documents.map((doc) => (
+                <MenuItem key={doc.fileHash} value={doc.fileHash}>
+                  {doc.fileName}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        ) : null}
 
         <FormControl size="small" sx={{ minWidth: 130 }}>
           <InputLabel id="embedding-color-mode-label">Color by</InputLabel>
@@ -471,7 +539,7 @@ export default function EmbeddingSpaceViewer({
             value={colorMode}
             onChange={(event) => setColorMode(event.target.value as ColorMode)}
           >
-            <MenuItem value="document">Document</MenuItem>
+            <MenuItem value="document">Group</MenuItem>
             <MenuItem value="kind">Chunk kind</MenuItem>
           </Select>
         </FormControl>
@@ -556,19 +624,19 @@ export default function EmbeddingSpaceViewer({
           sx={{ px: 1.5, py: 0.75, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}
         >
           {legendItems.map((item) => {
-            const selected = fileHashFilter === item.hash;
-            const dimmed = Boolean(fileHashFilter) && !selected;
+            const selected = groupFilter === item.hash || fileHashFilter === item.hash;
+            const dimmed = Boolean(groupFilter || fileHashFilter) && !selected;
             return (
               <Tooltip
                 key={item.hash}
-                title={selected ? 'Show all documents' : `Show only ${item.label}`}
+                title={selected ? 'Show all groups' : `Show only ${item.label}`}
               >
                 <Chip
                   size="small"
                   clickable
                   aria-pressed={selected}
                   label={item.label}
-                  onClick={() => handleDocumentChipClick(item.hash)}
+                  onClick={() => handleGroupChipClick(item.hash)}
                   sx={{
                     bgcolor: item.fill,
                     color: isDark ? '#0b1220' : '#fff',
@@ -589,51 +657,62 @@ export default function EmbeddingSpaceViewer({
       {embeddingModel ? (
         <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, bgcolor: 'background.default' }}>
           Model: <strong>{embeddingModel}</strong>
-          {truncated ? ' · Showing first 500 indexed chunks' : ''}
+          {truncated ? ' · Showing a capped mix of indexed chunks' : ''}
           {` · ${nodes.length} nodes · ${graphEdges.length} relationship arrows`}
         </Typography>
       ) : null}
 
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}>
         <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', bgcolor: 'background.default' }}>
-          {loading ? (
-            <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}>
-              <CircularProgress />
+          {graphCanvasMounted ? (
+            <Box sx={{ position: 'absolute', inset: 0 }}>
+              <GraphCanvas
+                ref={graphRef}
+                nodes={canvasNodes}
+                edges={canvasEdges}
+                layoutType="forceDirected3d"
+                cameraMode="rotate"
+                animated={false}
+                sizingType="attribute"
+                sizingAttribute="charCount"
+                minNodeSize={4}
+                maxNodeSize={9}
+                clusterAttribute={showClusters ? 'cluster' : undefined}
+                labelType={showLabels ? 'auto' : 'none'}
+                edgeArrowPosition={canvasNodes.length > DENSE_NODE_COUNT ? 'none' : 'end'}
+                selections={selections}
+                actives={actives}
+                onNodeClick={handleNodeClick}
+                onCanvasClick={onCanvasClick}
+                theme={graphTheme}
+                onRenderCluster={showClusters ? renderCluster : undefined}
+                renderNode={renderNode}
+              />
             </Box>
-          ) : error ? (
-            <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 2 }}>
-              <Alert severity="error" sx={{ maxWidth: 480 }}>{error}</Alert>
+          ) : null}
+          {loading || error || nodes.length === 0 ? (
+            <Box
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 1,
+                display: 'grid',
+                placeItems: 'center',
+                p: 2,
+                bgcolor: 'background.default',
+              }}
+            >
+              {loading ? (
+                <CircularProgress />
+              ) : error ? (
+                <Alert severity="error" sx={{ maxWidth: 480 }}>{error}</Alert>
+              ) : (
+                <Alert severity="info" sx={{ maxWidth: 480 }}>
+                  No indexed chunks are available for these sources yet.
+                </Alert>
+              )}
             </Box>
-          ) : nodes.length === 0 ? (
-            <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 2 }}>
-              <Alert severity="info" sx={{ maxWidth: 480 }}>
-                No indexed chunks are available for projection yet.
-              </Alert>
-            </Box>
-          ) : (
-            <GraphCanvas
-              ref={graphRef}
-              nodes={nodes}
-              edges={graphEdges}
-              layoutType="forceDirected3d"
-              cameraMode="rotate"
-              animated={false}
-              sizingType="attribute"
-              sizingAttribute="charCount"
-              minNodeSize={4}
-              maxNodeSize={9}
-              clusterAttribute={showClusters ? 'cluster' : undefined}
-              labelType={showLabels ? 'auto' : 'none'}
-              edgeArrowPosition={isDense ? 'none' : 'end'}
-              selections={selections}
-              actives={actives}
-              onNodeClick={handleNodeClick}
-              onCanvasClick={onCanvasClick}
-              theme={graphTheme}
-              onRenderCluster={showClusters ? renderCluster : undefined}
-              renderNode={renderNode}
-            />
-          )}
+          ) : null}
         </Box>
 
         {selectedPoint ? (
@@ -703,7 +782,7 @@ export default function EmbeddingSpaceViewer({
                   }}
                   maxHeight={160}
                 />
-                {onOpenDocumentCitation ? (
+                {onOpenDocumentCitation && isDocumentPoint(selectedPoint, documents) ? (
                   <Button
                     size="small"
                     variant="contained"

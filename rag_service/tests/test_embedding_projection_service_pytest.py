@@ -5,7 +5,9 @@ import torch
 
 from app.services.embedding_projection_service import (
     compute_projection_edges,
+    merge_embedding_family_points,
     project_embeddings_3d,
+    resolve_embedding_source_families,
 )
 
 
@@ -78,4 +80,54 @@ def test_compute_projection_edges_generates_similarity_edges():
     assert sim_edges[0]["source"] in ("p0", "p1")
     assert sim_edges[0]["target"] in ("p0", "p1")
     assert sim_edges[0]["score"] == 1.0
+
+
+def test_compute_projection_edges_skips_empty_file_hash_sequence_groups():
+    points = [
+        {"id": "p0", "file_hash": "", "chunk_id": 0},
+        {"id": "p1", "file_hash": "", "chunk_id": 1},
+    ]
+    edges = compute_projection_edges(points, [[1.0], [0.0]], similarity_threshold=0.99)
+    assert [edge["kind"] for edge in edges] == []
+
+
+def test_resolve_embedding_source_families_defaults_to_all():
+    assert resolve_embedding_source_families(None) == (
+        "documents",
+        "chat",
+        "web_search",
+        "memory",
+    )
+    assert resolve_embedding_source_families("chat") == ("chat",)
+
+
+def test_resolve_embedding_source_families_rejects_unknown():
+    with pytest.raises(ValueError, match="source_family"):
+        resolve_embedding_source_families("images")
+
+
+def test_merge_embedding_family_points_interleaves_and_caps():
+    merged, truncated = merge_embedding_family_points(
+        {
+            "documents": [{"id": "d0"}, {"id": "d1"}],
+            "chat": [{"id": "c0"}, {"id": "c1"}],
+        },
+        family_order=("documents", "chat"),
+        limit=3,
+    )
+    assert [point["id"] for point in merged] == ["d0", "c0", "d1"]
+    assert truncated is True
+
+
+def test_merge_embedding_family_points_not_truncated_when_all_fit():
+    merged, truncated = merge_embedding_family_points(
+        {
+            "documents": [{"id": "d0"}],
+            "chat": [{"id": "c0"}],
+        },
+        family_order=("documents", "chat"),
+        limit=10,
+    )
+    assert [point["id"] for point in merged] == ["d0", "c0"]
+    assert truncated is False
 

@@ -4,6 +4,49 @@ from __future__ import annotations
 
 import torch
 
+EMBEDDING_SOURCE_FAMILIES = ("documents", "chat", "web_search", "memory")
+EMBEDDING_SOURCE_FAMILY_ALL = "all"
+
+
+def resolve_embedding_source_families(source_family: str | None) -> tuple[str, ...]:
+    """Return the embedding collections to include in a projection request."""
+    raw = (source_family or EMBEDDING_SOURCE_FAMILY_ALL).strip().lower()
+    if raw == EMBEDDING_SOURCE_FAMILY_ALL:
+        return EMBEDDING_SOURCE_FAMILIES
+    if raw in EMBEDDING_SOURCE_FAMILIES:
+        return (raw,)
+    allowed = ", ".join((EMBEDDING_SOURCE_FAMILY_ALL, *EMBEDDING_SOURCE_FAMILIES))
+    raise ValueError(f"source_family must be one of: {allowed}")
+
+
+def merge_embedding_family_points(
+    family_points: dict[str, list[dict]],
+    *,
+    family_order: tuple[str, ...],
+    limit: int,
+) -> tuple[list[dict], bool]:
+    """Interleave per-collection points so one source cannot consume the whole cap."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    buckets = [list(family_points.get(name) or []) for name in family_order]
+    fetched_full = any(len(bucket) >= limit for bucket in buckets)
+    merged: list[dict] = []
+    indexes = [0] * len(buckets)
+    while len(merged) < limit:
+        progressed = False
+        for index, bucket in enumerate(buckets):
+            if indexes[index] >= len(bucket):
+                continue
+            merged.append(bucket[indexes[index]])
+            indexes[index] += 1
+            progressed = True
+            if len(merged) >= limit:
+                break
+        if not progressed:
+            break
+    leftover = any(indexes[index] < len(buckets[index]) for index in range(len(buckets)))
+    return merged, fetched_full or leftover
+
 
 def project_embeddings_3d(vectors: list[list[float]]) -> list[tuple[float, float, float]]:
     """Project embedding vectors into normalized 3D coordinates using PyTorch PCA.
@@ -65,6 +108,8 @@ def compute_projection_edges(
     by_file: dict[str, list[dict]] = {}
     for point in points:
         file_hash = str(point.get("file_hash") or "")
+        if not file_hash:
+            continue
         by_file.setdefault(file_hash, []).append(point)
 
     for file_chunks in by_file.values():

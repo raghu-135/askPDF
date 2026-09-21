@@ -6,13 +6,13 @@ from typing import Any
 
 from sqlalchemy.future import select
 
-from app.db import ChatTurnStatus, create_chat_turn, increment_qa_stats, update_message_context_compact
+from app.db import ChatTurnStatus, create_chat_turn, increment_qa_stats
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import AgentTask, AgentTaskArtifact, ChatTurn
-from app.rag.indexer import index_chat_memory_for_thread
 from app.services import agent_task_repository as repository
 from app.services.content_store import get_content_store
+from app.services.embedding_materialization_service import index_persisted_chat_turn
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -137,27 +137,25 @@ async def _index_published_turn(
     answer: str,
     config: dict[str, Any],
 ) -> None:
-    llm_model = str(config.get("llm_model") or "").strip()
+    llm_model = str(config.get("llm_model") or "").strip() or None
     try:
         embedding_context = await require_thread_embedding_ready(task.thread_id)
     except (EmbeddingModelResolutionError, EmbeddingModelUnavailableError):
         return
-    if not llm_model or not embedding_context.embedding_model:
+    if not embedding_context.embedding_model:
         return
+    raw_window = config.get("context_window")
     try:
-        indexed = await index_chat_memory_for_thread(
+        await index_persisted_chat_turn(
             thread_id=task.thread_id,
-            message_id=turn.id,
+            turn_id=turn.id,
             question=question,
             answer=answer,
             embedding_model=embedding_context.embedding_model,
             llm_name=llm_model,
-            context_window=config.get("context_window"),
+            context_window=raw_window if isinstance(raw_window, int) else None,
             message_created_at=turn.completed_at or turn.created_at,
         )
-        compact = indexed.get("memory_compact_text") if isinstance(indexed, dict) else None
-        if compact:
-            await update_message_context_compact(turn.id, compact)
         await increment_qa_stats(task.thread_id, len(question) + len(answer))
     except Exception:
         return

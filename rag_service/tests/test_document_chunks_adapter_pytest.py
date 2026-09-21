@@ -88,3 +88,56 @@ async def test_get_thread_vector_points_includes_vectors():
 
     assert len(result) == 1
     assert result[0]["vector"] == [0.2, 0.8, 0.1]
+
+
+@pytest.mark.asyncio
+async def test_get_thread_chat_vector_points_maps_message_groups():
+    adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+    adapter.collection_manager = SimpleNamespace(
+        get_collection=AsyncMock(return_value=MagicMock()),
+    )
+
+    collection = await adapter.collection_manager.get_collection("ChatMemory", "BAAI/bge-m3")
+    collection.query.fetch_objects = MagicMock(
+        return_value=SimpleNamespace(
+            objects=[
+                SimpleNamespace(
+                    uuid="chat-uuid-1",
+                    properties={
+                        "text": "answer chunk",
+                        "message_id": "msg-1",
+                        "chunk_id": 0,
+                        "question": "What is PCA?",
+                    },
+                    vector={"default": [0.1, 0.2, 0.3]},
+                )
+            ]
+        )
+    )
+
+    result = await adapter.get_thread_chat_vector_points(
+        "BAAI/bge-m3",
+        thread_id="thread-1",
+        limit=10,
+    )
+
+    assert len(result) == 1
+    assert result[0]["source_kind"] == "chat"
+    assert result[0]["file_hash"] == "chat:msg-1"
+    assert result[0]["file_name"] == "What is PCA?"
+    assert result[0]["vector"] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.asyncio
+async def test_get_thread_memory_vector_points_empty_without_scopes():
+    adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+    adapter.collection_manager = SimpleNamespace(
+        get_collection=AsyncMock(),
+    )
+    result = await adapter.get_thread_memory_vector_points(
+        "BAAI/bge-m3",
+        scope_filters=[],
+        limit=10,
+    )
+    assert result == []
+    adapter.collection_manager.get_collection.assert_not_called()

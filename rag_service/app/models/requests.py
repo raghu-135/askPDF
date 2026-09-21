@@ -468,7 +468,7 @@ class EmbeddingProjectionEdge(BaseModel):
 
 
 class EmbeddingProjectionResponse(BaseModel):
-    """3D embedding projection for a thread's indexed document chunks."""
+    """3D embedding projection for a thread's indexed embedding collections."""
 
     thread_id: str
     embedding_model: str

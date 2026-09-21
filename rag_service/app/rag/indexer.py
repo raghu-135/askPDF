@@ -1198,21 +1198,40 @@ async def index_web_search_for_thread(
     """
     db_client = get_vector_db()
     try:
+        from app.db.vector.adapter import web_search_snippet_hash, web_search_vector_uuid
+
+        pending: List[int] = []
+        object_ids: List[str] = []
+        for index, text in enumerate(texts or []):
+            object_id = web_search_vector_uuid(
+                embedding_model,
+                thread_id,
+                web_search_snippet_hash(text),
+            )
+            object_ids.append(object_id)
+            pending.append(index)
+        existing = await db_client.existing_web_search_object_ids(embedding_model, object_ids)
+        new_indexes = [index for index in pending if object_ids[index] not in existing]
+        if not new_indexes:
+            return {"status": OperationResultStatus.SUCCESS.value, "chunks_count": 0}
+        new_texts = [texts[index] for index in new_indexes]
+        new_urls = [urls[index] for index in new_indexes] if urls else None
+        new_titles = [titles[index] for index in new_indexes] if titles else None
         web_search_performed_at_iso = iso_utc_z(web_search_performed_at)
-        vectors = await generate_embeddings(texts, embedding_model)
-        
+        vectors = await generate_embeddings(new_texts, embedding_model)
+
         # Validate vectors before indexing
         if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model):
             raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
-        
+
         indexed_count = await db_client.index_web_search_chunks(
             thread_id=thread_id,
             query=query,
-            texts=texts,
+            texts=new_texts,
             embeddings=vectors,
             embedding_model=embedding_model,
-            urls=urls,
-            titles=titles,
+            urls=new_urls,
+            titles=new_titles,
             web_search_performed_at=web_search_performed_at_iso,
         )
         return {"status": OperationResultStatus.SUCCESS.value, "chunks_count": indexed_count}
@@ -1227,8 +1246,8 @@ async def trigger_reembed_for_missing_sources(
     file_hashes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Lazy backfill for sources and chat-memory vectors missing in vector DB.
-    Called when a thread is opened.
+    Lazy backfill for document and chat-memory vectors missing in vector DB.
+    Called when a thread is opened. Does not rematerialize historical web searches.
     """
     from app.services.embedding_materialization_service import reconcile_thread_embedding_targets
     return await reconcile_thread_embedding_targets(thread_id, embedding_model, file_hashes=file_hashes)

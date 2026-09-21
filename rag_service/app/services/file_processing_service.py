@@ -248,13 +248,8 @@ async def _enqueue_document_embedding_job(
     file_name: str,
     persist_thread_state: bool,
 ) -> None:
-    from app.services.document_projection_service import (
-        DocumentConversionFailedError,
-        DocumentConversionPendingError,
-        ensure_retrieval_projection,
-        evaluate_retrieval_readiness,
-    )
-    from app.services.embedding_materialization_service import RESOURCE_DOCUMENT, ensure_embedding_job
+    from app.services.document_projection_service import DocumentConversionFailedError
+    from app.services.embedding_materialization_service import enqueue_document_embedding_if_needed
     from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError
 
     await update_indexing_status(
@@ -264,51 +259,24 @@ async def _enqueue_document_embedding_job(
         thread_id=scope_id if persist_thread_state else None,
     )
     try:
-        readiness = await evaluate_retrieval_readiness(
-            file_hash,
-            embedding_model,
+        await enqueue_document_embedding_if_needed(
+            file_hash=file_hash,
             thread_id=scope_id,
+            embedding_model=embedding_model,
+            file_name=file_name,
         )
     except EmbeddingTokenizerUnavailableError:
         raise
-    if not readiness.get("canonical_ready"):
-        try:
-            await ensure_retrieval_projection(
-                file_hash=file_hash,
-                embedding_model=embedding_model,
-                file_name=file_name,
-            )
-        except DocumentConversionPendingError:
-            return
-        except DocumentConversionFailedError as exc:
-            await update_indexing_status(
-                file_hash=file_hash,
-                status=ProcessStatus.FAILED.value,
-                embedding_model=embedding_model,
-                thread_id=scope_id if persist_thread_state else None,
-                finished_at=iso_utc_z(),
-                error=str(exc),
-            )
-            raise
-        readiness = await evaluate_retrieval_readiness(
-            file_hash,
-            embedding_model,
-            thread_id=scope_id,
+    except DocumentConversionFailedError as exc:
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.FAILED.value,
+            embedding_model=embedding_model,
+            thread_id=scope_id if persist_thread_state else None,
+            finished_at=iso_utc_z(),
+            error=str(exc),
         )
-        if not readiness.get("canonical_ready"):
-            return
-    if readiness.get("ready"):
-        return
-    if not readiness.get("source_version"):
-        raise RuntimeError(f"retrieval version is unavailable for {file_hash}")
-    await ensure_embedding_job(
-        resource_type=RESOURCE_DOCUMENT,
-        resource_id=file_hash,
-        scope_id=scope_id,
-        embedding_model=embedding_model,
-        source_version=readiness["source_version"],
-        requeue_completed=True,
-    )
+        raise
 
 
 async def _background_index(
