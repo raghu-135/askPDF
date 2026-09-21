@@ -30,7 +30,9 @@ import {
 import type { PdfTab } from '../../lib/document-tabs';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
 import {
+  Badge,
   GraphCanvas,
+  Sphere,
   darkTheme,
   lightTheme,
   useSelection,
@@ -38,6 +40,7 @@ import {
   type GraphCanvasRef,
   type GraphEdge,
   type GraphNode,
+  type NodeRendererProps,
   type Theme,
 } from 'reagraph';
 import { DoubleSide } from 'three';
@@ -352,6 +355,27 @@ export default function EmbeddingSpaceViewer({
     />
   ), [clusterFillByName]);
 
+  const renderNode = useCallback((props: NodeRendererProps) => {
+    const chunkId = props.node.data?.chunk_id;
+    return (
+      <>
+        <Sphere {...props} />
+        <Badge
+          {...props}
+          label={chunkId == null ? '?' : String(chunkId)}
+          backgroundColor={isDark ? '#111827' : '#ffffff'}
+          textColor={isDark ? '#f9fafb' : '#111827'}
+          strokeColor={typeof props.color === 'string' ? props.color : undefined}
+          strokeWidth={0.035}
+          badgeSize={0.75}
+          fontSize={0.34}
+          fontWeight={700}
+          position="top-right"
+        />
+      </>
+    );
+  }, [isDark]);
+
   const graphTheme: Theme = useMemo(() => {
     const base = isDark ? darkTheme : lightTheme;
     return {
@@ -607,6 +631,7 @@ export default function EmbeddingSpaceViewer({
               onCanvasClick={onCanvasClick}
               theme={graphTheme}
               onRenderCluster={showClusters ? renderCluster : undefined}
+              renderNode={renderNode}
             />
           )}
         </Box>
