@@ -1,7 +1,6 @@
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { EMBEDDINGS_TAB_ID, PROJECT_OVERVIEW_TAB_ID, isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
-import EmbeddingSpaceViewer from '../embeddings/EmbeddingSpaceViewer';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import ResearchCanvasWorkspace from './ResearchCanvasWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
@@ -14,6 +13,7 @@ import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
 import { RESEARCH_CANVAS_TAB_ID } from '../../lib/canvas-spec';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
+const EmbeddingSpaceViewer = dynamic(() => import('../embeddings/EmbeddingSpaceViewer'), { ssr: false });
 
 export default function ThreadWorkspaceContent({
   activeTabId,

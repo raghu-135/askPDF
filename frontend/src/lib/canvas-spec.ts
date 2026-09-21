@@ -90,6 +90,8 @@ export type CanvasRef = {
 export type DocumentCanvasCitationTarget = {
   fileHash: string;
   sentenceId: number | null;
+  /** When false, open and highlight the sentence without starting TTS. */
+  play?: boolean;
 };
 
 export const documentCitationTarget = (

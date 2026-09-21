@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
 import {
   Alert,
   Box,
@@ -16,6 +15,7 @@ import {
   Stack,
   Switch,
   TextField,
+  Tooltip,
   Typography,
   useTheme,
 } from '@mui/material';
@@ -29,20 +29,19 @@ import {
 } from '../../lib/embedding-projection';
 import type { PdfTab } from '../../lib/document-tabs';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
-import type {
-  GraphCanvasRef,
-  GraphEdge,
-  GraphNode,
-  InternalGraphNode,
-  Theme,
+import {
+  GraphCanvas,
+  Sphere,
+  darkTheme,
+  lightTheme,
+  useSelection,
+  type GraphCanvasRef,
+  type GraphEdge,
+  type GraphNode,
+  type NodeRendererProps,
+  type Theme,
 } from 'reagraph';
-import { darkTheme, lightTheme } from 'reagraph';
-
-// Reagraph is WebGL / Three.js based and must not run in Node SSR
-const GraphCanvas = dynamic(
-  () => import('reagraph').then((mod) => mod.GraphCanvas),
-  { ssr: false },
-) as React.ComponentType<any>;
+import { assignDocumentColors, chunkGraphLabel } from './document-colors';
 
 type ColorMode = 'document' | 'kind';
 
@@ -53,15 +52,6 @@ function pageLabel(point: EmbeddingPoint3D): string {
   }
   if (point.pages) return `pages ${point.pages}`;
   return '';
-}
-
-function hashColor(seed: string): string {
-  let hash = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = seed.charCodeAt(index) + ((hash << 5) - hash);
-  }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue} 65% 52%)`;
 }
 
 function kindColor(point: EmbeddingPoint3D): string {
@@ -93,12 +83,11 @@ export default function EmbeddingSpaceViewer({
   const [searchFilter, setSearchFilter] = useState('');
   const [showSequenceEdges, setShowSequenceEdges] = useState(true);
   const [showSimilarityEdges, setShowSimilarityEdges] = useState(true);
+  const [clusterOverride, setClusterOverride] = useState<boolean | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const clearSelectionsRef = useRef<() => void>(() => {});
 
-  const documentColors = useMemo(
-    () => Object.fromEntries(documents.map((doc) => [doc.fileHash, hashColor(doc.fileHash)])),
-    [documents],
-  );
+  const isDark = muiTheme.palette.mode === 'dark';
 
   const loadProjection = useCallback(async () => {
     setLoading(true);
@@ -113,6 +102,7 @@ export default function EmbeddingSpaceViewer({
       setTruncated(response.truncated);
       setEmbeddingModel(response.embedding_model);
       setSelectedNodeId(null);
+      clearSelectionsRef.current();
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load embedding projection');
       setPoints([]);
@@ -143,25 +133,79 @@ export default function EmbeddingSpaceViewer({
     [visiblePoints],
   );
 
+  const documentColorOrder = useMemo(() => {
+    const hashes = [
+      ...documents.map((doc) => doc.fileHash),
+      ...visiblePoints.map((point) => point.file_hash),
+    ];
+    return hashes;
+  }, [documents, visiblePoints]);
+
+  const documentColors = useMemo(
+    () => assignDocumentColors(documentColorOrder, isDark ? 'dark' : 'light'),
+    [documentColorOrder, isDark],
+  );
+
+  const clusterNames = useMemo(() => {
+    const labels = new Map<string, string>();
+    const used = new Set<string>();
+    const sources: Array<{ hash: string; name: string }> = [
+      ...documents.map((doc) => ({ hash: doc.fileHash, name: doc.fileName })),
+      ...visiblePoints.map((point) => ({
+        hash: point.file_hash,
+        name: point.file_name || point.file_hash.slice(0, 8),
+      })),
+    ];
+    for (const source of sources) {
+      if (labels.has(source.hash)) continue;
+      let label = source.name.trim() || source.hash.slice(0, 8);
+      if (label.length > 28) label = `${label.slice(0, 27)}…`;
+      if (used.has(label)) {
+        label = `${label} · ${source.hash.slice(0, 4)}`;
+      }
+      used.add(label);
+      labels.set(source.hash, label);
+    }
+    return labels;
+  }, [documents, visiblePoints]);
+
+  const uniqueVisibleHashes = useMemo(() => {
+    const hashes: string[] = [];
+    const seen = new Set<string>();
+    for (const point of visiblePoints) {
+      if (seen.has(point.file_hash)) continue;
+      seen.add(point.file_hash);
+      hashes.push(point.file_hash);
+    }
+    return hashes;
+  }, [visiblePoints]);
+
+  const showClusters = clusterOverride ?? uniqueVisibleHashes.length > 1;
+
   const nodes: GraphNode[] = useMemo(() => {
     return visiblePoints.map((point) => {
       const fill = colorMode === 'kind'
         ? kindColor(point)
-        : (documentColors[point.file_hash] || hashColor(point.file_hash));
+        : (documentColors[point.file_hash] || documentColors[uniqueVisibleHashes[0]] || '#3b82f6');
       const pageStr = pageLabel(point);
+      const cluster = clusterNames.get(point.file_hash) || point.file_hash;
       return {
         id: point.id,
-        label: `${point.file_name || point.file_hash.slice(0, 8)} · chunk ${point.chunk_id ?? '?'}`,
+        label: chunkGraphLabel(point.file_name, point.file_hash, point.chunk_id),
         subLabel: pageStr || undefined,
         fill,
-        size: 9,
-        data: point,
+        cluster,
+        data: {
+          ...point,
+          charCount: point.text.length,
+          cluster,
+        },
         fx: typeof point.x === 'number' ? point.x * 250 : undefined,
         fy: typeof point.y === 'number' ? point.y * 250 : undefined,
         fz: typeof point.z === 'number' ? point.z * 250 : undefined,
       };
     });
-  }, [colorMode, documentColors, visiblePoints]);
+  }, [clusterNames, colorMode, documentColors, uniqueVisibleHashes, visiblePoints]);
 
   const graphEdges: GraphEdge[] = useMemo(() => {
     return edges
@@ -182,23 +226,46 @@ export default function EmbeddingSpaceViewer({
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          label: isSequence ? 'next' : (edge.label || undefined),
-          size: isSequence ? 1.5 : 2.5,
+          size: isSequence ? 0.45 : 0.7,
           fill: color,
           arrowPlacement: 'end' as const,
           dashed: !isSequence,
+          dashArray: isSequence ? undefined : ([5, 4] as [number, number]),
         };
       });
   }, [edges, muiTheme.palette.mode, showSequenceEdges, showSimilarityEdges, visiblePointIds]);
+
+  const {
+    selections,
+    actives,
+    onNodeClick,
+    onCanvasClick,
+    clearSelections,
+  } = useSelection({
+    ref: graphRef,
+    nodes,
+    edges: graphEdges,
+    type: 'single',
+    pathHoverType: 'direct',
+    pathSelectionType: 'out',
+    focusOnSelect: 'singleOnly',
+    onSelection: (ids) => {
+      const nodeId = ids.find((id) => visiblePointIds.has(id)) ?? null;
+      setSelectedNodeId(nodeId);
+    },
+  });
+
+  clearSelectionsRef.current = clearSelections;
+
+  const handleNodeClick = useCallback((node: GraphNode) => {
+    setSelectedNodeId(node.id);
+    onNodeClick?.(node);
+  }, [onNodeClick]);
 
   const selectedPoint = useMemo(() => {
     if (!selectedNodeId) return null;
     return points.find((point) => point.id === selectedNodeId) || null;
   }, [points, selectedNodeId]);
-
-  const handleNodeClick = useCallback((node: InternalGraphNode) => {
-    setSelectedNodeId(node.id);
-  }, []);
 
   const handleJumpToDocument = (point: EmbeddingPoint3D) => {
     if (!onOpenDocumentCitation) return;
@@ -211,27 +278,66 @@ export default function EmbeddingSpaceViewer({
     onOpenDocumentCitation({
       fileHash: point.file_hash,
       sentenceId: sentence?.id ?? null,
+      play: false,
     });
   };
 
   const handleFitView = useCallback(() => {
-    if (graphRef.current) {
-      const controls = graphRef.current.getControls?.();
-      controls?.reset?.(true);
-    }
+    graphRef.current?.fitNodesInView?.();
   }, []);
 
-  const isDark = muiTheme.palette.mode === 'dark';
+  const handleDocumentChipClick = useCallback((hash: string) => {
+    setFileHashFilter((current) => (current === hash ? '' : hash));
+  }, []);
+
   const graphTheme: Theme = useMemo(() => {
     const base = isDark ? darkTheme : lightTheme;
     return {
       ...base,
       canvas: {
         ...base.canvas,
-        background: isDark ? '#0b0f19' : '#f8fafc',
+        background: muiTheme.palette.background.default,
+      },
+      node: {
+        ...base.node,
+        opacity: 0.96,
+        selectedOpacity: 1,
+        inactiveOpacity: 0.22,
+      },
+      edge: {
+        ...base.edge,
+        opacity: 0.42,
+        selectedOpacity: 0.95,
+        inactiveOpacity: 0.08,
       },
     };
-  }, [isDark]);
+  }, [isDark, muiTheme.palette.background.default]);
+
+  const renderNode = useCallback(
+    (props: NodeRendererProps) => <Sphere {...props} selected={false} />,
+    [],
+  );
+
+  const legendItems = useMemo(() => {
+    const hashes: string[] = [];
+    const seen = new Set<string>();
+    const addHash = (hash: string | undefined) => {
+      if (!hash || seen.has(hash)) return;
+      seen.add(hash);
+      hashes.push(hash);
+    };
+    documents.forEach((doc) => addHash(doc.fileHash));
+    points.forEach((point) => addHash(point.file_hash));
+    return hashes.map((hash) => {
+      const documentTab = documents.find((doc) => doc.fileHash === hash);
+      const sample = points.find((point) => point.file_hash === hash);
+      return {
+        hash,
+        label: documentTab?.fileName || sample?.file_name || hash.slice(0, 8),
+        fill: documentColors[hash],
+      };
+    });
+  }, [documentColors, documents, points]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -312,6 +418,17 @@ export default function EmbeddingSpaceViewer({
           label={<Typography variant="caption">Similarity</Typography>}
         />
 
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={showClusters}
+              onChange={(e) => setClusterOverride(e.target.checked)}
+            />
+          }
+          label={<Typography variant="caption">Clusters</Typography>}
+        />
+
         <Button
           size="small"
           variant="outlined"
@@ -331,6 +448,45 @@ export default function EmbeddingSpaceViewer({
         </Button>
       </Stack>
 
+      {legendItems.length > 0 ? (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          flexWrap="wrap"
+          sx={{ px: 1.5, py: 0.75, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}
+        >
+          {legendItems.map((item) => {
+            const selected = fileHashFilter === item.hash;
+            const dimmed = Boolean(fileHashFilter) && !selected;
+            return (
+              <Tooltip
+                key={item.hash}
+                title={selected ? 'Show all documents' : `Show only ${item.label}`}
+              >
+                <Chip
+                  size="small"
+                  clickable
+                  aria-pressed={selected}
+                  label={item.label}
+                  onClick={() => handleDocumentChipClick(item.hash)}
+                  sx={{
+                    bgcolor: item.fill,
+                    color: isDark ? '#0b1220' : '#fff',
+                    fontWeight: 600,
+                    maxWidth: 220,
+                    opacity: dimmed ? 0.42 : 1,
+                    outline: selected ? '2px solid' : 'none',
+                    outlineColor: 'text.primary',
+                    outlineOffset: 1,
+                  }}
+                />
+              </Tooltip>
+            );
+          })}
+        </Stack>
+      ) : null}
+
       {embeddingModel ? (
         <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, bgcolor: 'background.default' }}>
           Model: <strong>{embeddingModel}</strong>
@@ -340,7 +496,7 @@ export default function EmbeddingSpaceViewer({
       ) : null}
 
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}>
-        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', bgcolor: isDark ? '#0f172a' : '#f8fafc' }}>
+        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', bgcolor: 'background.default' }}>
           {loading ? (
             <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}>
               <CircularProgress />
@@ -362,9 +518,18 @@ export default function EmbeddingSpaceViewer({
               edges={graphEdges}
               layoutType="forceDirected3d"
               cameraMode="rotate"
-              selections={selectedNodeId ? [selectedNodeId] : []}
+              sizingType="attribute"
+              sizingAttribute="charCount"
+              minNodeSize={5}
+              maxNodeSize={14}
+              clusterAttribute={showClusters ? 'cluster' : undefined}
+              labelType="auto"
+              selections={selections}
+              actives={actives}
               onNodeClick={handleNodeClick}
+              onCanvasClick={onCanvasClick}
               theme={graphTheme}
+              renderNode={renderNode}
             />
           )}
         </Box>
@@ -385,7 +550,15 @@ export default function EmbeddingSpaceViewer({
               <Stack spacing={1}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Chunk details</Typography>
-                  <Button size="small" onClick={() => setSelectedNodeId(null)}>Close</Button>
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setSelectedNodeId(null);
+                      clearSelections();
+                    }}
+                  >
+                    Close
+                  </Button>
                 </Stack>
                 <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                   <Chip size="small" label={selectedPoint.file_name || selectedPoint.file_hash.slice(0, 10)} />
@@ -424,6 +597,7 @@ export default function EmbeddingSpaceViewer({
                     x: selectedPoint.x,
                     y: selectedPoint.y,
                     z: selectedPoint.z,
+                    char_count: selectedPoint.text.length,
                   }}
                   maxHeight={160}
                 />

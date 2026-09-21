@@ -747,7 +747,9 @@ export default function Home() {
     setActiveSource('pdf');
     if (target.sentenceId != null) {
       setCurrentPdfId(target.sentenceId);
-      setPlayRequestId(target.sentenceId);
+      if (target.play !== false) {
+        setPlayRequestId(target.sentenceId);
+      }
     }
   }, [pdfTabs, rememberNonMemoryTab]);
 
