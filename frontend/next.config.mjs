@@ -17,6 +17,10 @@ const nextConfig = {
     optimizePackageImports: ['@mui/material', '@mui/icons-material', '@embedpdf/core'],
   },
   transpilePackages: [
+    'reagraph',
+    'three',
+    '@react-three/fiber',
+    '@react-three/drei',
     '@embedpdf/core',
     '@embedpdf/engines',
     '@embedpdf/models',

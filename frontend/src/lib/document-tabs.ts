@@ -38,6 +38,7 @@ export const traceWorkspaceStatus = (
 };
 
 export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
+export const EMBEDDINGS_TAB_ID = 'embeddings-tab' as const;
 
 export const isBrowserWorkspaceActive = ({
   activeTabId,
@@ -78,6 +79,11 @@ export const buildDocumentWorkspaceTabs = ({
       count: canvasCount,
     } satisfies ResearchCanvasWorkspaceTab);
   }
+  tabs.push({
+    kind: 'embeddings',
+    id: EMBEDDINGS_TAB_ID,
+    label: 'Embeddings',
+  });
   tabs.push({
     kind: 'trace',
     id: 'trace-tab',

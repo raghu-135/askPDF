@@ -31,6 +31,7 @@ import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import ErrorIcon from '@mui/icons-material/Error';
 import ReplayIcon from '@mui/icons-material/Replay';
 import DataObjectIcon from '@mui/icons-material/DataObject';
+import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import { truncateFileName } from '../../lib/pdf-utils';
 import type { BackendSentence, BBox } from '../../lib/bbox-derivation';
 import {
@@ -72,7 +73,12 @@ export type TraceWorkspaceTab = {
   status?: 'idle' | 'running' | 'failed' | 'review';
   count?: number;
 };
-export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | ProjectWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | ResearchCanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
+export type EmbeddingsWorkspaceTab = {
+  kind: 'embeddings';
+  id: 'embeddings-tab';
+  label: string;
+};
+export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | ProjectWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | ResearchCanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab | EmbeddingsWorkspaceTab;
 
 const statusColor = (status?: TraceWorkspaceTab['status']) => {
   if (status === 'failed') return 'error';
@@ -147,7 +153,7 @@ export default React.memo(function WorkspaceTabs({
     tooltip,
     label,
   }: {
-    tab: BrowserWorkspaceTab | MemoryWorkspaceTab | TraceWorkspaceTab | ResearchCanvasWorkspaceTab;
+    tab: BrowserWorkspaceTab | MemoryWorkspaceTab | TraceWorkspaceTab | ResearchCanvasWorkspaceTab | EmbeddingsWorkspaceTab;
     icon: React.ReactElement;
     tooltip: string;
     label?: string | React.ReactElement;
@@ -270,6 +276,13 @@ export default React.memo(function WorkspaceTabs({
               tab,
               icon: <Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><BugReportIcon fontSize="small" /></Badge>,
               tooltip: 'Debug Trace',
+            });
+          }
+          if (tab.kind === 'embeddings') {
+            return renderSystemTab({
+              tab,
+              icon: <ScatterPlotIcon fontSize="small" />,
+              tooltip: 'Embeddings',
             });
           }
           if (tab.kind === 'browser') {

@@ -9,7 +9,7 @@ this page documents the stable endpoint groups and important behavior.
 | Group | Examples |
 | --- | --- |
 | Projects | GET/POST /api/projects, clone, lifecycle, project threads |
-| Threads | GET/POST /api/threads, fork, settings, indexing status |
+| Threads | GET/POST /api/threads, fork, settings, indexing status, embeddings projection |
 | Files | upload, attach, download, parse status, chunks inspection, delete, annotations |
 | Chat | POST /api/threads/{thread_id}/chat |
 | Canvases | POST/GET /api/threads/{thread_id}/canvases |
@@ -23,6 +23,15 @@ this page documents the stable endpoint groups and important behavior.
 | Models | model list and chat/embedding health |
 | Tools | tool contract discovery |
 | Operations | /health, /ready |
+
+## Embeddings projection
+
+GET /api/threads/{thread_id}/embeddings-projection returns 3D-projected
+document chunk embeddings along with sequential and semantic similarity edges
+for the thread workspace viewer. Optional query parameters: `file_hash`,
+`source_kind`, and `limit` (default 300, max 1000).
+
+The implementation is in rag_service/app/api/threads.py.
 
 ## Chat
 

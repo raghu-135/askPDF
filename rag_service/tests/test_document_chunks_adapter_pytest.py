@@ -53,3 +53,38 @@ async def test_get_document_chunks_for_file_returns_sorted_page():
     assert result["limit"] == 50
     assert [chunk["chunk_id"] for chunk in result["chunks"]] == [0, 1]
     assert result["chunks"][1]["metadata"]["chunking_fingerprint"] == "fp"
+
+
+@pytest.mark.asyncio
+async def test_get_thread_vector_points_includes_vectors():
+    adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+    adapter.collection_manager = SimpleNamespace(
+        get_collection=AsyncMock(return_value=MagicMock()),
+    )
+
+    collection = await adapter.collection_manager.get_collection("Document", "BAAI/bge-m3")
+    collection.query.fetch_objects = MagicMock(
+        return_value=SimpleNamespace(
+            objects=[
+                SimpleNamespace(
+                    properties={
+                        "text": "chunk",
+                        "file_hash": "fh1",
+                        "chunk_id": 0,
+                        "metadata_json": "{}",
+                        "source_id": "src-0",
+                    },
+                    vector={"default": [0.2, 0.8, 0.1]},
+                )
+            ]
+        )
+    )
+
+    result = await adapter.get_thread_vector_points(
+        "BAAI/bge-m3",
+        file_hashes=["fh1"],
+        limit=10,
+    )
+
+    assert len(result) == 1
+    assert result[0]["vector"] == [0.2, 0.8, 0.1]

@@ -36,6 +36,7 @@
     "react-dom": "^19.2.5",
     "react-json-view-lite": "^2.5.0",
     "react-markdown": "^10.1.0",
+    "reagraph": "^4.32.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {

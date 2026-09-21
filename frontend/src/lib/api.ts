@@ -190,6 +190,8 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
 
 export type { FileChunksResponse, VectorChunk } from './file-chunks-url';
 export { buildFileChunksUrl, getFileChunks } from './file-chunks-url';
+export type { EmbeddingPoint3D, EmbeddingProjectionEdge, EmbeddingProjectionResponse } from './embedding-projection';
+export { getThreadEmbeddingProjection } from './embedding-projection';
 
 // ============ Thread API ============
 

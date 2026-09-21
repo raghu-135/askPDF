@@ -903,6 +903,7 @@ export default function Home() {
               onActiveCanvasChange={setActiveCanvasId}
               onOpenDocumentCitation={handleOpenDocumentCitation}
               canvasRefreshVersion={canvasRefreshVersion}
+              documents={pdfTabs}
               activeProject={activeProject}
               projectInventoryVersion={sidebarVersion}
               curatorRefreshVersion={memoryRefreshVersion}

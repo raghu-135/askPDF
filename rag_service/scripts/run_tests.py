@@ -76,6 +76,7 @@ UNIT_TEST_FILES = [
     "test_message_api_pytest.py",
     "test_model_aware_collections.py",
     "test_document_chunks_adapter_pytest.py",
+    "test_embedding_projection_service_pytest.py",
     "test_model_registry_edge_cases.py",
     "test_modular_visualization_pytest.py",
     "test_parsing_pytest.py",
@@ -128,6 +129,7 @@ API_TEST_FILES = [
     "test_api_endpoints_pytest.py",
     "test_api_integration_pytest.py",
     "test_file_chunks_api_pytest.py",
+    "test_embedding_projection_api_pytest.py",
     "test_project_lifecycle_api_pytest.py",
 ]
 

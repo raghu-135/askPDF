@@ -25,7 +25,7 @@ test('trace workspace status prefers failed over running over idle', () => {
   assert.equal(traceWorkspaceStatus([{ running: true }, { error: 'boom' }]), 'failed');
 });
 
-test('document workspace tabs include memory, browser, documents, canvas, and debug trace', () => {
+test('document workspace tabs include memory, browser, documents, canvas, embeddings, and debug trace', () => {
   const tabs = buildDocumentWorkspaceTabs({
     enabled: true,
     documents: [document],
@@ -34,15 +34,19 @@ test('document workspace tabs include memory, browser, documents, canvas, and de
     canvasCount: 2,
   });
 
-  assert.deepEqual(tabs.map((tab) => tab.kind), ['memory', 'browser', 'document', 'research_canvas', 'trace']);
+  assert.deepEqual(
+    tabs.map((tab) => tab.kind),
+    ['memory', 'browser', 'document', 'research_canvas', 'embeddings', 'trace'],
+  );
   assert.equal(tabs[0].id, 'memory-tab');
   assert.equal(tabs[1].id, 'browser-tab');
   assert.equal(tabs[2].id, 'file-1');
   assert.equal(tabs[3].id, 'research-canvas-tab');
   assert.equal(tabs[3].count, 2);
-  assert.equal(tabs[4].id, 'trace-tab');
-  assert.equal(tabs[4].status, 'running');
-  assert.equal(tabs[4].count, 1);
+  assert.equal(tabs[4].id, 'embeddings-tab');
+  assert.equal(tabs[5].id, 'trace-tab');
+  assert.equal(tabs[5].status, 'running');
+  assert.equal(tabs[5].count, 1);
 });
 
 test('document workspace tabs are empty when disabled', () => {

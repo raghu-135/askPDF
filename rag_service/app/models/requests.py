@@ -435,3 +435,44 @@ class ProcessPdfRequest(BaseModel):
     file_hash: str
     file_name: str
     backend_url: str
+
+
+class EmbeddingProjectionPoint(BaseModel):
+    """One projected embedding point for visualization."""
+
+    id: str
+    x: float
+    y: float
+    z: float
+    chunk_id: Optional[int] = None
+    file_hash: str
+    file_name: Optional[str] = None
+    text: str
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    pages: Optional[str] = None
+    source_kind: Optional[str] = None
+    table_id: Optional[str] = None
+    section_id: Optional[str] = None
+
+
+class EmbeddingProjectionEdge(BaseModel):
+    """A directed edge representing reading sequence or semantic similarity."""
+
+    id: str
+    source: str
+    target: str
+    label: Optional[str] = None
+    kind: str  # "sequence" | "similarity"
+    score: Optional[float] = None
+
+
+class EmbeddingProjectionResponse(BaseModel):
+    """3D embedding projection for a thread's indexed document chunks."""
+
+    thread_id: str
+    embedding_model: str
+    point_count: int
+    truncated: bool
+    points: List[EmbeddingProjectionPoint]
+    edges: List[EmbeddingProjectionEdge] = Field(default_factory=list)

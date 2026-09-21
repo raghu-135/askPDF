@@ -14,6 +14,7 @@ Endpoints:
 - PUT /api/threads/{thread_id}/settings - Update thread settings
 - DELETE /api/threads/{thread_id} - Delete thread
 - GET /api/threads/{thread_id}/indexing/status - Get thread indexing status
+- GET /api/threads/{thread_id}/embeddings-projection - Get 3D embedding projection
 """
 
 import asyncio
@@ -58,7 +59,11 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import check_embedding_model_ready, merge_thread_settings
+from app.db.vector.config import VectorDBQueryError
 from app.models.requests import (
+    EmbeddingProjectionEdge,
+    EmbeddingProjectionPoint,
+    EmbeddingProjectionResponse,
     PromptDefaults,
     PromptPreviewRequest,
     ThreadBulkDeleteRequest,
@@ -71,6 +76,12 @@ from app.models.requests import (
     ThreadUpdateRequest,
     ToolCatalogEntry,
 )
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
+from app.services.embedding_projection_service import compute_projection_edges, project_embeddings_3d
 from app.rag.indexer import trigger_reembed_for_missing_sources
 from app.services.file_cleanup_service import cleanup_detached_file
 from app.services.memory_service import hard_delete_thread_memory_resources
@@ -83,6 +94,9 @@ from app.services.thread_management_service import (
 )
 
 router = APIRouter(tags=["threads"])
+
+EMBEDDING_PROJECTION_DEFAULT_LIMIT = 300
+EMBEDDING_PROJECTION_MAX_LIMIT = 1000
 
 
 async def _settings_workflow_supports_replans(settings: dict) -> bool:
@@ -402,6 +416,108 @@ async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/threads/{thread_id}/embeddings-projection", response_model=EmbeddingProjectionResponse)
+async def get_thread_embeddings_projection_endpoint(
+    thread_id: str,
+    file_hash: Optional[str] = None,
+    source_kind: Optional[str] = None,
+    limit: int = EMBEDDING_PROJECTION_DEFAULT_LIMIT,
+):
+    """Return 3D-projected document chunk embeddings for the thread workspace viewer."""
+    if limit <= 0 or limit > EMBEDDING_PROJECTION_MAX_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {EMBEDDING_PROJECTION_MAX_LIMIT}",
+        )
+    try:
+        context = await require_thread_embedding_ready(thread_id)
+        files = await get_effective_thread_files(thread_id)
+        file_name_lookup = {
+            file.file_hash: getattr(file, "file_name", None) or file.file_hash
+            for file in files
+        }
+        accessible_hashes = list(file_name_lookup.keys())
+        if not accessible_hashes:
+            return EmbeddingProjectionResponse(
+                thread_id=thread_id,
+                embedding_model=context.embedding_model,
+                point_count=0,
+                truncated=False,
+                points=[],
+            )
+
+        target_hashes = accessible_hashes
+        if file_hash:
+            if file_hash not in file_name_lookup:
+                raise HTTPException(status_code=404, detail="File is not accessible to this thread")
+            target_hashes = [file_hash]
+
+        db = get_vector_db()
+        raw_points = await db.get_thread_vector_points(
+            context.embedding_model,
+            file_hashes=target_hashes,
+            source_kind=source_kind,
+            limit=limit,
+        )
+        vectors = [point["vector"] for point in raw_points]
+        coordinates = project_embeddings_3d(vectors)
+        response_points = [
+            EmbeddingProjectionPoint(
+                id=str(point["id"]),
+                x=coords[0],
+                y=coords[1],
+                z=coords[2],
+                chunk_id=point.get("chunk_id"),
+                file_hash=str(point.get("file_hash") or ""),
+                file_name=file_name_lookup.get(str(point.get("file_hash") or "")),
+                text=str(point.get("text") or ""),
+                page_start=point.get("page_start"),
+                page_end=point.get("page_end"),
+                pages=point.get("pages"),
+                source_kind=point.get("source_kind"),
+                table_id=point.get("table_id"),
+                section_id=point.get("section_id"),
+            )
+            for point, coords in zip(raw_points, coordinates)
+        ]
+        raw_edges = compute_projection_edges(raw_points, vectors)
+        response_edges = [
+            EmbeddingProjectionEdge(
+                id=edge["id"],
+                source=edge["source"],
+                target=edge["target"],
+                label=edge.get("label"),
+                kind=edge["kind"],
+                score=edge.get("score"),
+            )
+            for edge in raw_edges
+        ]
+        return EmbeddingProjectionResponse(
+            thread_id=thread_id,
+            embedding_model=context.embedding_model,
+            point_count=len(response_points),
+            truncated=len(response_points) >= limit,
+            points=response_points,
+            edges=response_edges,
+        )
+    except HTTPException:
+        raise
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "embedding_model_unavailable", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VectorDBQueryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/threads/{thread_id}")

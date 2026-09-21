@@ -1,6 +1,7 @@
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
-import { PROJECT_OVERVIEW_TAB_ID, isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
+import { EMBEDDINGS_TAB_ID, PROJECT_OVERVIEW_TAB_ID, isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
+import EmbeddingSpaceViewer from '../embeddings/EmbeddingSpaceViewer';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import ResearchCanvasWorkspace from './ResearchCanvasWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
@@ -49,6 +50,7 @@ export default function ThreadWorkspaceContent({
   onActiveCanvasChange,
   onOpenDocumentCitation,
   canvasRefreshVersion = 0,
+  documents = [],
 }: {
   activeTabId: string | null;
   activeDocument: PdfTab | null;
@@ -84,6 +86,7 @@ export default function ThreadWorkspaceContent({
   onActiveCanvasChange?: (canvasId: string) => void;
   onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
   canvasRefreshVersion?: number;
+  documents?: readonly PdfTab[];
 }) {
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -118,6 +121,18 @@ export default function ThreadWorkspaceContent({
           onOpenDocumentCitation={onOpenDocumentCitation}
           refreshVersion={canvasRefreshVersion}
         />
+      ) : activeTabId === EMBEDDINGS_TAB_ID ? (
+        threadId ? (
+          <EmbeddingSpaceViewer
+            threadId={threadId}
+            documents={documents || []}
+            onOpenDocumentCitation={onOpenDocumentCitation}
+          />
+        ) : (
+          <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 4 }}>
+            <Typography color="text.secondary">Select a thread to inspect embeddings.</Typography>
+          </Box>
+        )
       ) : activeTabId === 'trace-tab' ? (
         <TraceWorkspace
           tabs={traceTabs}

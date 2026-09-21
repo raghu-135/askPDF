@@ -1154,6 +1154,90 @@ class WeaviateAdapter:
             "chunks": chunks,
         }
 
+    @staticmethod
+    def _extract_object_vector(obj: Any) -> List[float]:
+        raw = getattr(obj, "vector", None)
+        if raw is None:
+            return []
+        if isinstance(raw, dict):
+            if "default" in raw:
+                return [float(value) for value in raw["default"]]
+            first = next(iter(raw.values()), None)
+            if isinstance(first, list):
+                return [float(value) for value in first]
+            return []
+        if isinstance(raw, list):
+            return [float(value) for value in raw]
+        return []
+
+    async def get_thread_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        file_hashes: List[str],
+        source_kind: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch document chunk vectors and metadata for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not file_hashes:
+            return []
+
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+        filt = wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+        if source_kind:
+            filt = filt & wvc.query.Filter.by_property("source_kind").equal(source_kind)
+
+        try:
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filt,
+                limit=limit,
+                include_vector=True,
+            )
+        except WeaviateBaseError as exc:
+            logger.error("Failed to fetch thread vector points: %s", exc)
+            raise VectorDBQueryError("Could not fetch thread vector points") from exc
+
+        points: List[Dict[str, Any]] = []
+        for obj in response.objects:
+            record = self._document_chunk_record(obj)
+            vector = self._extract_object_vector(obj)
+            if not vector:
+                continue
+            point_id = str(
+                record.get("source_id")
+                or record.get("chunk_identity")
+                or f"{record.get('file_hash')}:{record.get('chunk_id')}"
+            )
+            points.append(
+                {
+                    "id": point_id,
+                    "vector": vector,
+                    "chunk_id": record.get("chunk_id"),
+                    "file_hash": record.get("file_hash"),
+                    "text": record.get("text", ""),
+                    "page_start": record.get("page_start"),
+                    "page_end": record.get("page_end"),
+                    "pages": record.get("pages"),
+                    "source_kind": record.get("source_kind"),
+                    "table_id": record.get("table_id"),
+                    "section_id": record.get("section_id"),
+                    "title": record.get("title"),
+                    "metadata": record.get("metadata") or {},
+                }
+            )
+
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
     async def search_chat_memory(
         self,
         thread_id: str,
