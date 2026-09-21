@@ -32,7 +32,7 @@ import {
   getRouteLabelsForFunction,
 } from '../../lib/agent-workflow-builder';
 import type { BuilderSelection } from './types';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
+import { JsonPreview } from '../inspector/JsonPreview';
 
 const asArrayValue = (value: unknown): string[] => (
   Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean)

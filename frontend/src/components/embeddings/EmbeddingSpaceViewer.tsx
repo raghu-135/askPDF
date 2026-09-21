@@ -5,7 +5,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Collapse,
   FormControl,
   FormControlLabel,
   IconButton,
@@ -24,8 +23,12 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
-import { ConversationDisclosure } from '../conversation/ConversationDisclosure';
+import {
+  ChunkIdentityChips,
+  ChunkInspectorBody,
+  OverlayResizablePanel,
+} from '../inspector';
+import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import {
   getThreadEmbeddingProjection,
   type EmbeddingPoint3D,
@@ -34,6 +37,7 @@ import {
 } from '../../lib/embedding-projection';
 import type { PdfTab } from '../../lib/document-tabs';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
+import { chunkPageLabel } from '../../lib/chunk-page-label';
 import {
   Badge,
   GraphCanvas,
@@ -102,15 +106,6 @@ function ClusterHull({
   );
 }
 
-function pageLabel(point: EmbeddingPoint3D): string {
-  if (point.page_start != null) {
-    const end = point.page_end ?? point.page_start;
-    return point.page_start === end ? `p. ${point.page_start}` : `p. ${point.page_start}-${end}`;
-  }
-  if (point.pages) return `pages ${point.pages}`;
-  return '';
-}
-
 function kindColor(point: EmbeddingPoint3D): string {
   if (point.source_kind === 'chat') return '#14b8a6';
   if (point.source_kind === 'web_search') return '#22c55e';
@@ -136,6 +131,12 @@ export default function EmbeddingSpaceViewer({
 }) {
   const muiTheme = useTheme();
   const graphRef = useRef<GraphCanvasRef | null>(null);
+  const graphAreaRef = useRef<HTMLDivElement | null>(null);
+  const { ratio: detailsPanelRatio, resizing: detailsPanelResizing, onResizeStart: onDetailsPanelResizeStart } = useResizablePanelRatio(
+    graphAreaRef,
+    0.42,
+    { min: 0.18, max: 0.65 },
+  );
 
   const [points, setPoints] = useState<EmbeddingPoint3D[]>([]);
   const [edges, setEdges] = useState<EmbeddingProjectionEdge[]>([]);
@@ -265,7 +266,7 @@ export default function EmbeddingSpaceViewer({
       const fill = colorMode === 'kind'
         ? kindColor(point)
         : (documentColors[point.file_hash] || documentColors[uniqueVisibleHashes[0]] || '#3b82f6');
-      const pageStr = pageLabel(point);
+      const pageStr = chunkPageLabel(point);
       const cluster = clusterNames.get(point.file_hash) || point.file_hash;
       return {
         id: point.id,
@@ -679,7 +680,7 @@ export default function EmbeddingSpaceViewer({
       ) : null}
 
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative', overflow: 'hidden' }}>
-        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', overflow: 'hidden', bgcolor: 'background.default' }}>
+        <Box ref={graphAreaRef} sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', overflow: 'hidden', bgcolor: 'background.default' }}>
           {graphCanvasMounted ? (
             <Box sx={{ position: 'absolute', inset: 0 }}>
               <GraphCanvas
@@ -730,143 +731,60 @@ export default function EmbeddingSpaceViewer({
             </Box>
           ) : null}
           {selectedPoint ? (
-            <Box
-              sx={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: 0,
-                zIndex: 2,
-                maxHeight: 'min(42%, 360px)',
-                height: detailsExpanded ? 'min(42%, 360px)' : 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden',
-                bgcolor: 'background.paper',
-                borderTop: 1,
-                borderColor: 'divider',
-                boxShadow: 3,
-                contain: 'layout paint',
-                overscrollBehavior: 'contain',
-              }}
-              onMouseDown={(event) => event.stopPropagation()}
-              onWheel={(event) => event.stopPropagation()}
-            >
-              <Box sx={{ flexShrink: 0, px: 1.25, py: 0.5 }}>
-                <Stack direction="row" spacing={0.75} alignItems="center" useFlexGap>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                    Chunk
-                  </Typography>
-                  <Box sx={{ flex: 1, minWidth: 8 }} />
-                  {onOpenDocumentCitation && isDocumentPoint(selectedPoint, documents) ? (
-                    <Button size="small" variant="contained" onClick={() => handleJumpToDocument(selectedPoint)}>
-                      Jump to document
-                    </Button>
-                  ) : null}
-                  <Tooltip title={detailsExpanded ? 'Collapse details' : 'Expand details'}>
-                    <IconButton
-                      size="small"
-                      aria-label={detailsExpanded ? 'Collapse details' : 'Expand details'}
-                      aria-expanded={detailsExpanded}
-                      onClick={() => setDetailsExpanded((open) => !open)}
-                    >
-                      {detailsExpanded ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Clear selection">
-                    <IconButton size="small" aria-label="Clear selection" onClick={handleCloseDetails}>
-                      <CloseIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Stack>
-                <Stack
-                  direction="row"
-                  spacing={0.75}
-                  alignItems="center"
-                  useFlexGap
-                  flexWrap="wrap"
-                  sx={{ mt: 0.5, gap: 0.75 }}
-                >
-                  <Chip size="small" variant="outlined" label={`chunk ${selectedPoint.chunk_id ?? '?'}`} />
-                  {pageLabel(selectedPoint) ? (
-                    <Chip size="small" variant="outlined" label={pageLabel(selectedPoint)} />
-                  ) : null}
-                  <Chip size="small" label={selectedPoint.file_name || selectedPoint.file_hash.slice(0, 10)} />
-                  {selectedPoint.table_id ? (
-                    <Chip size="small" variant="outlined" color="warning" label={`table ${selectedPoint.table_id}`} />
-                  ) : null}
-                  {selectedPoint.section_id ? (
-                    <Chip size="small" variant="outlined" color="secondary" label={`section ${selectedPoint.section_id}`} />
-                  ) : null}
-                </Stack>
-              </Box>
-              <Collapse
-                in={detailsExpanded}
-                unmountOnExit
-                sx={{
-                  flex: '1 1 auto',
-                  minHeight: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                  '& .MuiCollapse-wrapper': {
-                    display: 'flex',
-                    flex: '1 1 auto',
-                    minHeight: 0,
-                  },
-                  '& .MuiCollapse-wrapperInner': {
-                    display: 'flex',
-                    flex: '1 1 auto',
-                    flexDirection: 'column',
-                    minHeight: 0,
-                  },
-                }}
-              >
-                <Box
-                  sx={{
-                    flex: '1 1 auto',
-                    minHeight: 0,
-                    px: 1.5,
-                    pb: 1,
-                    overflow: 'auto',
-                    overscrollBehavior: 'contain',
-                    WebkitOverflowScrolling: 'touch',
-                    touchAction: 'pan-y',
-                  }}
-                >
-                  <ConversationDisclosure label="Text" defaultExpanded>
-                    <Typography
-                      component="pre"
-                      variant="caption"
-                      sx={{
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        bgcolor: 'action.hover',
-                        p: 1,
-                        borderRadius: 1,
-                        fontFamily: 'monospace',
-                      }}
-                    >
-                      {selectedPoint.text || '(empty text)'}
+            <OverlayResizablePanel
+              ratio={detailsPanelRatio}
+              resizing={detailsPanelResizing}
+              onResizeStart={onDetailsPanelResizeStart}
+              expanded={detailsExpanded}
+              resizeLabel="Resize chunk details panel"
+              header={(
+                <Box sx={{ px: 1.25, py: 0.5 }}>
+                  <Stack direction="row" spacing={0.75} alignItems="center" useFlexGap>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      Chunk
                     </Typography>
-                  </ConversationDisclosure>
-                  <ConversationDisclosure label="Metadata" defaultExpanded>
-                    <JsonPreview
-                      value={{
-                        source_kind: selectedPoint.source_kind,
-                        section_id: selectedPoint.section_id,
-                        table_id: selectedPoint.table_id,
-                        x: selectedPoint.x,
-                        y: selectedPoint.y,
-                        z: selectedPoint.z,
-                        char_count: selectedPoint.text.length,
-                      }}
-                      maxHeight={false}
-                    />
-                  </ConversationDisclosure>
+                    <Box sx={{ flex: 1, minWidth: 8 }} />
+                    {onOpenDocumentCitation && isDocumentPoint(selectedPoint, documents) ? (
+                      <Button size="small" variant="contained" onClick={() => handleJumpToDocument(selectedPoint)}>
+                        Jump to document
+                      </Button>
+                    ) : null}
+                    <Tooltip title={detailsExpanded ? 'Collapse details' : 'Expand details'}>
+                      <IconButton
+                        size="small"
+                        aria-label={detailsExpanded ? 'Collapse details' : 'Expand details'}
+                        aria-expanded={detailsExpanded}
+                        onClick={() => setDetailsExpanded((open) => !open)}
+                      >
+                        {detailsExpanded ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Clear selection">
+                      <IconButton size="small" aria-label="Clear selection" onClick={handleCloseDetails}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
+                  <Box sx={{ mt: 0.5 }}>
+                    <ChunkIdentityChips chunk={selectedPoint} showFileName />
+                  </Box>
                 </Box>
-              </Collapse>
-            </Box>
+              )}
+            >
+              <ChunkInspectorBody
+                text={selectedPoint.text}
+                metadata={{
+                  source_kind: selectedPoint.source_kind,
+                  section_id: selectedPoint.section_id,
+                  table_id: selectedPoint.table_id,
+                  x: selectedPoint.x,
+                  y: selectedPoint.y,
+                  z: selectedPoint.z,
+                  char_count: selectedPoint.text.length,
+                }}
+                metadataMaxHeight={false}
+              />
+            </OverlayResizablePanel>
           ) : null}
         </Box>
       </Box>

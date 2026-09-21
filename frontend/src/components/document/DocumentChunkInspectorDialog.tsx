@@ -17,7 +17,8 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
+import { ChunkIdentityChips, ChunkInspectorBody } from '../inspector';
+import { chunkPageLabel } from '../../lib/chunk-page-label';
 import {
   getFileChunks,
   type FileChunksResponse,
@@ -26,15 +27,6 @@ import {
 
 const PAGE_SIZE = 100;
 
-function pageLabel(chunk: VectorChunk): string {
-  if (chunk.page_start != null) {
-    const end = chunk.page_end ?? chunk.page_start;
-    return chunk.page_start === end ? `p. ${chunk.page_start}` : `p. ${chunk.page_start}-${end}`;
-  }
-  if (chunk.pages) return `pages ${chunk.pages}`;
-  return '';
-}
-
 function chunkMatchesFilter(chunk: VectorChunk, filter: string): boolean {
   const needle = filter.trim().toLowerCase();
   if (!needle) return true;
@@ -42,14 +34,13 @@ function chunkMatchesFilter(chunk: VectorChunk, filter: string): boolean {
     String(chunk.chunk_id ?? ''),
     String(chunk.source_id ?? ''),
     chunk.text ?? '',
-    pageLabel(chunk),
+    chunkPageLabel(chunk),
     JSON.stringify(chunk.metadata ?? {}),
   ];
   return haystacks.some((value) => value.toLowerCase().includes(needle));
 }
 
 function ChunkCard({ chunk }: { chunk: VectorChunk }) {
-  const page = pageLabel(chunk);
   const copyChunk = async () => {
     try {
       await navigator.clipboard?.writeText(JSON.stringify(chunk, null, 2));
@@ -69,48 +60,21 @@ function ChunkCard({ chunk }: { chunk: VectorChunk }) {
       }}
     >
       <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
-        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
-          <Chip size="small" label={`chunk ${chunk.chunk_id ?? '?'}`} />
-          {page ? <Chip size="small" variant="outlined" label={page} /> : null}
-          {chunk.section_id ? (
-            <Chip size="small" variant="outlined" label={`section ${chunk.section_id}`} />
-          ) : null}
-          {chunk.table_id ? (
-            <Chip size="small" variant="outlined" label={`table ${chunk.table_id}`} />
-          ) : null}
-        </Stack>
+        <ChunkIdentityChips chunk={chunk} />
         <Tooltip title="Copy chunk JSON">
           <IconButton size="small" aria-label="Copy chunk JSON" onClick={() => void copyChunk()}>
             <ContentCopyIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </Stack>
-      <Typography
-        component="pre"
-        variant="caption"
-        sx={{
-          display: 'block',
-          mt: 1,
-          p: 1,
-          borderRadius: 1,
-          bgcolor: 'action.hover',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-          maxHeight: 180,
-          overflow: 'auto',
-        }}
-      >
-        {chunk.text || '(empty text)'}
-      </Typography>
-      {chunk.metadata && Object.keys(chunk.metadata).length > 0 ? (
-        <Box sx={{ mt: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-            Metadata
-          </Typography>
-          <JsonPreview value={chunk.metadata} maxHeight={220} />
-        </Box>
-      ) : null}
+      <Box sx={{ mt: 1 }}>
+        <ChunkInspectorBody
+          text={chunk.text ?? ''}
+          metadata={chunk.metadata}
+          textMaxHeight={180}
+          metadataMaxHeight={220}
+        />
+      </Box>
     </Box>
   );
 }
