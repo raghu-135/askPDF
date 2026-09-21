@@ -737,20 +737,22 @@ export default function EmbeddingSpaceViewer({
                 right: 0,
                 bottom: 0,
                 zIndex: 2,
-                maxHeight: '42%',
+                maxHeight: 'min(42%, 360px)',
+                height: detailsExpanded ? 'min(42%, 360px)' : 'auto',
                 display: 'flex',
                 flexDirection: 'column',
+                overflow: 'hidden',
                 bgcolor: 'background.paper',
                 borderTop: 1,
                 borderColor: 'divider',
                 boxShadow: 3,
-                contain: 'layout',
+                contain: 'layout paint',
                 overscrollBehavior: 'contain',
               }}
               onMouseDown={(event) => event.stopPropagation()}
               onWheel={(event) => event.stopPropagation()}
             >
-              <Box sx={{ px: 1.25, py: 0.5 }}>
+              <Box sx={{ flexShrink: 0, px: 1.25, py: 0.5 }}>
                 <Stack direction="row" spacing={0.75} alignItems="center" useFlexGap>
                   <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                     Chunk
@@ -798,14 +800,38 @@ export default function EmbeddingSpaceViewer({
                   ) : null}
                 </Stack>
               </Box>
-              <Collapse in={detailsExpanded} unmountOnExit sx={{ minHeight: 0, overflow: 'hidden' }}>
+              <Collapse
+                in={detailsExpanded}
+                unmountOnExit
+                sx={{
+                  flex: '1 1 auto',
+                  minHeight: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  '& .MuiCollapse-wrapper': {
+                    display: 'flex',
+                    flex: '1 1 auto',
+                    minHeight: 0,
+                  },
+                  '& .MuiCollapse-wrapperInner': {
+                    display: 'flex',
+                    flex: '1 1 auto',
+                    flexDirection: 'column',
+                    minHeight: 0,
+                  },
+                }}
+              >
                 <Box
                   sx={{
+                    flex: '1 1 auto',
+                    minHeight: 0,
                     px: 1.5,
                     pb: 1,
                     overflow: 'auto',
-                    maxHeight: 'min(32vh, 280px)',
                     overscrollBehavior: 'contain',
+                    WebkitOverflowScrolling: 'touch',
+                    touchAction: 'pan-y',
                   }}
                 >
                   <ConversationDisclosure label="Text" defaultExpanded>
@@ -835,7 +861,7 @@ export default function EmbeddingSpaceViewer({
                         z: selectedPoint.z,
                         char_count: selectedPoint.text.length,
                       }}
-                      maxHeight={140}
+                      maxHeight={false}
                     />
                   </ConversationDisclosure>
                 </Box>

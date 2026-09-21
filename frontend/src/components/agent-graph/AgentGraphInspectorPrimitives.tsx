@@ -52,7 +52,13 @@ export const hasValue = (value: unknown) => {
   return true;
 };
 
-export const JsonPreview = React.memo(function JsonPreview({ value, maxHeight = 140 }: { value: unknown; maxHeight?: number }) {
+export const JsonPreview = React.memo(function JsonPreview({
+  value,
+  maxHeight = 140,
+}: {
+  value: unknown;
+  maxHeight?: number | false;
+}) {
   const jsonSx = {
     '& .askpdf-json-view': {
       lineHeight: 1.35,
@@ -128,8 +134,7 @@ export const JsonPreview = React.memo(function JsonPreview({ value, maxHeight = 
         m: 0,
         mt: 0.5,
         p: 0.75,
-        maxHeight,
-        overflow: 'auto',
+        ...(maxHeight !== false ? { maxHeight, overflow: 'auto' } : {}),
         minWidth: 0,
         maxWidth: '100%',
         borderRadius: 1,
