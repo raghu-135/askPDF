@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box, Tooltip, CircularProgress } from "@mui/material";
 import { PlayArrow, Pause, SkipPrevious, SkipNext } from '@mui/icons-material';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
@@ -20,51 +20,79 @@ type Sentence = {
   words?: any[];
 };
 
-
-type Props = {
+export type PlayerControlsProps = {
   sentences: Sentence[] | null;
   sourceKey: string;
-  currentId: number | null;                // highlight only
+  currentId: number | null;
   onCurrentChange: (id: number | null) => void;
-  playRequestId: number | null;            // explicit command to play now
+  playRequestId: number | null;
   autoScroll: boolean;
   onAutoScrollChange: (value: boolean) => void;
   highlightEnabled: boolean;
   onHighlightEnabledChange: (value: boolean) => void;
 };
 
-const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey, currentId, onCurrentChange, playRequestId, autoScroll, onAutoScrollChange, highlightEnabled, onHighlightEnabledChange }: Props) {
-  // Ref to the audio element for playback control
+type PlayerControlsContextValue = {
+  sentences: Sentence[] | null;
+  currentId: number | null;
+  isDisabled: boolean;
+  disabledTooltip: string;
+  isPlaying: boolean;
+  isPreparingAudio: boolean;
+  autoScroll: boolean;
+  onAutoScrollChange: (value: boolean) => void;
+  highlightEnabled: boolean;
+  onHighlightEnabledChange: (value: boolean) => void;
+  handlePlayPause: () => void;
+  playSentence: (id: number, resumeFrom?: number) => Promise<void>;
+  open: boolean;
+  idPopover: string | undefined;
+  handleOpenSettings: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  handleCloseSettings: () => void;
+  anchorEl: HTMLButtonElement | null;
+  voiceOptions: string[];
+  selectedVoice: string;
+  setSelectedVoice: (voice: string) => void;
+  speed: number;
+  setSpeed: (speed: number) => void;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+};
+
+const PlayerControlsContext = createContext<PlayerControlsContextValue | null>(null);
+
+function usePlayerControlsContext() {
+  const context = useContext(PlayerControlsContext);
+  if (!context) {
+    throw new Error('Player controls must be rendered within PlayerControlsProvider');
+  }
+  return context;
+}
+
+function usePlayerControlsState({
+  sentences,
+  sourceKey,
+  currentId,
+  onCurrentChange,
+  playRequestId,
+  autoScroll,
+  onAutoScrollChange,
+  highlightEnabled,
+  onHighlightEnabledChange,
+}: PlayerControlsProps): PlayerControlsContextValue {
   const audioRef = useRef<HTMLAudioElement>(null);
   const playRequestTokenRef = useRef(0);
-  // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPreparingAudio, setIsPreparingAudio] = useState(false);
-  // Available TTS voices
   const [voices, setVoices] = useState<string[]>([]);
-  // Currently selected TTS voice
   const [selectedVoice, setSelectedVoice] = useState<string>("");
-  // Playback speed
   const [speed, setSpeed] = useState<number>(1.0);
-  // Track paused position for resume
   const [pausedAt, setPausedAt] = useState<number | null>(null);
-  // Popover anchor
   const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
 
-  // Disable controls while sentences are still being parsed or no playable text exists.
   const isDisabled = !sentences || sentences.length === 0;
   const disabledTooltip = isDisabled ? "Sentences are still processing" : "";
-
-  const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleCloseSettings = () => {
-    setAnchorEl(null);
-  };
-
   const open = Boolean(anchorEl);
-  const id_popover = open ? 'voice-settings-popover' : undefined;
+  const idPopover = open ? 'voice-settings-popover' : undefined;
   const voiceOptions = voices.length > 0
     ? voices
     : (selectedVoice ? [selectedVoice] : []);
@@ -75,14 +103,12 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
     synthesize: ttsSentence,
   });
 
-  // Fetch available TTS voices on mount
   useEffect(() => {
     async function fetchVoices() {
       try {
         const voicesData = await getVoices();
         setVoices(voicesData);
         if (voicesData.length > 0) {
-          // Prefer af_heart when available; otherwise keep current if valid, else first voice.
           if (voicesData.includes('af_heart')) {
             setSelectedVoice('af_heart');
           } else if (!voicesData.includes(selectedVoice)) {
@@ -93,10 +119,9 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
         console.error("Failed to fetch voices", err);
       }
     }
-    fetchVoices();
+    void fetchVoices();
   }, []);
 
-  // Cleanup on unmount: stop audio
   useEffect(() => {
     return () => {
       playRequestTokenRef.current += 1;
@@ -108,8 +133,6 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
     };
   }, [clearCache]);
 
-  // Stop playback only when the user switches transcript/document. Appending a
-  // streaming chat message or task timeline item must not interrupt Kokoro.
   useEffect(() => {
     playRequestTokenRef.current += 1;
     if (audioRef.current) {
@@ -122,38 +145,29 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
     setPausedAt(null);
     clearCache();
     onCurrentChange(null);
-  }, [sourceKey]);
+  }, [clearCache, onCurrentChange, sourceKey]);
 
-  // This follows source reset intentionally: a click that changes source and
-  // requests playback must reset the old source before starting the new one.
   useEffect(() => {
     if (playRequestId == null) return;
     void playSentence(playRequestId);
   }, [playRequestId]);
 
-  // Restart playback with new voice if changed during playback
   useEffect(() => {
     if (isPlaying && currentId !== null && selectedVoice !== "") {
       void playSentence(currentId);
     }
   }, [selectedVoice]);
 
-  // Voice/speed changes alter synthesis output, so old cache entries are invalid.
   useEffect(() => {
     clearCache();
-  }, [effectiveVoice, speed, clearCache]);
+  }, [clearCache, effectiveVoice, speed]);
 
-  /**
-   * Play the sentence at the given index. If resumeFrom is provided, resumes from that time.
-   * Handles TTS audio fetching and playback, and auto-advances to next sentence on end.
-   */
   async function playSentence(id: number, resumeFrom?: number) {
     const audio = audioRef.current;
     if (!audio || isDisabled) return;
     const requestToken = playRequestTokenRef.current + 1;
     playRequestTokenRef.current = requestToken;
 
-    // Stop any current playback
     audio.pause();
     audio.currentTime = 0;
     audio.onended = null;
@@ -181,10 +195,9 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
       setIsPlaying(true);
       setPausedAt(null);
 
-      // Auto-advance to next sentence on playback end
       audio.onended = () => {
         const next = id + 1;
-        if (next < sentences.length) {
+        if (sentences && next < sentences.length) {
           void playSentence(next);
         } else {
           setIsPlaying(false);
@@ -192,7 +205,6 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
         }
       };
     } catch (e) {
-      // Ignore expected abort errors from interrupted play() calls (pause/skip)
       if (e instanceof Error && e.name === "AbortError") {
         return;
       }
@@ -205,10 +217,6 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
     }
   }
 
-  /**
-   * Toggle play/pause for the current sentence.
-   * If paused, resumes from last position; otherwise, starts from current or first sentence.
-   */
   function handlePlayPause() {
     const audio = audioRef.current;
     if (isPreparingAudio) {
@@ -220,74 +228,158 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
 
     if (!isPlaying) {
       if (pausedAt !== null && currentId !== null) {
-        audio!.play();
+        void audio?.play();
         setIsPlaying(true);
         setPausedAt(null);
       } else {
         void playSentence(currentId ?? 0);
       }
-    } else {
-      if (audio) {
-        audio.pause();
-        setPausedAt(audio.currentTime);
-        setIsPlaying(false);
-      }
+    } else if (audio) {
+      audio.pause();
+      setPausedAt(audio.currentTime);
+      setIsPlaying(false);
     }
   }
 
+  return {
+    sentences,
+    currentId,
+    isDisabled,
+    disabledTooltip,
+    isPlaying,
+    isPreparingAudio,
+    autoScroll,
+    onAutoScrollChange,
+    highlightEnabled,
+    onHighlightEnabledChange,
+    handlePlayPause,
+    playSentence,
+    open,
+    idPopover,
+    handleOpenSettings: (event) => setAnchorEl(event.currentTarget),
+    handleCloseSettings: () => setAnchorEl(null),
+    anchorEl,
+    voiceOptions,
+    selectedVoice,
+    setSelectedVoice,
+    speed,
+    setSpeed,
+    audioRef,
+  };
+}
+
+export function PlayerControlsProvider({
+  children,
+  ...props
+}: PlayerControlsProps & { children: React.ReactNode }) {
+  const value = usePlayerControlsState(props);
   return (
-    <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-      <Tooltip title={disabledTooltip}>
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          <IconButton
-            color="primary"
-            onClick={handlePlayPause}
-            size="small"
-            disabled={isDisabled}
-            aria-label={isPreparingAudio ? "Preparing audio" : isPlaying ? "Pause" : "Play"}
-          >
-            {isPlaying ? (
-              <Pause fontSize="small" />
-            ) : isPreparingAudio ? (
-              <CircularProgress size={18} thickness={5} />
-            ) : (
-              <PlayArrow fontSize="small" />
-            )}
-          </IconButton>
-          <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={isDisabled || currentId === null || currentId <= 0} size="small">
-            <SkipPrevious fontSize="small" />
-          </IconButton>
-          <IconButton onClick={() => currentId !== null && currentId < (sentences?.length ?? 0) - 1 && playSentence(currentId + 1)} disabled={isDisabled || currentId === null || currentId >= (sentences?.length ?? 0) - 1} size="small">
-            <SkipNext fontSize="small" />
-          </IconButton>
+    <PlayerControlsContext.Provider value={value}>
+      {children}
+      <audio ref={value.audioRef} />
+    </PlayerControlsContext.Provider>
+  );
+}
 
-          <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
-            <IconButton
-              color={autoScroll ? "primary" : "default"}
-              onClick={() => onAutoScrollChange(!autoScroll)}
-              size="small"
-              disabled={isDisabled}
-            >
-              <AutoStoriesIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+export const PlayerPlaybackChrome = React.memo(function PlayerPlaybackChrome() {
+  const {
+    currentId,
+    disabledTooltip,
+    handlePlayPause,
+    isDisabled,
+    isPlaying,
+    isPreparingAudio,
+    playSentence,
+    sentences,
+  } = usePlayerControlsContext();
 
-          <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
-            <IconButton
-              color={highlightEnabled ? "primary" : "default"}
-              onClick={() => onHighlightEnabledChange(!highlightEnabled)}
-              size="small"
-              disabled={isDisabled}
-            >
-              <EditNoteIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
+  return (
+    <Tooltip title={disabledTooltip}>
+      <Stack direction="row" spacing={0.5} alignItems="center">
+        <IconButton
+          color="primary"
+          onClick={handlePlayPause}
+          size="small"
+          disabled={isDisabled}
+          aria-label={isPreparingAudio ? "Preparing audio" : isPlaying ? "Pause" : "Play"}
+        >
+          {isPlaying ? (
+            <Pause fontSize="small" />
+          ) : isPreparingAudio ? (
+            <CircularProgress size={18} thickness={5} />
+          ) : (
+            <PlayArrow fontSize="small" />
+          )}
+        </IconButton>
+        <IconButton
+          onClick={() => currentId !== null && currentId > 0 && void playSentence(currentId - 1)}
+          disabled={isDisabled || currentId === null || currentId <= 0}
+          size="small"
+        >
+          <SkipPrevious fontSize="small" />
+        </IconButton>
+        <IconButton
+          onClick={() => currentId !== null && currentId < (sentences?.length ?? 0) - 1 && void playSentence(currentId + 1)}
+          disabled={isDisabled || currentId === null || currentId >= (sentences?.length ?? 0) - 1}
+          size="small"
+        >
+          <SkipNext fontSize="small" />
+        </IconButton>
+      </Stack>
+    </Tooltip>
+  );
+});
+
+export const PlayerExtrasChrome = React.memo(function PlayerExtrasChrome() {
+  const {
+    anchorEl,
+    autoScroll,
+    currentId,
+    disabledTooltip,
+    handleCloseSettings,
+    handleOpenSettings,
+    highlightEnabled,
+    idPopover,
+    isDisabled,
+    isPlaying,
+    onAutoScrollChange,
+    onHighlightEnabledChange,
+    open,
+    playSentence,
+    selectedVoice,
+    setSelectedVoice,
+    setSpeed,
+    speed,
+    voiceOptions,
+  } = usePlayerControlsContext();
+
+  return (
+    <>
+      <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
+        <IconButton
+          color={autoScroll ? "primary" : "default"}
+          onClick={() => onAutoScrollChange(!autoScroll)}
+          size="small"
+          disabled={isDisabled}
+        >
+          <AutoStoriesIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+
+      <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
+        <IconButton
+          color={highlightEnabled ? "primary" : "default"}
+          onClick={() => onHighlightEnabledChange(!highlightEnabled)}
+          size="small"
+          disabled={isDisabled}
+        >
+          <EditNoteIcon fontSize="small" />
+        </IconButton>
       </Tooltip>
 
       <Tooltip title={disabledTooltip}>
         <IconButton
-          aria-describedby={id_popover}
+          aria-describedby={idPopover}
           size="small"
           onClick={handleOpenSettings}
           color={open ? "primary" : "default"}
@@ -298,7 +390,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
       </Tooltip>
 
       <Popover
-        id={id_popover}
+        id={idPopover}
         open={open}
         anchorEl={anchorEl}
         onClose={handleCloseSettings}
@@ -311,7 +403,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
           horizontal: 'center',
         }}
         PaperProps={{
-          sx: { p: 2, minWidth: 200 }
+          sx: { p: 2, minWidth: 200 },
         }}
       >
         <Stack spacing={2}>
@@ -356,9 +448,18 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, sourceKey
           </Box>
         </Stack>
       </Popover>
+    </>
+  );
+});
 
-      <audio ref={audioRef} />
-    </Stack>
+const PlayerControls = React.memo(function PlayerControls(props: PlayerControlsProps) {
+  return (
+    <PlayerControlsProvider {...props}>
+      <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
+        <PlayerPlaybackChrome />
+        <PlayerExtrasChrome />
+      </Stack>
+    </PlayerControlsProvider>
   );
 });
 

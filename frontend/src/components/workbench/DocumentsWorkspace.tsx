@@ -1,5 +1,5 @@
 import dynamic from 'next/dynamic';
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import type { PdfTab } from '../../lib/document-tabs';
@@ -9,6 +9,12 @@ import DocumentInstanceTabLabel from './DocumentInstanceTabLabel';
 import WorkspaceEmptyState from './WorkspaceEmptyState';
 import AddSourcesMenu from './AddSourcesMenu';
 import AddSourcesActions from './AddSourcesActions';
+import {
+  PlayerControlsProvider,
+  PlayerExtrasChrome,
+  PlayerPlaybackChrome,
+  type PlayerControlsProps,
+} from '../PlayerControls';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -45,7 +51,7 @@ export default function DocumentsWorkspace({
   emptyDescription = 'Upload a PDF or capture a page from the browser to start asking questions.',
   showCreateThread = false,
   onCreateThread,
-  playerControls,
+  playerControlProps = null,
 }: {
   documents: readonly PdfTab[];
   activeDocumentId: string | null;
@@ -79,8 +85,9 @@ export default function DocumentsWorkspace({
   emptyDescription?: string;
   showCreateThread?: boolean;
   onCreateThread?: () => void;
-  playerControls?: React.ReactNode;
+  playerControlProps?: PlayerControlsProps | null;
 }) {
+  const [chromeHost, setChromeHost] = useState<HTMLDivElement | null>(null);
   const documentTabs = documents.map((tab) => ({ ...tab, kind: 'document' as const }));
 
   const nestedTabs = documentTabs.map((tab) => ({
@@ -140,7 +147,12 @@ export default function DocumentsWorkspace({
     && cachedDocument
     && cachedDownloadUrl;
 
-  return (
+  const workspaceChromeSlots = playerControlProps ? {
+    playback: <PlayerPlaybackChrome />,
+    extras: <PlayerExtrasChrome />,
+  } : undefined;
+
+  const viewerBody = (
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto auto minmax(0, 1fr)' }}>
       <NestedInstanceTabs
         tabs={nestedTabs}
@@ -149,11 +161,7 @@ export default function DocumentsWorkspace({
         ariaLabel="Open documents"
         trailingAction={addSourcesAction}
       />
-      {playerControls ? (
-        <Box sx={{ px: 1, py: 0.5, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-          {playerControls}
-        </Box>
-      ) : null}
+      <Box ref={setChromeHost} sx={{ minHeight: 0 }} />
       <Box sx={{ minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         {showCachedViewer ? (
           <Box sx={{ position: 'absolute', inset: 0, visibility: 'hidden', pointerEvents: 'none' }} aria-hidden>
@@ -185,6 +193,8 @@ export default function DocumentsWorkspace({
             threadId={threadId}
             fileHash={activeDocument.fileHash}
             mode={threadId ? 'thread-editable' : 'source-readonly'}
+            chromeHost={chromeHost}
+            workspaceChromeSlots={workspaceChromeSlots}
           />
         ) : (
           <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 4 }}>
@@ -196,5 +206,15 @@ export default function DocumentsWorkspace({
         )}
       </Box>
     </Box>
+  );
+
+  if (!playerControlProps) {
+    return viewerBody;
+  }
+
+  return (
+    <PlayerControlsProvider {...playerControlProps}>
+      {viewerBody}
+    </PlayerControlsProvider>
   );
 }

@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { createPluginRegistration } from "@embedpdf/core";
 import { EmbedPDF, type PDFContextState } from "@embedpdf/core/react";
 import {
@@ -69,7 +70,9 @@ import { useTheme } from "@mui/material/styles";
 import { useHistoryCapability } from "@embedpdf/plugin-history/react";
 import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
 import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
-import { AnnotationToolbar } from "./annotation/AnnotationToolbar";
+import { AnnotationChromeItems } from "./annotation/AnnotationChromeItems";
+import CollapsibleWorkspaceChrome from "./workbench/CollapsibleWorkspaceChrome";
+import { WORKSPACE_CHROME_SEPARATOR } from "../lib/workspace-chrome";
 import { AnnotationSelectionMenu } from "./annotation/AnnotationSelectionMenu";
 import { PdfSearchHighlightLayer } from "./PdfSearchHighlightLayer";
 import { PdfSearchControls } from "./PdfSearchControls";
@@ -134,6 +137,12 @@ type Props = {
   threadId?: string | null;
   fileHash?: string | null;
   mode?: "thread-editable" | "source-readonly";
+  chromeHost?: HTMLDivElement | null;
+  workspaceChromeSlots?: {
+    playback?: React.ReactNode;
+    extras?: React.ReactNode;
+  };
+  workspaceChromeStorageKey?: string;
 };
 
 // Memoize tool configuration outside buildPlugins to prevent recreation
@@ -314,6 +323,72 @@ function SelectionActionMenu({
   );
 }
 
+function PdfWorkspaceChromePortal({
+  chromeHost,
+  storageKey,
+  pdfSearch,
+  mode,
+  documentId,
+  showSidebar,
+  onToggleSidebar,
+  isHistoryProcessingRef,
+  workspaceChromeSlots,
+}: {
+  chromeHost: HTMLDivElement;
+  storageKey: string;
+  pdfSearch: ReturnType<typeof usePdfSearch>;
+  mode: "thread-editable" | "source-readonly";
+  documentId: string;
+  showSidebar: boolean;
+  onToggleSidebar: () => void;
+  isHistoryProcessingRef: React.MutableRefObject<boolean>;
+  workspaceChromeSlots?: {
+    playback?: React.ReactNode;
+    extras?: React.ReactNode;
+  };
+}) {
+  const items = useMemo(() => {
+    const entries: Array<React.ReactNode | typeof WORKSPACE_CHROME_SEPARATOR> = [];
+
+    if (mode === "thread-editable") {
+      entries.push(
+        <AnnotationChromeItems
+          documentId={documentId}
+          showSidebar={showSidebar}
+          onToggleSidebar={onToggleSidebar}
+          isHistoryProcessingRef={isHistoryProcessingRef}
+        />,
+      );
+    }
+
+    entries.push(
+      <PdfSearchControls search={pdfSearch} />,
+      WORKSPACE_CHROME_SEPARATOR,
+      workspaceChromeSlots?.playback,
+      workspaceChromeSlots?.extras,
+    );
+    return entries;
+  }, [
+    documentId,
+    isHistoryProcessingRef,
+    mode,
+    onToggleSidebar,
+    pdfSearch,
+    showSidebar,
+    workspaceChromeSlots?.extras,
+    workspaceChromeSlots?.playback,
+  ]);
+
+  return createPortal(
+    <CollapsibleWorkspaceChrome
+      items={items}
+      storageKey={storageKey}
+      ariaLabel="Document tools"
+    />,
+    chromeHost,
+  );
+}
+
 function DocumentLoadedSync({
   isLoaded,
   setPdfLoaded,
@@ -346,6 +421,9 @@ function EmbedPdfDocumentBody({
   threadId,
   fileHash,
   mode = "thread-editable",
+  chromeHost = null,
+  workspaceChromeSlots,
+  workspaceChromeStorageKey = "documents-workspace-chrome",
   pdfLoaded,
   setPdfLoaded,
   isHistoryProcessingRef,
@@ -851,19 +929,19 @@ function EmbedPdfDocumentBody({
               setPdfLoaded={setPdfLoaded}
             />
 
-            {mode === "thread-editable" ? (
-              <AnnotationToolbar
+            {chromeHost ? (
+              <PdfWorkspaceChromePortal
+                chromeHost={chromeHost}
+                storageKey={workspaceChromeStorageKey}
+                pdfSearch={pdfSearch}
+                mode={mode}
                 documentId={documentId}
                 showSidebar={showSidebar}
                 onToggleSidebar={() => setShowSidebar((value) => !value)}
                 isHistoryProcessingRef={isHistoryProcessingRef}
-                searchControls={<PdfSearchControls search={pdfSearch} />}
+                workspaceChromeSlots={workspaceChromeSlots}
               />
-            ) : (
-              <Box sx={{ minHeight: 42, px: 1, display: "flex", alignItems: "center", borderBottom: 1, borderColor: "divider" }}>
-                <PdfSearchControls search={pdfSearch} />
-              </Box>
-            )}
+            ) : null}
 
             <Box
               sx={{
@@ -970,6 +1048,9 @@ const PdfViewer = React.memo(function PdfViewer({
   threadId = null,
   fileHash = null,
   mode = "thread-editable",
+  chromeHost = null,
+  workspaceChromeSlots,
+  workspaceChromeStorageKey = "documents-workspace-chrome",
 }: Props) {
   const theme = useTheme();
   const { engine, isLoading, error } = usePdfiumEngine();
@@ -1038,6 +1119,9 @@ const PdfViewer = React.memo(function PdfViewer({
               threadId={threadId}
               fileHash={fileHash}
               mode={mode}
+              chromeHost={chromeHost}
+              workspaceChromeSlots={workspaceChromeSlots}
+              workspaceChromeStorageKey={workspaceChromeStorageKey}
               pdfLoaded={pdfLoaded}
               setPdfLoaded={setPdfLoaded}
               isHistoryProcessingRef={isHistoryProcessingRef}

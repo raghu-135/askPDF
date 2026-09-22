@@ -15,6 +15,7 @@ import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
 import ProjectOverview from './ProjectOverview';
 import DocumentsWorkspace from './DocumentsWorkspace';
+import type { PlayerControlsProps } from '../PlayerControls';
 import type { Project, Thread } from '../../lib/api';
 import type { MemoryManagerIntent } from '../../lib/memory-manager';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
@@ -71,7 +72,7 @@ export default function ThreadWorkspaceContent({
   onOpenDocumentCitation,
   canvasRefreshVersion = 0,
   documents = [],
-  playerControls,
+  playerControlProps = null,
 }: {
   activeTabId: string | null;
   activeDocumentId: string | null;
@@ -120,7 +121,7 @@ export default function ThreadWorkspaceContent({
   onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
   canvasRefreshVersion?: number;
   documents?: readonly PdfTab[];
-  playerControls?: React.ReactNode;
+  playerControlProps?: PlayerControlsProps | null;
 }) {
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -184,7 +185,7 @@ export default function ThreadWorkspaceContent({
             : 'Upload a PDF or capture a page to add shared project knowledge.'}
           showCreateThread={Boolean(activeProject && !threadId)}
           onCreateThread={onCreateThread}
-          playerControls={playerControls}
+          playerControlProps={playerControlProps}
         />
       ) : activeTabId === RESEARCH_CANVAS_TAB_ID ? (
         <ResearchCanvasWorkspace

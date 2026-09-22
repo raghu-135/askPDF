@@ -23,6 +23,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import CollapsibleWorkspaceChrome from '../workbench/CollapsibleWorkspaceChrome';
+import { WORKSPACE_CHROME_SEPARATOR } from '../../lib/workspace-chrome';
 import {
   ChunkIdentityChips,
   ChunkInspectorBody,
@@ -58,6 +60,7 @@ import { assignDocumentColors, chunkGraphLabel } from './document-colors';
 type ColorMode = 'document' | 'kind';
 
 const DENSE_NODE_COUNT = 40;
+const MAX_SIMILARITY_EDGES = 250;
 const DOCUMENT_SOURCE_KINDS = new Set(['pdf', 'webpage', 'browser', 'browser_capture']);
 const SOURCE_FAMILY_OPTIONS: Array<{ value: EmbeddingSourceFamily; label: string }> = [
   { value: 'all', label: 'All sources' },
@@ -289,30 +292,37 @@ export default function EmbeddingSpaceViewer({
   }, [clusterNames, colorMode, documentColors, showLabels, uniqueVisibleHashes, visiblePoints]);
 
   const graphEdges: GraphEdge[] = useMemo(() => {
-    return edges
-      .filter((edge) => {
-        if (!visiblePointIds.has(edge.source) || !visiblePointIds.has(edge.target)) {
-          return false;
-        }
-        if (edge.kind === 'sequence' && !showSequenceEdges) return false;
-        if (edge.kind === 'similarity' && !showSimilarityEdges) return false;
-        return true;
-      })
-      .map((edge) => {
-        const isSequence = edge.kind === 'sequence';
-        const color = isSequence
-          ? (muiTheme.palette.mode === 'dark' ? '#94a3b8' : '#64748b')
-          : (muiTheme.palette.mode === 'dark' ? '#38bdf8' : '#0284c7');
-        return {
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          size: isSequence ? 0.45 : 0.7,
-          fill: color,
-          dashed: !isSequence,
-          dashArray: isSequence ? undefined : ([5, 4] as [number, number]),
-        };
-      });
+    const visibleEdges = edges.filter((edge) => {
+      if (!visiblePointIds.has(edge.source) || !visiblePointIds.has(edge.target)) {
+        return false;
+      }
+      if (edge.source === edge.target) return false;
+      if (edge.kind === 'sequence' && !showSequenceEdges) return false;
+      if (edge.kind === 'similarity' && !showSimilarityEdges) return false;
+      return true;
+    });
+
+    const sequenceEdges = visibleEdges.filter((edge) => edge.kind === 'sequence');
+    const similarityEdges = visibleEdges
+      .filter((edge) => edge.kind === 'similarity')
+      .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
+      .slice(0, MAX_SIMILARITY_EDGES);
+
+    return [...sequenceEdges, ...similarityEdges].map((edge) => {
+      const isSequence = edge.kind === 'sequence';
+      const color = isSequence
+        ? (muiTheme.palette.mode === 'dark' ? '#94a3b8' : '#64748b')
+        : (muiTheme.palette.mode === 'dark' ? '#38bdf8' : '#0284c7');
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        size: isSequence ? 0.45 : 0.55,
+        fill: color,
+        // Reagraph's dashed edge geometry can return empty buffers and crash on merge.
+        dashed: false,
+      };
+    });
   }, [edges, muiTheme.palette.mode, showSequenceEdges, showSimilarityEdges, visiblePointIds]);
 
   useEffect(() => {
@@ -485,199 +495,201 @@ export default function EmbeddingSpaceViewer({
     });
   }, [documentColors, documents, points, sourceFamily]);
 
-  return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        spacing={1}
-        sx={{
-          p: 1.25,
-          borderBottom: 1,
-          borderColor: 'divider',
-          alignItems: { md: 'center' },
-          bgcolor: 'background.paper',
-          flexWrap: 'wrap',
-          gap: 1,
-        }}
+  const embeddingChromeItems = useMemo(() => {
+    const items = [
+      <Button
+        key="fit-view"
+        size="small"
+        variant="outlined"
+        startIcon={<CenterFocusStrongIcon fontSize="small" />}
+        onClick={handleFitView}
       >
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          Embedding space
-        </Typography>
+        Fit view
+      </Button>,
+      <Button
+        key="refresh"
+        size="small"
+        startIcon={<RefreshIcon fontSize="small" />}
+        onClick={() => void loadProjection()}
+        disabled={loading}
+      >
+        Refresh
+      </Button>,
+      <TextField
+        key="filter-chunks"
+        size="small"
+        label="Filter chunks"
+        value={searchFilter}
+        onChange={(event) => setSearchFilter(event.target.value)}
+        sx={{ minWidth: 150 }}
+      />,
+      WORKSPACE_CHROME_SEPARATOR,
+      <FormControl key="source-family" size="small" sx={{ minWidth: 150 }}>
+        <InputLabel id="embedding-source-family-label">Source</InputLabel>
+        <Select
+          labelId="embedding-source-family-label"
+          label="Source"
+          value={sourceFamily}
+          onChange={(event) => {
+            const next = event.target.value as EmbeddingSourceFamily;
+            setSourceFamily(next);
+            setGroupFilter('');
+            setFileHashFilter('');
+          }}
+        >
+          {SOURCE_FAMILY_OPTIONS.map((option) => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>,
+    ];
 
-        <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel id="embedding-source-family-label">Source</InputLabel>
+    if (sourceFamily === 'all' || sourceFamily === 'documents') {
+      items.push(
+        <FormControl key="document-filter" size="small" sx={{ minWidth: 160 }}>
+          <InputLabel id="embedding-file-filter-label">Document</InputLabel>
           <Select
-            labelId="embedding-source-family-label"
-            label="Source"
-            value={sourceFamily}
+            labelId="embedding-file-filter-label"
+            label="Document"
+            value={fileHashFilter}
             onChange={(event) => {
-              const next = event.target.value as EmbeddingSourceFamily;
-              setSourceFamily(next);
-              setGroupFilter('');
-              setFileHashFilter('');
+              const next = String(event.target.value);
+              setFileHashFilter(next);
+              setGroupFilter(next);
             }}
           >
-            {SOURCE_FAMILY_OPTIONS.map((option) => (
-              <MenuItem key={option.value} value={option.value}>
-                {option.label}
+            <MenuItem value="">All documents</MenuItem>
+            {documents.map((doc) => (
+              <MenuItem key={doc.fileHash} value={doc.fileHash}>
+                {doc.fileName}
               </MenuItem>
             ))}
           </Select>
-        </FormControl>
+        </FormControl>,
+      );
+    }
 
-        {sourceFamily === 'all' || sourceFamily === 'documents' ? (
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel id="embedding-file-filter-label">Document</InputLabel>
-            <Select
-              labelId="embedding-file-filter-label"
-              label="Document"
-              value={fileHashFilter}
-              onChange={(event) => {
-                const next = String(event.target.value);
-                setFileHashFilter(next);
-                setGroupFilter(next);
-              }}
-            >
-              <MenuItem value="">All documents</MenuItem>
-              {documents.map((doc) => (
-                <MenuItem key={doc.fileHash} value={doc.fileHash}>
-                  {doc.fileName}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        ) : null}
+    items.push(
+      <FormControl key="color-mode" size="small" sx={{ minWidth: 130 }}>
+        <InputLabel id="embedding-color-mode-label">Color by</InputLabel>
+        <Select
+          labelId="embedding-color-mode-label"
+          label="Color by"
+          value={colorMode}
+          onChange={(event) => setColorMode(event.target.value as ColorMode)}
+        >
+          <MenuItem value="document">Group</MenuItem>
+          <MenuItem value="kind">Chunk kind</MenuItem>
+        </Select>
+      </FormControl>,
+      WORKSPACE_CHROME_SEPARATOR,
+      <FormControlLabel
+        key="sequence-edges"
+        control={
+          <Switch
+            size="small"
+            checked={showSequenceEdges}
+            onChange={(e) => setShowSequenceEdges(e.target.checked)}
+          />
+        }
+        label={<Typography variant="caption">Sequence</Typography>}
+      />,
+      <FormControlLabel
+        key="similarity-edges"
+        control={
+          <Switch
+            size="small"
+            checked={showSimilarityEdges}
+            onChange={(e) => setShowSimilarityEdges(e.target.checked)}
+          />
+        }
+        label={<Typography variant="caption">Similarity</Typography>}
+      />,
+      <FormControlLabel
+        key="clusters"
+        control={
+          <Switch
+            size="small"
+            checked={showClusters}
+            onChange={(e) => setShowClusters(e.target.checked)}
+          />
+        }
+        label={<Typography variant="caption">Clusters</Typography>}
+      />,
+      <FormControlLabel
+        key="labels"
+        control={
+          <Switch
+            size="small"
+            checked={showLabels}
+            onChange={(e) => setLabelOverride(e.target.checked)}
+          />
+        }
+        label={<Typography variant="caption">Labels</Typography>}
+      />,
+    );
 
-        <FormControl size="small" sx={{ minWidth: 130 }}>
-          <InputLabel id="embedding-color-mode-label">Color by</InputLabel>
-          <Select
-            labelId="embedding-color-mode-label"
-            label="Color by"
-            value={colorMode}
-            onChange={(event) => setColorMode(event.target.value as ColorMode)}
+    if (legendItems.length > 0) {
+      items.push(WORKSPACE_CHROME_SEPARATOR);
+      legendItems.forEach((item) => {
+        const selected = groupFilter === item.hash || fileHashFilter === item.hash;
+        const dimmed = Boolean(groupFilter || fileHashFilter) && !selected;
+        items.push(
+          <Tooltip
+            key={`legend-chip-${item.hash}`}
+            title={selected ? 'Show all groups' : `Show only ${item.label}`}
           >
-            <MenuItem value="document">Group</MenuItem>
-            <MenuItem value="kind">Chunk kind</MenuItem>
-          </Select>
-        </FormControl>
-
-        <TextField
-          size="small"
-          label="Filter chunks"
-          value={searchFilter}
-          onChange={(event) => setSearchFilter(event.target.value)}
-          sx={{ minWidth: 150, flex: 1 }}
-        />
-
-        <FormControlLabel
-          control={
-            <Switch
+            <Chip
               size="small"
-              checked={showSequenceEdges}
-              onChange={(e) => setShowSequenceEdges(e.target.checked)}
+              clickable
+              aria-pressed={selected}
+              label={item.label}
+              onClick={() => handleGroupChipClick(item.hash)}
+              sx={{
+                bgcolor: item.fill,
+                color: isDark ? '#0b1220' : '#fff',
+                fontWeight: 600,
+                maxWidth: 220,
+                opacity: dimmed ? 0.42 : 1,
+                outline: selected ? '2px solid' : 'none',
+                outlineColor: 'text.primary',
+                outlineOffset: 1,
+              }}
             />
-          }
-          label={<Typography variant="caption">Sequence</Typography>}
-        />
+          </Tooltip>,
+        );
+      });
+    }
 
-        <FormControlLabel
-          control={
-            <Switch
-              size="small"
-              checked={showSimilarityEdges}
-              onChange={(e) => setShowSimilarityEdges(e.target.checked)}
-            />
-          }
-          label={<Typography variant="caption">Similarity</Typography>}
-        />
+    return items;
+  }, [
+    colorMode,
+    documents,
+    fileHashFilter,
+    groupFilter,
+    handleFitView,
+    handleGroupChipClick,
+    isDark,
+    legendItems,
+    loadProjection,
+    loading,
+    searchFilter,
+    showClusters,
+    showLabels,
+    showSequenceEdges,
+    showSimilarityEdges,
+    sourceFamily,
+  ]);
 
-        <FormControlLabel
-          control={
-            <Switch
-              size="small"
-              checked={showClusters}
-              onChange={(e) => setShowClusters(e.target.checked)}
-            />
-          }
-          label={<Typography variant="caption">Clusters</Typography>}
-        />
-
-        <FormControlLabel
-          control={
-            <Switch
-              size="small"
-              checked={showLabels}
-              onChange={(e) => setLabelOverride(e.target.checked)}
-            />
-          }
-          label={<Typography variant="caption">Labels</Typography>}
-        />
-
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<CenterFocusStrongIcon fontSize="small" />}
-          onClick={handleFitView}
-        >
-          Fit view
-        </Button>
-
-        <Button
-          size="small"
-          startIcon={<RefreshIcon fontSize="small" />}
-          onClick={() => void loadProjection()}
-          disabled={loading}
-        >
-          Refresh
-        </Button>
-      </Stack>
-
-      {legendItems.length > 0 ? (
-        <Stack
-          direction="row"
-          spacing={0.5}
-          useFlexGap
-          flexWrap="wrap"
-          sx={{ px: 1.5, py: 0.75, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}
-        >
-          {legendItems.map((item) => {
-            const selected = groupFilter === item.hash || fileHashFilter === item.hash;
-            const dimmed = Boolean(groupFilter || fileHashFilter) && !selected;
-            return (
-              <Tooltip
-                key={item.hash}
-                title={selected ? 'Show all groups' : `Show only ${item.label}`}
-              >
-                <Chip
-                  size="small"
-                  clickable
-                  aria-pressed={selected}
-                  label={item.label}
-                  onClick={() => handleGroupChipClick(item.hash)}
-                  sx={{
-                    bgcolor: item.fill,
-                    color: isDark ? '#0b1220' : '#fff',
-                    fontWeight: 600,
-                    maxWidth: 220,
-                    opacity: dimmed ? 0.42 : 1,
-                    outline: selected ? '2px solid' : 'none',
-                    outlineColor: 'text.primary',
-                    outlineOffset: 1,
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-        </Stack>
-      ) : null}
-
-      {embeddingModel ? (
-        <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, bgcolor: 'background.default' }}>
-          Model: <strong>{embeddingModel}</strong>
-          {truncated ? ' · Showing a capped mix of indexed chunks' : ''}
-          {` · ${nodes.length} nodes · ${graphEdges.length} relationship arrows`}
-        </Typography>
-      ) : null}
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <CollapsibleWorkspaceChrome
+        items={embeddingChromeItems}
+        storageKey={`embedding-workspace-chrome:${threadId}`}
+        ariaLabel="Embedding tools"
+      />
 
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative', overflow: 'hidden' }}>
         <Box ref={graphAreaRef} sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', overflow: 'hidden', bgcolor: 'background.default' }}>
@@ -788,6 +800,25 @@ export default function EmbeddingSpaceViewer({
           ) : null}
         </Box>
       </Box>
+
+      {embeddingModel ? (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{
+            flexShrink: 0,
+            px: 1.5,
+            py: 0.5,
+            borderTop: 1,
+            borderColor: 'divider',
+            bgcolor: 'background.default',
+          }}
+        >
+          Model: <strong>{embeddingModel}</strong>
+          {truncated ? ' · Showing a capped mix of indexed chunks' : ''}
+          {` · ${nodes.length} nodes · ${graphEdges.length} relationship arrows`}
+        </Typography>
+      ) : null}
     </Box>
   );
 }

@@ -14,7 +14,6 @@ declare const process: {
 };
 import PdfUploader from "../components/PdfUploader";
 
-import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
 import type { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
@@ -936,23 +935,21 @@ export default function Home() {
               }}
               isBrowserCapturing={isBrowserCapturing}
               documentCount={pdfTabs.length}
-              playerControls={isDocumentsWorkspaceActive(activeTabId) && activeThread ? (
-                <PlayerControls
-                  sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
-                  sourceKey={activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey}
-                  currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
-                  onCurrentChange={(id) => {
-                    if (activeSource === 'pdf') setCurrentPdfId(id);
-                    else setCurrentChatId(id);
-                    setPlayRequestId(null);
-                  }}
-                  playRequestId={playRequestId}
-                  autoScroll={autoScroll}
-                  onAutoScrollChange={setAutoScroll}
-                  highlightEnabled={highlightEnabled}
-                  onHighlightEnabledChange={setHighlightEnabled}
-                />
-              ) : undefined}
+              playerControlProps={isDocumentsWorkspaceActive(activeTabId) && activeThread ? {
+                sentences: activeSource === 'pdf' ? pdfSentences : chatSentences,
+                sourceKey: activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey,
+                currentId: activeSource === 'pdf' ? currentPdfId : currentChatId,
+                onCurrentChange: (id) => {
+                  if (activeSource === 'pdf') setCurrentPdfId(id);
+                  else setCurrentChatId(id);
+                  setPlayRequestId(null);
+                },
+                playRequestId,
+                autoScroll,
+                onAutoScrollChange: setAutoScroll,
+                highlightEnabled,
+                onHighlightEnabledChange: setHighlightEnabled,
+              } : null}
             />
           }
           secondaryContent={
