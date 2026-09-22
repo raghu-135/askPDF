@@ -9,6 +9,7 @@ from datetime import timedelta
 from typing import Any, Dict, Iterable, List, TypedDict
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
@@ -72,6 +73,45 @@ def _wake() -> None:
     return None
 
 
+def _embedding_job_lookup(values: dict[str, Any]):
+    return select(EmbeddingJob).where(
+        EmbeddingJob.resource_type == values["resource_type"],
+        EmbeddingJob.resource_id == values["resource_id"],
+        EmbeddingJob.scope_id == values["scope_id"],
+        EmbeddingJob.embedding_model == values["embedding_model"],
+    )
+
+
+def _apply_embedding_job_updates(
+    row: EmbeddingJob,
+    values: dict[str, Any],
+    *,
+    requeue_completed: bool,
+) -> None:
+    if row.source_version != values["source_version"]:
+        row.source_version = values["source_version"]
+        row.status = JOB_PENDING
+        row.attempts = 0
+        row.error = None
+        row.available_at = utc_now()
+        row.claimed_at = None
+        row.completed_at = None
+        row.updated_at = utc_now()
+    elif requeue_completed and row.status == JOB_COMPLETED:
+        # Readiness is checked against the persisted manifest and vector
+        # set, not merely this durable row.  A completed row can therefore
+        # become runnable again after vector loss or projection repair.
+        row.status = JOB_PENDING
+        row.attempts = 0
+        row.error = None
+        row.available_at = utc_now()
+        row.claimed_at = None
+        row.completed_at = None
+        row.updated_at = utc_now()
+    elif row.status in {JOB_FAILED, JOB_PENDING}:
+        row.updated_at = utc_now()
+
+
 async def ensure_embedding_job(
     *,
     resource_type: str,
@@ -100,42 +140,29 @@ async def ensure_embedding_job(
 
     async def apply(active):
         row = (await active.execute(
-            select(EmbeddingJob)
-            .where(
-                EmbeddingJob.resource_type == values["resource_type"],
-                EmbeddingJob.resource_id == values["resource_id"],
-                EmbeddingJob.scope_id == values["scope_id"],
-                EmbeddingJob.embedding_model == values["embedding_model"],
-            )
-            .with_for_update()
+            _embedding_job_lookup(values).with_for_update()
         )).scalar_one_or_none()
-        if row is None:
+        if row is not None:
+            _apply_embedding_job_updates(row, values, requeue_completed=requeue_completed)
+            await active.flush()
+            return row
+
+        nested = await active.begin_nested()
+        try:
             row = EmbeddingJob(**values)
             active.add(row)
-        elif row.source_version != values["source_version"]:
-            row.source_version = values["source_version"]
-            row.status = JOB_PENDING
-            row.attempts = 0
-            row.error = None
-            row.available_at = utc_now()
-            row.claimed_at = None
-            row.completed_at = None
-            row.updated_at = utc_now()
-        elif requeue_completed and row.status == JOB_COMPLETED:
-            # Readiness is checked against the persisted manifest and vector
-            # set, not merely this durable row.  A completed row can therefore
-            # become runnable again after vector loss or projection repair.
-            row.status = JOB_PENDING
-            row.attempts = 0
-            row.error = None
-            row.available_at = utc_now()
-            row.claimed_at = None
-            row.completed_at = None
-            row.updated_at = utc_now()
-        elif row.status in {JOB_FAILED, JOB_PENDING}:
-            row.updated_at = utc_now()
-        await active.flush()
-        return row
+            await active.flush()
+            return row
+        except IntegrityError:
+            await nested.rollback()
+            row = (await active.execute(
+                _embedding_job_lookup(values).with_for_update()
+            )).scalar_one_or_none()
+            if row is None:
+                raise
+            _apply_embedding_job_updates(row, values, requeue_completed=requeue_completed)
+            await active.flush()
+            return row
 
     if session is not None:
         row = await apply(session)

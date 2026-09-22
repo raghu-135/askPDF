@@ -88,6 +88,28 @@ async def test_embedding_jobs_are_deduplicated_and_refresh_source_version(repo_s
 
 
 @pytest.mark.asyncio
+async def test_concurrent_embedding_job_enqueue_is_idempotent(repo_sessionmaker):
+    from app.services.embedding_materialization_service import ensure_embedding_job
+
+    target = {
+        "resource_type": "document",
+        "resource_id": "concurrent-file-1",
+        "scope_id": "concurrent-thread",
+        "embedding_model": "model-concurrent",
+        "source_version": "concurrent-file-1:retrieval-v1",
+    }
+    results = await asyncio.gather(*[
+        ensure_embedding_job(**target) for _ in range(10)
+    ])
+
+    assert len({result.id for result in results}) == 1
+    async with repo_sessionmaker() as session:
+        rows = list((await session.execute(select(EmbeddingJob))).scalars().all())
+    assert len(rows) == 1
+    assert rows[0].status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_completed_embedding_job_is_requeued_when_readiness_fails(repo_sessionmaker):
     from app.services.embedding_materialization_service import ensure_embedding_job
 
