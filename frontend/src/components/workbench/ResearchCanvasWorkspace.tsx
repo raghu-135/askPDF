@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { listThreadCanvases } from '../../lib/canvas-api';
@@ -45,9 +45,14 @@ export default function ResearchCanvasWorkspace({
     void load();
   }, [load, refreshVersion]);
 
+  const onActiveCanvasChangeRef = useRef(onActiveCanvasChange);
+  onActiveCanvasChangeRef.current = onActiveCanvasChange;
+
   useEffect(() => {
-    if (!activeCanvasId && canvases[0]) onActiveCanvasChange(canvases[0].id);
-  }, [activeCanvasId, canvases, onActiveCanvasChange]);
+    if (!activeCanvasId && canvases[0]) {
+      onActiveCanvasChangeRef.current(canvases[0].id);
+    }
+  }, [activeCanvasId, canvases]);
 
   const active = canvases.find((canvas) => canvas.id === activeCanvasId) || canvases[0] || null;
 

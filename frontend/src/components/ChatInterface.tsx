@@ -717,6 +717,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     testRuntime,
 }) => {
     const settingsRegistry = useThreadChatSettingsRegistryOptional();
+    const registerThreadSettings = settingsRegistry?.registerSettings;
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
     const [composerSeed, setComposerSeed] = useState('');
@@ -2408,13 +2409,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
-        if (!settingsRegistry) return;
-        const { registerSettings } = settingsRegistry;
+        if (!registerThreadSettings) return;
         if (!activeThread) {
-            registerSettings(null);
+            registerThreadSettings(null);
             return;
         }
-        registerSettings({
+        registerThreadSettings({
             description: isTestRuntime
                 ? 'Initialized from the selected thread. Changes apply only to this temporary Builder Test session and are not saved to the thread.'
                 : undefined,
@@ -2462,7 +2462,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onReset: () => { void loadThreadSettings(); },
         });
         return () => {
-            registerSettings(null);
+            registerThreadSettings(null);
         };
     }, [
         activeThread,
@@ -2474,7 +2474,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         isTestRuntime,
         projectAllowsGlobalMemory,
         promptPreview,
-        settingsRegistry,
+        registerThreadSettings,
         replans,
         replansLimit,
         savingSettings,

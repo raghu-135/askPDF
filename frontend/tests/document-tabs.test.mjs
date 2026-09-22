@@ -8,10 +8,8 @@ import {
   DOCUMENTS_TAB_ID,
   isBrowserWorkspaceActive,
   isDocumentsWorkspaceActive,
-  projectWorkspaceLandingTabId,
   selectedWorkspaceTabValue,
   THREAD_OVERVIEW_TAB_ID,
-  threadWorkspaceLandingTabId,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
 
@@ -62,16 +60,6 @@ test('project workspace opens overview first and groups documents under document
   assert.deepEqual(tabs.map((tab) => tab.kind), ['project', 'memory', 'documents', 'browser']);
   assert.deepEqual(tabs.map((tab) => tab.id), ['project-tab', 'memory-tab', DOCUMENTS_TAB_ID, 'browser-tab']);
   assert.equal(tabs[2].count, 2);
-});
-
-test('project landing stays on overview instead of leftover browser or a document', () => {
-  assert.equal(projectWorkspaceLandingTabId([{ id: 'file-1' }]), 'project-tab');
-  assert.equal(projectWorkspaceLandingTabId([]), 'project-tab');
-});
-
-test('thread landing opens documents when files exist and thread overview when empty', () => {
-  assert.equal(threadWorkspaceLandingTabId([{ id: 'file-1' }]), DOCUMENTS_TAB_ID);
-  assert.equal(threadWorkspaceLandingTabId([]), THREAD_OVERVIEW_TAB_ID);
 });
 
 test('browser workspace follows the Browser tab, not a leftover active flag', () => {

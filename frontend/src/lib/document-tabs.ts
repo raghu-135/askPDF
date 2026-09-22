@@ -108,14 +108,6 @@ export const buildProjectWorkspaceTabs = (documentCount = 0): WorkspaceTab[] => 
   { kind: 'browser', id: 'browser-tab', label: 'Browser' },
 ];
 
-export const projectWorkspaceLandingTabId = (
-  _documents: readonly Pick<PdfTab, 'id'>[] = [],
-): string => PROJECT_OVERVIEW_TAB_ID;
-
-export const threadWorkspaceLandingTabId = (
-  documents: readonly Pick<PdfTab, 'id'>[] = [],
-): string => (documents.length > 0 ? DOCUMENTS_TAB_ID : THREAD_OVERVIEW_TAB_ID);
-
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
   { kind: 'home', id: 'home-tab', label: 'Home' },
   { kind: 'memory', id: 'memory-tab', label: 'Memory' },

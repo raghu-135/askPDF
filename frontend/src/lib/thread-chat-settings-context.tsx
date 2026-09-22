@@ -8,12 +8,12 @@ export type ThreadChatSettingsValue = ChatSettingsFormProps & {
   onReset: () => void;
 };
 
-type ThreadChatSettingsContextValue = {
-  settings: ThreadChatSettingsValue | null;
+type ThreadChatSettingsRegistryValue = {
   registerSettings: (value: ThreadChatSettingsValue | null) => void;
 };
 
-const ThreadChatSettingsContext = createContext<ThreadChatSettingsContextValue | null>(null);
+const ThreadChatSettingsRegistryContext = createContext<ThreadChatSettingsRegistryValue | null>(null);
+const ThreadChatSettingsStateContext = createContext<ThreadChatSettingsValue | null>(null);
 
 export function ThreadChatSettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<ThreadChatSettingsValue | null>(null);
@@ -22,20 +22,22 @@ export function ThreadChatSettingsProvider({ children }: { children: React.React
     setSettings(value);
   }, []);
 
-  const contextValue = useMemo(
-    () => ({ settings, registerSettings }),
-    [registerSettings, settings],
+  const registryValue = useMemo(
+    () => ({ registerSettings }),
+    [registerSettings],
   );
 
   return (
-    <ThreadChatSettingsContext.Provider value={contextValue}>
-      {children}
-    </ThreadChatSettingsContext.Provider>
+    <ThreadChatSettingsRegistryContext.Provider value={registryValue}>
+      <ThreadChatSettingsStateContext.Provider value={settings}>
+        {children}
+      </ThreadChatSettingsStateContext.Provider>
+    </ThreadChatSettingsRegistryContext.Provider>
   );
 }
 
 export function useThreadChatSettingsRegistry() {
-  const context = useContext(ThreadChatSettingsContext);
+  const context = useContext(ThreadChatSettingsRegistryContext);
   if (!context) {
     throw new Error('useThreadChatSettingsRegistry must be used within ThreadChatSettingsProvider');
   }
@@ -43,10 +45,9 @@ export function useThreadChatSettingsRegistry() {
 }
 
 export function useThreadChatSettingsRegistryOptional() {
-  return useContext(ThreadChatSettingsContext);
+  return useContext(ThreadChatSettingsRegistryContext);
 }
 
 export function useThreadChatSettings() {
-  const context = useContext(ThreadChatSettingsContext);
-  return context?.settings ?? null;
+  return useContext(ThreadChatSettingsStateContext);
 }

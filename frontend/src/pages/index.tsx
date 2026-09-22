@@ -26,10 +26,14 @@ import {
   isDocumentsWorkspaceActive,
   PROJECT_OVERVIEW_TAB_ID,
   THREAD_OVERVIEW_TAB_ID,
-  projectWorkspaceLandingTabId,
-  threadWorkspaceLandingTabId,
   type PdfTab,
 } from "../lib/document-tabs";
+import {
+  readWorkspaceResume,
+  resolveWorkspaceResume,
+  writeWorkspaceResume,
+  type WorkspaceResumeState,
+} from '../lib/workspace-resume-state';
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
@@ -40,7 +44,7 @@ import DocumentChunkInspectorDialog from '../components/document/DocumentChunkIn
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
-import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
+import { API_BASE, Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, getPdfForTarget, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
 import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { closeDocumentTabUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { isParsedSentencePayload, transformSentences } from "../lib/bbox-derivation";
@@ -95,7 +99,6 @@ export default function Home() {
   const memoryManagerDirtyRef = useRef(false);
   memoryManagerDirtyRef.current = memoryManagerDirty;
   const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
-  const [lastNonMemoryTabByContext, setLastNonMemoryTabByContext] = useState<Record<string, string>>({});
   const [sidebarHeaderState, setSidebarHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
   const workspaceNavRef = useRef(0);
 
@@ -141,16 +144,49 @@ export default function Home() {
     setChunkInspectorTab(tab);
   }, [chunkInspectorTarget]);
 
-  const rememberNonMemoryTab = useCallback((tabId: string | null, contextKey = workspaceContextKey) => {
-    if (!tabId || tabId === 'memory-tab') return;
-    setLastNonMemoryTabByContext((current) => ({ ...current, [contextKey]: tabId }));
-  }, [workspaceContextKey]);
+  const persistWorkspaceResume = useCallback((
+    contextKey: string,
+    state: WorkspaceResumeState,
+  ) => {
+    writeWorkspaceResume(contextKey, state);
+  }, []);
 
-  const fallbackNonMemoryTab = useCallback(() => {
-    if (activeProject) return PROJECT_OVERVIEW_TAB_ID;
-    if (activeThread) return threadWorkspaceLandingTabId(pdfTabs);
-    return 'home-tab';
-  }, [activeProject, activeThread, pdfTabs]);
+  const hydrateResumedDocumentTab = useCallback((
+    tab: PdfTab,
+    target: { kind: 'thread'; threadId: string } | { kind: 'project'; projectId: string },
+  ) => {
+    if (!tab || tab.sentences) return;
+    if (target.kind === 'thread') {
+      void hydrateThreadPdfTab(target.threadId, {
+        fileHash: tab.fileHash,
+        fileName: tab.fileName,
+        sourceType: tab.sourceType,
+        associationScope: tab.associationScope,
+        isProjectKnowledge: tab.isProjectKnowledge,
+      }).then((hydrated) => {
+        setPdfTabs((prev) => prev.map((item) => (item.fileHash === hydrated.fileHash ? hydrated : item)));
+      }).catch((error) => {
+        console.warn(`Failed to hydrate resumed document ${tab.fileHash}:`, error);
+      });
+      return;
+    }
+    void getPdfForTarget(tab.fileHash, { scope: 'project', id: target.projectId }).then((pdfData) => {
+      const sentences = transformSentences(pdfData.sentences);
+      setPdfTabs((prev) => prev.map((item) => (
+        item.id === tab.id
+          ? {
+            ...item,
+            downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
+            sentences,
+            text: extractTextFromSentences(sentences),
+            parsingStatus: ProcessStatus.Completed,
+          }
+          : item
+      )));
+    }).catch((error) => {
+      console.warn(`Failed to hydrate resumed document ${tab.fileHash}:`, error);
+    });
+  }, []);
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
@@ -160,8 +196,6 @@ export default function Home() {
     setMemoryCuratorDirty(false);
     // Clear current state
     setPdfTabs([]);
-    setActiveTabId(thread ? THREAD_OVERVIEW_TAB_ID : 'home-tab');
-    setActiveDocumentId(null);
     setCachedPdfFileHash(null);
     previousDocumentFileHashRef.current = null;
     setCurrentPdfId(null);
@@ -173,21 +207,33 @@ export default function Home() {
     setThreadProject(null);
     clearTraces();
     setActiveCanvasId(null);
-    
-    // Reset browser state when leaving thread context
-    setIsBrowserActive(false);
+    setActiveDocumentId(null);
+    setActiveTraceId(null);
 
     if (thread) {
+      const contextKey = `thread:${thread.id}`;
+      const cached = readWorkspaceResume(contextKey);
+      const initialTabId = cached?.tabId && cached.tabId !== 'memory-tab'
+        ? cached.tabId
+        : THREAD_OVERVIEW_TAB_ID;
+      setActiveTabId(initialTabId);
+      setActiveDocumentId(
+        isDocumentsWorkspaceActive(initialTabId) && cached?.documentId ? cached.documentId : null,
+      );
+      setActiveCanvasId(
+        initialTabId === RESEARCH_CANVAS_TAB_ID && cached?.canvasId ? cached.canvasId : null,
+      );
+      setIsBrowserActive(initialTabId === 'browser-tab');
+
       setActiveProject(null);
       setActiveThread(thread);
       try {
         setIsPdfLoading(true);
-        // Always fetch the latest thread data to ensure we have current files and stats
-        const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
+        const detailedThread = await getThread(thread.id);
         if (nav !== workspaceNavRef.current) return;
 
         const [loadedTabs, parentProject] = await Promise.all([
-          loadThreadTabs(detailedThread),
+          loadThreadTabs(detailedThread, { eagerCount: 0 }),
           detailedThread.project_id
             ? getProject(detailedThread.project_id).catch(() => null)
             : Promise.resolve(null),
@@ -196,11 +242,35 @@ export default function Home() {
         setActiveThread(detailedThread);
         setThreadProject(parentProject);
         setPdfTabs(loadedTabs);
-        setActiveTabId(threadWorkspaceLandingTabId(loadedTabs));
-        setActiveDocumentId(loadedTabs[0]?.id || null);
+
+        const resolved = resolveWorkspaceResume({
+          contextKey,
+          state: cached,
+          availableTabs: buildDocumentWorkspaceTabs({
+            enabled: true,
+            documentCount: loadedTabs.length,
+            traces: [],
+            includeResearchCanvas: true,
+          }),
+          pdfTabs: loadedTabs,
+          traceIds: [],
+          canvasIds: [],
+        });
+        setActiveTabId(resolved.tabId);
+        setActiveDocumentId(resolved.documentId ?? null);
+        setActiveTraceId(resolved.traceId ?? null);
+        setActiveCanvasId(resolved.canvasId ?? null);
+        setIsBrowserActive(resolved.tabId === 'browser-tab');
+        persistWorkspaceResume(contextKey, resolved);
+
+        if (resolved.tabId === DOCUMENTS_TAB_ID && resolved.documentId) {
+          const tab = loadedTabs.find((item) => item.id === resolved.documentId);
+          if (tab) hydrateResumedDocumentTab(tab, { kind: 'thread', threadId: detailedThread.id });
+        }
       } catch (err) {
         if (nav !== workspaceNavRef.current) return;
         console.error('Failed to load thread files:', err);
+        setActiveTabId(THREAD_OVERVIEW_TAB_ID);
       } finally {
         if (nav === workspaceNavRef.current) {
           setIsPdfLoading(false);
@@ -208,44 +278,75 @@ export default function Home() {
       }
     } else {
       setActiveThread(null);
-      setActiveTabId('home-tab');
+      const homeTabs = buildHomeWorkspaceTabs();
+      const resolved = resolveWorkspaceResume({
+        contextKey: 'home',
+        state: readWorkspaceResume('home'),
+        availableTabs: homeTabs,
+      });
+      setActiveTabId(resolved.tabId);
+      setIsBrowserActive(false);
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
+  }, [clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, persistWorkspaceResume, setActiveTraceId]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
     const nav = ++workspaceNavRef.current;
+    const contextKey = `project:${project.id}`;
+    const cached = readWorkspaceResume(contextKey);
+    const initialTabId = cached?.tabId && cached.tabId !== 'memory-tab'
+      ? cached.tabId
+      : PROJECT_OVERVIEW_TAB_ID;
+
     setMemoryManagerIntent(null);
     setMemoryCuratorDirty(false);
     setActiveThread(null);
     setThreadProject(null);
     setActiveProject(project);
     setPdfTabs([]);
-    setActiveDocumentId(null);
     setCachedPdfFileHash(null);
     previousDocumentFileHashRef.current = null;
     clearTraces();
     setActiveCanvasId(null);
-    setIsBrowserActive(false);
-    setActiveTabId(PROJECT_OVERVIEW_TAB_ID);
+    setActiveTraceId(null);
+    setActiveTabId(initialTabId);
+    setActiveDocumentId(
+      isDocumentsWorkspaceActive(initialTabId) && cached?.documentId ? cached.documentId : null,
+    );
+    setIsBrowserActive(initialTabId === 'browser-tab');
     setIsPdfLoading(true);
     setProjectModelReady(null);
     try {
-      const tabs = await loadProjectTabs(project);
+      const tabs = await loadProjectTabs(project, { eagerCount: 0 });
       if (nav !== workspaceNavRef.current) return;
       setPdfTabs(tabs);
-      setActiveTabId(projectWorkspaceLandingTabId(tabs));
-      setIsBrowserActive(false);
+
+      const resolved = resolveWorkspaceResume({
+        contextKey,
+        state: cached,
+        availableTabs: buildProjectWorkspaceTabs(tabs.length),
+        pdfTabs: tabs,
+      });
+      setActiveTabId(resolved.tabId);
+      setActiveDocumentId(resolved.documentId ?? null);
+      setIsBrowserActive(resolved.tabId === 'browser-tab');
+      persistWorkspaceResume(contextKey, resolved);
+
+      if (resolved.tabId === DOCUMENTS_TAB_ID && resolved.documentId) {
+        const tab = tabs.find((item) => item.id === resolved.documentId);
+        if (tab) hydrateResumedDocumentTab(tab, { kind: 'project', projectId: project.id });
+      }
     } catch (error) {
       if (nav !== workspaceNavRef.current) return;
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
+      setActiveTabId(PROJECT_OVERVIEW_TAB_ID);
     } finally {
       if (nav === workspaceNavRef.current) {
         setIsPdfLoading(false);
       }
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
+  }, [clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, persistWorkspaceResume, setActiveTraceId]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
@@ -293,7 +394,12 @@ export default function Home() {
     setThreadProject(null);
     setProjectModelReady(null);
     setPdfTabs([]);
-    setActiveTabId('home-tab');
+    const resolved = resolveWorkspaceResume({
+      contextKey: 'home',
+      state: readWorkspaceResume('home'),
+      availableTabs: buildHomeWorkspaceTabs(),
+    });
+    setActiveTabId(resolved.tabId);
     setActiveDocumentId(null);
     setCachedPdfFileHash(null);
     previousDocumentFileHashRef.current = null;
@@ -359,6 +465,12 @@ export default function Home() {
     if (existingTab) {
       setActiveTabId(DOCUMENTS_TAB_ID);
       setActiveDocumentId(existingTab.id);
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: DOCUMENTS_TAB_ID,
+        documentId: existingTab.id,
+        traceId: null,
+        canvasId: null,
+      });
       setIsBrowserActive(false);
       setCurrentPdfId(null);
       setCurrentChatId(null);
@@ -378,6 +490,12 @@ export default function Home() {
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(DOCUMENTS_TAB_ID);
     setActiveDocumentId(newTab.id);
+    persistWorkspaceResume(workspaceContextKey, {
+      tabId: DOCUMENTS_TAB_ID,
+      documentId: newTab.id,
+      traceId: null,
+      canvasId: null,
+    });
     setIsBrowserActive(false);
 
     if (activeThread && fileHash) {
@@ -582,17 +700,30 @@ export default function Home() {
     setActiveSource('pdf');
     const tab = pdfTabs.find((item) => item.id === documentId);
     if (tab) hydrateDocumentOnSelect(tab);
-  }, [hydrateDocumentOnSelect, pdfTabs]);
+    if (isDocumentsWorkspaceActive(activeTabId)) {
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: DOCUMENTS_TAB_ID,
+        documentId,
+        traceId: null,
+        canvasId: null,
+      });
+    }
+  }, [activeTabId, hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
 
   const handleOpenOverviewDocument = useCallback((documentId: string) => {
-    rememberNonMemoryTab(DOCUMENTS_TAB_ID);
     setActiveTabId(DOCUMENTS_TAB_ID);
     setActiveDocumentId(documentId);
     setIsBrowserActive(false);
     setActiveSource('pdf');
     const tab = pdfTabs.find((item) => item.id === documentId);
     if (tab) hydrateDocumentOnSelect(tab);
-  }, [hydrateDocumentOnSelect, pdfTabs, rememberNonMemoryTab]);
+    persistWorkspaceResume(workspaceContextKey, {
+      tabId: DOCUMENTS_TAB_ID,
+      documentId,
+      traceId: null,
+      canvasId: null,
+    });
+  }, [hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
 
   const handleDocumentClose = useCallback((tabId: string) => {
     closeDocumentTabUtil(
@@ -710,14 +841,28 @@ export default function Home() {
       setMemoryManagerIntent(null);
       setMemoryCuratorDirty(false);
     }
-    if (tabId !== 'memory-tab') {
-      rememberNonMemoryTab(tabId);
-    }
-    setActiveTabId(tabId);
-    setIsBrowserActive(tabId === 'browser-tab');
+    let nextDocumentId = activeDocumentId;
+    let nextTraceId = activeTraceId;
+    let nextCanvasId = activeCanvasId;
     if (tabId === DOCUMENTS_TAB_ID && !activeDocumentId && pdfTabs[0]) {
-      setActiveDocumentId(pdfTabs[0].id);
+      nextDocumentId = pdfTabs[0].id;
       hydrateDocumentOnSelect(pdfTabs[0]);
+    }
+    if (tabId !== DOCUMENTS_TAB_ID) nextDocumentId = null;
+    if (tabId !== 'trace-tab') nextTraceId = null;
+    if (tabId !== RESEARCH_CANVAS_TAB_ID) nextCanvasId = null;
+    setActiveTabId(tabId);
+    setActiveDocumentId(nextDocumentId);
+    setActiveTraceId(nextTraceId);
+    setActiveCanvasId(nextCanvasId);
+    setIsBrowserActive(tabId === 'browser-tab');
+    if (tabId !== 'memory-tab') {
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId,
+        documentId: nextDocumentId,
+        traceId: nextTraceId,
+        canvasId: nextCanvasId,
+      });
     }
     if (tabId === 'memory-tab') {
       const memoryProject = activeProject || threadProject;
@@ -729,29 +874,49 @@ export default function Home() {
         }));
       }
     }
-  }, [activeDocumentId, activeProject, activeThread, confirmDiscardMemoryCurator, hydrateDocumentOnSelect, memoryManagerIntent, pdfTabs, rememberNonMemoryTab, threadProject]);
+  }, [activeCanvasId, activeDocumentId, activeProject, activeThread, activeTraceId, confirmDiscardMemoryCurator, hydrateDocumentOnSelect, memoryManagerIntent, pdfTabs, persistWorkspaceResume, threadProject, workspaceContextKey]);
 
   const handleOpenMemoryCurator = useCallback((intent: MemoryManagerIntent) => {
     if (memoryManagerIntent && memoryManagerDirtyRef.current && !confirmDiscardMemoryCurator()) return;
-    rememberNonMemoryTab(activeTabId);
     setActiveTabId('memory-tab');
     setIsBrowserActive(false);
     setMemoryCuratorDirty(false);
     setMemoryManagerIntent(intent);
-  }, [activeTabId, confirmDiscardMemoryCurator, memoryManagerIntent, rememberNonMemoryTab]);
+  }, [confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleMemoryBack = useCallback(() => {
     if (!confirmDiscardMemoryCurator()) return;
     setMemoryCuratorDirty(false);
     setMemoryManagerIntent(null);
-    const target = lastNonMemoryTabByContext[workspaceContextKey] || fallbackNonMemoryTab();
-    if (target === 'home-tab') {
-      handleOpenHome();
+    const availableTabs = activeThread
+      ? buildDocumentWorkspaceTabs({
+        enabled: true,
+        documentCount: pdfTabs.length,
+        traces: traceTabs,
+        includeResearchCanvas: true,
+      })
+      : activeProject
+        ? buildProjectWorkspaceTabs(pdfTabs.length)
+        : buildHomeWorkspaceTabs();
+    const resolved = resolveWorkspaceResume({
+      contextKey: workspaceContextKey,
+      state: readWorkspaceResume(workspaceContextKey),
+      availableTabs,
+      pdfTabs,
+      traceIds: traceTabs.map((trace) => trace.id),
+      canvasIds: activeCanvasId ? [activeCanvasId] : [],
+    });
+    if (resolved.tabId === 'home-tab' && workspaceContextKey === 'home') {
+      setActiveTabId(resolved.tabId);
+      setIsBrowserActive(false);
       return;
     }
-    setActiveTabId(target);
-    setIsBrowserActive(target === 'browser-tab');
-  }, [confirmDiscardMemoryCurator, fallbackNonMemoryTab, handleOpenHome, lastNonMemoryTabByContext, workspaceContextKey]);
+    setActiveTabId(resolved.tabId);
+    setActiveDocumentId(resolved.documentId ?? null);
+    setActiveTraceId(resolved.traceId ?? null);
+    setActiveCanvasId(resolved.canvasId ?? null);
+    setIsBrowserActive(resolved.tabId === 'browser-tab');
+  }, [activeCanvasId, activeProject, activeThread, confirmDiscardMemoryCurator, pdfTabs, traceTabs, workspaceContextKey]);
 
   const handleOpenConversationReview = useCallback((draftContent?: string) => {
     if (!activeThread) return;
@@ -766,38 +931,77 @@ export default function Home() {
   }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
 
   const handleOpenCanvas = useCallback((canvas: CanvasRef) => {
-    rememberNonMemoryTab(RESEARCH_CANVAS_TAB_ID);
     setActiveCanvasId(canvas.id);
     setActiveTabId(RESEARCH_CANVAS_TAB_ID);
     setIsBrowserActive(false);
     setCanvasRefreshVersion((value) => value + 1);
-  }, [rememberNonMemoryTab]);
+    persistWorkspaceResume(workspaceContextKey, {
+      tabId: RESEARCH_CANVAS_TAB_ID,
+      documentId: null,
+      traceId: null,
+      canvasId: canvas.id,
+    });
+  }, [persistWorkspaceResume, workspaceContextKey]);
 
   const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
     const documentTab = pdfTabs.find((tab) => tab.fileHash === target.fileHash);
     if (!documentTab) return;
-    rememberNonMemoryTab(DOCUMENTS_TAB_ID);
     setActiveTabId(DOCUMENTS_TAB_ID);
     setActiveDocumentId(documentTab.id);
     setIsBrowserActive(false);
     hydrateDocumentOnSelect(documentTab);
     setActiveSource('pdf');
+    persistWorkspaceResume(workspaceContextKey, {
+      tabId: DOCUMENTS_TAB_ID,
+      documentId: documentTab.id,
+      traceId: null,
+      canvasId: null,
+    });
     if (target.sentenceId != null) {
       setCurrentPdfId(target.sentenceId);
       if (target.play !== false) {
         setPlayRequestId(target.sentenceId);
       }
     }
-  }, [hydrateDocumentOnSelect, pdfTabs, rememberNonMemoryTab]);
+  }, [hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
     if (trace.activate !== false) {
-      rememberNonMemoryTab('trace-tab');
       setActiveTabId('trace-tab');
       setIsBrowserActive(false);
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: 'trace-tab',
+        documentId: null,
+        traceId: trace.id,
+        canvasId: null,
+      });
     }
     openTrace(trace);
-  }, [openTrace, rememberNonMemoryTab]);
+  }, [openTrace, persistWorkspaceResume, workspaceContextKey]);
+
+  const handleActiveTraceChange = useCallback((traceId: string | null) => {
+    setActiveTraceId(traceId);
+    if (activeTabId === 'trace-tab' && traceId) {
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: 'trace-tab',
+        documentId: null,
+        traceId,
+        canvasId: null,
+      });
+    }
+  }, [activeTabId, persistWorkspaceResume, setActiveTraceId, workspaceContextKey]);
+
+  const handleActiveCanvasChange = useCallback((canvasId: string | null) => {
+    setActiveCanvasId(canvasId);
+    if (activeTabId === RESEARCH_CANVAS_TAB_ID && canvasId) {
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: RESEARCH_CANVAS_TAB_ID,
+        documentId: null,
+        traceId: null,
+        canvasId,
+      });
+    }
+  }, [activeTabId, persistWorkspaceResume, workspaceContextKey]);
 
   const isMemoryWorkspaceActive = activeTabId === 'memory-tab';
   const activeMemoryIntent = isMemoryWorkspaceActive
@@ -909,7 +1113,7 @@ export default function Home() {
               cachedDownloadUrl={cachedDocumentData.downloadUrl}
               traceTabs={traceTabs}
               activeTraceId={activeTraceId}
-              onActiveTraceChange={setActiveTraceId}
+              onActiveTraceChange={handleActiveTraceChange}
               onCloseTrace={closeTrace}
               onCloseDocument={handleDocumentClose}
               onDocumentRemove={handleTabRemove}
@@ -927,7 +1131,7 @@ export default function Home() {
               threadId={activeThread?.id ?? null}
               activeThread={activeThread}
               activeCanvasId={activeCanvasId}
-              onActiveCanvasChange={setActiveCanvasId}
+              onActiveCanvasChange={handleActiveCanvasChange}
               onOpenDocumentCitation={handleOpenDocumentCitation}
               canvasRefreshVersion={canvasRefreshVersion}
               documents={pdfTabs}
@@ -942,6 +1146,12 @@ export default function Home() {
               onCapturePage={() => {
                 setActiveTabId('browser-tab');
                 setIsBrowserActive(true);
+                persistWorkspaceResume(workspaceContextKey, {
+                  tabId: 'browser-tab',
+                  documentId: null,
+                  traceId: null,
+                  canvasId: null,
+                });
               }}
               onAddCapture={() => { void handleAddBrowserToThread(); }}
               onRequestUpload={() => {
