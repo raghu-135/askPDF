@@ -77,7 +77,7 @@ import useStoredLayoutState from '../workbench/useStoredLayoutState';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import ThreadSecondaryPanel from '../ThreadSecondaryPanel';
-import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
+import { buildDocumentWorkspaceTabs, DOCUMENTS_TAB_ID, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
 import { hydrateThreadPdfTab, loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
@@ -236,6 +236,7 @@ export default function AgentWorkflowBuilderPage() {
   const [testThread, setTestThread] = useState<Thread | null>(null);
   const [testPdfTabs, setTestPdfTabs] = useState<PdfTab[]>([]);
   const [testActiveTabId, setTestActiveTabId] = useState<string | null>(null);
+  const [testActiveDocumentId, setTestActiveDocumentId] = useState<string | null>(null);
   const [testThreadLoading, setTestThreadLoading] = useState(false);
   const [testSidebarVersion, setTestSidebarVersion] = useState(0);
   const {
@@ -701,19 +702,20 @@ export default function AgentWorkflowBuilderPage() {
     }
   }, [baseWorkflowId, clearTestTraces, testThread?.id]);
 
-  const testActiveDocument = getActiveTab(testPdfTabs, testActiveTabId);
+  const testActiveDocument = getActiveTab(testPdfTabs, testActiveDocumentId);
   const testActiveDocumentData = getActiveTabData(testActiveDocument);
   const testWorkspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
     enabled: Boolean(testThread),
-    documents: testPdfTabs,
+    documentCount: testPdfTabs.length,
     traces: testTraceTabs,
-  }), [testPdfTabs, testThread, testTraceTabs]);
+  }), [testPdfTabs.length, testThread, testTraceTabs]);
 
   const handleTestThreadSelect = useCallback(async (thread: Thread | null) => {
     if (!thread) {
       setTestThread(null);
       setTestPdfTabs([]);
       setTestActiveTabId(null);
+      setTestActiveDocumentId(null);
       setTestSession(emptyBuilderTestSession());
       clearTestTraces();
       return;
@@ -724,19 +726,10 @@ export default function AgentWorkflowBuilderPage() {
       const tabs = await loadThreadTabs(detailed);
       setTestThread(detailed);
       setTestPdfTabs(tabs);
-      setTestActiveTabId(tabs[0]?.id || 'browser-tab');
+      setTestActiveTabId(DOCUMENTS_TAB_ID);
+      setTestActiveDocumentId(tabs[0]?.id || null);
       setTestSession(emptyBuilderTestSession(detailed.id));
       clearTestTraces();
-      window.setTimeout(() => {
-        detailed.files.slice(1).forEach(async (threadFile) => {
-          try {
-            const hydrated = await hydrateThreadPdfTab(detailed.id, threadFile);
-            setTestPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
-          } catch (error) {
-            console.warn(`Failed to hydrate background test PDF tab ${threadFile.fileHash}:`, error);
-          }
-        });
-      }, 0);
     } finally {
       setTestThreadLoading(false);
     }
@@ -744,14 +737,21 @@ export default function AgentWorkflowBuilderPage() {
 
   const handleTestTabChange = useCallback((tabId: string) => {
     setTestActiveTabId(tabId);
-    const tab = testPdfTabs.find(item => item.id === tabId);
-    if (!testThread || !tab || tabId === 'browser-tab' || tab.sentences) return;
+    if (tabId === DOCUMENTS_TAB_ID && !testActiveDocumentId && testPdfTabs[0]) {
+      setTestActiveDocumentId(testPdfTabs[0].id);
+    }
+  }, [testActiveDocumentId, testPdfTabs]);
+
+  const handleTestActiveDocumentChange = useCallback((documentId: string) => {
+    setTestActiveDocumentId(documentId);
+    const tab = testPdfTabs.find((item) => item.id === documentId);
+    if (!testThread || !tab || tab.sentences) return;
     void hydrateThreadPdfTab(testThread.id, {
       fileHash: tab.fileHash,
       fileName: tab.fileName,
       sourceType: tab.sourceType,
     }).then((hydrated) => {
-      setTestPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
+      setTestPdfTabs((prev) => prev.map((item) => item.fileHash === hydrated.fileHash ? hydrated : item));
     }).catch((error) => {
       console.warn(`Failed to hydrate selected test PDF tab ${tab.fileHash}:`, error);
     });
@@ -923,6 +923,8 @@ export default function AgentWorkflowBuilderPage() {
               ) : (
                 <ThreadWorkspaceContent
                   activeTabId={testActiveTabId}
+                  activeDocumentId={testActiveDocumentId}
+                  onActiveDocumentChange={handleTestActiveDocumentChange}
                   activeDocument={testActiveDocument}
                   documentSentences={testActiveDocumentData.pdfSentences}
                   documentDownloadUrl={testActiveDocumentData.downloadUrl}
@@ -937,8 +939,7 @@ export default function AgentWorkflowBuilderPage() {
                   autoScroll={false}
                   highlightEnabled
                   threadId={testThread?.id || null}
-                  emptyTitle={testThread ? 'Choose a workspace tab' : 'Select a thread to test'}
-                  emptyDescription={testThread ? 'Open a PDF, Browser, or Debug Trace.' : 'Use the project-grouped thread browser in the secondary panel.'}
+                  documents={testPdfTabs}
                 />
               )
             ) : buildTab === 'spec-tab' && spec ? (

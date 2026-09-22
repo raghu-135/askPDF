@@ -1,11 +1,13 @@
 import React from 'react';
-import { Box, Chip, IconButton, Tab, Tabs, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, IconButton, Tooltip, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AgentRunDebugPanel from '../agent-debug/AgentRunDebugPanel';
 import type { AgentRunDetails, AgentRunResumeAction, AgentTraceRefs } from '../../lib/api';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
+import NestedInstanceTabs from './NestedInstanceTabs';
+import WorkspaceEmptyState from './WorkspaceEmptyState';
 
 export type TraceRunTab = {
   id: string;
@@ -42,37 +44,54 @@ export default function TraceWorkspace({
   const activeTab = tabs.find((tab) => tab.id === activeRunId) || tabs[0];
   if (!activeTab) {
     return (
-      <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, color: 'text.secondary' }}>
-        <Box sx={{ textAlign: 'center' }}>
-          <BugReportIcon sx={{ fontSize: 42, opacity: 0.45 }} />
-          <Typography variant="h6">No trace open</Typography>
-          <Typography variant="body2">Open a trace from an assistant response to inspect its run.</Typography>
-        </Box>
-      </Box>
+      <WorkspaceEmptyState
+        icon={<BugReportIcon sx={{ fontSize: 42, opacity: 0.45 }} />}
+        title="No trace open"
+        description="Open a trace from an assistant response to inspect its run."
+      />
     );
   }
 
+  const nestedTabs = tabs.map((tab) => ({
+    id: tab.id,
+    label: (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+        <Typography variant="body2" noWrap sx={{ maxWidth: 170 }}>{tab.label}</Typography>
+        {tab.running && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
+        {tab.error && <Chip size="small" color="error" label="Failed" sx={{ height: 20 }} />}
+        <Tooltip title="Close trace">
+          <IconButton
+            size="small"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose(tab.id);
+            }}
+            sx={{ p: 0.2 }}
+          >
+            <CloseIcon sx={{ fontSize: 15 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+    ),
+  }));
+
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
-      <Tabs value={tabs.findIndex((tab) => tab.id === activeTab.id)} onChange={(_, index) => tabs[index] && onActiveRunChange(tabs[index].id)} variant="scrollable" scrollButtons="auto" aria-label="Open traces" sx={{ minHeight: 38, borderBottom: 1, borderColor: 'divider' }}>
-        {tabs.map((tab) => (
-          <Tab
-            key={tab.id}
-            sx={{ minHeight: 38, textTransform: 'none', py: 0 }}
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-                <Typography variant="body2" noWrap sx={{ maxWidth: 170 }}>{tab.label}</Typography>
-                {tab.running && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
-                {tab.error && <Chip size="small" color="error" label="Failed" sx={{ height: 20 }} />}
-                <Tooltip title="Close trace"><IconButton size="small" onClick={(event) => { event.stopPropagation(); onClose(tab.id); }} sx={{ p: 0.2 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-              </Box>
-            }
-          />
-        ))}
-      </Tabs>
+      <NestedInstanceTabs
+        tabs={nestedTabs}
+        activeId={activeTab.id}
+        onActiveChange={onActiveRunChange}
+        ariaLabel="Open traces"
+      />
       <Box sx={{ minHeight: 0, overflow: 'auto', bgcolor: 'background.default' }}>
         {activeTab.messageId && onBackToMessage && (
-          <Box sx={{ px: 1, py: 0.5 }}><Tooltip title="Return to the originating message"><IconButton size="small" onClick={() => onBackToMessage(activeTab.messageId!)}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip></Box>
+          <Box sx={{ px: 1, py: 0.5 }}>
+            <Tooltip title="Return to the originating message">
+              <IconButton size="small" onClick={() => onBackToMessage(activeTab.messageId!)}>
+                <ArrowBackIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
         )}
         <AgentRunDebugPanel
           runId={activeTab.id}

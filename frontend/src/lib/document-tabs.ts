@@ -29,6 +29,10 @@ export type TraceTabStatusInput = {
   error?: string | null;
 };
 
+export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
+export const EMBEDDINGS_TAB_ID = 'embeddings-tab' as const;
+export const DOCUMENTS_TAB_ID = 'documents-tab' as const;
+
 export const traceWorkspaceStatus = (
   traces: readonly TraceTabStatusInput[],
 ): TraceWorkspaceTab['status'] => {
@@ -37,15 +41,16 @@ export const traceWorkspaceStatus = (
   return 'idle';
 };
 
-export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
-export const EMBEDDINGS_TAB_ID = 'embeddings-tab' as const;
-
 export const isBrowserWorkspaceActive = ({
   activeTabId,
 }: {
   activeTabId: string | null;
   isBrowserActive?: boolean;
 }) => activeTabId === 'browser-tab';
+
+export const isDocumentsWorkspaceActive = (activeTabId: string | null) => (
+  activeTabId === DOCUMENTS_TAB_ID
+);
 
 export const selectedWorkspaceTabValue = (
   tabs: readonly { id: string }[],
@@ -54,13 +59,13 @@ export const selectedWorkspaceTabValue = (
 
 export const buildDocumentWorkspaceTabs = ({
   enabled,
-  documents,
+  documentCount = 0,
   traces,
   includeResearchCanvas = false,
   canvasCount = 0,
 }: {
   enabled: boolean;
-  documents: readonly PdfTab[];
+  documentCount?: number;
   traces: readonly TraceTabStatusInput[];
   includeResearchCanvas?: boolean;
   canvasCount?: number;
@@ -68,8 +73,8 @@ export const buildDocumentWorkspaceTabs = ({
   if (!enabled) return [];
   const tabs: WorkspaceTab[] = [
     { kind: 'memory', id: 'memory-tab', label: 'Memory' },
+    { kind: 'documents', id: DOCUMENTS_TAB_ID, label: 'Documents', count: documentCount },
     { kind: 'browser', id: 'browser-tab', label: 'Browser' },
-    ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
   ];
   if (includeResearchCanvas) {
     tabs.push({
@@ -94,11 +99,11 @@ export const buildDocumentWorkspaceTabs = ({
   return tabs;
 };
 
-export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): WorkspaceTab[] => [
+export const buildProjectWorkspaceTabs = (documentCount = 0): WorkspaceTab[] => [
   { kind: 'project', id: PROJECT_OVERVIEW_TAB_ID, label: 'Project' },
   { kind: 'memory', id: 'memory-tab', label: 'Memory' },
+  { kind: 'documents', id: DOCUMENTS_TAB_ID, label: 'Documents', count: documentCount },
   { kind: 'browser', id: 'browser-tab', label: 'Browser' },
-  ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
 ];
 
 export const projectWorkspaceLandingTabId = (
