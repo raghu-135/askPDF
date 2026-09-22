@@ -12,9 +12,10 @@ import logging
 import re
 from typing import Dict, Optional, Tuple
 from app.models.llm_server_client import (
-    get_embedding_model, 
+    embed_query,
+    get_embedding_model,
     should_use_local_embeddings,
-    LOCAL_EMBEDDING_MODELS
+    LOCAL_EMBEDDING_MODELS,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,11 @@ class EmbeddingModelRegistry:
     async def _probe_model_dimensions(self, model_name: str) -> int:
         """Probe embedding model to determine vector dimensions."""
         try:
-            embedding_model = get_embedding_model(model_name)
-            # Use a simple test text to get dimensions
-            test_embedding = await embedding_model.aembed_query("test")
+            if should_use_local_embeddings(model_name):
+                embedding_model = get_embedding_model(model_name)
+                test_embedding = await embedding_model.aembed_query("test")
+            else:
+                test_embedding = await embed_query(model_name, "test")
             dimensions = len(test_embedding)
             logger.info(f"Detected {dimensions} dimensions for model '{model_name}'")
             return dimensions

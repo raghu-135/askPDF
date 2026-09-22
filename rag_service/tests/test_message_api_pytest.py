@@ -173,3 +173,54 @@ class TestMessageEndpoints:
         )
         delete_pair.assert_awaited_once_with("turn-1:user")
         recompute_stats.assert_awaited_once_with("thread-1")
+
+    @pytest.mark.asyncio
+    async def test_delete_turn_with_remote_embedding_model_still_deletes_db_rows(self):
+        """Vector cleanup should not block deletion for remote embedding models."""
+        user = SimpleNamespace(
+            id="turn-1:user",
+            turn_id="turn-1",
+            thread_id="thread-1",
+            role=MessageRole.USER.value,
+            web_sources=None,
+        )
+        assistant = SimpleNamespace(
+            id="turn-1:assistant",
+            turn_id="turn-1",
+            thread_id="thread-1",
+            role=MessageRole.ASSISTANT.value,
+            web_sources=None,
+        )
+        thread = SimpleNamespace(id="thread-1", embedding_model="qwen/qwen3-embedding-4b")
+        vector_db = SimpleNamespace(
+            delete_chat_memory_by_message_id=AsyncMock(return_value=True),
+            delete_web_chunks_by_urls=AsyncMock(return_value=0),
+        )
+
+        with (
+            patch("app.api.messages.get_message", new_callable=AsyncMock, side_effect=[user, assistant]),
+            patch(
+                "app.api.messages.get_thread_messages",
+                new_callable=AsyncMock,
+                return_value=[user, assistant],
+            ),
+            patch("app.api.messages.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.messages.get_vector_db", return_value=vector_db),
+            patch(
+                "app.api.messages.delete_message_pair",
+                new_callable=AsyncMock,
+                return_value=["turn-1:user", "turn-1:assistant"],
+            ),
+            patch("app.api.messages.recompute_qa_stats", new_callable=AsyncMock),
+        ):
+            data = await messages_api.delete_message_endpoint("turn-1:user")
+
+        assert data == {
+            "status": "deleted",
+            "deleted_ids": ["turn-1:user", "turn-1:assistant"],
+        }
+        vector_db.delete_chat_memory_by_message_id.assert_awaited_once_with(
+            "thread-1",
+            "turn-1",
+            "qwen/qwen3-embedding-4b",
+        )

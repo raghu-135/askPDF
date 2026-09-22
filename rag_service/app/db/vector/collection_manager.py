@@ -25,6 +25,7 @@ from app.db.vector.helpers import _metadata_json, _parse_metadata
 logger = logging.getLogger(__name__)
 
 _SIMILAR_CLASS_RE = re.compile(r'found similar class "([^"]+)"', re.IGNORECASE)
+_COLLECTION_DIMENSION_SUFFIX_RE = re.compile(r"_\d+$")
 
 
 def similar_weaviate_class_name(exc: BaseException) -> str | None:
@@ -75,6 +76,58 @@ class ModelAwareCollectionManager:
             if name.casefold() == folded:
                 return name
         return None
+
+    def _collection_prefix(self, base_name: str, model_name: str) -> str:
+        sanitized = self.registry.sanitize_model_name(model_name)
+        return f"{base_name}_{sanitized}_"
+
+    def find_existing_collection_names(self, base_name: str, model_name: str) -> list[str]:
+        """Return stored Weaviate classes for a base/model pair without probing embeddings."""
+        prefix = self._collection_prefix(base_name, model_name).casefold()
+        matches: list[str] = []
+        for name in self.listed_collection_names():
+            folded = name.casefold()
+            if folded.startswith(prefix) and _COLLECTION_DIMENSION_SUFFIX_RE.search(folded):
+                matches.append(name)
+        return matches
+
+    def find_existing_collection(self, base_name: str, model_name: str) -> str | None:
+        """Return one stored Weaviate class when an unambiguous match exists."""
+        matches = self.find_existing_collection_names(base_name, model_name)
+        if not matches:
+            return None
+        if len(matches) > 1:
+            logger.warning(
+                "Multiple collections match base '%s' and model '%s': %s",
+                base_name,
+                model_name,
+                matches,
+            )
+        return matches[0]
+
+    async def get_existing_collections(self, base_name: str, model_name: str) -> list:
+        """Return existing Weaviate collections for cleanup without live embedding probes."""
+        names = self.find_existing_collection_names(base_name, model_name)
+        if len(names) > 1:
+            logger.warning(
+                "Deleting from all %s collections matching base '%s' and model '%s': %s",
+                len(names),
+                base_name,
+                model_name,
+                names,
+            )
+        collections = []
+        for stored_name in names:
+            if stored_name not in self._collection_cache:
+                collection = self.client.collections.use(stored_name)
+                self._collection_cache[stored_name] = collection
+            collections.append(self._collection_cache[stored_name])
+        return collections
+
+    async def get_existing_collection(self, base_name: str, model_name: str):
+        """Return one existing collection, or None when no class is stored yet."""
+        collections = await self.get_existing_collections(base_name, model_name)
+        return collections[0] if collections else None
     
     async def get_collection(self, base_name: str, model_name: str):
         """Get or create collection for base name and model."""

@@ -402,6 +402,25 @@ class WeaviateAdapter:
             logger.error("Unexpected error deleting %s: %s", description, e)
             return False
 
+    async def _delete_many_from_existing_collections(
+        self,
+        base_name: str,
+        embedding_model: str,
+        filt,
+        *,
+        description: str,
+    ) -> bool:
+        """Delete from stored model-aware collections without probing the embedding API."""
+        collections = await self.collection_manager.get_existing_collections(base_name, embedding_model)
+        if not collections:
+            logger.info("No existing '%s' collection for model '%s'; skipping %s", base_name, embedding_model, description)
+            return True
+        results = [
+            await self._delete_many_from_collection(col, filt, description=description)
+            for col in collections
+        ]
+        return all(results)
+
     async def delete_thread_data(self, thread_id: str) -> bool:
         """Delete only thread-scoped chat-memory and web-search vectors for a thread.
         
@@ -1646,16 +1665,14 @@ class WeaviateAdapter:
         _validate_not_empty(message_id, "message_id")
         _validate_not_empty(embedding_model, "embedding_model")
         
-        # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
-        
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("message_id").equal(message_id)
         )
         
-        return await self._delete_many_from_collection(
-            col,
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.CHAT_MEMORY,
+            embedding_model,
             filt,
             description=f"chat memory for message '{message_id}' in thread '{thread_id}'",
         )
@@ -1676,15 +1693,13 @@ class WeaviateAdapter:
         if not urls:
             return 0
         
-        # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
-        
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("url").contains_any(urls)
         )
-        deleted = await self._delete_many_from_collection(
-            col,
+        deleted = await self._delete_many_from_existing_collections(
+            CollectionNames.WEB_SEARCH,
+            embedding_model,
             filt,
             description=f"web chunks for {len(urls)} URLs in thread '{thread_id}'",
         )
@@ -1703,12 +1718,10 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model, "embedding_model")
         
-        # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
-        
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        return await self._delete_many_from_collection(
-            col,
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.DOCUMENT,
+            embedding_model,
             filt,
             description=f"document vectors for file '{file_hash}', model '{embedding_model}'",
         )
@@ -1717,10 +1730,10 @@ class WeaviateAdapter:
         """Delete only staged vectors belonging to one materialization attempt."""
         _validate_not_empty(manifest_id, "manifest_id")
         _validate_not_empty(embedding_model, "embedding_model")
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         filt = wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
-        return await self._delete_many_from_collection(
-            col,
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.DOCUMENT,
+            embedding_model,
             filt,
             description=f"document vectors for manifest '{manifest_id}'",
         )
