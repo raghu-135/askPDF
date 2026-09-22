@@ -14,6 +14,7 @@ import FolderIcon from '@mui/icons-material/Folder';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PublicIcon from '@mui/icons-material/Public';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
+import ForumIcon from '@mui/icons-material/Forum';
 import type { BackendSentence, BBox } from '../../lib/bbox-derivation';
 import {
   ProcessStatus,
@@ -43,6 +44,7 @@ export type DocumentWorkspaceTab = {
 export type BrowserWorkspaceTab = { kind: 'browser'; id: 'browser-tab'; label: string };
 export type HomeWorkspaceTab = { kind: 'home'; id: 'home-tab'; label: string };
 export type ProjectWorkspaceTab = { kind: 'project'; id: 'project-tab'; label: string };
+export type ThreadWorkspaceTab = { kind: 'thread'; id: 'thread-tab'; label: string };
 export type MemoryWorkspaceTab = { kind: 'memory'; id: 'memory-tab'; label: string };
 export type DocumentsWorkspaceTab = { kind: 'documents'; id: 'documents-tab'; label: string; count?: number };
 export type CanvasWorkspaceTab = { kind: 'canvas'; id: 'canvas-tab'; label: string; issueCount?: number };
@@ -64,6 +66,7 @@ export type WorkspaceTab =
   | BrowserWorkspaceTab
   | HomeWorkspaceTab
   | ProjectWorkspaceTab
+  | ThreadWorkspaceTab
   | MemoryWorkspaceTab
   | DocumentsWorkspaceTab
   | CanvasWorkspaceTab
@@ -178,6 +181,14 @@ export default React.memo(function WorkspaceTabs({
               label: tab.label,
               icon: <FolderIcon fontSize="small" />,
               tooltip: 'Project',
+            });
+          }
+          if (tab.kind === 'thread') {
+            return renderLabeledTab({
+              tabId: tab.id,
+              label: tab.label,
+              icon: <ForumIcon fontSize="small" />,
+              tooltip: 'Thread',
             });
           }
           if (tab.kind === 'memory') {

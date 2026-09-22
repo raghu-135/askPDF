@@ -10,6 +10,8 @@ import {
   isDocumentsWorkspaceActive,
   projectWorkspaceLandingTabId,
   selectedWorkspaceTabValue,
+  THREAD_OVERVIEW_TAB_ID,
+  threadWorkspaceLandingTabId,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
 
@@ -19,7 +21,7 @@ test('trace workspace status prefers failed over running over idle', () => {
   assert.equal(traceWorkspaceStatus([{ running: true }, { error: 'boom' }]), 'failed');
 });
 
-test('document workspace tabs include memory, documents, browser, canvas, embeddings, and debug trace', () => {
+test('document workspace tabs include thread, memory, documents, browser, canvas, embeddings, and debug trace', () => {
   const tabs = buildDocumentWorkspaceTabs({
     enabled: true,
     documentCount: 3,
@@ -30,18 +32,19 @@ test('document workspace tabs include memory, documents, browser, canvas, embedd
 
   assert.deepEqual(
     tabs.map((tab) => tab.kind),
-    ['memory', 'documents', 'browser', 'research_canvas', 'embeddings', 'trace'],
+    ['thread', 'memory', 'documents', 'browser', 'research_canvas', 'embeddings', 'trace'],
   );
-  assert.equal(tabs[0].id, 'memory-tab');
-  assert.equal(tabs[1].id, DOCUMENTS_TAB_ID);
-  assert.equal(tabs[1].count, 3);
-  assert.equal(tabs[2].id, 'browser-tab');
-  assert.equal(tabs[3].id, 'research-canvas-tab');
-  assert.equal(tabs[3].count, 2);
-  assert.equal(tabs[4].id, 'embeddings-tab');
-  assert.equal(tabs[5].id, 'trace-tab');
-  assert.equal(tabs[5].status, 'running');
-  assert.equal(tabs[5].count, 1);
+  assert.equal(tabs[0].id, THREAD_OVERVIEW_TAB_ID);
+  assert.equal(tabs[1].id, 'memory-tab');
+  assert.equal(tabs[2].id, DOCUMENTS_TAB_ID);
+  assert.equal(tabs[2].count, 3);
+  assert.equal(tabs[3].id, 'browser-tab');
+  assert.equal(tabs[4].id, 'research-canvas-tab');
+  assert.equal(tabs[4].count, 2);
+  assert.equal(tabs[5].id, 'embeddings-tab');
+  assert.equal(tabs[6].id, 'trace-tab');
+  assert.equal(tabs[6].status, 'running');
+  assert.equal(tabs[6].count, 1);
 });
 
 test('document workspace tabs are empty when disabled', () => {
@@ -64,6 +67,11 @@ test('project workspace opens overview first and groups documents under document
 test('project landing stays on overview instead of leftover browser or a document', () => {
   assert.equal(projectWorkspaceLandingTabId([{ id: 'file-1' }]), 'project-tab');
   assert.equal(projectWorkspaceLandingTabId([]), 'project-tab');
+});
+
+test('thread landing opens documents when files exist and thread overview when empty', () => {
+  assert.equal(threadWorkspaceLandingTabId([{ id: 'file-1' }]), DOCUMENTS_TAB_ID);
+  assert.equal(threadWorkspaceLandingTabId([]), THREAD_OVERVIEW_TAB_ID);
 });
 
 test('browser workspace follows the Browser tab, not a leftover active flag', () => {

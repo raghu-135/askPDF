@@ -30,6 +30,7 @@ export type TraceTabStatusInput = {
 };
 
 export const PROJECT_OVERVIEW_TAB_ID = 'project-tab' as const;
+export const THREAD_OVERVIEW_TAB_ID = 'thread-tab' as const;
 export const EMBEDDINGS_TAB_ID = 'embeddings-tab' as const;
 export const DOCUMENTS_TAB_ID = 'documents-tab' as const;
 
@@ -72,6 +73,7 @@ export const buildDocumentWorkspaceTabs = ({
 }): WorkspaceTab[] => {
   if (!enabled) return [];
   const tabs: WorkspaceTab[] = [
+    { kind: 'thread', id: THREAD_OVERVIEW_TAB_ID, label: 'Thread' },
     { kind: 'memory', id: 'memory-tab', label: 'Memory' },
     { kind: 'documents', id: DOCUMENTS_TAB_ID, label: 'Documents', count: documentCount },
     { kind: 'browser', id: 'browser-tab', label: 'Browser' },
@@ -109,6 +111,10 @@ export const buildProjectWorkspaceTabs = (documentCount = 0): WorkspaceTab[] => 
 export const projectWorkspaceLandingTabId = (
   _documents: readonly Pick<PdfTab, 'id'>[] = [],
 ): string => PROJECT_OVERVIEW_TAB_ID;
+
+export const threadWorkspaceLandingTabId = (
+  documents: readonly Pick<PdfTab, 'id'>[] = [],
+): string => (documents.length > 0 ? DOCUMENTS_TAB_ID : THREAD_OVERVIEW_TAB_ID);
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
   { kind: 'home', id: 'home-tab', label: 'Home' },

@@ -25,7 +25,9 @@ import {
   DOCUMENTS_TAB_ID,
   isDocumentsWorkspaceActive,
   PROJECT_OVERVIEW_TAB_ID,
+  THREAD_OVERVIEW_TAB_ID,
   projectWorkspaceLandingTabId,
+  threadWorkspaceLandingTabId,
   type PdfTab,
 } from "../lib/document-tabs";
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
@@ -48,6 +50,7 @@ import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 import { defaultMemoryManagerIntent, reviewManagerIntent, type MemoryManagerIntent } from '../lib/memory-manager';
 import type { ConversationSentence } from '../lib/chat-sentence-cache';
+import { ThreadChatSettingsProvider } from '../lib/thread-chat-settings-context';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -145,9 +148,9 @@ export default function Home() {
 
   const fallbackNonMemoryTab = useCallback(() => {
     if (activeProject) return PROJECT_OVERVIEW_TAB_ID;
-    if (activeThread) return DOCUMENTS_TAB_ID;
+    if (activeThread) return threadWorkspaceLandingTabId(pdfTabs);
     return 'home-tab';
-  }, [activeProject, activeThread]);
+  }, [activeProject, activeThread, pdfTabs]);
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
@@ -157,7 +160,7 @@ export default function Home() {
     setMemoryCuratorDirty(false);
     // Clear current state
     setPdfTabs([]);
-    setActiveTabId(thread ? DOCUMENTS_TAB_ID : 'home-tab');
+    setActiveTabId(thread ? THREAD_OVERVIEW_TAB_ID : 'home-tab');
     setActiveDocumentId(null);
     setCachedPdfFileHash(null);
     previousDocumentFileHashRef.current = null;
@@ -176,6 +179,7 @@ export default function Home() {
 
     if (thread) {
       setActiveProject(null);
+      setActiveThread(thread);
       try {
         setIsPdfLoading(true);
         // Always fetch the latest thread data to ensure we have current files and stats
@@ -192,7 +196,7 @@ export default function Home() {
         setActiveThread(detailedThread);
         setThreadProject(parentProject);
         setPdfTabs(loadedTabs);
-        setActiveTabId(DOCUMENTS_TAB_ID);
+        setActiveTabId(threadWorkspaceLandingTabId(loadedTabs));
         setActiveDocumentId(loadedTabs[0]?.id || null);
       } catch (err) {
         if (nav !== workspaceNavRef.current) return;
@@ -580,6 +584,16 @@ export default function Home() {
     if (tab) hydrateDocumentOnSelect(tab);
   }, [hydrateDocumentOnSelect, pdfTabs]);
 
+  const handleOpenOverviewDocument = useCallback((documentId: string) => {
+    rememberNonMemoryTab(DOCUMENTS_TAB_ID);
+    setActiveTabId(DOCUMENTS_TAB_ID);
+    setActiveDocumentId(documentId);
+    setIsBrowserActive(false);
+    setActiveSource('pdf');
+    const tab = pdfTabs.find((item) => item.id === documentId);
+    if (tab) hydrateDocumentOnSelect(tab);
+  }, [hydrateDocumentOnSelect, pdfTabs, rememberNonMemoryTab]);
+
   const handleDocumentClose = useCallback((tabId: string) => {
     closeDocumentTabUtil(
       tabId,
@@ -816,6 +830,7 @@ export default function Home() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <ThreadChatSettingsProvider>
       <Box sx={{ height: '100vh', overflow: 'hidden', bgcolor: 'background.default' }}>
         <WorkbenchShell
           layout={workbenchLayout}
@@ -935,6 +950,19 @@ export default function Home() {
               }}
               isBrowserCapturing={isBrowserCapturing}
               documentCount={pdfTabs.length}
+              threadProject={threadProject}
+              threadsById={rightPanelLineageThreadsById}
+              onOpenThread={handleOpenThreadInChat}
+              onOpenDocument={handleOpenOverviewDocument}
+              onProjectUpdated={handleProjectUpdated}
+              projectReady={activeProject ? projectModelReady !== false : true}
+              onCloneProject={sidebarHeaderState?.openCloneProjectDialog
+                ? () => sidebarHeaderState.openCloneProjectDialog?.(false)
+                : undefined}
+              onCloneProjectWithThreads={sidebarHeaderState?.openCloneProjectDialog
+                ? () => sidebarHeaderState.openCloneProjectDialog?.(true)
+                : undefined}
+              onDeleteProject={sidebarHeaderState?.openDeleteProjectDialog}
               playerControlProps={isDocumentsWorkspaceActive(activeTabId) && activeThread ? {
                 sentences: activeSource === 'pdf' ? pdfSentences : chatSentences,
                 sourceKey: activeSource === 'pdf' ? `pdf:${fileHash || 'none'}` : chatPlaybackSourceKey,
@@ -1062,6 +1090,7 @@ export default function Home() {
           />
         ) : null}
       </Box>
+      </ThreadChatSettingsProvider>
     </ThemeProvider>
   );
 }

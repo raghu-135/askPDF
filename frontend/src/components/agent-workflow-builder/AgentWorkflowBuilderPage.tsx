@@ -77,7 +77,7 @@ import useStoredLayoutState from '../workbench/useStoredLayoutState';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import ThreadSecondaryPanel from '../ThreadSecondaryPanel';
-import { buildDocumentWorkspaceTabs, DOCUMENTS_TAB_ID, type PdfTab } from '../../lib/document-tabs';
+import { buildDocumentWorkspaceTabs, DOCUMENTS_TAB_ID, threadWorkspaceLandingTabId, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
 import { hydrateThreadPdfTab, loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
@@ -726,7 +726,7 @@ export default function AgentWorkflowBuilderPage() {
       const tabs = await loadThreadTabs(detailed);
       setTestThread(detailed);
       setTestPdfTabs(tabs);
-      setTestActiveTabId(DOCUMENTS_TAB_ID);
+      setTestActiveTabId(threadWorkspaceLandingTabId(tabs));
       setTestActiveDocumentId(tabs[0]?.id || null);
       setTestSession(emptyBuilderTestSession(detailed.id));
       clearTestTraces();

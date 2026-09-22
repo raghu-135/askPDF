@@ -4,6 +4,7 @@ import {
   DOCUMENTS_TAB_ID,
   EMBEDDINGS_TAB_ID,
   PROJECT_OVERVIEW_TAB_ID,
+  THREAD_OVERVIEW_TAB_ID,
   isBrowserWorkspaceActive,
   isDocumentsWorkspaceActive,
   type PdfTab,
@@ -14,6 +15,7 @@ import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
 import ProjectOverview from './ProjectOverview';
+import ThreadOverview from './ThreadOverview';
 import DocumentsWorkspace from './DocumentsWorkspace';
 import type { PlayerControlsProps } from '../PlayerControls';
 import type { Project, Thread } from '../../lib/api';
@@ -73,6 +75,15 @@ export default function ThreadWorkspaceContent({
   canvasRefreshVersion = 0,
   documents = [],
   playerControlProps = null,
+  threadProject = null,
+  threadsById,
+  onOpenThread,
+  onOpenDocument,
+  onProjectUpdated,
+  projectReady = true,
+  onCloneProject,
+  onCloneProjectWithThreads,
+  onDeleteProject,
 }: {
   activeTabId: string | null;
   activeDocumentId: string | null;
@@ -122,6 +133,15 @@ export default function ThreadWorkspaceContent({
   canvasRefreshVersion?: number;
   documents?: readonly PdfTab[];
   playerControlProps?: PlayerControlsProps | null;
+  threadProject?: Project | null;
+  threadsById?: Map<string, Thread>;
+  onOpenThread?: (thread: Thread) => void;
+  onOpenDocument?: (documentId: string) => void;
+  onProjectUpdated?: (project: Project) => void;
+  projectReady?: boolean;
+  onCloneProject?: () => void;
+  onCloneProjectWithThreads?: () => void;
+  onDeleteProject?: () => void;
 }) {
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -138,16 +158,46 @@ export default function ThreadWorkspaceContent({
             <CircularProgress color={darkMode ? 'inherit' : 'primary'} />
             <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
           </Box>
-        ) : (
+        ) : activeProject ? (
           <ProjectOverview
-            projectName={activeProject?.name || 'Project'}
-            documentCount={documentCount}
+            project={activeProject}
+            documents={documents}
             darkMode={darkMode}
             onCreateThread={onCreateThread || (() => undefined)}
             onCapturePage={onCapturePage || (() => undefined)}
             onRequestUpload={onRequestUpload || (() => undefined)}
             isBrowserCapturing={isBrowserCapturing}
+            onProjectUpdated={onProjectUpdated}
+            onOpenDocument={onOpenDocument}
+            onCloneProject={onCloneProject}
+            onCloneProjectWithThreads={onCloneProjectWithThreads}
+            onDeleteProject={onDeleteProject}
+            projectReady={projectReady}
           />
+        ) : null
+      ) : activeTabId === THREAD_OVERVIEW_TAB_ID ? (
+        isLoading ? (
+          <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit' }}>
+            <CircularProgress color={darkMode ? 'inherit' : 'primary'} />
+            <Typography sx={{ ml: 2 }}>Loading thread...</Typography>
+          </Box>
+        ) : activeThread ? (
+          <ThreadOverview
+            thread={activeThread}
+            projectName={threadProject?.name}
+            threadsById={threadsById}
+            documents={documents}
+            darkMode={darkMode}
+            onCapturePage={onCapturePage}
+            onRequestUpload={onRequestUpload}
+            isBrowserCapturing={isBrowserCapturing}
+            onOpenThread={onOpenThread}
+            onOpenDocument={onOpenDocument}
+          />
+        ) : (
+          <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 4 }}>
+            <Typography color="text.secondary">Select a thread to view its overview.</Typography>
+          </Box>
         )
       ) : isDocumentsWorkspaceActive(activeTabId) ? (
         <DocumentsWorkspace

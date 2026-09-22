@@ -80,6 +80,7 @@ import {
     type ReasoningFormat as ReasoningFormatValue,
 } from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import { useThreadChatSettingsRegistryOptional } from '../lib/thread-chat-settings-context';
 import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTaskPanel';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
@@ -715,6 +716,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenMemoryReview,
     testRuntime,
 }) => {
+    const settingsRegistry = useThreadChatSettingsRegistryOptional();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
     const [composerSeed, setComposerSeed] = useState('');
@@ -1209,8 +1211,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         return merged;
     }, [toolCatalog, toolInstructions]);
 
+    const shouldLoadPromptPreview = settingsDialogOpen || Boolean(activeThread);
+
     useEffect(() => {
-        if (!settingsDialogOpen) return;
+        if (!shouldLoadPromptPreview) return;
         let cancelled = false;
         const timeoutId = setTimeout(async () => {
             try {
@@ -1235,7 +1239,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentWorkflowId]);
+    }, [shouldLoadPromptPreview, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentWorkflowId]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -2402,6 +2406,87 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setSettingsDialogOpen(false);
         loadThreadSettings();
     };
+
+    useEffect(() => {
+        if (!settingsRegistry) return;
+        const { registerSettings } = settingsRegistry;
+        if (!activeThread) {
+            registerSettings(null);
+            return;
+        }
+        registerSettings({
+            description: isTestRuntime
+                ? 'Initialized from the selected thread. Changes apply only to this temporary Builder Test session and are not saved to the thread.'
+                : undefined,
+            saveLabel: isTestRuntime ? 'Apply to test' : undefined,
+            replans,
+            replansLimit,
+            useReranker,
+            hitlCanvasPublish,
+            useMemory,
+            useThreadMemory,
+            useProjectMemory,
+            useGlobalMemory,
+            projectAllowsGlobalMemory,
+            agentWorkflowId,
+            agentWorkflowIsCustom: !isBuiltinAgentWorkflow(agentWorkflows, agentWorkflowId),
+            agentWorkflows,
+            systemRole,
+            toolInstructions,
+            customInstructions,
+            toolCatalog,
+            effectiveToolInstructions,
+            promptPreview,
+            saving: savingSettings,
+            onReplansChange: (value) => setReplans(value),
+            onRerankerChange: (checked) => setUseReranker(checked),
+            onHitlCanvasPublishChange: (checked) => setHitlCanvasPublish(checked),
+            onMemoryChange: (checked) => setUseMemory(checked),
+            onThreadMemoryChange: (checked) => setUseThreadMemory(checked),
+            onProjectMemoryChange: (checked) => setUseProjectMemory(checked),
+            onGlobalMemoryChange: (checked) => setUseGlobalMemory(checked),
+            onAgentWorkflowChange: (value) => setAgentWorkflowId(value),
+            onAgentWorkflowMenuOpen: refreshAgentWorkflows,
+            onSystemRoleChange: (value) => setSystemRole(value),
+            onToolInstructionChange: (toolId, value) =>
+                setToolInstructions((prev) => ({
+                    ...prev,
+                    [toolId]: value,
+                })),
+            onCustomInstructionsChange: (value) => setCustomInstructions(value),
+            onResetAll: resetAllSettingsToDefault,
+            onResetSystemRole: resetSystemRoleToDefault,
+            onResetToolInstruction: resetToolInstructionToDefault,
+            onResetCustomInstructions: resetCustomInstructionsToDefault,
+            onSave: () => { void handleSaveThreadSettings(); },
+            onReset: () => { void loadThreadSettings(); },
+        });
+        return () => {
+            registerSettings(null);
+        };
+    }, [
+        activeThread,
+        agentWorkflowId,
+        agentWorkflows,
+        customInstructions,
+        effectiveToolInstructions,
+        hitlCanvasPublish,
+        isTestRuntime,
+        projectAllowsGlobalMemory,
+        promptPreview,
+        settingsRegistry,
+        replans,
+        replansLimit,
+        savingSettings,
+        systemRole,
+        toolCatalog,
+        toolInstructions,
+        useGlobalMemory,
+        useMemory,
+        useProjectMemory,
+        useReranker,
+        useThreadMemory,
+    ]);
 
     const handleCopy = useCallback((text: string, messageId: string) => {
         navigator.clipboard.writeText(text);

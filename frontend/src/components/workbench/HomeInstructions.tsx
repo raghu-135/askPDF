@@ -1,89 +1,16 @@
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Box,
   Button,
   Chip,
   CircularProgress,
-  Divider,
-  List,
-  ListItem,
-  ListItemText,
-  Paper,
   Stack,
   Typography,
 } from '@mui/material';
-import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
-import ChatIcon from '@mui/icons-material/Chat';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import FactCheckIcon from '@mui/icons-material/FactCheck';
-import FolderCopyIcon from '@mui/icons-material/FolderCopy';
-import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import { HOME_INSTRUCTION_SECTIONS } from '../../lib/home-instructions';
-
-const sectionIcon = (title: string) => {
-  if (title === 'Projects and Threads') return <FolderCopyIcon color="primary" />;
-  if (title === 'Documents and Browser Sources') return <PictureAsPdfIcon color="primary" />;
-  if (title === 'Chat and Retrieval') return <ChatIcon color="primary" />;
-  if (title === 'Memory & Settings') return <PsychologyIcon color="primary" />;
-  if (title === 'Agent Workflows') return <AutoAwesomeSharpIcon color="primary" />;
-  return <FactCheckIcon color="primary" />;
-};
-
-function InstructionGuide() {
-  return (
-    <Box
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' },
-        gap: 1.5,
-      }}
-    >
-      {HOME_INSTRUCTION_SECTIONS.map((section) => (
-        <Paper
-          key={section.title}
-          elevation={0}
-          sx={{
-            border: 1,
-            borderColor: 'divider',
-            bgcolor: 'background.paper',
-            borderRadius: 1,
-            minWidth: 0,
-          }}
-        >
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1.25 }}>
-            {sectionIcon(section.title)}
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-              {section.title}
-            </Typography>
-          </Stack>
-          <Divider />
-          <List
-            dense
-            disablePadding
-            sx={{
-              listStyleType: 'disc',
-              pl: 3,
-              pr: 1.5,
-            }}
-          >
-            {section.items.map((item) => (
-              <ListItem key={item} alignItems="flex-start" sx={{ display: 'list-item', pl: 0, pr: 0, py: 0.75 }}>
-                <ListItemText
-                  primary={item}
-                  primaryTypographyProps={{ variant: 'body2', sx: { lineHeight: 1.45 } }}
-                />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
-      ))}
-    </Box>
-  );
-}
+import InstructionGuide from './InstructionGuide';
+import OverviewSection from './OverviewSection';
 
 export default function HomeInstructions({
   darkMode = false,
@@ -132,27 +59,14 @@ export default function HomeInstructions({
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
             <CircularProgress />
           </Box>
-        ) : hasProjects ? (
-          <Accordion
-            disableGutters
-            elevation={0}
-            sx={{
-              border: 1,
-              borderColor: 'divider',
-              bgcolor: 'background.paper',
-              borderRadius: 1,
-              '&:before': { display: 'none' },
-            }}
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography sx={{ fontWeight: 700 }}>How this works</Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <InstructionGuide />
-            </AccordionDetails>
-          </Accordion>
         ) : (
-          <InstructionGuide />
+          <OverviewSection
+            title="How this works"
+            collapsible={hasProjects}
+            defaultExpanded
+          >
+            <InstructionGuide sections={HOME_INSTRUCTION_SECTIONS} />
+          </OverviewSection>
         )}
       </Box>
     </Box>
