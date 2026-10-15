@@ -14,8 +14,9 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import {
   WorkbenchAutocomplete,
   WorkbenchToolbar,
-  workbenchControlOutlineSx,
 } from '../workbench/WorkbenchToolbar';
+import { ContextBudgetMenu } from './ContextBudgetMenu';
+import type { ContextBudgetRatios } from '../../lib/context-budget';
 
 export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   header: React.ReactNode;
@@ -62,6 +63,8 @@ export function ConversationHeader({
   models,
   model,
   contextWindow,
+  contextBudget,
+  defaultContextBudget,
   disabled = false,
   contextWindowDisabled = false,
   leading,
@@ -71,10 +74,13 @@ export function ConversationHeader({
   sx,
   onModelChange,
   onContextWindowChange,
+  onContextBudgetChange,
 }: {
   models: string[];
   model: string;
   contextWindow: number;
+  contextBudget: ContextBudgetRatios;
+  defaultContextBudget: ContextBudgetRatios;
   disabled?: boolean;
   contextWindowDisabled?: boolean;
   leading?: React.ReactNode;
@@ -84,6 +90,7 @@ export function ConversationHeader({
   sx?: SxProps<Theme>;
   onModelChange: (model: string) => void;
   onContextWindowChange: (contextWindow: number) => void;
+  onContextBudgetChange: (budget: ContextBudgetRatios) => void;
 }) {
   const [showContextHighlight, setShowContextHighlight] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -138,29 +145,15 @@ export function ConversationHeader({
               if (!showContextHighlight) setTooltipOpen(false);
             }}
           >
-            <TextField
-              size="small"
-              label="Ctx size"
-              type="number"
-              value={contextWindow}
+            <ContextBudgetMenu
+              contextWindow={contextWindow}
+              contextBudget={contextBudget}
+              defaultContextBudget={defaultContextBudget}
               disabled={disabled || contextWindowDisabled}
-              onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
-              onClick={dismissContextHelp}
-              onFocus={dismissContextHelp}
-              sx={{
-                width: 116,
-                flex: '0 0 116px',
-                '& .MuiOutlinedInput-root': {
-                  transition: 'all 0.3s ease',
-                  backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
-                  ...workbenchControlOutlineSx,
-                  '& fieldset': {
-                    borderColor: showContextHighlight ? 'primary.main' : 'transparent',
-                    borderWidth: showContextHighlight ? '2px' : '1px',
-                  },
-                },
-              }}
-              slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
+              highlight={showContextHighlight}
+              onContextWindowChange={onContextWindowChange}
+              onContextBudgetChange={onContextBudgetChange}
+              onDismissHelp={dismissContextHelp}
             />
           </Tooltip>
         </Box>

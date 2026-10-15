@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.models.requests import ContextBudgetOverride
+
 
 DEEP_RESEARCH_WORKFLOW_ID = "deep_research_agent"
 
@@ -103,6 +105,7 @@ class AgentTaskCreateRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=20_000)
     llm_model: str = Field(min_length=1, max_length=300)
     context_window: int = Field(default=32_768, ge=2_048, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
     enabled_profiles: List[SubagentProfileId] = Field(default_factory=lambda: [
         SubagentProfileId.DOCUMENT,

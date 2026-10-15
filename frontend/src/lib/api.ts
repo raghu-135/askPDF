@@ -900,9 +900,24 @@ export interface PromptToolDefinition {
   default_prompt: string;
 }
 
+export interface ContextBudgetDefaults {
+  usable_ratio: number;
+  recent_ratio: number;
+  semantic_ratio: number;
+  durable_memory_ratio: number;
+  document_ratio: number;
+  memory_expanded_ratio: number;
+  evidence_ratio?: number;
+  draft_ratio?: number;
+  plan_section_ratio?: number;
+  plan_total_ratio?: number;
+  plan_memory_ratio?: number;
+}
+
 export interface PromptDefaults {
   replans_limit: number;
   context_window: number;
+  context_budget: ContextBudgetDefaults;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -1744,6 +1759,7 @@ export async function planMemoryManager(input: {
   messages: MemoryCuratorMessage[];
   llm_model: string;
   context_window: number;
+  context_budget?: ContextBudgetDefaults;
   review_round?: number;
   review_id?: string | null;
   memory_review_cursor?: MemoryConsistencyReviewCursor | null;
@@ -1873,6 +1889,7 @@ export async function getPromptTools(): Promise<{ tools: PromptToolDefinition[];
 
 export async function getPromptPreview(payload: {
   context_window: number;
+  context_budget?: ContextBudgetDefaults;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -2554,7 +2571,12 @@ export async function listAgentDefinitions(): Promise<AgentDefinitionCatalogEntr
 }
 
 export async function createAgentTask(threadId: string, payload: {
-  definition_id: string; objective: string; llm_model: string; context_window: number; web_search_mode: 'off' | 'ask' | 'on';
+  definition_id: string;
+  objective: string;
+  llm_model: string;
+  context_window: number;
+  context_budget?: ContextBudgetDefaults;
+  web_search_mode: 'off' | 'ask' | 'on';
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',
@@ -2854,6 +2876,7 @@ const threadChatPayload = (
   customInstructionsOverride?: string,
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
+  contextBudget?: ContextBudgetDefaults,
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -2864,6 +2887,9 @@ const threadChatPayload = (
     context_window: contextWindowSize,
     ...getBrowserRuntimeContext()
   };
+  if (contextBudget) {
+    payload.context_budget = contextBudget;
+  }
   if (bypassClarification) {
     payload.bypass_clarification = true;
   }
@@ -2898,8 +2924,9 @@ export async function threadChat(
   customInstructionsOverride?: string,
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
+  contextBudget?: ContextBudgetDefaults,
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -2947,8 +2974,9 @@ export async function streamThreadChat(
   hitlWebApproval: boolean | undefined,
   onEvent: (event: AgentExecutionStreamEnvelope) => void,
   signal?: AbortSignal,
+  contextBudget?: ContextBudgetDefaults,
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

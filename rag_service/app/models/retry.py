@@ -48,7 +48,12 @@ async def invoke_with_retry(
     **kwargs,
 ):
     def retry_model_error(exc: BaseException) -> bool:
-        retryable, _ = is_retryable_model_error(str(exc))
+        from runtime_protocol.model_errors import is_context_length_error
+
+        message = str(exc)
+        if is_context_length_error(message):
+            return False
+        retryable, _ = is_retryable_model_error(message)
         return retryable
 
     async def observe_model_retry(event: Dict[str, Any]) -> None:

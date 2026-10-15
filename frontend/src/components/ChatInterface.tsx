@@ -99,6 +99,16 @@ import {
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
 import { formatAgentTraceIdentity, formatOpenTraceControlLabel } from '../lib/trace-open-label';
+import {
+    CONTEXT_BUDGET_STORAGE_KEY,
+    FALLBACK_CONTEXT_BUDGET,
+    type ContextBudgetRatios,
+    formatContextLengthUserMessage,
+    packingBudgetPayload,
+    readStoredContextBudget,
+    writeStoredContextBudget,
+} from '../lib/context-budget';
+import { ContextBudgetCapacityBar } from './conversation/ContextBudgetCapacityBar';
 import { canOpenTraceTab, isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
 import {
     ConversationComposer,
@@ -132,6 +142,7 @@ interface ChatMessage extends Message {
     agent_route_reason?: string;
     pending_human_review?: boolean;
     canvas_ref?: CanvasRef | null;
+    output_truncated?: boolean;
 }
 
 type LiveChatExecution = {
@@ -613,6 +624,11 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </details>
                     </Box>
                 )}
+                {msg.role === MessageRole.Assistant && msg.output_truncated && (
+                    <Alert severity="warning" variant="outlined" sx={{ mt: 1 }}>
+                        The model stopped because it hit the output limit. The answer may be cut off. Try lowering Ctx size or the document and history sliders.
+                    </Alert>
+                )}
                 {msg.role === MessageRole.Assistant && (
                     <SourceList label="Web sources used" sources={msg.web_sources || []} />
                 )}
@@ -732,6 +748,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
+    const [defaultContextBudget, setDefaultContextBudget] = useState<ContextBudgetRatios>(FALLBACK_CONTEXT_BUDGET);
+    const [contextBudget, setContextBudget] = useState<ContextBudgetRatios>(
+        () => readStoredContextBudget() || FALLBACK_CONTEXT_BUDGET,
+    );
     const [replans, setReplans] = useState(1);
     const [replansLimit, setReplansLimit] = useState<number | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
@@ -992,6 +1012,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
+                    if (res.defaults.context_budget) {
+                        const packingDefaults: ContextBudgetRatios = {
+                            usable_ratio: res.defaults.context_budget.usable_ratio,
+                            recent_ratio: res.defaults.context_budget.recent_ratio,
+                            semantic_ratio: res.defaults.context_budget.semantic_ratio,
+                            durable_memory_ratio: res.defaults.context_budget.durable_memory_ratio,
+                            document_ratio: res.defaults.context_budget.document_ratio,
+                            memory_expanded_ratio: res.defaults.context_budget.memory_expanded_ratio,
+                        };
+                        setDefaultContextBudget(packingDefaults);
+                        if (!localStorage.getItem(CONTEXT_BUDGET_STORAGE_KEY)) {
+                            setContextBudget(packingDefaults);
+                        }
+                    }
                     if (!activeThread) {
                         setReplans(Math.min(1, res.defaults.replans_limit));
                         setSystemRole(res.defaults.system_role ?? '');
@@ -1221,6 +1255,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             try {
                 const res = await getPromptPreview({
                     context_window: contextWindow,
+                    context_budget: packingBudgetPayload(contextBudget),
                     system_role: systemRole,
                     tool_instructions: effectiveToolInstructions,
                     custom_instructions: customInstructions,
@@ -1240,7 +1275,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [shouldLoadPromptPreview, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentWorkflowId]);
+    }, [shouldLoadPromptPreview, contextWindow, contextBudget, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentWorkflowId]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -1360,6 +1395,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (val > 0 && typeof window !== 'undefined') {
             localStorage.setItem('last_context_window', val.toString());
         }
+    };
+
+    const handleContextBudgetChange = (budget: ContextBudgetRatios) => {
+        setContextBudget(budget);
+        writeStoredContextBudget(budget);
     };
 
     useEffect(() => {
@@ -1888,6 +1928,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             let response: ThreadChatResponse | undefined;
             let terminalStreamError: string | undefined;
+            let outputTruncated = false;
             const traceStream = new LiveTraceStreamController(tempAssistantMsg.id);
             await streamThreadChat(
                 activeThread.id,
@@ -1903,6 +1944,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 Boolean(options?.bypassClarification),
                 hitlWebApproval,
                 (event: AgentExecutionStreamEnvelope) => {
+                    if (event.event === 'llm.completed' && event.data?.output_truncated) {
+                        outputTruncated = true;
+                    }
                     if (event.event !== 'heartbeat') {
                         appendLiveExecutionEvent(event);
                     }
@@ -1919,9 +1963,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (isLiveTraceTerminalEvent(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
                         const rawError = event.data?.error;
-                        terminalStreamError = event.event === 'run.failed' && !event.data?.response
-                            ? String(rawError?.raw_message || rawError?.message || rawError || 'Chat workflow failed.')
-                            : undefined;
+                        if (event.event === 'run.failed' && !event.data?.response) {
+                            const formatted = formatContextLengthUserMessage(rawError);
+                            terminalStreamError = formatted.detail
+                                ? `${formatted.title}\n\n${formatted.detail}`
+                                : formatted.title;
+                        } else {
+                            terminalStreamError = undefined;
+                        }
                         const terminalSnapshot = traceStream.snapshot(event.event, terminalStreamError, response?.status);
                         setLiveExecution((current) => current?.messageId === tempAssistantMsg.id
                             ? { ...current, runId: terminalSnapshot.runId, running: false, error: terminalStreamError }
@@ -1942,6 +1991,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         });
                     }
                 },
+                undefined,
+                packingBudgetPayload(contextBudget),
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;
@@ -2183,6 +2234,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             agent_workflow_id: response.agent_workflow_id,
                                                         agent_route: response.agent_route || response.route,
                             agent_route_reason: response.agent_route_reason,
+                            output_truncated: outputTruncated || undefined,
                             created_at: new Date().toISOString()
                         });
                     }
@@ -2661,6 +2713,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             models={availableModels}
             model={llmModel}
             contextWindow={contextWindow}
+            contextBudget={contextBudget}
+            defaultContextBudget={defaultContextBudget}
             selectedTaskId={deepResearchTaskId}
             embeddingControl={<EmbeddingModelReadinessIndicator model={activeThread.embeddingModel} ready={isEmbeddingModelValid} showStatusLabel />}
             renderWebControl={(mode, disabled) => <WebSearchModeControl
@@ -2671,6 +2725,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             webSearchMode={webSearchMode}
             onModelChange={(model) => void handleLlmModelChange(model)}
             onContextWindowChange={handleContextWindowChange}
+            onContextBudgetChange={handleContextBudgetChange}
             onTaskSelect={setDeepResearchTaskId}
             onBack={() => setDeepResearchOpen(false)}
             onOpenTrace={onOpenTrace}
@@ -2706,8 +2761,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 models={availableModels}
                 model={llmModel}
                 contextWindow={contextWindow}
+                contextBudget={contextBudget}
+                defaultContextBudget={defaultContextBudget}
                 onModelChange={(model) => void handleLlmModelChange(model)}
                 onContextWindowChange={handleContextWindowChange}
+                onContextBudgetChange={handleContextBudgetChange}
                 leading={(
                     <>
                     <EmbeddingModelReadinessIndicator
@@ -2888,6 +2946,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         </Tooltip>
                     </Box>
                 )}
+
+                <ContextBudgetCapacityBar
+                    contextWindow={contextWindow}
+                    contextBudget={contextBudget}
+                    disabled={loading}
+                    compact
+                />
 
                 <ChatComposer
                     inputRef={composerInputRef}

@@ -192,7 +192,7 @@ def _json_preview(value: Any, *, limit: int = 4000) -> str:
 def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **_prompt_context(state),
-        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:usable_context_chars(state.get("context_window"), ratio=0.45)] or CONTEXT_PLACEHOLDER,
+        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:usable_context_chars(state.get("context_window"), ratio_key="evidence_ratio", budget=state.get("context_budget"))] or CONTEXT_PLACEHOLDER,
         "EXECUTION_PLAN": _json_preview(state.get("execution_plan") or []),
         "DOCUMENT_SOURCE_COUNT": len(state.get("document_sources") or []),
         "WEB_SOURCE_COUNT": len(state.get("web_sources") or []),
@@ -262,7 +262,7 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
     })
     return _render_prompt("corrective_grounded_verifier.md", {
         **_prompt_context(state),
-        "DRAFT_ANSWER": str(state.get("final_answer") or "")[:usable_context_chars(state.get("context_window"), ratio=0.25)],
+        "DRAFT_ANSWER": str(state.get("final_answer") or "")[:usable_context_chars(state.get("context_window"), ratio_key="draft_ratio", budget=state.get("context_budget"))],
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
         "EVIDENCE_CONTEXT": corrective_evidence_context(state),
         "RETRIEVAL_CONTRADICTIONS": _json_preview(

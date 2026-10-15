@@ -103,6 +103,7 @@ def issue_execution_context_token(
             "llm_model": extensions.get("llm_model"),
             "embedding_model": context.embedding_model,
             "context_window": context.context_window,
+            "context_budget": context.context_budget,
         },
         "context": context_data,
     }

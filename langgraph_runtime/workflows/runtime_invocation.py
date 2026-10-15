@@ -27,6 +27,11 @@ from langgraph_runtime.workflows.state import (
 )
 from langgraph_runtime.workflows.trace import compact_preview
 from langgraph_runtime.models.retry import invoke_with_retry
+from runtime_protocol.model_errors import (
+    CONTEXT_LENGTH_EXCEEDED,
+    classify_model_error_message,
+    output_was_truncated,
+)
 from langgraph_runtime.time_utils import iso_utc_z, utc_now
 from langgraph_runtime.mcp_client import create_mcp_langchain_tool
 from langgraph_runtime.mcp_client import MCPUnavailableError
@@ -128,13 +133,25 @@ def append_tool_event_for_node(
 def error_summary(exc: Exception, *, code: str) -> Dict[str, Any]:
     if isinstance(exc, MCPUnavailableError):
         return {**exc.as_dict(), "workflow_error_code": code}
-    return {
-        "code": code,
+    classified = classify_model_error_message(str(exc))
+    resolved_code = str(classified.get("code") or code)
+    if resolved_code == CONTEXT_LENGTH_EXCEEDED:
+        logger.error(
+            "LLM context length exceeded | code=%s type=%s",
+            resolved_code,
+            type(exc).__name__,
+        )
+    retryable = bool(classified.get("retryable", False))
+    payload = {
+        "code": resolved_code,
         "type": type(exc).__name__,
         "message": compact_preview(str(exc), limit=700),
         "raw_message": compact_preview(str(exc), limit=700),
-        "retryable": True,
+        "retryable": retryable,
     }
+    if classified.get("http_status_code") is not None:
+        payload["http_status_code"] = classified["http_status_code"]
+    return payload
 
 
 def append_failed_node_event(
@@ -189,14 +206,18 @@ async def invoke_llm_for_node(
                 messages=messages,
                 response=response,
             )
-        await _emit_progress_event(config, "llm.completed", {
+        llm_meta = llm_result_metadata(response, model_name=model_name, retry_attempts=retry_attempts)
+        completed_payload = {
             **progress,
             "status": "completed",
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "response_chars": len(str(getattr(response, "content", "") or "")),
             "usage": _usage_summary(response),
             "retry_count": len(retry_attempts),
-        })
+        }
+        if llm_meta.get("output_truncated"):
+            completed_payload["output_truncated"] = True
+        await _emit_progress_event(config, "llm.completed", completed_payload)
         return response
     except (ChatRunCancellationRequested, GraphBubbleUp):
         raise
@@ -480,6 +501,11 @@ def llm_result_metadata(
     }
     token_counts = {key: value for key, value in token_counts.items() if value is not None}
 
+    finish_reason = response_metadata.get("finish_reason") or token_usage.get("finish_reason")
+    if finish_reason is None:
+        choices = response_metadata.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            finish_reason = choices[0].get("finish_reason")
     summary = {
         "model_name": model_name or response_metadata.get("model_name") or response_metadata.get("model"),
         "response_chars": len(content_text),
@@ -490,6 +516,8 @@ def llm_result_metadata(
         "reasoning_format": normalized.get("reasoning_format"),
         "reasoning_chars": len(reasoning) if reasoning else None,
         "reasoning_preview": compact_preview(reasoning, limit=1800) if reasoning else None,
+        "finish_reason": finish_reason,
+        "output_truncated": True if output_was_truncated(finish_reason) else None,
     }
     return {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
 

@@ -15,11 +15,13 @@ def test_memory_budget_is_a_ratio_of_the_context_window():
     from app.models.llm_server_client import CHARS_PER_TOKEN
     from app.models.memory_limits import MAX_CONTEXT_WINDOW_TOKENS, MAX_MEMORY_CONTEXT_CHARS
     from app.services.memory_retrieval_policy import AVERAGE_MEMORY_CHARS
+    from runtime_protocol.context_budget import load_context_budget_settings
 
+    settings = load_context_budget_settings()
     previous = None
     for context_window in (4096, 16384, 32768, 131072, 1_000_000):
         budget = compute_memory_retrieval_budget(context_window)
-        usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
+        usable = int(context_window * settings.usable_ratio * CHARS_PER_TOKEN)
         assert budget["char_budget"] == max(1, int(usable * budget["ratio"]))
         assert budget["candidate_limit"] == max(
             1, math.ceil(budget["char_budget"] / AVERAGE_MEMORY_CHARS) * 2

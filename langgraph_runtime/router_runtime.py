@@ -21,6 +21,8 @@ from langgraph_runtime.workflows.workflow_runtime import runtime_execution_optio
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
 from runtime_protocol.errors import RuntimeError as RuntimeExecutionError
+from runtime_protocol.context_budget import resolve_context_budget
+from runtime_protocol.model_errors import classify_model_error_message
 from langgraph_runtime.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 
@@ -526,6 +528,8 @@ async def _handle_compiled_rag_chat(
     if use_reranker is None:
         use_reranker = True
     context_window = getattr(req, "context_window", None) or runtime_limits().default_token_budget
+    raw_budget = getattr(req, "context_budget", None)
+    context_budget = resolve_context_budget(raw_budget if isinstance(raw_budget, dict) else None).to_dict()
     system_role = getattr(req, "system_role_override", "") or ""
     tool_instructions = getattr(req, "tool_instructions_override", None) or {}
     custom_instructions = getattr(req, "custom_instructions_override", "") or ""
@@ -590,6 +594,7 @@ async def _handle_compiled_rag_chat(
         "llm_model": llm_model,
         "embedding_model": embedding_model,
         "context_window": context_window,
+        "context_budget": context_budget,
         "use_web_search": use_web_search,
         "use_reranker": use_reranker,
         "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
@@ -853,12 +858,21 @@ async def _handle_compiled_rag_chat(
                 runtime_label, agent_run_id, thread_id, duration_ms,
             )
         parallel_unauthorized = str(exc) == "parallel runtime is not authorized for this workflow"
+        classified = classify_model_error_message(str(exc))
         error_payload = {
-            "code": "workflow_budget_exhausted" if budget_exhausted else ("agent_workflow_parallel_unauthorized" if parallel_unauthorized else failure_code),
+            "code": (
+                "workflow_budget_exhausted"
+                if budget_exhausted
+                else "agent_workflow_parallel_unauthorized"
+                if parallel_unauthorized
+                else str(classified.get("code") or failure_code)
+            ),
             "raw_message": str(exc),
-            "retryable": False if budget_exhausted else not parallel_unauthorized,
+            "retryable": False if budget_exhausted or parallel_unauthorized else bool(classified.get("retryable", False)),
             "partial": budget_exhausted,
         }
+        if classified.get("http_status_code") is not None:
+            error_payload["http_status_code"] = classified["http_status_code"]
         if budget_exhausted:
             error_payload["workflow_budget"] = exc.as_dict()
         node_events = merge_parallel_deltas(

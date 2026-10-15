@@ -10,6 +10,7 @@ import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import { packingBudgetPayload, type ContextBudgetRatios } from '../lib/context-budget';
 import {
   API_BASE,
   commandAgentTask,
@@ -221,12 +222,15 @@ export default function DeepResearchTaskPanel({
   models,
   model,
   contextWindow,
+  contextBudget,
+  defaultContextBudget,
   selectedTaskId,
   embeddingControl,
   renderWebControl,
   webSearchMode,
   onModelChange,
   onContextWindowChange,
+  onContextBudgetChange,
   onTaskSelect,
   onBack,
   onOpenTrace,
@@ -243,12 +247,15 @@ export default function DeepResearchTaskPanel({
   models: string[];
   model: string;
   contextWindow: number;
+  contextBudget: ContextBudgetRatios;
+  defaultContextBudget: ContextBudgetRatios;
   selectedTaskId: string | null;
   embeddingControl: React.ReactNode;
   renderWebControl: (mode: 'off' | 'ask' | 'on', disabled: boolean) => React.ReactNode;
   webSearchMode: 'off' | 'ask' | 'on';
   onModelChange: (model: string) => void;
   onContextWindowChange: (value: number) => void;
+  onContextBudgetChange: (value: ContextBudgetRatios) => void;
   onTaskSelect: (taskId: string | null) => void;
   onBack: () => void;
   onOpenTrace?: (trace: ChatTraceDescriptor) => void;
@@ -500,7 +507,14 @@ export default function DeepResearchTaskPanel({
     if (!definitionId) { setError('Select an available agent definition first.'); return; }
     setBusy(true); setError('');
     try {
-      const created = await createAgentTask(threadId, { definition_id: definitionId, objective, llm_model: model, context_window: contextWindow, web_search_mode: webSearchMode });
+      const created = await createAgentTask(threadId, {
+        definition_id: definitionId,
+        objective,
+        llm_model: model,
+        context_window: contextWindow,
+        context_budget: packingBudgetPayload(contextBudget),
+        web_search_mode: webSearchMode,
+      });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);
     } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
@@ -689,10 +703,13 @@ export default function DeepResearchTaskPanel({
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
       contextWindow={displayedContextWindow}
+      contextBudget={contextBudget}
+      defaultContextBudget={defaultContextBudget}
       disabled={frozen || modelField?.read_only === true}
       contextWindowDisabled={frozen || contextWindowField?.read_only === true}
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
+      onContextBudgetChange={onContextBudgetChange}
       leading={<><Tooltip title="Back to chat"><IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip>{embeddingControl}</>}
       beforeModelControls={webSearchField ? renderWebControl(
         frozen ? configuredWebMode : webSearchMode,

@@ -42,6 +42,7 @@ async def prefetch_context(
     use_web_search: bool,
     use_reranker: bool,
     prefetch_mode: str = DEFAULT_PREFETCH_MODE,
+    context_budget: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
@@ -67,7 +68,8 @@ async def prefetch_context(
     from app.db.vector import get_vector_db
     from app.models.retry import invoke_with_retry
 
-    budget = compute_prefetch_budget(context_window)
+    overrides = context_budget if isinstance(context_budget, dict) else None
+    budget = compute_prefetch_budget(context_window, overrides)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
     embedding_client = get_embedding_model(embedding_model)

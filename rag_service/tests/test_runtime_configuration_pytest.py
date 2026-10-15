@@ -67,6 +67,17 @@ def _environment() -> dict[str, str]:
         "REPLANS_LIMIT": "10",
         "MAX_CUSTOM_INSTRUCTIONS_CHARS": "2000",
         "MAX_SYSTEM_ROLE_CHARS": "500",
+        "CONTEXT_USABLE_RATIO": "0.80",
+        "CONTEXT_RECENT_RATIO": "0.22",
+        "CONTEXT_SEMANTIC_RATIO": "0.12",
+        "CONTEXT_DURABLE_MEMORY_RATIO": "0.06",
+        "CONTEXT_DOCUMENT_RATIO": "0.28",
+        "CONTEXT_MEMORY_EXPANDED_RATIO": "0.12",
+        "CONTEXT_EVIDENCE_RATIO": "0.45",
+        "CONTEXT_DRAFT_RATIO": "0.25",
+        "CONTEXT_PLAN_SECTION_RATIO": "0.20",
+        "CONTEXT_PLAN_TOTAL_RATIO": "0.50",
+        "CONTEXT_PLAN_MEMORY_RATIO": "0.12",
     }
     for suffix in (
         "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",

@@ -28,6 +28,7 @@ async def search_durable_memory(request: DocumentSearchRequest, context: ToolInv
             char_budget = int(compute_memory_retrieval_budget(
                 context.context_window or 32000,
                 expanded=True,
+                budget=context.context_budget,
             )["char_budget"])
             result = await search_memory_tool(
                 memory_context,

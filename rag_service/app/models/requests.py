@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime_protocol.context_budget import resolve_context_budget
 
 from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
@@ -161,6 +163,7 @@ class MemoryManagerConversationRequest(BaseModel):
     )
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
     memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
@@ -259,6 +262,7 @@ class MemoryManagerPlanRequest(BaseModel):
     memory_id: Optional[str] = None
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     review_round: int = Field(default=1, ge=1)
     review_cursor: Optional[MemoryReviewCursor] = None
     memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
@@ -325,6 +329,24 @@ class ThreadFileAnnotationsResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ContextBudgetOverride(BaseModel):
+    """Optional per-run packing ratios. Omitted fields use environment defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    usable_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    recent_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    semantic_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    durable_memory_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    document_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    memory_expanded_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _validate_prefetch_sum(self) -> "ContextBudgetOverride":
+        resolve_context_budget(self.model_dump(exclude_none=True))
+        return self
+
+
 class ThreadChatRequest(BaseModel):
     """Request body for thread-based chat."""
 
@@ -336,6 +358,7 @@ class ThreadChatRequest(BaseModel):
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
+    context_budget: Optional[ContextBudgetOverride] = None
     replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(
         default=None, max_length=MAX_SYSTEM_ROLE_CHARS
@@ -397,6 +420,7 @@ class ToolCatalogEntry(BaseModel):
 class PromptDefaults(BaseModel):
     replans_limit: int
     context_window: int
+    context_budget: Dict[str, float]
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
@@ -407,6 +431,7 @@ class PromptDefaults(BaseModel):
 
 class PromptPreviewRequest(BaseModel):
     context_window: int = DEFAULT_TOKEN_BUDGET
+    context_budget: Optional[ContextBudgetOverride] = None
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(

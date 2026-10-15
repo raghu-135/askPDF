@@ -6,26 +6,44 @@ import json
 import math
 import os
 import re
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Mapping
 
-from app.models.llm_server_client import CHARS_PER_TOKEN
+from runtime_protocol.context_budget import (
+    CHARS_PER_TOKEN,
+    ContextBudgetSettings,
+    load_context_budget_settings,
+    resolve_context_budget,
+)
+
 from app.models.memory_limits import DEFAULT_MEMORY_RELATIVE_SCORE_RATIO
 from app.models.memory_tools import normalize_memory_attributes
 
 
-STANDARD_MEMORY_RATIO = 0.06
-EXPANDED_MEMORY_RATIO = 0.12
 DEFAULT_MEMORY_SCORE_FLOOR = 0.20
 DEFAULT_RELATIVE_SCORE_RATIO = DEFAULT_MEMORY_RELATIVE_SCORE_RATIO
 NEAR_DUPLICATE_TOKEN_SIMILARITY = 0.85
 AVERAGE_MEMORY_CHARS = 400
 
 
-def compute_memory_retrieval_budget(context_window: int, *, expanded: bool = False) -> Dict[str, int | float]:
+def _memory_settings(budget: ContextBudgetSettings | Mapping[str, Any] | None) -> ContextBudgetSettings:
+    if budget is None:
+        return load_context_budget_settings()
+    if isinstance(budget, ContextBudgetSettings):
+        return budget
+    return resolve_context_budget(budget)
+
+
+def compute_memory_retrieval_budget(
+    context_window: int,
+    *,
+    expanded: bool = False,
+    budget: ContextBudgetSettings | Mapping[str, Any] | None = None,
+) -> Dict[str, int | float]:
     """Size durable-memory packing as a share of the selected context window."""
 
-    usable_chars = int(max(1, int(context_window)) * 0.80 * CHARS_PER_TOKEN)
-    ratio = EXPANDED_MEMORY_RATIO if expanded else STANDARD_MEMORY_RATIO
+    settings = _memory_settings(budget)
+    usable_chars = int(max(1, int(context_window)) * settings.usable_ratio * CHARS_PER_TOKEN)
+    ratio = settings.memory_expanded_ratio if expanded else settings.durable_memory_ratio
     char_budget = max(1, int(usable_chars * ratio))
     candidate_limit = max(1, math.ceil(char_budget / AVERAGE_MEMORY_CHARS) * 2)
     return {

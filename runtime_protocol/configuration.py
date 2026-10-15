@@ -36,6 +36,24 @@ LANGGRAPH_LIMIT_NAMES = (
     "MAX_SYSTEM_ROLE_CHARS",
 )
 
+CONTEXT_BUDGET_ENV_NAMES = tuple(
+    sorted(
+        {
+            "CONTEXT_USABLE_RATIO",
+            "CONTEXT_RECENT_RATIO",
+            "CONTEXT_SEMANTIC_RATIO",
+            "CONTEXT_DURABLE_MEMORY_RATIO",
+            "CONTEXT_DOCUMENT_RATIO",
+            "CONTEXT_MEMORY_EXPANDED_RATIO",
+            "CONTEXT_EVIDENCE_RATIO",
+            "CONTEXT_DRAFT_RATIO",
+            "CONTEXT_PLAN_SECTION_RATIO",
+            "CONTEXT_PLAN_TOTAL_RATIO",
+            "CONTEXT_PLAN_MEMORY_RATIO",
+        }
+    )
+)
+
 
 @dataclass(frozen=True)
 class RuntimeEnvironment:
@@ -137,6 +155,17 @@ def _positive_float(name: str, values: Mapping[str, str], errors: list[str]) -> 
     return parsed
 
 
+def parse_open_unit_ratio(value: str | float, *, name: str) -> float:
+    """Parse a finite ratio in (0, 1] without silently clamping it."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite ratio in (0, 1]") from exc
+    if not math.isfinite(parsed) or not 0 < parsed <= 1:
+        raise ValueError(f"{name} must be a finite ratio in (0, 1]")
+    return parsed
+
+
 def parse_bounded_ratio(value: str | float, *, name: str, minimum: float = 0.0, maximum: float = 0.5) -> float:
     """Parse a finite inclusive ratio without silently clamping it."""
     try:
@@ -146,6 +175,26 @@ def parse_bounded_ratio(value: str | float, *, name: str, minimum: float = 0.0, 
     if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
         raise ValueError(f"{name} must be a finite ratio between {minimum:g} and {maximum:g}")
     return parsed
+
+
+def _context_budget_ratios(values: Mapping[str, str], errors: list[str]) -> None:
+    from runtime_protocol.context_budget import load_context_budget_settings, validate_prefetch_ratios
+
+    try:
+        settings = load_context_budget_settings(values)
+        validate_prefetch_ratios(settings)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return
+    for name in CONTEXT_BUDGET_ENV_NAMES:
+        raw = values.get(name)
+        if raw is None or not str(raw).strip():
+            errors.append(f"{name} is required")
+            continue
+        try:
+            parse_open_unit_ratio(str(raw).strip(), name=name)
+        except ValueError as exc:
+            errors.append(str(exc))
 
 
 def _jitter_ratio(name: str, values: Mapping[str, str], errors: list[str]) -> float | None:
@@ -340,6 +389,9 @@ def validate_runtime_environment(
         _required("HERMES_PROFILE_ROOT", values, errors)
         _positive_int("HERMES_PROFILE_UID", values, errors)
         _positive_int("HERMES_PROFILE_GID", values, errors)
+
+    if service in {"control_plane", "langgraph"}:
+        _context_budget_ratios(values, errors)
 
     if service == "langgraph":
         for name in LANGGRAPH_LIMIT_NAMES:

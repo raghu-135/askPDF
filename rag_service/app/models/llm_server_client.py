@@ -168,44 +168,31 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
 
-# Pre-fetch budget allocation ratios
-# These four sum to 0.68; the remaining 0.32 is reserved for answer generation +
-# system prompt overhead (tool schemas, locked sections, etc.)
-RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
-RATIO_PREFETCH_SEMANTIC = 0.12  # Semantic chat-memory recall from all past QA pairs
-RATIO_PREFETCH_DURABLE_MEMORY = 0.06  # Durable user/project/thread memory
-RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
+from runtime_protocol.context_budget import (
+    AVG_CHUNK_CHARS,
+    AVG_TURN_CHARS,
+    compute_prefetch_budget as _compute_prefetch_budget,
+    default_context_budget_settings,
+    load_context_budget_settings,
+    resolve_context_budget,
+)
 
-# Average char estimates used to derive item-count limits from char budgets
-AVG_CHUNK_CHARS = 500   # Typical PDF or chat-memory chunk
-AVG_TURN_CHARS = 600    # Typical combined user+assistant turn
+_budget_defaults = default_context_budget_settings()
+RATIO_PREFETCH_RECENT = _budget_defaults.recent_ratio
+RATIO_PREFETCH_SEMANTIC = _budget_defaults.semantic_ratio
+RATIO_PREFETCH_DURABLE_MEMORY = _budget_defaults.durable_memory_ratio
+RATIO_PREFETCH_DOCUMENT = _budget_defaults.document_ratio
 
 
-def compute_prefetch_budget(context_window: int) -> dict:
+def compute_prefetch_budget(context_window: int, budget_overrides: dict | None = None) -> dict:
     """
     Compute character and item-count budgets for the parallel pre-fetch pass.
 
     Scales proportionally to any context window (4 K → 1 M tokens).
-    A 20 % overhead buffer is preserved for system prompt text + tool schemas
-    injected by the LangChain / LangGraph framework.
-
-    Returns a dict with both char budgets and derived item-count limits so
-    callers can use whichever unit is most convenient.
+    Ratios come from environment defaults and optional per-request overrides.
     """
-    usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
-    durable_memory_chars = max(1, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))
-    return {
-        # Character budgets. Each slice is a ratio of the usable window.
-        "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
-        "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
-        "durable_memory_chars":   durable_memory_chars,
-        "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
-        # Derived item-count limits
-        "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
-        "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
-        "durable_memory_limit":   max(1, math.ceil(durable_memory_chars / AVG_CHUNK_CHARS) * 2),
-        "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
-    }
+    resolved = resolve_context_budget(budget_overrides) if budget_overrides else load_context_budget_settings()
+    return _compute_prefetch_budget(context_window, resolved)
 
 
 def default_thread_settings():

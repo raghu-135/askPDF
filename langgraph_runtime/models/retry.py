@@ -6,6 +6,8 @@ import logging
 import re
 from typing import Any, Callable, Dict, Optional
 
+from runtime_protocol.model_errors import classify_model_error_message, is_context_length_error
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,8 @@ def _extract_http_status_code(err_str: str) -> Optional[int]:
 
 
 def is_retryable_model_error(err_str: str) -> tuple[bool, str]:
+    if is_context_length_error(err_str):
+        return False, ""
     status_code = _extract_http_status_code(err_str)
     if status_code in {408, 409, 429} or (status_code is not None and status_code >= 500):
         return True, f"Retryable OpenAI-compatible API error ({status_code})"

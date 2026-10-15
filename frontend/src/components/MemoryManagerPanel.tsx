@@ -26,7 +26,16 @@ import {
   type MemoryManagerPlan,
   type MemoryConsistencyReviewCursor,
   type MemoryWorkspaceReadiness,
+  getPromptTools,
 } from '../lib/api';
+import {
+  CONTEXT_BUDGET_STORAGE_KEY,
+  FALLBACK_CONTEXT_BUDGET,
+  type ContextBudgetRatios,
+  packingBudgetPayload,
+  readStoredContextBudget,
+  writeStoredContextBudget,
+} from '../lib/context-budget';
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
@@ -159,6 +168,10 @@ export default function MemoryManagerPanel({
   const [models, setModels] = useState<string[]>([]);
   const [llmModel, setLlmModel] = useState('');
   const [contextWindow, setContextWindow] = useState(defaultContextWindow);
+  const [defaultContextBudget, setDefaultContextBudget] = useState<ContextBudgetRatios>(FALLBACK_CONTEXT_BUDGET);
+  const [contextBudget, setContextBudget] = useState<ContextBudgetRatios>(
+    () => readStoredContextBudget() || FALLBACK_CONTEXT_BUDGET,
+  );
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [workspaceReadiness, setWorkspaceReadiness] = useState<MemoryWorkspaceReadiness | null>(null);
   const [workspaceReadinessFailed, setWorkspaceReadinessFailed] = useState(false);
@@ -203,6 +216,21 @@ export default function MemoryManagerPanel({
       setModels(items);
       setLlmModel(savedModel && items.includes(savedModel) ? savedModel : items[0] || savedModel);
     });
+    getPromptTools().then((res) => {
+      if (cancelled || !res.defaults?.context_budget) return;
+      const packingDefaults: ContextBudgetRatios = {
+        usable_ratio: res.defaults.context_budget.usable_ratio,
+        recent_ratio: res.defaults.context_budget.recent_ratio,
+        semantic_ratio: res.defaults.context_budget.semantic_ratio,
+        durable_memory_ratio: res.defaults.context_budget.durable_memory_ratio,
+        document_ratio: res.defaults.context_budget.document_ratio,
+        memory_expanded_ratio: res.defaults.context_budget.memory_expanded_ratio,
+      };
+      setDefaultContextBudget(packingDefaults);
+      if (!window.localStorage.getItem(CONTEXT_BUDGET_STORAGE_KEY)) {
+        setContextBudget(packingDefaults);
+      }
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -276,6 +304,7 @@ export default function MemoryManagerPanel({
         })),
         llm_model: llmModel,
         context_window: contextWindow,
+        context_budget: packingBudgetPayload(contextBudget),
         review_round: reviewCursor ? 2 : 1,
         review_id: reviewId,
         web_search_mode: webSearchMode,
@@ -526,11 +555,17 @@ export default function MemoryManagerPanel({
             models={models}
             model={llmModel}
             contextWindow={contextWindow}
+            contextBudget={contextBudget}
+            defaultContextBudget={defaultContextBudget}
             disabled={busy}
             onModelChange={setLlmModel}
             onContextWindowChange={(value) => {
               setContextWindow(value);
               if (value > 0) window.localStorage.setItem('last_context_window', String(value));
+            }}
+            onContextBudgetChange={(value) => {
+              setContextBudget(value);
+              writeStoredContextBudget(value);
             }}
             sx={{
               minHeight: 72,

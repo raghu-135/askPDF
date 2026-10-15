@@ -4,6 +4,14 @@ from app.models import retry as retry_module
 from app.services import retry as retry_service
 
 
+def test_retry_classifier_does_not_retry_context_length_errors():
+    is_retryable, reason = retry_module.is_retryable_model_error(
+        "Error code: 400 - context_length_exceeded: maximum context length"
+    )
+    assert is_retryable is False
+    assert reason == ""
+
+
 def test_retry_classifier_does_not_retry_generic_bad_request_or_vendor_400():
     is_retryable, reason = retry_module.is_retryable_model_error(
         "Error code: 400 - {'error': 'Model was unloaded while the request was still in queue..'}".lower()

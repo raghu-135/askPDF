@@ -540,6 +540,7 @@ class NodeRegistry:
                     use_web_search=web_prefetch_allowed(state),
                     use_reranker=state.get("use_reranker", True),
                     prefetch_mode=str((state.get("prefetch_policy") or {}).get("mode") or DEFAULT_PREFETCH_MODE),
+                    context_budget=state.get("context_budget"),
                 )
             transient_history = str(state.get("transient_history_text") or "").strip()
             if transient_history:

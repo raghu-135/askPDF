@@ -99,12 +99,23 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         token_task_id = approval_task_id or str(request.run_id)
         limits = dict(task_context.limits or {}) if task_context is not None else {}
         ttl_seconds = execution_context_ttl_seconds(limits)
+        from runtime_protocol.context_budget import resolve_context_budget
+
+        request_payload = dict(context.request_payload or {})
+        raw_budget = request_payload.get("context_budget")
+        budget_dict = resolve_context_budget(raw_budget if isinstance(raw_budget, dict) else None).to_dict()
+
         token = issue_execution_context_token(
             ToolInvocationContext(
                 thread_id=request.thread_id,
                 run_id=request.run_id,
                 embedding_model=context.embedding_model,
-                context_window=int(config.get("context_window") or 32_768),
+                context_window=int(
+                    request_payload.get("context_window")
+                    or config.get("context_window")
+                    or 32_768
+                ),
+                context_budget=budget_dict,
                 use_web_search=bool(config.get("use_web_search")),
                 use_reranker=use_reranker,
                 extensions={

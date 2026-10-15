@@ -246,10 +246,13 @@ async def _delete_thread_resources(thread_id: str) -> bool:
 async def prompt_tools_endpoint():
     """Return user-facing tool aliases and default prompts for prompt customization UI."""
     try:
+        from runtime_protocol.context_budget import load_context_budget_settings
+
         defaults = merge_thread_settings({})
         defaults["tool_instructions"] = normalize_tool_instructions(
             defaults.get("tool_instructions", {})
         )
+        defaults["context_budget"] = load_context_budget_settings().to_dict()
         payload = PromptDefaults(**defaults).model_dump(mode="json")
         return {
             "tools": [ToolCatalogEntry(**t).model_dump(mode="json") for t in get_tool_catalog()],

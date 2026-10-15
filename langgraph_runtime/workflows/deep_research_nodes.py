@@ -447,8 +447,9 @@ async def _call_model(
 
 def _planning_context(state: Mapping[str, Any]) -> str:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    section_limit = usable_context_chars(state.get("context_window"), ratio=0.20)
-    total_limit = usable_context_chars(state.get("context_window"), ratio=0.50)
+    budget = state.get("context_budget")
+    section_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_section_ratio", budget=budget)
+    total_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_total_ratio", budget=budget)
     sections = [
         str(bundle.get("recent_history_text") or ""),
         str(bundle.get("semantic_history_text") or ""),
@@ -684,7 +685,7 @@ async def deep_task_planner(state: Dict[str, Any], config: RunnableConfig) -> Di
         [value for value in effective_memory.get("memories") or [] if isinstance(value, dict)],
         key=lambda value: (rank.get(str(value.get("scope_type")), 9), str(value.get("id") or "")),
     )
-    memory_budget = usable_context_chars(state.get("context_window"), ratio=0.12)
+    memory_budget = usable_context_chars(state.get("context_window"), ratio_key="plan_memory_ratio", budget=state.get("context_budget"))
     per_memory = max(1, memory_budget // 8)
     bounded_memory: list[Dict[str, Any]] = []
     memory_chars = 0
