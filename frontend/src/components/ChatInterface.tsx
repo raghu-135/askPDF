@@ -108,7 +108,6 @@ import {
     readStoredContextBudget,
     writeStoredContextBudget,
 } from '../lib/context-budget';
-import { ContextBudgetCapacityBar } from './conversation/ContextBudgetCapacityBar';
 import { canOpenTraceTab, isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
 import {
     ConversationComposer,
@@ -2945,13 +2944,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         </Tooltip>
                     </Box>
                 )}
-
-                <ContextBudgetCapacityBar
-                    contextWindow={contextWindow}
-                    contextBudget={contextBudget}
-                    disabled={loading}
-                    compact
-                />
 
                 <ChatComposer
                     inputRef={composerInputRef}

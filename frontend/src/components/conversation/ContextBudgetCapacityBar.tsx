@@ -3,7 +3,12 @@ import { Box, Slider, Tooltip, Typography } from '@mui/material';
 import type { ContextBudgetRatios } from '../../lib/context-budget';
 import { contextWindowBreakdown } from '../../lib/context-budget';
 import {
-  CONTEXT_COMPACT_BAR_HELP,
+  BAR_SEGMENT_REPLY_BODY,
+  BAR_SEGMENT_REPLY_TITLE,
+  BAR_SEGMENT_RETRIEVAL_BODY,
+  BAR_SEGMENT_RETRIEVAL_TITLE,
+  BAR_SEGMENT_SAFETY_BODY,
+  BAR_SEGMENT_SAFETY_TITLE,
   CONTEXT_PACKING_WINDOW_HELP,
   CONTEXT_WINDOW_SPLIT_HELP,
 } from '../../lib/context-budget-help';
@@ -13,7 +18,6 @@ type ContextBudgetCapacityBarProps = {
   contextWindow: number;
   contextBudget: ContextBudgetRatios;
   disabled?: boolean;
-  compact?: boolean;
   showUsableSlider?: boolean;
   onUsableRatioChange?: (usableRatio: number) => void;
 };
@@ -22,7 +26,6 @@ const COLORS = {
   retrieval: 'warning.main',
   reply: 'info.main',
   safety: 'success.main',
-  remainder: 'success.dark',
 } as const;
 
 function LegendDot({ color }: { color: string }) {
@@ -65,12 +68,43 @@ function LegendRow({
   );
 }
 
+type BudgetBarSegment = {
+  share: number;
+  color: string;
+  title: string;
+  body: string;
+  tokens: number;
+};
+
+const tooltipSlotProps = {
+  tooltip: { sx: { maxWidth: 280 } },
+  popper: {
+    sx: { zIndex: (theme: { zIndex: { modal: number } }) => theme.zIndex.modal + 2 },
+  },
+};
+
+function SegmentTooltipContent({ title, body, tokens, share }: BudgetBarSegment) {
+  return (
+    <Box>
+      <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+        {title}
+      </Typography>
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.25 }}>
+        {tokens.toLocaleString()} tok · {(share * 100).toFixed(0)}% of ctx
+      </Typography>
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
+        {body}
+      </Typography>
+    </Box>
+  );
+}
+
 function BudgetBar({
   segments,
   height,
   ariaLabel,
 }: {
-  segments: Array<{ share: number; color: string }>;
+  segments: BudgetBarSegment[];
   height: number;
   ariaLabel: string;
 }) {
@@ -89,14 +123,25 @@ function BudgetBar({
     >
       {segments.map((segment, index) => (
         segment.share > 0 ? (
-          <Box
+          <Tooltip
             key={index}
-            sx={{
-              width: `${segment.share * 100}%`,
-              bgcolor: segment.color,
-              minWidth: 2,
-            }}
-          />
+            describeChild
+            title={<SegmentTooltipContent {...segment} />}
+            placement="top"
+            enterDelay={250}
+            slotProps={tooltipSlotProps}
+          >
+            <Box
+              component="span"
+              sx={{
+                display: 'block',
+                width: `${segment.share * 100}%`,
+                bgcolor: segment.color,
+                minWidth: 6,
+                height: '100%',
+              }}
+            />
+          </Tooltip>
         ) : null
       ))}
     </Box>
@@ -107,7 +152,6 @@ export function ContextBudgetCapacityBar({
   contextWindow,
   contextBudget,
   disabled = false,
-  compact = false,
   showUsableSlider = false,
   onUsableRatioChange,
 }: ContextBudgetCapacityBarProps) {
@@ -121,48 +165,6 @@ export function ContextBudgetCapacityBar({
   const retrievalShare = retrievalTokens / windowTokens;
   const remainderShare = remainderTokens / windowTokens;
 
-  if (compact) {
-    return (
-      <Box sx={{ px: 0.25, py: 0.5 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mb: 0.35, alignItems: 'center' }}>
-          <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25, minWidth: 0 }}>
-            <Typography variant="caption" color="text.secondary">
-              Ctx {contextWindow.toLocaleString()} split
-            </Typography>
-            <ContextBudgetHelpTip text={CONTEXT_COMPACT_BAR_HELP} ariaLabel="Context split help" />
-          </Box>
-            <Typography variant="caption" color="text.secondary">
-              <Box component="span" sx={{ color: 'warning.main', fontWeight: 600 }}>
-                {retrievalTokens.toLocaleString()}
-              </Box>
-              {' retrieval · '}
-              <Box component="span" sx={{ color: 'success.dark', fontWeight: 600 }}>
-                {remainderTokens.toLocaleString()}
-              </Box>
-              {' left'}
-            </Typography>
-        </Box>
-        <Tooltip
-          title={CONTEXT_COMPACT_BAR_HELP}
-          placement="top"
-          enterDelay={500}
-          slotProps={{ tooltip: { sx: { maxWidth: 300 } } }}
-        >
-          <Box sx={{ cursor: 'help' }}>
-            <BudgetBar
-              height={6}
-              ariaLabel={`${retrievalTokens} tokens max retrieval, ${remainderTokens} tokens remaining`}
-              segments={[
-                { share: retrievalShare, color: COLORS.retrieval },
-                { share: remainderShare, color: COLORS.remainder },
-              ]}
-            />
-          </Box>
-        </Tooltip>
-      </Box>
-    );
-  }
-
   const detailedAria = [
     `${retrievalTokens} tokens max retrieval`,
     `${breakdown.answerReserve} tokens for system and answer`,
@@ -173,60 +175,53 @@ export function ContextBudgetCapacityBar({
     <Box sx={{ mt: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.25, mb: 1 }}>
         <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
-          How your {contextWindow.toLocaleString()} token target is split. The sliders above only change the orange
-          retrieval slice; blue and green are computed automatically.
+          How your {contextWindow.toLocaleString()} token target is split. Hover each color on the bar for what it means.
         </Typography>
         <ContextBudgetHelpTip text={CONTEXT_WINDOW_SPLIT_HELP} ariaLabel="Window split help" />
       </Box>
       <BudgetBar
-        height={10}
+        height={12}
         ariaLabel={detailedAria}
         segments={[
-          { share: retrievalShare, color: COLORS.retrieval },
-          { share: breakdown.answerReserve / windowTokens, color: COLORS.reply },
-          { share: breakdown.headroom / windowTokens, color: COLORS.safety },
+          {
+            share: retrievalShare,
+            color: COLORS.retrieval,
+            title: BAR_SEGMENT_RETRIEVAL_TITLE,
+            body: BAR_SEGMENT_RETRIEVAL_BODY,
+            tokens: retrievalTokens,
+          },
+          {
+            share: breakdown.answerReserve / windowTokens,
+            color: COLORS.reply,
+            title: BAR_SEGMENT_REPLY_TITLE,
+            body: BAR_SEGMENT_REPLY_BODY,
+            tokens: breakdown.answerReserve,
+          },
+          {
+            share: breakdown.headroom / windowTokens,
+            color: COLORS.safety,
+            title: BAR_SEGMENT_SAFETY_TITLE,
+            body: BAR_SEGMENT_SAFETY_BODY,
+            tokens: breakdown.headroom,
+          },
         ]}
       />
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1.25 }}>
-        <Tooltip
-          title="Sum of the four retrieval sliders above—maximum combined history, memory, and document text."
-          placement="left"
-          slotProps={{ tooltip: { sx: { maxWidth: 280 } } }}
-        >
-          <Box>
-            <LegendRow
-              color={COLORS.retrieval}
-              title="Max retrieval (your sliders)"
-              detail={`${retrievalTokens.toLocaleString()} tok · ${(retrievalShare * 100).toFixed(0)}% of ctx`}
-            />
-          </Box>
-        </Tooltip>
-        <Tooltip
-          title="Reserved inside the packing window when your slice sliders total less than 100%. Used for system prompt, tools, and the model’s reply."
-          placement="left"
-          slotProps={{ tooltip: { sx: { maxWidth: 280 } } }}
-        >
-          <Box>
-            <LegendRow
-              color={COLORS.reply}
-              title="System + answer (automatic)"
-              detail={`${breakdown.answerReserve.toLocaleString()} tok · ${((breakdown.answerReserve / windowTokens) * 100).toFixed(0)}% of ctx`}
-            />
-          </Box>
-        </Tooltip>
-        <Tooltip
-          title="Intentionally unused share of ctx size so AskPDF does not pack all the way to the provider limit."
-          placement="left"
-          slotProps={{ tooltip: { sx: { maxWidth: 280 } } }}
-        >
-          <Box>
-            <LegendRow
-              color={COLORS.safety}
-              title="Safety margin (automatic)"
-              detail={`${breakdown.headroom.toLocaleString()} tok · ${((breakdown.headroom / windowTokens) * 100).toFixed(0)}% of ctx`}
-            />
-          </Box>
-        </Tooltip>
+        <LegendRow
+          color={COLORS.retrieval}
+          title="Max retrieval (your sliders)"
+          detail={`${retrievalTokens.toLocaleString()} tok · ${(retrievalShare * 100).toFixed(0)}% of ctx`}
+        />
+        <LegendRow
+          color={COLORS.reply}
+          title="System + answer (automatic)"
+          detail={`${breakdown.answerReserve.toLocaleString()} tok · ${((breakdown.answerReserve / windowTokens) * 100).toFixed(0)}% of ctx`}
+        />
+        <LegendRow
+          color={COLORS.safety}
+          title="Safety margin (automatic)"
+          detail={`${breakdown.headroom.toLocaleString()} tok · ${((breakdown.headroom / windowTokens) * 100).toFixed(0)}% of ctx`}
+        />
       </Box>
       <Typography variant="caption" sx={{ display: 'block', mt: 1.25, fontWeight: 600 }}>
         {remainderTokens.toLocaleString()} tokens not counted toward retrieval caps

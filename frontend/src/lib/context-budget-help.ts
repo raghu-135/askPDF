@@ -7,13 +7,22 @@ export const CONTEXT_SIZE_HELP =
   'Your token target for one run (prompt + answer). If you see context-length errors, lower this number or reduce the retrieval sliders.';
 
 export const CONTEXT_WINDOW_SPLIT_HELP =
-  'The bar shows how that target is divided. Orange is the max retrieval budget (your sliders). Blue is room reserved for system instructions and the reply. Green is extra margin left empty on purpose.';
+  'Hover each color on the bar: orange = max retrieval (your sliders), blue = system + answer, green = safety margin.';
 
 export const CONTEXT_PACKING_WINDOW_HELP =
   'Fraction of ctx size used when calculating the slices. The remainder stays as safety margin (green in the bar) so packing does not assume the full window.';
 
-export const CONTEXT_COMPACT_BAR_HELP =
-  'Orange: max history, memory, and PDF text AskPDF may load. Green: everything else—system prompt, tools, reply, and safety margin. Hover the bar or tap the help icon for details.';
+export const BAR_SEGMENT_RETRIEVAL_TITLE = 'Orange — max retrieval';
+export const BAR_SEGMENT_RETRIEVAL_BODY =
+  'Upper limit on history, memory, and PDF text AskPDF may load before the model runs. Set by the four sliders above.';
+
+export const BAR_SEGMENT_REPLY_TITLE = 'Blue — system + answer';
+export const BAR_SEGMENT_REPLY_BODY =
+  'Room inside the packing window reserved for system instructions, tools, and the model’s reply when your slice sliders do not use 100%.';
+
+export const BAR_SEGMENT_SAFETY_TITLE = 'Green — safety margin';
+export const BAR_SEGMENT_SAFETY_BODY =
+  'Part of ctx size left empty on purpose so packing does not assume the full provider window.';
 
 export const SLICE_HELP: Record<
   keyof Pick<ContextBudgetRatios, 'recent_ratio' | 'semantic_ratio' | 'durable_memory_ratio' | 'document_ratio'>,
