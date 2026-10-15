@@ -9,17 +9,31 @@ compare-papers, evidence-matrix, or timeline layouts.
 
 The document is `canvas_spec_v1`: a title, optional summary, and sections of
 typed blocks. Allowed blocks are `stat`, `table`, `callout`, `markdown`,
-`sources`, and `dag`. Unknown types, scripts, and javascript URLs are rejected.
+`sources`, `dag`, `quote`, `timeline`, and `claim_pair`. Unknown types,
+scripts, and javascript URLs are rejected.
 
-Citations live in a `sources` block:
+Citations may appear in:
+
+- a `sources` block (`document`, `web`, `memory`, `conversation`)
+- each `timeline` event (`citation`)
+- each side of a `claim_pair` (`citation`)
+- a `quote` block (`file_hash` plus `sentence_id`; canonical text is resolved
+  server-side from parsed sentences)
+
+Document locators:
 
 - `document`: `file_hash` (must be attached to the thread), optional `sentence_id`
 - `web`: http(s) `url`
 - `memory`: `memory_id`
 - `conversation`: `message_id`
 
-Agent publish requires at least one citation. Document hashes that are not on
-the thread fail admission.
+Table cells may be plain strings or `{ "text", "tone" }` with tone
+`supported`, `contradicted`, `partial`, or `absent`. DAG edges may include
+optional `relation` (`supports`, `contradicts`, `precedes`).
+
+Agent publish requires at least one cited evidence locator (sources, timeline,
+claim_pair, and/or quote). Document hashes that are not on the thread fail
+admission.
 
 The Pydantic contract is rag_service/app/models/canvas.py. The renderer and
 client types are frontend/src/components/canvas/CanvasDocument.tsx and

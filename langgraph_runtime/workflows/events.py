@@ -79,6 +79,8 @@ def append_tool_event(
     if trace_recorder is not None and hasattr(trace_recorder, "record_tool_event"):
         trace_recorder.record_tool_event(dict(event))
     execution_event_sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
-    if execution_event_sink is not None and hasattr(execution_event_sink, "emit_nowait"):
-        execution_event_sink.emit_nowait("tool.completed", event)
+    tool_call_id = event.get("tool_call_id")
+    if execution_event_sink is not None and hasattr(execution_event_sink, "emit_nowait") and tool_call_id:
+        runtime_kind = "tool.completed" if event.get("ok", True) else "tool.failed"
+        execution_event_sink.emit_nowait(runtime_kind, event)
     return [*state.get("tool_events", []), event]

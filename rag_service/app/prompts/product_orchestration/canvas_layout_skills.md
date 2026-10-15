@@ -1,6 +1,6 @@
 # Research canvas layout skills
 
-These skills apply only when `publish_canvas` is available. They are prompt recipes for the existing `canvas_spec_v1` blocks (`stat`, `table`, `callout`, `markdown`, `sources`, `dag`). Do not invent block types, scripts, or javascript URLs. Pick exactly one layout that matches the user request. Every published canvas must include a `sources` block whose document citations use `file_hash` values attached to this thread.
+These skills apply only when `publish_canvas` is available. They are prompt recipes for the existing `canvas_spec_v1` blocks (`stat`, `table`, `callout`, `markdown`, `sources`, `dag`, `quote`, `timeline`, `claim_pair`). Do not invent block types, scripts, or javascript URLs. Pick exactly one layout that matches the user request. Every published canvas must cite evidence: a `sources` block, `timeline` event citations, `claim_pair` side citations, and/or `quote` blocks whose `file_hash` values are attached to this thread.
 
 After a successful publish, mention the canvas title in the answer. If evidence is too thin for the chosen layout, say so instead of fabricating rows.
 
@@ -12,10 +12,11 @@ Suggested sections:
 
 1. Overview — 2–4 `stat` blocks (papers compared, shared claims, disagreements, unresolved items).
 2. Comparison — one `table` with headers such as `Claim | Source A | Source B` (add a column per compared source). Cells must be short and evidence-backed.
-3. Gaps — a `callout` with `tone=warning` for disagreements or missing evaluations.
-4. Sources — `sources` citations for every compared document (`kind=document`, `file_hash`, optional `sentence_id`).
+3. Sharpest disagreement — a `claim_pair` (`relation=contradicts` or `extends`) or a `quote` block (`file_hash`, `sentence_id`) for the passage that best shows the split.
+4. Gaps — a `callout` with `tone=warning` for disagreements or missing evaluations.
+5. Sources — `sources` citations for every compared document (`kind=document`, `file_hash`, optional `sentence_id`).
 
-Optional: a `dag` of claim nodes pointing at supporting source nodes.
+Optional: a `dag` of claim nodes with `relation` on edges (`supports`, `contradicts`).
 
 ## canvas_evidence_matrix
 
@@ -24,11 +25,11 @@ Use when the user wants support, contradiction, or coverage of claims across sou
 Suggested sections:
 
 1. Coverage — `stat` blocks for supported, contradicted, and uncovered claims.
-2. Matrix — one `table` with headers `Claim | Source | Support | Notes`. Use Support values such as `supported`, `contradicted`, `absent`, or `partial`.
+2. Matrix — one `table` with headers `Claim | Source | Support | Notes`. In the Support column use cell objects `{ "text": "...", "tone": "supported" | "contradicted" | "partial" | "absent" }` instead of bare words when possible.
 3. Conflicts — a `callout` when sources disagree.
 4. Sources — `sources` citations for every matrix source.
 
-Optional: a `dag` from claim nodes to source nodes.
+Optional: a `dag` from claim nodes to source nodes with labeled edges.
 
 ## canvas_timeline
 
@@ -37,8 +38,8 @@ Use when the answer depends on chronology, sequence, first/latest, before/after,
 Suggested sections:
 
 1. Span — `stat` blocks for event count and time range.
-2. Timeline — one `table` with headers `Time | Event | Source | Notes`, oldest row first.
+2. Timeline — one `timeline` block with events in oldest-first order (`time`, `label`, optional `note`, `citation` per event).
 3. Caveats — a `callout` when timestamps are thread-added times rather than publication dates. `document_available_in_thread_at` means added to this thread.
 4. Sources — `sources` citations (`document`, `conversation`, `web`, or `memory` as appropriate).
 
-Optional: a `dag` chaining events in time order.
+Optional: a `table` for extra notes only, or a `dag` chaining events with `relation=precedes`.

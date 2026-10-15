@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Literal, Mapping
 
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -29,7 +29,17 @@ _PUBLISH_TOOL = ToolName.PUBLISH_CANVAS.value
 _FAKE_FENCE = re.compile(r"```(?:\w+)?\s*publish_canvas[\s\S]*?```", re.IGNORECASE)
 _FAKE_CALL = re.compile(r"publish_canvas\s*\([^)]*\)", re.IGNORECASE)
 _MAX_ROUNDS = 3
-_BLOCK_TYPES = frozenset({"stat", "table", "callout", "markdown", "sources", "dag"})
+_BLOCK_TYPES = frozenset({
+    "stat",
+    "table",
+    "callout",
+    "markdown",
+    "sources",
+    "dag",
+    "quote",
+    "timeline",
+    "claim_pair",
+})
 _BLOCK_FIELDS = {
     "stat": frozenset({"type", "value", "label", "tone"}),
     "table": frozenset({"type", "caption", "headers", "rows"}),
@@ -37,13 +47,22 @@ _BLOCK_FIELDS = {
     "markdown": frozenset({"type", "text"}),
     "sources": frozenset({"type", "title", "citations"}),
     "dag": frozenset({"type", "title", "nodes", "edges"}),
+    "quote": frozenset({"type", "file_hash", "sentence_id", "label"}),
+    "timeline": frozenset({"type", "title", "events"}),
+    "claim_pair": frozenset({"type", "relation", "left", "right"}),
 }
 _TOOL_ARG_KEYS = frozenset({"spec", "supersedes_id", "idempotency_key"})
+_CANVAS_SPEC_ENVELOPE_KEYS = frozenset({"schema_version", "title", "summary", "sections"})
+_DEFAULT_CANVAS_TITLE = "Research canvas"
+_DEFAULT_SECTION_TITLE = "Findings"
 _SPEC_COACHING = (
     "publish_canvas requires spec as canvas_spec_v1: "
     '{"schema_version": 1, "title": "...", "sections": [{"title": "...", "blocks": [...]}]}. '
-    "Allowed blocks: stat, table, callout, markdown, sources, dag. "
-    "Include a sources block with citations. Do not pass a single block as spec."
+    "Allowed blocks: stat, table, callout, markdown, sources, dag, quote, timeline, claim_pair. "
+    "Table cells may be strings or {text, tone} with tone supported|contradicted|partial|absent. "
+    "DAG edges may include relation supports|contradicts|precedes. "
+    "Include citations in a sources block, timeline events, claim_pair sides, or a quote block. "
+    "Do not pass a single block as spec."
 )
 
 
@@ -80,47 +99,211 @@ def _citation_list(value: Mapping[str, Any]) -> list[Any] | None:
     return None
 
 
-def _coerce_block(value: Any) -> Any:
+_CITATION_FIELDS = frozenset({"kind", "label", "file_hash", "sentence_id", "url", "memory_id", "message_id"})
+
+
+def _prose_from_mapping(block: Mapping[str, Any]) -> str | None:
+    for key in ("text", "content", "body", "message", "summary", "description"):
+        value = block.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _normalize_citation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
-        return value
+        return None
+    citation = dict(value)
+    if citation.get("kind") == "document" and not citation.get("file_hash"):
+        for key in ("source_id", "file_id", "document_id", "src_id"):
+            candidate = citation.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                citation["file_hash"] = candidate.strip()
+                break
+    label = citation.get("label")
+    if not isinstance(label, str) or not label.strip():
+        for key in ("title", "name", "file_name"):
+            candidate = citation.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                citation["label"] = candidate.strip()[:160]
+                break
+    kind = citation.get("kind")
+    if kind not in {"document", "web", "memory", "conversation"}:
+        if citation.get("file_hash"):
+            citation["kind"] = "document"
+        elif citation.get("url"):
+            citation["kind"] = "web"
+        else:
+            return None
+    if not isinstance(citation.get("label"), str) or not str(citation.get("label")).strip():
+        return None
+    return {key: citation[key] for key in _CITATION_FIELDS if key in citation}
+
+
+def _coerce_block(value: Any) -> Any | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return {"type": "markdown", "text": text} if text else None
+    if not isinstance(value, Mapping):
+        return None
     block = dict(value)
     block_type = str(block.get("type") or "")
-    if not block_type and (block.get("text") or block.get("content")):
+    prose = _prose_from_mapping(block)
+    if not block_type and prose:
         block_type = "markdown"
         block["type"] = "markdown"
+    if block_type == "markdown":
+        if not block.get("text") and prose:
+            block["text"] = prose
+        if not isinstance(block.get("text"), str) or not str(block.get("text")).strip():
+            return None
+    if block_type == "callout":
+        if not block.get("title"):
+            block["title"] = str(block.get("heading") or "Note")[:120]
+        if not block.get("body") and prose:
+            block["body"] = prose[:1200]
+        if not isinstance(block.get("body"), str) or not str(block.get("body")).strip():
+            if prose:
+                return {"type": "markdown", "text": prose}
+            return None
+        if block.get("tone") not in {"info", "warning"}:
+            block["tone"] = "info"
+    if block_type == "stat":
+        if not block.get("label") and block.get("name"):
+            block["label"] = str(block.get("name"))
+        if block.get("value") is not None and not isinstance(block.get("value"), str):
+            block["value"] = str(block.get("value"))
+        if not block.get("value") or not block.get("label"):
+            return None
+    if block_type == "sources":
+        if "citations" not in block:
+            citations = _citation_list(block)
+            if citations is not None:
+                block["citations"] = citations
+        raw_citations = block.get("citations")
+        if isinstance(raw_citations, list):
+            citations = [item for item in (_normalize_citation(c) for c in raw_citations) if item]
+            if not citations:
+                return None
+            block["citations"] = citations
+        if not block.get("title"):
+            block["title"] = "Sources"
     if block_type == "markdown" and "text" not in block and block.get("content"):
         block["text"] = str(block.pop("content"))
-    if block_type == "sources" and "citations" not in block:
-        citations = _citation_list(block)
-        if citations is not None:
-            block["citations"] = citations
     allowed = _BLOCK_FIELDS.get(block_type)
     if allowed is None:
         return block
-    return {key: block[key] for key in allowed if key in block}
+    coerced = {key: block[key] for key in allowed if key in block}
+    return coerced if coerced.get("type") else None
+
+
+def _coerce_blocks(blocks: list[Any]) -> list[Any]:
+    repaired = [_coerce_block(block) for block in blocks]
+    return [block for block in repaired if isinstance(block, Mapping) and block.get("type")]
 
 
 def _blocks_from_payload(body: Mapping[str, Any]) -> list[Any] | None:
     block_type = str(body.get("type") or "")
     citations = _citation_list(body) if block_type != "sources" else None
     if block_type in _BLOCK_TYPES:
-        blocks = [_coerce_block(body)]
+        blocks = _coerce_blocks([body])
         if citations:
-            blocks.append(_coerce_block({"type": "sources", "citations": citations}))
-        return blocks
+            blocks.extend(_coerce_blocks([{"type": "sources", "citations": citations}]))
+        return blocks or None
     if body.get("text") or body.get("content"):
-        blocks = [_coerce_block({**dict(body), "type": "markdown"})]
+        blocks = _coerce_blocks([{**dict(body), "type": "markdown"}])
         if citations:
-            blocks.append(_coerce_block({"type": "sources", "citations": citations}))
-        return blocks
+            blocks.extend(_coerce_blocks([{"type": "sources", "citations": citations}]))
+        return blocks or None
     return None
+
+
+def _resolve_canvas_title(body: Mapping[str, Any], payload: Mapping[str, Any] | None = None) -> str:
+    for candidate in (
+        body.get("title"),
+        body.get("subtitle"),
+        body.get("name"),
+        (payload or {}).get("title"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()[:160]
+    sections = body.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, Mapping):
+                continue
+            section_title = section.get("title") or section.get("name")
+            if isinstance(section_title, str) and section_title.strip():
+                return section_title.strip()[:160]
+    return _DEFAULT_CANVAS_TITLE
+
+
+def _resolve_schema_version(body: Mapping[str, Any]) -> Literal[1]:
+    if body.get("schema_version") == 1:
+        return 1
+    version = body.get("version")
+    if version in {1, "1"}:
+        return 1
+    return 1
+
+
+def _normalize_section(section: Any, *, index: int) -> Any:
+    if isinstance(section, str):
+        text = section.strip()
+        if not text:
+            return None
+        return {
+            "title": _DEFAULT_SECTION_TITLE if index == 0 else f"Section {index + 1}",
+            "blocks": [{"type": "markdown", "text": text}],
+        }
+    if not isinstance(section, Mapping):
+        return None
+    normalized: dict[str, Any] = {}
+    section_title = section.get("title") or section.get("name")
+    if isinstance(section_title, str) and section_title.strip():
+        normalized["title"] = section_title.strip()[:120]
+    else:
+        normalized["title"] = _DEFAULT_SECTION_TITLE if index == 0 else f"Section {index + 1}"
+    blocks = section.get("blocks")
+    if isinstance(blocks, list):
+        coerced = _coerce_blocks(blocks)
+        if not coerced and isinstance(section.get("content"), str) and section["content"].strip():
+            coerced = [{"type": "markdown", "text": section["content"].strip()}]
+        normalized["blocks"] = coerced
+    elif "blocks" in section:
+        normalized["blocks"] = section["blocks"]
+    if not normalized.get("blocks"):
+        return None
+    return normalized
+
+
+def _sanitize_canvas_spec_envelope(body: Mapping[str, Any], *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    spec: dict[str, Any] = {}
+    if "summary" in body and body.get("summary") is not None:
+        summary = body.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            spec["summary"] = summary.strip()[:400]
+    sections = body.get("sections")
+    normalized_sections: list[Any] = []
+    if isinstance(sections, list):
+        normalized_sections = [
+            section
+            for index, section in enumerate(sections)
+            for section in [_normalize_section(section, index=index)]
+            if section is not None and section.get("blocks")
+        ]
+        spec["sections"] = normalized_sections
+    title_source = {**body, "sections": normalized_sections} if normalized_sections else body
+    spec["schema_version"] = _resolve_schema_version(body)
+    spec["title"] = _resolve_canvas_title(title_source, payload)
+    return spec
 
 
 def _canvas_envelope(*, title: str, summary: Any, blocks: list[Any]) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "schema_version": 1,
         "title": (title or "Research canvas").strip()[:160] or "Research canvas",
-        "sections": [{"title": "Findings", "blocks": [_coerce_block(block) for block in blocks]}],
+        "sections": [{"title": "Findings", "blocks": _coerce_blocks(blocks)}],
     }
     if isinstance(summary, str) and summary.strip():
         spec["summary"] = summary.strip()[:400]
@@ -142,7 +325,7 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         return spec
     body = dict(spec)
     if isinstance(body.get("sections"), list):
-        return body
+        return _sanitize_canvas_spec_envelope(body, payload=payload)
     lifted = _blocks_from_payload(body)
     if lifted is not None:
         return _canvas_envelope(
@@ -239,11 +422,16 @@ async def synthesize_with_canvas_publish(
             except (ChatRunCancellationRequested, GraphBubbleUp):
                 raise
             except Exception as exc:
+                tool_call_id = str((tool_runtime.get("configurable") or {}).get("tool_call_id") or call_id)
                 normalized = {
                     "ok": False,
                     "content": str(exc),
                     "error": {"code": "publish_canvas_failed", "message": str(exc)},
-                    "trace": {"tool_name": _PUBLISH_TOOL},
+                    "trace": {
+                        "tool_name": _PUBLISH_TOOL,
+                        "tool_call_id": tool_call_id,
+                        "caller_node": node,
+                    },
                 }
             append_tool_event_for_node(state, {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node}, tool_input=tool_input, config=tool_runtime)
             tool_body = _tool_message_body(normalized)

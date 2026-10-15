@@ -17,6 +17,7 @@ from langgraph_runtime.workflows.evidence import corrective_evidence_context, co
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
 from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
 from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runtime_prompt
+from runtime_protocol.evidence import usable_context_chars
 
 
 GRAPH_TOOL_NAMES = [
@@ -191,7 +192,7 @@ def _json_preview(value: Any, *, limit: int = 4000) -> str:
 def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **_prompt_context(state),
-        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:8000] or CONTEXT_PLACEHOLDER,
+        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:usable_context_chars(state.get("context_window"), ratio=0.45)] or CONTEXT_PLACEHOLDER,
         "EXECUTION_PLAN": _json_preview(state.get("execution_plan") or []),
         "DOCUMENT_SOURCE_COUNT": len(state.get("document_sources") or []),
         "WEB_SOURCE_COUNT": len(state.get("web_sources") or []),
@@ -261,7 +262,7 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
     })
     return _render_prompt("corrective_grounded_verifier.md", {
         **_prompt_context(state),
-        "DRAFT_ANSWER": str(state.get("final_answer") or "")[:12_000],
+        "DRAFT_ANSWER": str(state.get("final_answer") or "")[:usable_context_chars(state.get("context_window"), ratio=0.25)],
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
         "EVIDENCE_CONTEXT": corrective_evidence_context(state),
         "RETRIEVAL_CONTRADICTIONS": _json_preview(

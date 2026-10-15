@@ -12,10 +12,16 @@ from tests.test_canvas_spec_pytest import valid_spec
 
 
 def test_admit_canvas_spec_rejects_missing_citations():
-    payload = valid_spec()
-    payload["sections"][0]["blocks"] = [
-        block for block in payload["sections"][0]["blocks"] if block.get("type") != "sources"
-    ]
+    payload = {
+        "schema_version": 1,
+        "title": "No citations",
+        "sections": [
+            {
+                "title": "Empty",
+                "blocks": [{"type": "stat", "value": "1", "label": "One"}],
+            }
+        ],
+    }
     spec = parse_canvas_spec(payload)
     try:
         admit_canvas_spec(spec, thread_file_hashes={"file-a"})
@@ -59,10 +65,16 @@ async def test_publish_canvas_rejects_invalid_components(monkeypatch):
 @pytest.mark.asyncio
 async def test_publish_canvas_rejects_missing_citations(monkeypatch):
     monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[SimpleNamespace(file_hash="file-a")]))
-    payload = valid_spec()
-    payload["sections"][0]["blocks"] = [
-        block for block in payload["sections"][0]["blocks"] if block.get("type") != "sources"
-    ]
+    payload = {
+        "schema_version": 1,
+        "title": "No citations",
+        "sections": [
+            {
+                "title": "Empty",
+                "blocks": [{"type": "markdown", "text": "Summary only."}],
+            }
+        ],
+    }
     result = await invoke_publish_canvas(
         PublishCanvasRequest.model_validate({"spec": payload}),
         ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
@@ -75,7 +87,12 @@ async def test_publish_canvas_rejects_missing_citations(monkeypatch):
 async def test_publish_canvas_persists_admitted_spec(monkeypatch):
     monkeypatch.setattr(
         "app.tools.publish_canvas.get_thread_files",
-        AsyncMock(return_value=[SimpleNamespace(file_hash="file-a")]),
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(file_hash="file-a"),
+                SimpleNamespace(file_hash="file-b"),
+            ]
+        ),
     )
     created = {"id": "canvas-1", "title": "Compare the two papers"}
     monkeypatch.setattr(

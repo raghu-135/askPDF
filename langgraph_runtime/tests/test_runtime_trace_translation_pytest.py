@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from langgraph_runtime.adapter import _event_from_graph, _LangGraphEventBridge
+from langgraph_runtime.workflows.events import append_tool_event
 from langgraph_runtime.workflows.runtime_invocation import invoke_llm_for_node
 
 
@@ -17,6 +18,78 @@ async def test_event_bridge_reports_completed_background_validation_failure():
     await asyncio.sleep(0)
     with pytest.raises(ValueError, match="tool_call_id"):
         await bridge.drain()
+
+
+@pytest.mark.asyncio
+async def test_event_bridge_failed_publish_tool_event_drains_with_tool_call_id():
+    sink = SimpleNamespace(emit_runtime_event=AsyncMock())
+    bridge = _LangGraphEventBridge("run", sink)
+    bridge.emit_nowait(
+        "tool.failed",
+        {
+            "tool_name": "publish_canvas",
+            "tool_call_id": "synthesizer:publish_canvas:abc",
+            "ok": False,
+        },
+    )
+    await bridge.drain()
+    sink.emit_runtime_event.assert_awaited_once()
+    event = sink.emit_runtime_event.await_args.args[0]
+    assert event.kind == "tool.failed"
+
+
+def test_append_tool_event_emits_failed_without_tool_call_id_skips_runtime_sink():
+    class Sink:
+        def __init__(self) -> None:
+            self.kinds: list[str] = []
+
+        def emit_nowait(self, kind, _payload):
+            self.kinds.append(kind)
+
+    sink = Sink()
+    append_tool_event(
+        {},
+        {"ok": False, "tool_name": "publish_canvas", "trace": {"tool_name": "publish_canvas"}},
+        config={"configurable": {"execution_event_sink": sink}},
+        runtime_node_type=lambda _config, _node: "synthesizer",
+        runtime_visit_index=lambda _config: 1,
+    )
+    assert sink.kinds == []
+
+
+@pytest.mark.asyncio
+async def test_append_tool_event_failed_publish_drains_event_bridge():
+    class Sink:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        def emit_nowait(self, kind, payload):
+            self.events.append((kind, payload))
+
+    sink = Sink()
+    append_tool_event(
+        {},
+        {
+            "ok": False,
+            "tool_name": "publish_canvas",
+            "trace": {
+                "tool_name": "publish_canvas",
+                "tool_call_id": "synthesizer:publish_canvas:deadbeef",
+                "caller_node": "synthesizer",
+            },
+        },
+        config={"configurable": {"execution_event_sink": sink}},
+        runtime_node_type=lambda _config, _node: "synthesizer",
+        runtime_visit_index=lambda _config: 1,
+    )
+    assert len(sink.events) == 1
+    kind, payload = sink.events[0]
+    assert kind == "tool.failed"
+    assert payload["tool_call_id"] == "synthesizer:publish_canvas:deadbeef"
+    assert payload["ok"] is False
+    bridge = _LangGraphEventBridge("run", SimpleNamespace(emit_runtime_event=AsyncMock()))
+    bridge.emit_nowait(kind, payload)
+    await bridge.drain()
 
 
 @pytest.mark.parametrize(("kind", "payload"), [

@@ -9,6 +9,24 @@ from runtime_protocol.contracts import RuntimeEvidenceKind, RuntimeInheritedEvid
 
 INHERITED_EVIDENCE_CONTENT_LIMIT = 24_000
 TOOL_EVIDENCE_PREVIEW_LIMIT = 2_000
+_CHARS_PER_TOKEN = 4
+_USABLE_CONTEXT_RATIO = 0.80
+_FALLBACK_CONTEXT_WINDOW = 8192
+
+
+def usable_context_chars(context_window: int | None, *, ratio: float = 1.0) -> int:
+    """Return a character share of the usable context window."""
+
+    try:
+        tokens = int(context_window) if context_window is not None else 0
+    except (TypeError, ValueError):
+        tokens = 0
+    if tokens <= 0:
+        tokens = _FALLBACK_CONTEXT_WINDOW
+    usable = max(1, int(tokens * _USABLE_CONTEXT_RATIO * _CHARS_PER_TOKEN))
+    return max(1, int(usable * ratio))
+
+
 EXPLICIT_GAP_WARNINGS = frozenset({"missing_document_vectors", "indexing_in_progress", "missing_thread_context", "no_relevant_content", "no_relevant_conversation_history", "no_relevant_memory", "no_thread_documents", "no_usable_web_results", "web_search_disabled", "search_web_failed"})
 
 def _bounded(value: Any, limit: int = INHERITED_EVIDENCE_CONTENT_LIMIT) -> str:
@@ -23,19 +41,20 @@ def _source_text(sources: Iterable[Mapping[str, Any]]) -> str:
             lines.append(f"[{title or 'Source'}]\n{text}")
     return "\n\n".join(lines)[:INHERITED_EVIDENCE_CONTENT_LIMIT]
 
-def _packet(kind: RuntimeEvidenceKind, content: Any, *, sources: Iterable[Mapping[str, Any]] = (), provenance: Mapping[str, Any] | None = None, warnings: Iterable[str] = (), explicit_gap: bool = False) -> RuntimeInheritedEvidence:
+def _packet(kind: RuntimeEvidenceKind, content: Any, *, sources: Iterable[Mapping[str, Any]] = (), provenance: Mapping[str, Any] | None = None, warnings: Iterable[str] = (), explicit_gap: bool = False, limit: int = INHERITED_EVIDENCE_CONTENT_LIMIT) -> RuntimeInheritedEvidence:
     normalized_sources = tuple(dict(item) for item in sources if isinstance(item, Mapping))[:100]
-    normalized_content = _bounded(content) or _source_text(normalized_sources)
+    normalized_content = _bounded(content, limit) or _bounded(_source_text(normalized_sources), limit)
     identity = hashlib.sha256(f"{kind.value}\0{normalized_content}\0{len(normalized_sources)}".encode()).hexdigest()[:24]
     return RuntimeInheritedEvidence(packet_id=f"inherited:{kind.value}:{identity}", kind=kind, content=normalized_content, sources=normalized_sources, warnings=tuple(dict.fromkeys(str(item) for item in warnings if str(item).strip())), provenance=dict(provenance or {}), available=bool(normalized_content or normalized_sources) and not explicit_gap, explicit_gap=explicit_gap)
 
-def inherited_evidence_packets(prefetch: Mapping[str, Any] | None, *, profile_id: str | None = None) -> tuple[RuntimeInheritedEvidence, ...]:
+def inherited_evidence_packets(prefetch: Mapping[str, Any] | None, *, profile_id: str | None = None, context_window: int | None = None) -> tuple[RuntimeInheritedEvidence, ...]:
     bundle = dict(prefetch or {})
+    limit = usable_context_chars(context_window)
     packets = {
-        RuntimeEvidenceKind.DOCUMENT: _packet(RuntimeEvidenceKind.DOCUMENT, bundle.get("document_evidence_text"), sources=bundle.get("document_sources") or bundle.get("documents") or (), provenance={"origin": "prefetch", "inventory": list(bundle.get("documents") or [])[:100]}),
-        RuntimeEvidenceKind.WEB: _packet(RuntimeEvidenceKind.WEB, bundle.get("web_evidence_text"), sources=bundle.get("web_sources") or (), provenance={"origin": "prefetch"}),
-        RuntimeEvidenceKind.CONVERSATION: _packet(RuntimeEvidenceKind.CONVERSATION, "\n\n".join(value for value in (_bounded(bundle.get("recent_history_text"), 12_000), _bounded(bundle.get("semantic_history_text"), 12_000)) if value), sources=bundle.get("semantic_memory_refs") or bundle.get("recent_message_refs") or (), provenance={"origin": "prefetch"}),
-        RuntimeEvidenceKind.MEMORY: _packet(RuntimeEvidenceKind.MEMORY, bundle.get("durable_memory_text"), sources=bundle.get("durable_memory_refs") or (), provenance={"origin": "prefetch"}),
+        RuntimeEvidenceKind.DOCUMENT: _packet(RuntimeEvidenceKind.DOCUMENT, bundle.get("document_evidence_text"), sources=bundle.get("document_sources") or bundle.get("documents") or (), provenance={"origin": "prefetch", "inventory": list(bundle.get("documents") or [])[:100]}, limit=limit),
+        RuntimeEvidenceKind.WEB: _packet(RuntimeEvidenceKind.WEB, bundle.get("web_evidence_text"), sources=bundle.get("web_sources") or (), provenance={"origin": "prefetch"}, limit=limit),
+        RuntimeEvidenceKind.CONVERSATION: _packet(RuntimeEvidenceKind.CONVERSATION, "\n\n".join(value for value in (_bounded(bundle.get("recent_history_text"), limit), _bounded(bundle.get("semantic_history_text"), limit)) if value), sources=bundle.get("semantic_memory_refs") or bundle.get("recent_message_refs") or (), provenance={"origin": "prefetch"}, limit=limit),
+        RuntimeEvidenceKind.MEMORY: _packet(RuntimeEvidenceKind.MEMORY, bundle.get("durable_memory_text"), sources=bundle.get("durable_memory_refs") or (), provenance={"origin": "prefetch"}, limit=limit),
     }
     scopes = {"document_researcher": (RuntimeEvidenceKind.DOCUMENT,), "web_researcher": (RuntimeEvidenceKind.WEB,), "memory_researcher": (RuntimeEvidenceKind.CONVERSATION, RuntimeEvidenceKind.MEMORY), "evidence_critic": tuple(RuntimeEvidenceKind)}
     return tuple(packets[kind] for kind in scopes.get(str(profile_id or ""), tuple(RuntimeEvidenceKind)) if packets[kind].available or packets[kind].explicit_gap)

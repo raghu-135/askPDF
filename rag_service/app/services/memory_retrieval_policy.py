@@ -9,10 +9,7 @@ import re
 from typing import Any, Dict, Iterable
 
 from app.models.llm_server_client import CHARS_PER_TOKEN
-from app.models.memory_limits import (
-    DEFAULT_MEMORY_RELATIVE_SCORE_RATIO,
-    MAX_MEMORY_CONTEXT_CHARS,
-)
+from app.models.memory_limits import DEFAULT_MEMORY_RELATIVE_SCORE_RATIO
 from app.models.memory_tools import normalize_memory_attributes
 
 
@@ -24,26 +21,20 @@ NEAR_DUPLICATE_TOKEN_SIMILARITY = 0.85
 AVERAGE_MEMORY_CHARS = 400
 
 
-def _clamp(value: int, minimum: int, maximum: int) -> int:
-    return max(minimum, min(maximum, int(value)))
-
-
 def compute_memory_retrieval_budget(context_window: int, *, expanded: bool = False) -> Dict[str, int | float]:
-    usable_chars = int(max(256, int(context_window)) * 0.80 * CHARS_PER_TOKEN)
+    """Size durable-memory packing as a share of the selected context window."""
+
+    usable_chars = int(max(1, int(context_window)) * 0.80 * CHARS_PER_TOKEN)
     ratio = EXPANDED_MEMORY_RATIO if expanded else STANDARD_MEMORY_RATIO
-    minimum, maximum, max_candidates = (
-        (1600, MAX_MEMORY_CONTEXT_CHARS, 40)
-        if expanded else (800, 8000, 20)
-    )
-    char_budget = _clamp(int(usable_chars * ratio), minimum, maximum)
-    candidate_limit = _clamp(math.ceil(char_budget / AVERAGE_MEMORY_CHARS) * 2, 5, max_candidates)
+    char_budget = max(1, int(usable_chars * ratio))
+    candidate_limit = max(1, math.ceil(char_budget / AVERAGE_MEMORY_CHARS) * 2)
     return {
         "usable_chars": usable_chars,
         "ratio": ratio,
         "char_budget": char_budget,
         "candidate_limit": candidate_limit,
-        "per_memory_min_chars": 200,
-        "per_memory_max_chars": 1000,
+        "per_memory_min_chars": 1,
+        "per_memory_max_chars": char_budget,
     }
 
 
@@ -107,7 +98,7 @@ def pack_memory_results(memories: Iterable[Dict[str, Any]], char_budget: int) ->
     if not candidates or char_budget <= 0:
         return [], 0
     expected_count = max(1, min(len(candidates), math.ceil(char_budget / AVERAGE_MEMORY_CHARS)))
-    per_memory = _clamp(char_budget // expected_count, 200, 1000)
+    per_memory = max(1, char_budget // expected_count)
     packed: list[Dict[str, Any]] = []
     used = 0
     for memory in candidates:

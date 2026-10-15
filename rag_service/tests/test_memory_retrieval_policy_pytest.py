@@ -9,22 +9,31 @@ from app.services.memory_retrieval_policy import (
 )
 
 
-def test_memory_budget_scales_and_caps_across_context_windows():
-    expected = {
-        4096: (800, 5),
-        16384: (3145, 16),
-        32768: (6291, 20),
-        131072: (8000, 20),
-        1_000_000: (8000, 20),
-    }
-    for context_window, (chars, candidates) in expected.items():
-        budget = compute_memory_retrieval_budget(context_window)
-        assert budget["char_budget"] == chars
-        assert budget["candidate_limit"] == candidates
+def test_memory_budget_is_a_ratio_of_the_context_window():
+    import math
 
+    from app.models.llm_server_client import CHARS_PER_TOKEN
+    from app.models.memory_limits import MAX_CONTEXT_WINDOW_TOKENS, MAX_MEMORY_CONTEXT_CHARS
+    from app.services.memory_retrieval_policy import AVERAGE_MEMORY_CHARS
+
+    previous = None
+    for context_window in (4096, 16384, 32768, 131072, 1_000_000):
+        budget = compute_memory_retrieval_budget(context_window)
+        usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
+        assert budget["char_budget"] == max(1, int(usable * budget["ratio"]))
+        assert budget["candidate_limit"] == max(
+            1, math.ceil(budget["char_budget"] / AVERAGE_MEMORY_CHARS) * 2
+        )
+        if previous is not None:
+            assert budget["char_budget"] > previous
+        previous = budget["char_budget"]
+
+    standard = compute_memory_retrieval_budget(1_000_000)
     expanded = compute_memory_retrieval_budget(1_000_000, expanded=True)
-    assert expanded["char_budget"] == 16000
-    assert expanded["candidate_limit"] == 40
+    assert expanded["char_budget"] > standard["char_budget"]
+    assert expanded["ratio"] == standard["ratio"] * 2
+    ceiling = compute_memory_retrieval_budget(MAX_CONTEXT_WINDOW_TOKENS, expanded=True)
+    assert ceiling["char_budget"] == MAX_MEMORY_CONTEXT_CHARS
 
 
 def test_memory_applicability_uses_attributes_without_an_llm_call():

@@ -44,6 +44,7 @@ UNIT_TEST_FILES = [
     "test_canvas_emit_pytest.py",
     "test_canvas_layout_skills_pytest.py",
     "test_canvas_spec_pytest.py",
+    "test_canvas_service_pytest.py",
     "test_content_store_pytest.py",
     "test_external_research_tools.py",
     "test_execution_stream_live_delivery_pytest.py",

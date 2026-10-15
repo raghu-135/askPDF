@@ -49,6 +49,7 @@ def test_normalize_publish_canvas_spec_splits_markdown_and_sources_extras():
     assert blocks[0] == {"type": "markdown", "text": "Advisor models steer black-box LLMs."}
     assert blocks[1] == {
         "type": "sources",
+        "title": "Sources",
         "citations": [{"kind": "web", "label": "Paper", "url": "https://example.com"}],
     }
 
@@ -56,6 +57,100 @@ def test_normalize_publish_canvas_spec_splits_markdown_and_sources_extras():
 def test_normalize_publish_canvas_spec_preserves_canvas_spec_v1():
     original = {"schema_version": 1, "title": "Advisor Models", "sections": [{"title": "Coverage", "blocks": [{"type": "stat", "value": "3", "label": "Claims"}]}]}
     assert normalize_publish_canvas_spec({"spec": original}) == original
+
+
+def test_normalize_publish_canvas_spec_strips_unknown_envelope_fields():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "schema_version": 1,
+            "title": "How Humans Learn",
+            "id": "artifact-uuid",
+            "subtitle": "Report overview",
+            "version": 2,
+            "sections": [{
+                "title": "Overview",
+                "blocks": [{"type": "markdown", "text": "Summary.", "extra": "drop-me"}],
+            }],
+        },
+    })
+    assert set(spec.keys()) == {"schema_version", "title", "sections"}
+    assert "id" not in spec
+    assert "subtitle" not in spec
+    assert "version" not in spec
+    assert spec["sections"][0]["blocks"][0] == {"type": "markdown", "text": "Summary."}
+
+
+def test_normalize_publish_canvas_spec_defaults_missing_title_and_schema_version():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "sections": [{
+                "blocks": [{"type": "markdown", "text": "Learning happens through practice."}],
+            }],
+        },
+    })
+    assert spec["schema_version"] == 1
+    assert spec["title"] == "Findings"
+    assert spec["sections"][0]["title"] == "Findings"
+    assert spec["sections"][0]["blocks"][0]["text"] == "Learning happens through practice."
+
+
+def test_normalize_publish_canvas_spec_repairs_incomplete_blocks_and_citations():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "sections": [{
+                "title": "Overview",
+                "blocks": [
+                    {"type": "callout", "tone": "warning", "content": "Practice builds durable memory."},
+                    {"type": "markdown", "content": "Learning is active."},
+                    {
+                        "type": "sources",
+                        "citations": [{
+                            "kind": "document",
+                            "label": "How Humans Learn",
+                            "source_id": "abc123def456",
+                        }],
+                    },
+                ],
+            }],
+        },
+    })
+    types = [block["type"] for block in spec["sections"][0]["blocks"]]
+    assert "callout" in types and "markdown" in types
+    callout = next(block for block in spec["sections"][0]["blocks"] if block["type"] == "callout")
+    assert callout["title"] == "Note"
+    assert callout["body"] == "Practice builds durable memory."
+    sources = next(block for block in spec["sections"][0]["blocks"] if block["type"] == "sources")
+    assert sources["citations"][0]["file_hash"] == "abc123def456"
+    assert "source_id" not in sources["citations"][0]
+
+
+def test_normalize_publish_canvas_spec_wraps_string_sections():
+    spec = normalize_publish_canvas_spec({
+        "spec": {"sections": ["1. Attach prior knowledge before new concepts."]},
+    })
+    assert spec["sections"][0]["blocks"][0]["text"].startswith("1. Attach")
+
+
+def test_normalize_publish_canvas_spec_uses_subtitle_as_title_when_title_missing():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "subtitle": "How Humans Learn",
+            "sections": [{"title": "Overview", "blocks": [{"type": "stat", "value": "3", "label": "Ideas"}]}],
+        },
+    })
+    assert spec["title"] == "How Humans Learn"
+    assert "subtitle" not in spec
+
+
+def test_normalize_publish_canvas_spec_preserves_dag_edge_relation():
+    block = {
+        "type": "dag",
+        "nodes": [{"id": "a", "label": "Claim"}, {"id": "b", "label": "Source"}],
+        "edges": [{"source": "a", "target": "b", "relation": "contradicts"}],
+    }
+    spec = normalize_publish_canvas_spec(block)
+    edge = spec["sections"][0]["blocks"][0]["edges"][0]
+    assert edge["relation"] == "contradicts"
 
 
 @pytest.mark.asyncio

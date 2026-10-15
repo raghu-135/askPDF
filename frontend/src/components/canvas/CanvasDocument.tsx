@@ -24,11 +24,15 @@ import {
   DAG_NODE_WIDTH,
   documentCitationTarget,
   layoutCanvasDag,
+  tableCellText,
+  tableCellTone,
   type CanvasBlock,
   type CanvasCitation,
   type CanvasCitationKind,
   type CanvasSpec,
+  type CanvasTableCell,
   type DocumentCanvasCitationTarget,
+  type EvidenceCellTone,
 } from '../../lib/canvas-spec';
 
 const KIND_LABEL: Record<CanvasCitationKind, string> = {
@@ -85,16 +89,30 @@ function DagView({ block }: { block: Extract<CanvasBlock, { type: 'dag' }> }) {
           </defs>
           {layout.edges.map((edge) => {
             const midX = (edge.x1 + edge.x2) / 2;
+            const midY = (edge.y1 + edge.y2) / 2;
             return (
-              <path
-                key={`${edge.source}-${edge.target}-${edge.y1}-${edge.y2}`}
-                d={`M ${edge.x1} ${edge.y1} C ${midX} ${edge.y1}, ${midX} ${edge.y2}, ${edge.x2} ${edge.y2}`}
-                fill="none"
-                stroke="currentColor"
-                strokeOpacity={0.45}
-                strokeWidth={1.5}
-                markerEnd={`url(#${markerId})`}
-              />
+              <g key={`${edge.source}-${edge.target}-${edge.y1}-${edge.y2}`}>
+                <path
+                  d={`M ${edge.x1} ${edge.y1} C ${midX} ${edge.y1}, ${midX} ${edge.y2}, ${edge.x2} ${edge.y2}`}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeOpacity={0.45}
+                  strokeWidth={1.5}
+                  markerEnd={`url(#${markerId})`}
+                />
+                {edge.relation ? (
+                  <text
+                    x={midX}
+                    y={midY - 6}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill="currentColor"
+                    opacity={0.75}
+                  >
+                    {edge.relation}
+                  </text>
+                ) : null}
+              </g>
             );
           })}
           {layout.nodes.map((node) => (
@@ -155,6 +173,144 @@ function CitationChip({
         '& .MuiChip-icon': { ml: 0.75 },
       }}
     />
+  );
+}
+
+const EVIDENCE_CELL_STYLES: Record<EvidenceCellTone, { bgcolor: string; borderColor: string }> = {
+  supported: { bgcolor: 'rgba(46, 125, 50, 0.1)', borderColor: 'success.light' },
+  contradicted: { bgcolor: 'rgba(211, 47, 47, 0.1)', borderColor: 'error.light' },
+  partial: { bgcolor: 'rgba(237, 108, 2, 0.1)', borderColor: 'warning.light' },
+  absent: { bgcolor: 'action.hover', borderColor: 'divider' },
+};
+
+function evidenceCellSx(cell: CanvasTableCell) {
+  const tone = tableCellTone(cell);
+  if (!tone) return undefined;
+  const palette = EVIDENCE_CELL_STYLES[tone];
+  return {
+    bgcolor: palette.bgcolor,
+    borderLeft: '3px solid',
+    borderColor: palette.borderColor,
+  };
+}
+
+function QuoteView({
+  block,
+  onOpenDocumentCitation,
+}: {
+  block: Extract<CanvasBlock, { type: 'quote' }>;
+  onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+}) {
+  const target = {
+    fileHash: block.file_hash,
+    sentenceId: block.sentence_id,
+    play: false,
+  };
+  const clickable = Boolean(onOpenDocumentCitation && block.text);
+  return (
+    <Paper
+      variant="outlined"
+      onClick={clickable ? () => onOpenDocumentCitation?.(target) : undefined}
+      sx={{
+        p: 2,
+        borderRadius: 2,
+        borderLeft: '4px solid',
+        borderLeftColor: 'primary.main',
+        cursor: clickable ? 'pointer' : 'default',
+      }}
+    >
+      {block.label ? (
+        <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8 }}>
+          {block.label}
+        </Typography>
+      ) : null}
+      <Typography variant="body1" sx={{ mt: block.label ? 0.5 : 0, fontStyle: 'italic', lineHeight: 1.6 }}>
+        {block.text ? `"${block.text}"` : 'Quote text is unavailable.'}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+        {block.page ? `Page ${block.page} · ` : ''}
+        {clickable ? 'Open in PDF' : block.file_hash}
+      </Typography>
+    </Paper>
+  );
+}
+
+function TimelineView({
+  block,
+  onOpenDocumentCitation,
+}: {
+  block: Extract<CanvasBlock, { type: 'timeline' }>;
+  onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+}) {
+  return (
+    <Box>
+      {block.title ? (
+        <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8 }}>
+          {block.title}
+        </Typography>
+      ) : null}
+      <Stack spacing={1.5} sx={{ mt: block.title ? 0.75 : 0, pl: 1, borderLeft: '2px solid', borderColor: 'divider' }}>
+        {block.events.map((event, index) => (
+          <Box key={`${event.time}:${event.label}:${index}`} sx={{ pl: 1.5 }}>
+            <Typography variant="caption" color="primary.main" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
+              {event.time}
+            </Typography>
+            <Typography variant="subtitle2" sx={{ mt: 0.25 }}>{event.label}</Typography>
+            {event.note ? (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>{event.note}</Typography>
+            ) : null}
+            <Box sx={{ mt: 0.75 }}>
+              <CitationChip citation={event.citation} onOpenDocumentCitation={onOpenDocumentCitation} />
+            </Box>
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
+const CLAIM_RELATION_LABEL: Record<Extract<CanvasBlock, { type: 'claim_pair' }>['relation'], string> = {
+  agrees: 'Agrees with',
+  contradicts: 'Contradicts',
+  extends: 'Extends',
+};
+
+function ClaimPairView({
+  block,
+  onOpenDocumentCitation,
+}: {
+  block: Extract<CanvasBlock, { type: 'claim_pair' }>;
+  onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+}) {
+  return (
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={2}
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        divider={<Box sx={{ width: { xs: '100%', sm: 1 }, height: { xs: 1, sm: 'auto' }, bgcolor: 'divider', alignSelf: 'stretch' }} />}
+      >
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="body1" sx={{ lineHeight: 1.55 }}>{block.left.text}</Typography>
+          <Box sx={{ mt: 1 }}>
+            <CitationChip citation={block.left.citation} onOpenDocumentCitation={onOpenDocumentCitation} />
+          </Box>
+        </Box>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, px: { sm: 0.5 }, textAlign: 'center' }}
+        >
+          {CLAIM_RELATION_LABEL[block.relation]}
+        </Typography>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="body1" sx={{ lineHeight: 1.55 }}>{block.right.text}</Typography>
+          <Box sx={{ mt: 1 }}>
+            <CitationChip citation={block.right.citation} onOpenDocumentCitation={onOpenDocumentCitation} />
+          </Box>
+        </Box>
+      </Stack>
+    </Paper>
   );
 }
 
@@ -219,7 +375,9 @@ function BlockView({
               {block.rows.map((row, index) => (
                 <TableRow key={index} hover>
                   {row.map((cell, cellIndex) => (
-                    <TableCell key={`${index}:${cellIndex}`}>{cell}</TableCell>
+                    <TableCell key={`${index}:${cellIndex}`} sx={evidenceCellSx(cell)}>
+                      {tableCellText(cell)}
+                    </TableCell>
                   ))}
                 </TableRow>
               ))}
@@ -265,7 +423,19 @@ function BlockView({
       </Box>
     );
   }
-  return <DagView block={block} />;
+  if (block.type === 'quote') {
+    return <QuoteView block={block} onOpenDocumentCitation={onOpenDocumentCitation} />;
+  }
+  if (block.type === 'timeline') {
+    return <TimelineView block={block} onOpenDocumentCitation={onOpenDocumentCitation} />;
+  }
+  if (block.type === 'claim_pair') {
+    return <ClaimPairView block={block} onOpenDocumentCitation={onOpenDocumentCitation} />;
+  }
+  if (block.type === 'dag') {
+    return <DagView block={block} />;
+  }
+  return null;
 }
 
 export default function CanvasDocument({

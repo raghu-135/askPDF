@@ -193,16 +193,17 @@ def compute_prefetch_budget(context_window: int) -> dict:
     callers can use whichever unit is most convenient.
     """
     usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
+    durable_memory_chars = max(1, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))
     return {
-        # Character budgets
+        # Character budgets. Each slice is a ratio of the usable window.
         "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
         "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
-        "durable_memory_chars":   max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))),
+        "durable_memory_chars":   durable_memory_chars,
         "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
         # Derived item-count limits
         "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
         "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
-        "durable_memory_limit":   max(5, min(20, math.ceil(max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))) / 400) * 2)),
+        "durable_memory_limit":   max(1, math.ceil(durable_memory_chars / AVG_CHUNK_CHARS) * 2),
         "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
     }
 

@@ -12,11 +12,16 @@ from app.db.models_sqlmodel import AgentTaskArtifact
 from app.db.repositories.canvas_repo_sqlmodel import CanvasRepository
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
+from app.db import get_file_parsed_sentences
 from app.models.canvas import (
     RESEARCH_CANVAS_ARTIFACT_KIND,
     RESEARCH_CANVAS_MEDIA_TYPE,
+    CanvasAdmissionError,
     CanvasCreateRequest,
+    QuoteBlock,
+    iter_canvas_quote_file_hashes,
     parse_canvas_spec,
+    resolve_quote_blocks,
 )
 from app.services.content_store import get_content_store, thread_artifact_content_key
 from app.services.task_artifact_service import MAX_SINGLE_ARTIFACT_BYTES
@@ -88,6 +93,26 @@ class CanvasService:
     ) -> dict[str, Any]:
         await self._require_thread(thread_id)
         spec = request.spec
+        quote_hashes = sorted(set(iter_canvas_quote_file_hashes(spec)))
+        if quote_hashes:
+            sentences_by_file = {
+                file_hash: await get_file_parsed_sentences(file_hash)
+                for file_hash in quote_hashes
+            }
+            try:
+                spec = resolve_quote_blocks(spec, sentences_by_file=sentences_by_file)
+            except CanvasAdmissionError as exc:
+                raise CanvasValidationError(str(exc)) from exc
+            for block in (
+                item
+                for section in spec.sections
+                for item in section.blocks
+                if isinstance(item, QuoteBlock)
+            ):
+                if not block.text:
+                    raise CanvasValidationError(
+                        f"quote sentence_id {block.sentence_id} could not be resolved for {block.file_hash}"
+                    )
         if request.idempotency_key:
             existing = await self._canvases.get_by_idempotency(thread_id, request.idempotency_key)
             if existing is not None:

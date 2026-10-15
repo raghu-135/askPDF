@@ -17,13 +17,14 @@ test('dag layout places sources before dependents', () => {
       { id: 'claim', label: 'Claim' },
       { id: 'source', label: 'Source' },
     ],
-    [{ source: 'claim', target: 'source' }],
+    [{ source: 'claim', target: 'source', relation: 'supports' }],
   );
   const claim = layout.nodes.find((node) => node.id === 'claim');
   const source = layout.nodes.find((node) => node.id === 'source');
   assert.ok(claim && source);
   assert.ok(claim.x < source.x);
   assert.equal(layout.edges.length, 1);
+  assert.equal(layout.edges[0].relation, 'supports');
 });
 
 test('canvas spec counts sections, stats, and citations', () => {

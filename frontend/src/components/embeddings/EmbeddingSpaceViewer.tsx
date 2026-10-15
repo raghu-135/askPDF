@@ -24,7 +24,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CollapsibleWorkspaceChrome from '../workbench/CollapsibleWorkspaceChrome';
-import { WORKSPACE_CHROME_SEPARATOR } from '../../lib/workspace-chrome';
+import { WORKSPACE_CHROME_SEPARATOR, type WorkspaceChromeEntry } from '../../lib/workspace-chrome';
 import {
   ChunkIdentityChips,
   ChunkInspectorBody,
@@ -496,7 +496,7 @@ export default function EmbeddingSpaceViewer({
   }, [documentColors, documents, points, sourceFamily]);
 
   const embeddingChromeItems = useMemo(() => {
-    const items = [
+    const items: WorkspaceChromeEntry[] = [
       <Button
         key="fit-view"
         size="small"

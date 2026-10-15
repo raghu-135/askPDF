@@ -82,8 +82,8 @@ def test_logical_server_groups_have_unique_known_tools():
 
 
 @pytest.mark.asyncio
-async def test_durable_memory_budget_is_clamped_to_contract_limit(monkeypatch):
-    from app.models.memory_limits import MAX_MEMORY_CONTEXT_CHARS
+async def test_durable_memory_budget_scales_with_context_window(monkeypatch):
+    from app.services.memory_retrieval_policy import compute_memory_retrieval_budget
     from app.tools.context import ToolInvocationContext
     from app.tools.retrieval_memory import search_durable_memory
     from app.tools.contracts import DocumentSearchRequest
@@ -105,7 +105,7 @@ async def test_durable_memory_budget_is_clamped_to_contract_limit(monkeypatch):
         ToolInvocationContext(thread_id="thread-1", context_window=20_000),
     )
 
-    assert captured["char_budget"] == MAX_MEMORY_CONTEXT_CHARS
+    assert captured["char_budget"] == int(compute_memory_retrieval_budget(20_000, expanded=True)["char_budget"])
     assert result.ok is True
 
 

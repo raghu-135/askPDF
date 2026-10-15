@@ -35,6 +35,7 @@ from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, Dee
 from langgraph_runtime.models.llm import execution_model_client, get_llm
 from langgraph_runtime.models.retry import is_retryable_model_error
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
+from runtime_protocol.evidence import usable_context_chars
 from langgraph_runtime.runtime_support.evidence import inherited_evidence_packets, tool_result_evidence
 from langgraph_runtime.runtime_support.task_results import (
     RuntimeTaskResultValidationError,
@@ -217,7 +218,11 @@ def _permitted_profile_tools(state: Mapping[str, Any], profile_id: str) -> tuple
 
 def _inherited_evidence(state: Mapping[str, Any], profile_id: str) -> list[dict[str, Any]]:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
-    return [packet.to_dict() for packet in inherited_evidence_packets(bundle, profile_id=profile_id)]
+    return [packet.to_dict() for packet in inherited_evidence_packets(
+        bundle,
+        profile_id=profile_id,
+        context_window=state.get("context_window"),
+    )]
 
 
 _DOCUMENT_ABSENCE_ASSERTION = re.compile(
@@ -442,12 +447,14 @@ async def _call_model(
 
 def _planning_context(state: Mapping[str, Any]) -> str:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    section_limit = usable_context_chars(state.get("context_window"), ratio=0.20)
+    total_limit = usable_context_chars(state.get("context_window"), ratio=0.50)
     sections = [
         str(bundle.get("recent_history_text") or ""),
         str(bundle.get("semantic_history_text") or ""),
         str(bundle.get("document_evidence_text") or ""),
     ]
-    return "\n\n".join(value[:12_000] for value in sections if value)[:32_000]
+    return "\n\n".join(value[:section_limit] for value in sections if value)[:total_limit]
 
 
 def _plan_output_identity(text: str) -> dict[str, Any]:
@@ -677,11 +684,13 @@ async def deep_task_planner(state: Dict[str, Any], config: RunnableConfig) -> Di
         [value for value in effective_memory.get("memories") or [] if isinstance(value, dict)],
         key=lambda value: (rank.get(str(value.get("scope_type")), 9), str(value.get("id") or "")),
     )
+    memory_budget = usable_context_chars(state.get("context_window"), ratio=0.12)
+    per_memory = max(1, memory_budget // 8)
     bounded_memory: list[Dict[str, Any]] = []
     memory_chars = 0
     for value in memory_items:
-        content = str(value.get("content") or "")[:2_000]
-        if memory_chars + len(content) > 12_000:
+        content = str(value.get("content") or "")[:per_memory]
+        if memory_chars + len(content) > memory_budget:
             break
         memory_chars += len(content)
         bounded_memory.append({

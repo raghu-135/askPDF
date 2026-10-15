@@ -19,11 +19,15 @@ export type CanvasStatBlock = {
   tone?: 'neutral' | 'info' | 'warning';
 };
 
+export type EvidenceCellTone = 'supported' | 'contradicted' | 'partial' | 'absent';
+
+export type CanvasTableCell = string | { text: string; tone?: EvidenceCellTone };
+
 export type CanvasTableBlock = {
   type: 'table';
   caption?: string | null;
   headers: string[];
-  rows: string[][];
+  rows: CanvasTableCell[][];
 };
 
 export type CanvasCalloutBlock = {
@@ -44,11 +48,49 @@ export type CanvasSourcesBlock = {
   citations: CanvasCitation[];
 };
 
+export type DagEdgeRelation = 'supports' | 'contradicts' | 'precedes';
+
 export type CanvasDagBlock = {
   type: 'dag';
   title?: string | null;
   nodes: Array<{ id: string; label: string }>;
-  edges: Array<{ source: string; target: string }>;
+  edges: Array<{ source: string; target: string; relation?: DagEdgeRelation | null }>;
+};
+
+export type CanvasQuoteBlock = {
+  type: 'quote';
+  file_hash: string;
+  sentence_id: number;
+  label?: string | null;
+  text?: string | null;
+  page?: number | null;
+};
+
+export type CanvasTimelineEvent = {
+  time: string;
+  label: string;
+  note?: string | null;
+  citation: CanvasCitation;
+};
+
+export type CanvasTimelineBlock = {
+  type: 'timeline';
+  title?: string | null;
+  events: CanvasTimelineEvent[];
+};
+
+export type ClaimPairRelation = 'agrees' | 'contradicts' | 'extends';
+
+export type CanvasClaimSide = {
+  text: string;
+  citation: CanvasCitation;
+};
+
+export type CanvasClaimPairBlock = {
+  type: 'claim_pair';
+  relation: ClaimPairRelation;
+  left: CanvasClaimSide;
+  right: CanvasClaimSide;
 };
 
 export type CanvasBlock =
@@ -57,7 +99,10 @@ export type CanvasBlock =
   | CanvasCalloutBlock
   | CanvasMarkdownBlock
   | CanvasSourcesBlock
-  | CanvasDagBlock;
+  | CanvasDagBlock
+  | CanvasQuoteBlock
+  | CanvasTimelineBlock
+  | CanvasClaimPairBlock;
 
 export type CanvasSection = {
   title: string;
@@ -104,6 +149,14 @@ export const documentCitationTarget = (
   };
 };
 
+export const tableCellText = (cell: CanvasTableCell): string => (
+  typeof cell === 'string' ? cell : cell.text
+);
+
+export const tableCellTone = (cell: CanvasTableCell): EvidenceCellTone | null => (
+  typeof cell === 'string' ? null : (cell.tone ?? null)
+);
+
 export const DAG_NODE_WIDTH = 148;
 export const DAG_NODE_HEIGHT = 40;
 export const DAG_LAYER_GAP = 56;
@@ -119,6 +172,7 @@ export type CanvasDagLayoutNode = {
 export type CanvasDagLayoutEdge = {
   source: string;
   target: string;
+  relation?: DagEdgeRelation | null;
   x1: number;
   y1: number;
   x2: number;
@@ -134,7 +188,7 @@ export type CanvasDagLayout = {
 
 export const layoutCanvasDag = (
   nodes: Array<{ id: string; label: string }>,
-  edges: Array<{ source: string; target: string }>,
+  edges: Array<{ source: string; target: string; relation?: DagEdgeRelation | null }>,
 ): CanvasDagLayout => {
   const incoming = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
@@ -179,6 +233,7 @@ export const layoutCanvasDag = (
     return [{
       source: edge.source,
       target: edge.target,
+      relation: edge.relation ?? null,
       x1: from.x + DAG_NODE_WIDTH,
       y1: from.y + DAG_NODE_HEIGHT / 2,
       x2: to.x,
@@ -203,8 +258,12 @@ export const canvasSpecCounts = (spec: CanvasSpec) => {
   return {
     sections: spec.sections.length,
     stats: blocks.filter((block) => block.type === 'stat').length,
-    sources: blocks.reduce((count, block) => (
-      block.type === 'sources' ? count + block.citations.length : count
-    ), 0),
+    sources: blocks.reduce((count, block) => {
+      if (block.type === 'sources') return count + block.citations.length;
+      if (block.type === 'timeline') return count + block.events.length;
+      if (block.type === 'claim_pair') return count + 2;
+      if (block.type === 'quote') return count + 1;
+      return count;
+    }, 0),
   };
 };

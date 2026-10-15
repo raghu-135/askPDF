@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from app.agent.evidence_contract import (
     RECORD_IDENTIFIER_PATTERN,
@@ -27,6 +27,13 @@ MAX_CALLOUT_CHARS = 1200
 MAX_DAG_NODES = 24
 MAX_CITATIONS = 20
 MAX_CITATION_LABEL_CHARS = 160
+MAX_QUOTE_TEXT_CHARS = 1200
+MAX_QUOTE_LABEL_CHARS = 160
+MAX_TIMELINE_EVENTS = 20
+MAX_CLAIM_TEXT_CHARS = 600
+EvidenceCellTone = Literal["supported", "contradicted", "partial", "absent"]
+DagEdgeRelation = Literal["supports", "contradicts", "precedes"]
+ClaimPairRelation = Literal["agrees", "contradicts", "extends"]
 
 
 class CanvasModel(BaseModel):
@@ -70,11 +77,26 @@ class StatBlock(CanvasModel):
     tone: Literal["neutral", "info", "warning"] = "neutral"
 
 
+class TableCell(CanvasModel):
+    text: str = Field(max_length=MAX_TABLE_CELL_CHARS)
+    tone: Optional[EvidenceCellTone] = None
+
+
+def _coerce_table_cell(cell: Any) -> TableCell:
+    if isinstance(cell, TableCell):
+        return cell
+    if isinstance(cell, str):
+        return TableCell(text=cell)
+    if isinstance(cell, dict):
+        return TableCell.model_validate(cell)
+    raise ValueError("table cells must be strings or {text, tone} objects")
+
+
 class TableBlock(CanvasModel):
     type: Literal["table"] = "table"
     caption: Optional[str] = Field(default=None, max_length=160)
     headers: list[str] = Field(min_length=1, max_length=MAX_TABLE_HEADERS)
-    rows: list[list[str]] = Field(min_length=1, max_length=MAX_TABLE_ROWS)
+    rows: list[list[TableCell]] = Field(min_length=1, max_length=MAX_TABLE_ROWS)
 
     @field_validator("headers")
     @classmethod
@@ -84,16 +106,20 @@ class TableBlock(CanvasModel):
             raise ValueError("table headers must be non-empty and within the cell limit")
         return cleaned
 
+    @field_validator("rows", mode="before")
+    @classmethod
+    def coerce_rows(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [[_coerce_table_cell(cell) for cell in row] for row in value]
+
     @field_validator("rows")
     @classmethod
-    def validate_rows(cls, value: list[list[str]]) -> list[list[str]]:
-        rows: list[list[str]] = []
+    def validate_rows(cls, value: list[list[TableCell]]) -> list[list[TableCell]]:
         for row in value:
-            cells = [str(cell) for cell in row]
-            if any(len(cell) > MAX_TABLE_CELL_CHARS for cell in cells):
+            if any(len(cell.text) > MAX_TABLE_CELL_CHARS for cell in row):
                 raise ValueError("table cells exceed the character limit")
-            rows.append(cells)
-        return rows
+        return value
 
     @model_validator(mode="after")
     def validate_row_width(self) -> "TableBlock":
@@ -102,6 +128,16 @@ class TableBlock(CanvasModel):
             if len(row) != width:
                 raise ValueError("every table row must match the header count")
         return self
+
+    @field_serializer("rows")
+    def serialize_rows(self, rows: list[list[TableCell]]) -> list[list[Any]]:
+        serialized: list[list[Any]] = []
+        for row in rows:
+            serialized.append([
+                cell.text if cell.tone is None else {"text": cell.text, "tone": cell.tone}
+                for cell in row
+            ])
+        return serialized
 
 
 class CalloutBlock(CanvasModel):
@@ -122,6 +158,47 @@ class SourceListBlock(CanvasModel):
     citations: list[CanvasCitation] = Field(min_length=1, max_length=MAX_CITATIONS)
 
 
+class QuoteBlock(CanvasModel):
+    type: Literal["quote"] = "quote"
+    file_hash: str = Field(min_length=1)
+    sentence_id: int = Field(ge=0)
+    label: Optional[str] = Field(default=None, max_length=MAX_QUOTE_LABEL_CHARS)
+    text: Optional[str] = Field(default=None, max_length=MAX_QUOTE_TEXT_CHARS)
+    page: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("file_hash")
+    @classmethod
+    def validate_file_hash(cls, value: str) -> str:
+        if not SOURCE_IDENTIFIER_PATTERN.fullmatch(value):
+            raise ValueError("quote requires a valid file_hash")
+        return value
+
+
+class TimelineEvent(CanvasModel):
+    time: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=400)
+    citation: CanvasCitation
+
+
+class TimelineBlock(CanvasModel):
+    type: Literal["timeline"] = "timeline"
+    title: Optional[str] = Field(default=None, max_length=120)
+    events: list[TimelineEvent] = Field(min_length=1, max_length=MAX_TIMELINE_EVENTS)
+
+
+class ClaimSide(CanvasModel):
+    text: str = Field(min_length=1, max_length=MAX_CLAIM_TEXT_CHARS)
+    citation: CanvasCitation
+
+
+class ClaimPairBlock(CanvasModel):
+    type: Literal["claim_pair"] = "claim_pair"
+    relation: ClaimPairRelation
+    left: ClaimSide
+    right: ClaimSide
+
+
 class DagNode(CanvasModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     label: str = Field(min_length=1, max_length=48)
@@ -130,6 +207,7 @@ class DagNode(CanvasModel):
 class DagEdge(CanvasModel):
     source: str = Field(min_length=1, max_length=64)
     target: str = Field(min_length=1, max_length=64)
+    relation: Optional[DagEdgeRelation] = None
 
 
 class DagBlock(CanvasModel):
@@ -150,7 +228,17 @@ class DagBlock(CanvasModel):
 
 
 CanvasBlock = Annotated[
-    Union[StatBlock, TableBlock, CalloutBlock, MarkdownBlock, SourceListBlock, DagBlock],
+    Union[
+        StatBlock,
+        TableBlock,
+        CalloutBlock,
+        MarkdownBlock,
+        SourceListBlock,
+        DagBlock,
+        QuoteBlock,
+        TimelineBlock,
+        ClaimPairBlock,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -190,15 +278,30 @@ def iter_canvas_citations(spec: CanvasSpec) -> list[CanvasCitation]:
         for block in section.blocks:
             if isinstance(block, SourceListBlock):
                 citations.extend(block.citations)
+            elif isinstance(block, TimelineBlock):
+                citations.extend(event.citation for event in block.events)
+            elif isinstance(block, ClaimPairBlock):
+                citations.append(block.left.citation)
+                citations.append(block.right.citation)
     return citations
+
+
+def iter_canvas_quote_file_hashes(spec: CanvasSpec) -> list[str]:
+    hashes: list[str] = []
+    for section in spec.sections:
+        for block in section.blocks:
+            if isinstance(block, QuoteBlock):
+                hashes.append(block.file_hash)
+    return hashes
 
 
 def admit_canvas_spec(spec: CanvasSpec, *, thread_file_hashes: set[str]) -> None:
     citations = iter_canvas_citations(spec)
-    if not citations:
+    quote_hashes = iter_canvas_quote_file_hashes(spec)
+    if not citations and not quote_hashes:
         raise CanvasAdmissionError(
             "missing_citations",
-            "publish_canvas requires at least one citation in a sources block",
+            "publish_canvas requires at least one citation or quote block",
         )
     unknown = sorted(
         {
@@ -206,9 +309,68 @@ def admit_canvas_spec(spec: CanvasSpec, *, thread_file_hashes: set[str]) -> None
             for citation in citations
             if citation.kind == "document" and citation.file_hash not in thread_file_hashes
         }
+        | {file_hash for file_hash in quote_hashes if file_hash not in thread_file_hashes}
     )
     if unknown:
         raise CanvasAdmissionError(
             "unknown_document_citation",
             "document citations must use file_hash values attached to this thread: " + ", ".join(unknown),
         )
+
+
+def _sentence_lookup(parsed: dict[str, Any] | None) -> dict[int, dict[str, Any]]:
+    if not parsed:
+        return {}
+    sentences = parsed.get("sentences") or []
+    lookup: dict[int, dict[str, Any]] = {}
+    for item in sentences:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get("id")
+        try:
+            sentence_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        lookup[sentence_id] = item
+    return lookup
+
+
+def resolve_quote_blocks(
+    spec: CanvasSpec,
+    *,
+    sentences_by_file: dict[str, dict[str, Any] | None],
+) -> CanvasSpec:
+    """Fill canonical quote text and page from parsed sentences; reject unknown ids."""
+
+    sections: list[CanvasSection] = []
+    for section in spec.sections:
+        blocks: list[CanvasBlock] = []
+        for block in section.blocks:
+            if not isinstance(block, QuoteBlock):
+                blocks.append(block)
+                continue
+            lookup = _sentence_lookup(sentences_by_file.get(block.file_hash))
+            sentence = lookup.get(block.sentence_id)
+            if sentence is None:
+                raise CanvasAdmissionError(
+                    "unknown_sentence_id",
+                    f"quote sentence_id {block.sentence_id} was not found for file {block.file_hash}",
+                )
+            text = str(sentence.get("text") or "").strip()
+            if not text:
+                raise CanvasAdmissionError(
+                    "empty_quote",
+                    f"quote sentence_id {block.sentence_id} has no text for file {block.file_hash}",
+                )
+            page_raw = sentence.get("page")
+            page = int(page_raw) if page_raw is not None else None
+            blocks.append(
+                block.model_copy(
+                    update={
+                        "text": text[:MAX_QUOTE_TEXT_CHARS],
+                        "page": page if page and page >= 1 else None,
+                    }
+                )
+            )
+        sections.append(section.model_copy(update={"blocks": blocks}))
+    return spec.model_copy(update={"sections": sections})
