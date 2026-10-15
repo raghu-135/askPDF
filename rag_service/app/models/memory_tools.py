@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.memory_limits import (
     DEFAULT_MEMORY_RELATIVE_SCORE_RATIO,
-    MAX_MEMORY_CONTEXT_CHARS,
     MAX_MEMORY_QUERY_CHARS,
     MAX_MEMORY_ROWS,
+    max_memory_context_chars,
 )
 
 
@@ -66,10 +66,20 @@ class MemorySearchInput(BaseModel):
     view: Literal["effective", "stored"] = "effective"
     scope_types: Optional[List[Literal["user", "project", "thread"]]] = None
     max_results: int = Field(default=10, ge=1, le=MAX_MEMORY_ROWS)
-    char_budget: Optional[int] = Field(default=None, ge=200, le=MAX_MEMORY_CONTEXT_CHARS)
+    char_budget: Optional[int] = Field(default=None, ge=200)
     score_floor: Optional[float] = Field(default=None, ge=0.0)
     relative_score_ratio: float = Field(default=DEFAULT_MEMORY_RELATIVE_SCORE_RATIO, ge=0.0, le=1.0)
     selected_memory_id: Optional[str] = None
+
+    @field_validator("char_budget")
+    @classmethod
+    def _char_budget_within_ceiling(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        ceiling = max_memory_context_chars()
+        if value > ceiling:
+            raise ValueError(f"char_budget must be at most {ceiling}")
+        return value
 
 
 class MemoryGetInput(BaseModel):

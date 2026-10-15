@@ -26,16 +26,9 @@ import {
   type MemoryManagerPlan,
   type MemoryConsistencyReviewCursor,
   type MemoryWorkspaceReadiness,
-  getPromptTools,
 } from '../lib/api';
-import {
-  CONTEXT_BUDGET_STORAGE_KEY,
-  FALLBACK_CONTEXT_BUDGET,
-  type ContextBudgetRatios,
-  packingBudgetPayload,
-  readStoredContextBudget,
-  writeStoredContextBudget,
-} from '../lib/context-budget';
+import { packingBudgetPayload } from '../lib/context-budget';
+import { useContextBudgetState } from '../hooks/useContextBudgetState';
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
@@ -168,10 +161,12 @@ export default function MemoryManagerPanel({
   const [models, setModels] = useState<string[]>([]);
   const [llmModel, setLlmModel] = useState('');
   const [contextWindow, setContextWindow] = useState(defaultContextWindow);
-  const [defaultContextBudget, setDefaultContextBudget] = useState<ContextBudgetRatios>(FALLBACK_CONTEXT_BUDGET);
-  const [contextBudget, setContextBudget] = useState<ContextBudgetRatios>(
-    () => readStoredContextBudget() || FALLBACK_CONTEXT_BUDGET,
-  );
+  const {
+    contextBudget,
+    defaultContextBudget,
+    contextBudgetReady,
+    setContextBudget,
+  } = useContextBudgetState();
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [workspaceReadiness, setWorkspaceReadiness] = useState<MemoryWorkspaceReadiness | null>(null);
   const [workspaceReadinessFailed, setWorkspaceReadinessFailed] = useState(false);
@@ -216,21 +211,6 @@ export default function MemoryManagerPanel({
       setModels(items);
       setLlmModel(savedModel && items.includes(savedModel) ? savedModel : items[0] || savedModel);
     });
-    getPromptTools().then((res) => {
-      if (cancelled || !res.defaults?.context_budget) return;
-      const packingDefaults: ContextBudgetRatios = {
-        usable_ratio: res.defaults.context_budget.usable_ratio,
-        recent_ratio: res.defaults.context_budget.recent_ratio,
-        semantic_ratio: res.defaults.context_budget.semantic_ratio,
-        durable_memory_ratio: res.defaults.context_budget.durable_memory_ratio,
-        document_ratio: res.defaults.context_budget.document_ratio,
-        memory_expanded_ratio: res.defaults.context_budget.memory_expanded_ratio,
-      };
-      setDefaultContextBudget(packingDefaults);
-      if (!window.localStorage.getItem(CONTEXT_BUDGET_STORAGE_KEY)) {
-        setContextBudget(packingDefaults);
-      }
-    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -288,7 +268,7 @@ export default function MemoryManagerPanel({
     nextMessages: CuratorUiMessage[],
     webSearchDecision?: { query: string; approved: boolean },
   ) => {
-    if (!llmModel || modelReady !== true) return;
+    if (!llmModel || modelReady !== true || !contextBudget) return;
     setBusy(true);
     setError(null);
     setApplied(false);
@@ -558,15 +538,13 @@ export default function MemoryManagerPanel({
             contextBudget={contextBudget}
             defaultContextBudget={defaultContextBudget}
             disabled={busy}
+            contextBudgetDisabled={!contextBudgetReady}
             onModelChange={setLlmModel}
             onContextWindowChange={(value) => {
               setContextWindow(value);
               if (value > 0) window.localStorage.setItem('last_context_window', String(value));
             }}
-            onContextBudgetChange={(value) => {
-              setContextBudget(value);
-              writeStoredContextBudget(value);
-            }}
+            onContextBudgetChange={setContextBudget}
             sx={{
               minHeight: 72,
               px: 1.5,

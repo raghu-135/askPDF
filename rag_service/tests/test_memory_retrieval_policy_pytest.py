@@ -13,7 +13,7 @@ def test_memory_budget_is_a_ratio_of_the_context_window():
     import math
 
     from app.models.llm_server_client import CHARS_PER_TOKEN
-    from app.models.memory_limits import MAX_CONTEXT_WINDOW_TOKENS, MAX_MEMORY_CONTEXT_CHARS
+    from app.models.memory_limits import MAX_CONTEXT_WINDOW_TOKENS, max_memory_context_chars
     from app.services.memory_retrieval_policy import AVERAGE_MEMORY_CHARS
     from runtime_protocol.context_budget import load_context_budget_settings
 
@@ -35,7 +35,7 @@ def test_memory_budget_is_a_ratio_of_the_context_window():
     assert expanded["char_budget"] > standard["char_budget"]
     assert expanded["ratio"] == standard["ratio"] * 2
     ceiling = compute_memory_retrieval_budget(MAX_CONTEXT_WINDOW_TOKENS, expanded=True)
-    assert ceiling["char_budget"] == MAX_MEMORY_CONTEXT_CHARS
+    assert ceiling["char_budget"] == max_memory_context_chars()
 
 
 def test_memory_applicability_uses_attributes_without_an_llm_call():

@@ -10,20 +10,6 @@ from typing import Any, Mapping
 CHARS_PER_TOKEN = 4
 _FALLBACK_CONTEXT_WINDOW = 8192
 
-_CONTEXT_ENV_DEFAULTS: dict[str, str] = {
-    "CONTEXT_USABLE_RATIO": "0.80",
-    "CONTEXT_RECENT_RATIO": "0.22",
-    "CONTEXT_SEMANTIC_RATIO": "0.12",
-    "CONTEXT_DURABLE_MEMORY_RATIO": "0.06",
-    "CONTEXT_DOCUMENT_RATIO": "0.28",
-    "CONTEXT_MEMORY_EXPANDED_RATIO": "0.12",
-    "CONTEXT_EVIDENCE_RATIO": "0.45",
-    "CONTEXT_DRAFT_RATIO": "0.25",
-    "CONTEXT_PLAN_SECTION_RATIO": "0.20",
-    "CONTEXT_PLAN_TOTAL_RATIO": "0.50",
-    "CONTEXT_PLAN_MEMORY_RATIO": "0.12",
-}
-
 _PREFETCH_KEYS = (
     "recent_ratio",
     "semantic_ratio",
@@ -95,24 +81,6 @@ def _ratio_from_env(name: str, values: Mapping[str, str]) -> float:
     if raw is None or not str(raw).strip():
         raise ValueError(f"{name} is required")
     return _parse_open_ratio(str(raw).strip(), name=name)
-
-
-def default_context_budget_settings() -> ContextBudgetSettings:
-    """Return installed defaults without requiring environment variables."""
-
-    return ContextBudgetSettings(
-        usable_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_USABLE_RATIO"]),
-        recent_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_RECENT_RATIO"]),
-        semantic_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_SEMANTIC_RATIO"]),
-        durable_memory_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_DURABLE_MEMORY_RATIO"]),
-        document_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_DOCUMENT_RATIO"]),
-        memory_expanded_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_MEMORY_EXPANDED_RATIO"]),
-        evidence_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_EVIDENCE_RATIO"]),
-        draft_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_DRAFT_RATIO"]),
-        plan_section_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_PLAN_SECTION_RATIO"]),
-        plan_total_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_PLAN_TOTAL_RATIO"]),
-        plan_memory_ratio=float(_CONTEXT_ENV_DEFAULTS["CONTEXT_PLAN_MEMORY_RATIO"]),
-    )
 
 
 def load_context_budget_settings(environ: Mapping[str, str] | None = None) -> ContextBudgetSettings:
@@ -218,7 +186,3 @@ def compute_prefetch_budget(
         "durable_memory_limit": max(1, math.ceil(durable_memory_chars / AVG_CHUNK_CHARS) * 2),
         "recent_turn_limit": max(4, int(usable * settings.recent_ratio) // AVG_TURN_CHARS),
     }
-
-
-def context_budget_env_defaults() -> dict[str, str]:
-    return dict(_CONTEXT_ENV_DEFAULTS)

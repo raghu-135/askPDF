@@ -32,6 +32,10 @@ logging.basicConfig(
 logging.getLogger("app").setLevel(getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
+from runtime_protocol.configuration import validate_runtime_environment
+
+validate_runtime_environment(service="control_plane")
+
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -67,7 +71,6 @@ from app.runtime.hermes_profile import HERMES_BASE_TOOL_IDS, HERMES_EXTERNAL_TOO
 from app.http_clients import close_http_clients, init_http_clients
 from app.runtime.registry import get_runtime_registry
 from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
-from runtime_protocol.configuration import validate_runtime_environment
 from runtime_protocol.auth import valid_bearer_token
 from app.auth import authenticate, reset_principal, set_principal
 
@@ -192,7 +195,6 @@ async def lifespan(app: FastAPI):
     runtime_readiness_task = None
     mcp_lifespans = []
     try:
-        validate_runtime_environment(service="control_plane")
         if hermes_runtime_enabled():
             validate_hermes_model_compatibility()
         get_runtime_registry().initialize()

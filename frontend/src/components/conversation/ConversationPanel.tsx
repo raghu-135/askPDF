@@ -67,6 +67,7 @@ export function ConversationHeader({
   defaultContextBudget,
   disabled = false,
   contextWindowDisabled = false,
+  contextBudgetDisabled = false,
   leading,
   beforeModelControls,
   afterModelControls,
@@ -79,10 +80,11 @@ export function ConversationHeader({
   models: string[];
   model: string;
   contextWindow: number;
-  contextBudget: ContextBudgetRatios;
-  defaultContextBudget: ContextBudgetRatios;
+  contextBudget: ContextBudgetRatios | null;
+  defaultContextBudget: ContextBudgetRatios | null;
   disabled?: boolean;
   contextWindowDisabled?: boolean;
+  contextBudgetDisabled?: boolean;
   leading?: React.ReactNode;
   beforeModelControls?: React.ReactNode;
   afterModelControls?: React.ReactNode;
@@ -149,7 +151,7 @@ export function ConversationHeader({
               contextWindow={contextWindow}
               contextBudget={contextBudget}
               defaultContextBudget={defaultContextBudget}
-              disabled={disabled || contextWindowDisabled}
+              disabled={disabled || contextWindowDisabled || contextBudgetDisabled || !contextBudget || !defaultContextBudget}
               highlight={showContextHighlight}
               onContextWindowChange={onContextWindowChange}
               onContextBudgetChange={onContextBudgetChange}

@@ -2,8 +2,11 @@ import React from 'react';
 import { IconButton, Tooltip, Typography } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
-const tooltipSlotProps = {
+export const contextBudgetTooltipSlotProps = {
   tooltip: { sx: { maxWidth: 300 } },
+  popper: {
+    sx: { zIndex: (theme: { zIndex: { modal: number } }) => theme.zIndex.modal + 2 },
+  },
 };
 
 export function ContextBudgetHelpTip({
@@ -20,7 +23,7 @@ export function ContextBudgetHelpTip({
   ) : text;
 
   return (
-    <Tooltip title={title} placement="top" enterDelay={300} slotProps={tooltipSlotProps}>
+    <Tooltip title={title} placement="top" enterDelay={300} slotProps={contextBudgetTooltipSlotProps}>
       <IconButton
         size="small"
         aria-label={ariaLabel}

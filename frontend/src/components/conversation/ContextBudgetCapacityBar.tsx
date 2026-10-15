@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Box, Slider, Tooltip, Typography } from '@mui/material';
 import type { ContextBudgetRatios } from '../../lib/context-budget';
-import { contextWindowBreakdown } from '../../lib/context-budget';
+import { contextWindowBreakdown, type ContextWindowBreakdown } from '../../lib/context-budget';
 import {
   BAR_SEGMENT_REPLY_BODY,
   BAR_SEGMENT_REPLY_TITLE,
@@ -12,7 +12,7 @@ import {
   CONTEXT_PACKING_WINDOW_HELP,
   CONTEXT_WINDOW_SPLIT_HELP,
 } from '../../lib/context-budget-help';
-import { ContextBudgetHelpTip } from './ContextBudgetHelpTip';
+import { ContextBudgetHelpTip, contextBudgetTooltipSlotProps } from './ContextBudgetHelpTip';
 
 type ContextBudgetCapacityBarProps = {
   contextWindow: number;
@@ -27,6 +27,43 @@ const COLORS = {
   reply: 'info.main',
   safety: 'success.main',
 } as const;
+
+type WindowSegmentConfig = {
+  color: string;
+  title: string;
+  body: string;
+  legendTitle: string;
+  tokens: (breakdown: ContextWindowBreakdown) => number;
+};
+
+const WINDOW_SEGMENTS: WindowSegmentConfig[] = [
+  {
+    color: COLORS.retrieval,
+    title: BAR_SEGMENT_RETRIEVAL_TITLE,
+    body: BAR_SEGMENT_RETRIEVAL_BODY,
+    legendTitle: 'Max retrieval (your sliders)',
+    tokens: (breakdown) => breakdown.prefetchCap,
+  },
+  {
+    color: COLORS.reply,
+    title: BAR_SEGMENT_REPLY_TITLE,
+    body: BAR_SEGMENT_REPLY_BODY,
+    legendTitle: 'System + answer (automatic)',
+    tokens: (breakdown) => breakdown.answerReserve,
+  },
+  {
+    color: COLORS.safety,
+    title: BAR_SEGMENT_SAFETY_TITLE,
+    body: BAR_SEGMENT_SAFETY_BODY,
+    legendTitle: 'Safety margin (automatic)',
+    tokens: (breakdown) => breakdown.headroom,
+  },
+];
+
+type BudgetBarSegment = WindowSegmentConfig & {
+  share: number;
+  tokenCount: number;
+};
 
 function LegendDot({ color }: { color: string }) {
   return (
@@ -68,29 +105,14 @@ function LegendRow({
   );
 }
 
-type BudgetBarSegment = {
-  share: number;
-  color: string;
-  title: string;
-  body: string;
-  tokens: number;
-};
-
-const tooltipSlotProps = {
-  tooltip: { sx: { maxWidth: 280 } },
-  popper: {
-    sx: { zIndex: (theme: { zIndex: { modal: number } }) => theme.zIndex.modal + 2 },
-  },
-};
-
-function SegmentTooltipContent({ title, body, tokens, share }: BudgetBarSegment) {
+function SegmentTooltipContent({ title, body, tokenCount, share }: BudgetBarSegment) {
   return (
     <Box>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
         {title}
       </Typography>
       <Typography variant="caption" sx={{ display: 'block', mt: 0.25 }}>
-        {tokens.toLocaleString()} tok · {(share * 100).toFixed(0)}% of ctx
+        {tokenCount.toLocaleString()} tok · {(share * 100).toFixed(0)}% of ctx
       </Typography>
       <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
         {body}
@@ -129,7 +151,7 @@ function BudgetBar({
             title={<SegmentTooltipContent {...segment} />}
             placement="top"
             enterDelay={250}
-            slotProps={tooltipSlotProps}
+            slotProps={contextBudgetTooltipSlotProps}
           >
             <Box
               component="span"
@@ -148,6 +170,10 @@ function BudgetBar({
   );
 }
 
+function segmentDetail(tokenCount: number, share: number): string {
+  return `${tokenCount.toLocaleString()} tok · ${(share * 100).toFixed(0)}% of ctx`;
+}
+
 export function ContextBudgetCapacityBar({
   contextWindow,
   contextBudget,
@@ -160,16 +186,21 @@ export function ContextBudgetCapacityBar({
     [contextBudget, contextWindow],
   );
   const windowTokens = Math.max(1, contextWindow);
-  const retrievalTokens = breakdown.prefetchCap;
-  const remainderTokens = breakdown.llmFree;
-  const retrievalShare = retrievalTokens / windowTokens;
-  const remainderShare = remainderTokens / windowTokens;
 
-  const detailedAria = [
-    `${retrievalTokens} tokens max retrieval`,
-    `${breakdown.answerReserve} tokens for system and answer`,
-    `${breakdown.headroom} tokens safety margin`,
-  ].join(', ');
+  const barSegments = useMemo((): BudgetBarSegment[] => {
+    return WINDOW_SEGMENTS.map((config) => {
+      const tokenCount = config.tokens(breakdown);
+      return {
+        ...config,
+        tokenCount,
+        share: tokenCount / windowTokens,
+      };
+    });
+  }, [breakdown, windowTokens]);
+
+  const detailedAria = barSegments
+    .map((segment) => `${segment.tokenCount} tokens ${segment.legendTitle.toLowerCase()}`)
+    .join(', ');
 
   return (
     <Box sx={{ mt: 1 }}>
@@ -179,58 +210,17 @@ export function ContextBudgetCapacityBar({
         </Typography>
         <ContextBudgetHelpTip text={CONTEXT_WINDOW_SPLIT_HELP} ariaLabel="Window split help" />
       </Box>
-      <BudgetBar
-        height={12}
-        ariaLabel={detailedAria}
-        segments={[
-          {
-            share: retrievalShare,
-            color: COLORS.retrieval,
-            title: BAR_SEGMENT_RETRIEVAL_TITLE,
-            body: BAR_SEGMENT_RETRIEVAL_BODY,
-            tokens: retrievalTokens,
-          },
-          {
-            share: breakdown.answerReserve / windowTokens,
-            color: COLORS.reply,
-            title: BAR_SEGMENT_REPLY_TITLE,
-            body: BAR_SEGMENT_REPLY_BODY,
-            tokens: breakdown.answerReserve,
-          },
-          {
-            share: breakdown.headroom / windowTokens,
-            color: COLORS.safety,
-            title: BAR_SEGMENT_SAFETY_TITLE,
-            body: BAR_SEGMENT_SAFETY_BODY,
-            tokens: breakdown.headroom,
-          },
-        ]}
-      />
+      <BudgetBar height={12} ariaLabel={detailedAria} segments={barSegments} />
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1.25 }}>
-        <LegendRow
-          color={COLORS.retrieval}
-          title="Max retrieval (your sliders)"
-          detail={`${retrievalTokens.toLocaleString()} tok · ${(retrievalShare * 100).toFixed(0)}% of ctx`}
-        />
-        <LegendRow
-          color={COLORS.reply}
-          title="System + answer (automatic)"
-          detail={`${breakdown.answerReserve.toLocaleString()} tok · ${((breakdown.answerReserve / windowTokens) * 100).toFixed(0)}% of ctx`}
-        />
-        <LegendRow
-          color={COLORS.safety}
-          title="Safety margin (automatic)"
-          detail={`${breakdown.headroom.toLocaleString()} tok · ${((breakdown.headroom / windowTokens) * 100).toFixed(0)}% of ctx`}
-        />
+        {barSegments.map((segment) => (
+          <LegendRow
+            key={segment.legendTitle}
+            color={segment.color}
+            title={segment.legendTitle}
+            detail={segmentDetail(segment.tokenCount, segment.share)}
+          />
+        ))}
       </Box>
-      <Typography variant="caption" sx={{ display: 'block', mt: 1.25, fontWeight: 600 }}>
-        {remainderTokens.toLocaleString()} tokens not counted toward retrieval caps
-        {' '}
-        ({(remainderShare * 100).toFixed(0)}% of ctx)
-      </Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-        That is system + answer ({breakdown.answerReserve.toLocaleString()}) plus safety margin ({breakdown.headroom.toLocaleString()}).
-      </Typography>
 
       {showUsableSlider && onUsableRatioChange && (
         <Box sx={{ mt: 2, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>

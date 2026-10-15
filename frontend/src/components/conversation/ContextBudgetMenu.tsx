@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Button,
@@ -9,11 +9,11 @@ import {
   Typography,
 } from '@mui/material';
 import TuneIcon from '@mui/icons-material/Tune';
-import type { ContextBudgetRatios } from '../../lib/context-budget';
 import {
   PACKING_SLICES,
   prefetchSliceSum,
   sliceTokenBudget,
+  type ContextBudgetRatios,
 } from '../../lib/context-budget';
 import { ContextBudgetCapacityBar } from './ContextBudgetCapacityBar';
 import { ContextBudgetHelpTip } from './ContextBudgetHelpTip';
@@ -27,8 +27,8 @@ import { workbenchControlOutlineSx } from '../workbench/WorkbenchToolbar';
 
 type ContextBudgetMenuProps = {
   contextWindow: number;
-  contextBudget: ContextBudgetRatios;
-  defaultContextBudget: ContextBudgetRatios;
+  contextBudget: ContextBudgetRatios | null;
+  defaultContextBudget: ContextBudgetRatios | null;
   disabled?: boolean;
   highlight?: boolean;
   onContextWindowChange: (value: number) => void;
@@ -48,15 +48,35 @@ export function ContextBudgetMenu({
 }: ContextBudgetMenuProps) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const open = Boolean(anchorEl);
-  const sliceSum = useMemo(() => prefetchSliceSum(contextBudget), [contextBudget]);
 
   const handleSliceChange = (key: keyof ContextBudgetRatios, nextValue: number) => {
+    if (!contextBudget) return;
     const candidate = { ...contextBudget, [key]: nextValue };
     if (key !== 'usable_ratio' && prefetchSliceSum(candidate) > 1) {
       return;
     }
     onContextBudgetChange(candidate);
   };
+
+  if (!contextBudget || !defaultContextBudget) {
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        disabled
+        startIcon={<TuneIcon fontSize="small" />}
+        sx={{
+          minWidth: 116,
+          flex: '0 0 auto',
+          justifyContent: 'space-between',
+          px: 1,
+          ...workbenchControlOutlineSx,
+        }}
+      >
+        Ctx {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
+      </Button>
+    );
+  }
 
   return (
     <>

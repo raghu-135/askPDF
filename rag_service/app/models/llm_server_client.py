@@ -169,19 +169,10 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 CHARS_PER_TOKEN = 4
 
 from runtime_protocol.context_budget import (
-    AVG_CHUNK_CHARS,
-    AVG_TURN_CHARS,
     compute_prefetch_budget as _compute_prefetch_budget,
-    default_context_budget_settings,
     load_context_budget_settings,
     resolve_context_budget,
 )
-
-_budget_defaults = default_context_budget_settings()
-RATIO_PREFETCH_RECENT = _budget_defaults.recent_ratio
-RATIO_PREFETCH_SEMANTIC = _budget_defaults.semantic_ratio
-RATIO_PREFETCH_DURABLE_MEMORY = _budget_defaults.durable_memory_ratio
-RATIO_PREFETCH_DOCUMENT = _budget_defaults.document_ratio
 
 
 def compute_prefetch_budget(context_window: int, budget_overrides: dict | None = None) -> dict:

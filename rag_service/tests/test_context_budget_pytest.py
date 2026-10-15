@@ -61,6 +61,15 @@ def test_usable_context_chars_token_formula():
     assert usable_context_chars(window, ratio_key="recent_ratio", budget=settings) == expected
 
 
+def test_max_memory_context_chars_requires_env(monkeypatch):
+    from app.models.memory_limits import max_memory_context_chars
+
+    for name in _ratio_env():
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="is required"):
+        max_memory_context_chars()
+
+
 def test_startup_rejects_missing_context_ratio():
     from rag_service.tests.test_runtime_configuration_pytest import _environment
     from runtime_protocol.configuration import RuntimeConfigurationError

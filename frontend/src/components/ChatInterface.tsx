@@ -100,14 +100,10 @@ import {
 } from '../lib/live-trace-stream';
 import { formatAgentTraceIdentity, formatOpenTraceControlLabel } from '../lib/trace-open-label';
 import {
-    CONTEXT_BUDGET_STORAGE_KEY,
-    FALLBACK_CONTEXT_BUDGET,
-    type ContextBudgetRatios,
     formatContextLengthUserMessage,
     packingBudgetPayload,
-    readStoredContextBudget,
-    writeStoredContextBudget,
 } from '../lib/context-budget';
+import { useContextBudgetState } from '../hooks/useContextBudgetState';
 import { canOpenTraceTab, isValidTraceId, traceTabIdForRun } from '../lib/trace-tabs';
 import {
     ConversationComposer,
@@ -747,10 +743,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
-    const [defaultContextBudget, setDefaultContextBudget] = useState<ContextBudgetRatios>(FALLBACK_CONTEXT_BUDGET);
-    const [contextBudget, setContextBudget] = useState<ContextBudgetRatios>(
-        () => readStoredContextBudget() || FALLBACK_CONTEXT_BUDGET,
-    );
+    const {
+        contextBudget,
+        defaultContextBudget,
+        contextBudgetReady,
+        setContextBudget,
+    } = useContextBudgetState();
     const [replans, setReplans] = useState(1);
     const [replansLimit, setReplansLimit] = useState<number | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
@@ -1010,20 +1008,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
-                    if (res.defaults.context_budget) {
-                        const packingDefaults: ContextBudgetRatios = {
-                            usable_ratio: res.defaults.context_budget.usable_ratio,
-                            recent_ratio: res.defaults.context_budget.recent_ratio,
-                            semantic_ratio: res.defaults.context_budget.semantic_ratio,
-                            durable_memory_ratio: res.defaults.context_budget.durable_memory_ratio,
-                            document_ratio: res.defaults.context_budget.document_ratio,
-                            memory_expanded_ratio: res.defaults.context_budget.memory_expanded_ratio,
-                        };
-                        setDefaultContextBudget(packingDefaults);
-                        if (!localStorage.getItem(CONTEXT_BUDGET_STORAGE_KEY)) {
-                            setContextBudget(packingDefaults);
-                        }
-                    }
                     if (!activeThread) {
                         setReplans(Math.min(1, res.defaults.replans_limit));
                         setSystemRole(res.defaults.system_role ?? '');
@@ -1247,7 +1231,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const shouldLoadPromptPreview = settingsDialogOpen || Boolean(activeThread);
 
     useEffect(() => {
-        if (!shouldLoadPromptPreview) return;
+        if (!shouldLoadPromptPreview || !contextBudget) return;
         let cancelled = false;
         const timeoutId = setTimeout(async () => {
             try {
@@ -1393,11 +1377,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (val > 0 && typeof window !== 'undefined') {
             localStorage.setItem('last_context_window', val.toString());
         }
-    };
-
-    const handleContextBudgetChange = (budget: ContextBudgetRatios) => {
-        setContextBudget(budget);
-        writeStoredContextBudget(budget);
     };
 
     useEffect(() => {
@@ -1873,7 +1852,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
             return;
         }
-        if (!llmModel || !activeThread) return;
+        if (!llmModel || !activeThread || !contextBudget) return;
         if (testRuntime) {
             await handleBuilderTestSend(textToSend);
             return;
@@ -2713,6 +2692,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             contextWindow={contextWindow}
             contextBudget={contextBudget}
             defaultContextBudget={defaultContextBudget}
+            contextBudgetDisabled={!contextBudgetReady}
             selectedTaskId={deepResearchTaskId}
             embeddingControl={<EmbeddingModelReadinessIndicator model={activeThread.embeddingModel} ready={isEmbeddingModelValid} showStatusLabel />}
             renderWebControl={(mode, disabled) => <WebSearchModeControl
@@ -2723,7 +2703,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             webSearchMode={webSearchMode}
             onModelChange={(model) => void handleLlmModelChange(model)}
             onContextWindowChange={handleContextWindowChange}
-            onContextBudgetChange={handleContextBudgetChange}
+            onContextBudgetChange={setContextBudget}
             onTaskSelect={setDeepResearchTaskId}
             onBack={() => setDeepResearchOpen(false)}
             onOpenTrace={onOpenTrace}
@@ -2763,7 +2743,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 defaultContextBudget={defaultContextBudget}
                 onModelChange={(model) => void handleLlmModelChange(model)}
                 onContextWindowChange={handleContextWindowChange}
-                onContextBudgetChange={handleContextBudgetChange}
+                onContextBudgetChange={setContextBudget}
+                contextBudgetDisabled={!contextBudgetReady}
                 leading={(
                     <>
                     <EmbeddingModelReadinessIndicator

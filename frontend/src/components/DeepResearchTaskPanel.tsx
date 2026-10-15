@@ -231,6 +231,7 @@ export default function DeepResearchTaskPanel({
   onModelChange,
   onContextWindowChange,
   onContextBudgetChange,
+  contextBudgetDisabled = false,
   onTaskSelect,
   onBack,
   onOpenTrace,
@@ -247,8 +248,9 @@ export default function DeepResearchTaskPanel({
   models: string[];
   model: string;
   contextWindow: number;
-  contextBudget: ContextBudgetRatios;
-  defaultContextBudget: ContextBudgetRatios;
+  contextBudget: ContextBudgetRatios | null;
+  defaultContextBudget: ContextBudgetRatios | null;
+  contextBudgetDisabled?: boolean;
   selectedTaskId: string | null;
   embeddingControl: React.ReactNode;
   renderWebControl: (mode: 'off' | 'ask' | 'on', disabled: boolean) => React.ReactNode;
@@ -505,6 +507,7 @@ export default function DeepResearchTaskPanel({
 
   const launch = async (objective: string) => {
     if (!definitionId) { setError('Select an available agent definition first.'); return; }
+    if (!contextBudget) { setError('Context budget settings are still loading.'); return; }
     setBusy(true); setError('');
     try {
       const created = await createAgentTask(threadId, {
@@ -707,6 +710,7 @@ export default function DeepResearchTaskPanel({
       defaultContextBudget={defaultContextBudget}
       disabled={frozen || modelField?.read_only === true}
       contextWindowDisabled={frozen || contextWindowField?.read_only === true}
+      contextBudgetDisabled={contextBudgetDisabled}
       onModelChange={onModelChange}
       onContextWindowChange={onContextWindowChange}
       onContextBudgetChange={onContextBudgetChange}

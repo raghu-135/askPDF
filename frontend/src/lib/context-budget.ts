@@ -1,45 +1,71 @@
-export type ContextBudgetRatios = {
-  usable_ratio: number;
-  recent_ratio: number;
-  semantic_ratio: number;
-  durable_memory_ratio: number;
-  document_ratio: number;
-  memory_expanded_ratio: number;
-};
+import type { ContextBudgetDefaults } from './api';
 
-export const FALLBACK_CONTEXT_BUDGET: ContextBudgetRatios = {
-  usable_ratio: 0.8,
-  recent_ratio: 0.22,
-  semantic_ratio: 0.12,
-  durable_memory_ratio: 0.06,
-  document_ratio: 0.28,
-  memory_expanded_ratio: 0.12,
-};
+export const CONTEXT_LENGTH_EXCEEDED = 'context_length_exceeded';
+
+export const PACKING_RATIO_KEYS = [
+  'usable_ratio',
+  'recent_ratio',
+  'semantic_ratio',
+  'durable_memory_ratio',
+  'document_ratio',
+  'memory_expanded_ratio',
+] as const;
+
+export type ContextBudgetRatios = Pick<ContextBudgetDefaults, typeof PACKING_RATIO_KEYS[number]>;
+
+export type PrefetchSliceKey = keyof Pick<
+  ContextBudgetRatios,
+  'recent_ratio' | 'semantic_ratio' | 'durable_memory_ratio' | 'document_ratio'
+>;
 
 export const CONTEXT_BUDGET_STORAGE_KEY = 'last_context_budget';
 
-export function packingBudgetPayload(budget: ContextBudgetRatios) {
+function isOpenUnitRatio(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1;
+}
+
+export function contextBudgetFromDefaults(defaults: ContextBudgetDefaults): ContextBudgetRatios {
   return {
-    usable_ratio: budget.usable_ratio,
-    recent_ratio: budget.recent_ratio,
-    semantic_ratio: budget.semantic_ratio,
-    durable_memory_ratio: budget.durable_memory_ratio,
-    document_ratio: budget.document_ratio,
-    memory_expanded_ratio: budget.memory_expanded_ratio,
+    usable_ratio: defaults.usable_ratio,
+    recent_ratio: defaults.recent_ratio,
+    semantic_ratio: defaults.semantic_ratio,
+    durable_memory_ratio: defaults.durable_memory_ratio,
+    document_ratio: defaults.document_ratio,
+    memory_expanded_ratio: defaults.memory_expanded_ratio,
   };
 }
 
-export const PACKING_SLICES: Array<{
-  key: keyof Pick<ContextBudgetRatios, 'recent_ratio' | 'semantic_ratio' | 'durable_memory_ratio' | 'document_ratio'>;
-  label: string;
-}> = [
+export function normalizeStoredContextBudget(raw: unknown): ContextBudgetRatios | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const candidate = raw as Record<string, unknown>;
+  for (const key of PACKING_RATIO_KEYS) {
+    if (!isOpenUnitRatio(candidate[key])) return null;
+  }
+  const ratios = contextBudgetFromDefaults(candidate as ContextBudgetDefaults);
+  if (prefetchSliceSum(ratios) > 1) return null;
+  return ratios;
+}
+
+export function packingBudgetPayload(budget: ContextBudgetRatios): ContextBudgetRatios {
+  const payload: Partial<ContextBudgetRatios> = {};
+  for (const key of PACKING_RATIO_KEYS) {
+    payload[key] = budget[key];
+  }
+  return payload as ContextBudgetRatios;
+}
+
+export const PACKING_SLICES: Array<{ key: PrefetchSliceKey; label: string }> = [
   { key: 'recent_ratio', label: 'Recent turns' },
   { key: 'semantic_ratio', label: 'Semantic memory' },
   { key: 'durable_memory_ratio', label: 'Durable memory' },
   { key: 'document_ratio', label: 'Documents' },
 ];
 
-export function sliceTokenBudget(contextWindow: number, ratios: ContextBudgetRatios, sliceKey: keyof ContextBudgetRatios): number {
+export function sliceTokenBudget(
+  contextWindow: number,
+  ratios: ContextBudgetRatios,
+  sliceKey: PrefetchSliceKey,
+): number {
   const sliceRatio = ratios[sliceKey];
   return Math.max(0, Math.round(contextWindow * ratios.usable_ratio * sliceRatio));
 }
@@ -97,7 +123,7 @@ export function formatContextLengthUserMessage(error: unknown): { title: string;
   const payload = error && typeof error === 'object' ? error as { code?: string; raw_message?: string; message?: string } : {};
   const code = String(payload.code || '');
   const detail = String(payload.raw_message || payload.message || error || '').trim();
-  if (code === 'context_length_exceeded') {
+  if (code === CONTEXT_LENGTH_EXCEEDED) {
     return {
       title: 'The model rejected this prompt because it exceeded the model context window. Lower Ctx size or reduce the document and history sliders, then try again.',
       detail: detail || undefined,
@@ -111,9 +137,7 @@ export function readStoredContextBudget(): ContextBudgetRatios | null {
   const raw = window.localStorage.getItem(CONTEXT_BUDGET_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as ContextBudgetRatios;
-    if (!parsed || typeof parsed !== 'object') return null;
-    return parsed;
+    return normalizeStoredContextBudget(JSON.parse(raw));
   } catch {
     return null;
   }
