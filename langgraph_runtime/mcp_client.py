@@ -19,6 +19,7 @@ from langgraph.func import task
 from langgraph.config import get_config
 
 from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from langgraph_runtime.canvas_spec_contract import CANVAS_SPEC_V1_FIELD_HINT
 from runtime_protocol.tool_approval import stable_invocation_id
 from runtime_protocol.tool_contract import normalize_tool_result
 
@@ -146,7 +147,7 @@ class _TimelineArguments(_QueryArguments):
 
 class _PublishCanvasArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    spec: dict[str, Any]
+    spec: dict[str, Any] = Field(description=CANVAS_SPEC_V1_FIELD_HINT)
     supersedes_id: str | None = None
     idempotency_key: str | None = None
 

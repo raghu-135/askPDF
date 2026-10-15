@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from langgraph_runtime.mcp_client import create_mcp_langchain_tool
 from langgraph_runtime.workflows.canvas_publish import (
+    CanvasSpecNormalizeError,
     normalize_publish_canvas_spec,
     strip_prose_publish_canvas,
     synthesize_with_canvas_publish,
@@ -153,6 +154,136 @@ def test_normalize_publish_canvas_spec_preserves_dag_edge_relation():
     assert edge["relation"] == "contradicts"
 
 
+def test_normalize_publish_canvas_spec_maps_dag_from_to_aliases():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "schema_version": 1,
+            "title": "Flow",
+            "sections": [{
+                "title": "Structure",
+                "blocks": [{
+                    "type": "dag",
+                    "nodes": [{"id": "a", "title": "Start"}, {"id": "b", "name": "End"}],
+                    "edges": [{"from": "a", "to": "b"}],
+                }],
+            }],
+        },
+    })
+    block = spec["sections"][0]["blocks"][0]
+    assert block["nodes"][0]["label"] == "Start"
+    assert block["nodes"][1]["label"] == "End"
+    assert block["edges"][0] == {"source": "a", "target": "b"}
+
+
+def test_normalize_publish_canvas_spec_repairs_type_as_key_wrappers():
+    """Matches evaluator_replanner publish_canvas payloads (markdown/stat/sources keys)."""
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "schema_version": 1,
+            "title": "Five Core Ideas",
+            "sections": [{
+                "title": "Overview",
+                "blocks": [
+                    {"markdown": "Five core ideas from the report."},
+                    {"stat": {"label": "Core Ideas Identified", "value": "5"}},
+                    {
+                        "sources": {
+                            "citations": [{
+                                "kind": "document",
+                                "label": "how-humans-learn-report.pdf",
+                                "file_hash": "255dc7dfd217005fef041fea229249b2",
+                            }],
+                        },
+                    },
+                ],
+            }],
+        },
+    })
+    blocks = spec["sections"][0]["blocks"]
+    assert blocks[0] == {"type": "markdown", "text": "Five core ideas from the report."}
+    assert blocks[1] == {"type": "stat", "label": "Core Ideas Identified", "value": "5"}
+    assert blocks[2]["type"] == "sources"
+    assert blocks[2]["citations"][0]["file_hash"] == "255dc7dfd217005fef041fea229249b2"
+
+
+def test_normalize_publish_canvas_spec_drops_uncoercible_blocks_instead_of_passthrough():
+    with pytest.raises(CanvasSpecNormalizeError, match="no publishable sections"):
+        normalize_publish_canvas_spec({
+            "spec": {
+                "title": "Broken",
+                "sections": [{"title": "Overview", "blocks": [{"not_a_block": {"x": 1}}]}],
+            },
+        })
+
+
+def test_normalize_publish_canvas_spec_section_content_becomes_blocks():
+    spec = normalize_publish_canvas_spec({
+        "spec": {
+            "title": "Learn",
+            "sections": [{"title": "Overview", "content": "Humans learn through practice."}],
+        },
+    })
+    assert spec["sections"][0]["blocks"] == [{"type": "markdown", "text": "Humans learn through practice."}]
+
+
+def test_normalize_publish_canvas_spec_rejects_empty_sections():
+    with pytest.raises(CanvasSpecNormalizeError, match="no publishable sections"):
+        normalize_publish_canvas_spec({
+            "spec": {"schema_version": 1, "title": "Empty", "sections": []},
+        })
+
+
+@pytest.mark.asyncio
+async def test_helper_skips_mcp_when_spec_normalizes_to_empty_sections(monkeypatch):
+    tool_calls = []
+
+    async def fake_llm(func, messages, **_kwargs):
+        return await func(messages)
+
+    async def fake_tool(name, tool_input, **_kwargs):
+        tool_calls.append((name, tool_input))
+        return {"ok": True, "content": "ok", "error": None, "trace": {"tool_name": name}}
+
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_llm_for_node", fake_llm)
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_tool_for_node", fake_tool)
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.append_tool_event_for_node", lambda *args, **kwargs: [])
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.tool_config_for_node", lambda *args, **kwargs: {"configurable": {"tool_call_id": "call-1"}})
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.normalize_tool_result", lambda raw, **kwargs: raw)
+
+    class Bound:
+        async def ainvoke(self, messages):
+            if any(isinstance(item, ToolMessage) for item in messages):
+                return SimpleNamespace(content="Prose only.", tool_calls=[], usage_metadata={})
+            return SimpleNamespace(
+                content="",
+                tool_calls=[{
+                    "name": "publish_canvas",
+                    "id": "call-1",
+                    "args": {"spec": {"schema_version": 1, "title": "X", "sections": []}},
+                }],
+                usage_metadata={},
+            )
+
+    class LLM:
+        def bind_tools(self, _tools):
+            return Bound()
+
+        async def ainvoke(self, _messages):
+            raise AssertionError("unbound model must not run while emit is admitted")
+
+    result = await synthesize_with_canvas_publish(
+        LLM(),
+        [HumanMessage(content="Compare")],
+        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        config={},
+        node="synthesizer",
+        started=0.0,
+    )
+    assert result["published"] is False
+    assert tool_calls == []
+    assert "could not be published" in result["answer"]
+
+
 @pytest.mark.asyncio
 async def test_helper_does_not_invoke_publish_when_not_admitted(monkeypatch):
     async def fake_llm(func, messages, **_kwargs):
@@ -200,7 +331,11 @@ async def test_helper_invokes_publish_canvas_once_with_spec(monkeypatch):
     monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.tool_config_for_node", lambda *args, **kwargs: {})
     monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.normalize_tool_result", lambda raw, **kwargs: raw)
 
-    spec = {"schema_version": 1, "title": "Advisor Models", "sections": []}
+    spec = {
+        "schema_version": 1,
+        "title": "Advisor Models",
+        "sections": [{"title": "Coverage", "blocks": [{"type": "stat", "value": "3", "label": "Claims"}]}],
+    }
 
     class Bound:
         async def ainvoke(self, messages):
@@ -326,3 +461,4 @@ async def test_helper_strips_fake_call_after_admission_failure(monkeypatch):
     assert result["published"] is False
     assert "publish_canvas" not in result["answer"]
     assert "Fallback." in result["answer"]
+    assert "could not be published" in result["answer"]

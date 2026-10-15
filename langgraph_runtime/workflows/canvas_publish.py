@@ -12,6 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphBubbleUp
 
 from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled
+from langgraph_runtime.canvas_spec_contract import CANVAS_SPEC_V1_FIELD_HINT
 from langgraph_runtime.agent.reasoning import normalize_ai_response
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.mcp_client import create_mcp_langchain_tool
@@ -56,14 +57,20 @@ _CANVAS_SPEC_ENVELOPE_KEYS = frozenset({"schema_version", "title", "summary", "s
 _DEFAULT_CANVAS_TITLE = "Research canvas"
 _DEFAULT_SECTION_TITLE = "Findings"
 _SPEC_COACHING = (
-    "publish_canvas requires spec as canvas_spec_v1: "
-    '{"schema_version": 1, "title": "...", "sections": [{"title": "...", "blocks": [...]}]}. '
-    "Allowed blocks: stat, table, callout, markdown, sources, dag, quote, timeline, claim_pair. "
-    "Table cells may be strings or {text, tone} with tone supported|contradicted|partial|absent. "
-    "DAG edges may include relation supports|contradicts|precedes. "
-    "Include citations in a sources block, timeline events, claim_pair sides, or a quote block. "
-    "Do not pass a single block as spec."
+    f"publish_canvas failed. Required shape: {CANVAS_SPEC_V1_FIELD_HINT} "
+    "Do not use from/to on dag edges, content instead of sections[].blocks, or title on dag nodes (use label). "
+    "Every canvas needs a sources block: {\"type\": \"sources\", \"citations\": [{\"kind\": \"document\", \"label\": \"...\", \"file_hash\": \"...\"}]} "
+    "or at least one quote block. Blocks must use type (not markdown/stat/sources wrapper keys). "
+    "Include citations in sources, timeline events, claim_pair sides, or quote blocks."
 )
+
+
+class CanvasSpecNormalizeError(ValueError):
+    """Raised when model spec cannot be repaired into a non-empty canvas_spec_v1."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def strip_prose_publish_canvas(text: str) -> str:
@@ -110,6 +117,35 @@ def _prose_from_mapping(block: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _lift_wrapped_block(block: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn {markdown: \"...\"} / {stat: {...}} / {sources: {...}} into typed blocks."""
+
+    if block.get("type"):
+        return dict(block)
+    wrapper_keys = [key for key in block if key in _BLOCK_TYPES]
+    if len(wrapper_keys) != 1:
+        return dict(block)
+    block_type = wrapper_keys[0]
+    inner = block[block_type]
+    if block_type == "markdown":
+        if isinstance(inner, str):
+            return {"type": "markdown", "text": inner.strip()}
+        if isinstance(inner, Mapping):
+            lifted = dict(inner)
+            lifted["type"] = "markdown"
+            return lifted
+        if inner is not None:
+            return {"type": "markdown", "text": str(inner).strip()}
+        return dict(block)
+    if isinstance(inner, Mapping):
+        lifted = dict(inner)
+        lifted["type"] = block_type
+        return lifted
+    if block_type == "stat" and isinstance(inner, (int, float)):
+        return {"type": "stat", "value": str(inner)}
+    return dict(block)
+
+
 def _normalize_citation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -146,7 +182,7 @@ def _coerce_block(value: Any) -> Any | None:
         return {"type": "markdown", "text": text} if text else None
     if not isinstance(value, Mapping):
         return None
-    block = dict(value)
+    block = _lift_wrapped_block(value)
     block_type = str(block.get("type") or "")
     prose = _prose_from_mapping(block)
     if not block_type and prose:
@@ -171,6 +207,8 @@ def _coerce_block(value: Any) -> Any | None:
     if block_type == "stat":
         if not block.get("label") and block.get("name"):
             block["label"] = str(block.get("name"))
+        if not block.get("label") and block.get("title"):
+            block["label"] = str(block.get("title"))
         if block.get("value") is not None and not isinstance(block.get("value"), str):
             block["value"] = str(block.get("value"))
         if not block.get("value") or not block.get("label"):
@@ -190,6 +228,41 @@ def _coerce_block(value: Any) -> Any | None:
             block["title"] = "Sources"
     if block_type == "markdown" and "text" not in block and block.get("content"):
         block["text"] = str(block.pop("content"))
+    if block_type == "dag":
+        nodes = block.get("nodes")
+        if isinstance(nodes, list):
+            repaired_nodes: list[Any] = []
+            for node in nodes:
+                if isinstance(node, Mapping):
+                    node_dict = dict(node)
+                    if not node_dict.get("label"):
+                        for key in ("title", "name"):
+                            candidate = node_dict.get(key)
+                            if isinstance(candidate, str) and candidate.strip():
+                                node_dict["label"] = candidate.strip()[:48]
+                                break
+                    repaired_nodes.append(node_dict)
+                else:
+                    repaired_nodes.append(node)
+            block["nodes"] = repaired_nodes
+        edges = block.get("edges")
+        if isinstance(edges, list):
+            repaired_edges: list[Any] = []
+            for edge in edges:
+                if isinstance(edge, Mapping):
+                    edge_dict = dict(edge)
+                    if not edge_dict.get("source") and edge_dict.get("from") is not None:
+                        edge_dict["source"] = edge_dict.pop("from")
+                    else:
+                        edge_dict.pop("from", None)
+                    if not edge_dict.get("target") and edge_dict.get("to") is not None:
+                        edge_dict["target"] = edge_dict.pop("to")
+                    else:
+                        edge_dict.pop("to", None)
+                    repaired_edges.append(edge_dict)
+                else:
+                    repaired_edges.append(edge)
+            block["edges"] = repaired_edges
     allowed = _BLOCK_FIELDS.get(block_type)
     if allowed is None:
         return block
@@ -265,13 +338,17 @@ def _normalize_section(section: Any, *, index: int) -> Any:
     else:
         normalized["title"] = _DEFAULT_SECTION_TITLE if index == 0 else f"Section {index + 1}"
     blocks = section.get("blocks")
+    coerced: list[Any] = []
     if isinstance(blocks, list):
         coerced = _coerce_blocks(blocks)
-        if not coerced and isinstance(section.get("content"), str) and section["content"].strip():
-            coerced = [{"type": "markdown", "text": section["content"].strip()}]
+    content = section.get("content")
+    if not coerced:
+        if isinstance(content, str) and content.strip():
+            coerced = [{"type": "markdown", "text": content.strip()}]
+        elif isinstance(content, list):
+            coerced = _coerce_blocks(content)
+    if coerced:
         normalized["blocks"] = coerced
-    elif "blocks" in section:
-        normalized["blocks"] = section["blocks"]
     if not normalized.get("blocks"):
         return None
     return normalized
@@ -296,6 +373,22 @@ def _sanitize_canvas_spec_envelope(body: Mapping[str, Any], *, payload: Mapping[
     title_source = {**body, "sections": normalized_sections} if normalized_sections else body
     spec["schema_version"] = _resolve_schema_version(body)
     spec["title"] = _resolve_canvas_title(title_source, payload)
+    if not normalized_sections:
+        dropped = []
+        if isinstance(sections, list):
+            for index, section in enumerate(sections):
+                if isinstance(section, Mapping):
+                    label = section.get("title") or section.get("name") or f"section_{index + 1}"
+                    dropped.append(str(label))
+                elif isinstance(section, str):
+                    dropped.append(section[:40] or f"section_{index + 1}")
+        detail = ", ".join(dropped) if dropped else "all sections"
+        raise CanvasSpecNormalizeError(
+            "Canvas spec has no publishable sections after repair. "
+            f"Dropped or empty: {detail}. "
+            "Use sections[].blocks (not content alone at the root). "
+            "DAG edges need source/target; DAG nodes and stats need label."
+        )
     return spec
 
 
@@ -320,7 +413,12 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         spec = leftover or None
     spec = _parse_json_object(spec)
     if isinstance(spec, list):
-        return _canvas_envelope(title=str(payload.get("title") or ""), summary=payload.get("summary"), blocks=spec)
+        envelope = _canvas_envelope(title=str(payload.get("title") or ""), summary=payload.get("summary"), blocks=spec)
+        if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
+            raise CanvasSpecNormalizeError(
+                "Canvas spec has no publishable blocks. Use sections[].blocks with valid block types."
+            )
+        return envelope
     if not isinstance(spec, Mapping):
         return spec
     body = dict(spec)
@@ -328,14 +426,28 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         return _sanitize_canvas_spec_envelope(body, payload=payload)
     lifted = _blocks_from_payload(body)
     if lifted is not None:
-        return _canvas_envelope(
+        envelope = _canvas_envelope(
             title=str(payload.get("title") or body.get("title") or ""),
             summary=body.get("summary"),
             blocks=lifted,
         )
+        if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
+            raise CanvasSpecNormalizeError(
+                "Canvas spec has no publishable blocks. Use sections[].blocks with valid block types."
+            )
+        return envelope
     blocks = body.get("blocks")
     if isinstance(blocks, list):
-        return _canvas_envelope(title=str(body.get("title") or payload.get("title") or ""), summary=body.get("summary"), blocks=blocks)
+        envelope = _canvas_envelope(
+            title=str(body.get("title") or payload.get("title") or ""),
+            summary=body.get("summary"),
+            blocks=blocks,
+        )
+        if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
+            raise CanvasSpecNormalizeError(
+                "Canvas spec has no publishable blocks. Use sections[].blocks with valid block types."
+            )
+        return envelope
     return body
 
 
@@ -372,6 +484,8 @@ async def synthesize_with_canvas_publish(
     emit_enabled = canvas_emit_enabled(state.get("allowed_tool_ids")) and hasattr(llm, "bind_tools")
     published = False
     failed_attempts = 0
+    publish_calls = 0
+    last_publish_error: str | None = None
     last_response: Any = None
     bound = llm.bind_tools([create_mcp_langchain_tool(_PUBLISH_TOOL)]) if emit_enabled else llm
 
@@ -399,16 +513,42 @@ async def synthesize_with_canvas_publish(
                 conversation.append(ToolMessage(content="Canvas already published for this run.", tool_call_id=call_id))
                 continue
             args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
-            tool_input: dict[str, Any] = {"spec": normalize_publish_canvas_spec(args)}
+            publish_calls += 1
+            tool_started = time.perf_counter()
+            tool_runtime = tool_config_for_node(
+                state, config, caller_node=node, tool_name=_PUBLISH_TOOL, started=tool_started
+            )
+            try:
+                normalized_spec = normalize_publish_canvas_spec(args)
+            except CanvasSpecNormalizeError as exc:
+                tool_call_id = str((tool_runtime.get("configurable") or {}).get("tool_call_id") or call_id)
+                last_publish_error = exc.message
+                normalized = {
+                    "ok": False,
+                    "content": exc.message,
+                    "error": {"code": "publish_canvas_invalid_spec", "message": exc.message},
+                    "trace": {
+                        "tool_name": _PUBLISH_TOOL,
+                        "tool_call_id": tool_call_id,
+                        "caller_node": node,
+                    },
+                }
+                append_tool_event_for_node(
+                    state,
+                    {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node},
+                    tool_input={"spec": args.get("spec") if isinstance(args, Mapping) else args},
+                    config=tool_runtime,
+                )
+                tool_body = f"{exc.message}\n{_SPEC_COACHING}"
+                conversation.append(ToolMessage(content=tool_body, tool_call_id=call_id))
+                failed_attempts += 1
+                continue
+            tool_input: dict[str, Any] = {"spec": normalized_spec}
             key = canvas_idempotency_key(state)
             if key:
                 tool_input["idempotency_key"] = key
             if args.get("supersedes_id"):
                 tool_input["supersedes_id"] = str(args.get("supersedes_id"))
-            tool_started = time.perf_counter()
-            tool_runtime = tool_config_for_node(
-                state, config, caller_node=node, tool_name=_PUBLISH_TOOL, started=tool_started
-            )
             try:
                 raw = await invoke_tool_for_node(
                     _PUBLISH_TOOL,
@@ -436,6 +576,9 @@ async def synthesize_with_canvas_publish(
             append_tool_event_for_node(state, {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node}, tool_input=tool_input, config=tool_runtime)
             tool_body = _tool_message_body(normalized)
             if not _tool_ok(normalized):
+                last_publish_error = (
+                    str((normalized.get("error") or {}).get("message") or normalized.get("content") or tool_body)
+                )[:700]
                 tool_body = f"{tool_body}\n{_SPEC_COACHING}"
             conversation.append(ToolMessage(content=tool_body, tool_call_id=call_id))
             if _tool_ok(normalized):
@@ -447,8 +590,14 @@ async def synthesize_with_canvas_publish(
         break
 
     normalized = normalize_ai_response(last_response)
+    answer = strip_prose_publish_canvas(normalized["answer"])
+    if emit_enabled and publish_calls > 0 and not published:
+        notice = "The research canvas could not be published for this answer."
+        if last_publish_error:
+            notice = f"{notice} {last_publish_error}"
+        answer = f"{answer}\n\n{notice}".strip() if answer else notice
     return {
-        "answer": strip_prose_publish_canvas(normalized["answer"]),
+        "answer": answer,
         "response": last_response,
         "published": published,
         "reasoning": normalized["reasoning"],
