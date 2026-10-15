@@ -822,8 +822,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!onOpenTrace) return;
         const tabId = traceTabIdForRun(snapshot.runId, extras.messageId);
         if (!canOpenTraceTab(tabId)) return;
-        const requested = extras.messageId === workspaceTraceMessageIdRef.current;
-        const activate = extras.activate === true || requested;
+        const activate = extras.activate === true;
         if (activate && isValidTraceId(snapshot.runId)) liveTraceActivatedRunRef.current = snapshot.runId;
         onOpenTrace({
             ...extras,
@@ -2675,7 +2674,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             loading: !isValidTraceId(runId) || Boolean(agentRunLoading[runId as string]),
             error: liveForMessage?.error || (isValidTraceId(runId) ? agentRunErrors[runId] : undefined),
             running: Boolean(liveForMessage?.running),
-            activate: true,
+            activate: false,
             onRunDetailsChange: handleAgentRunDetailsChange,
         });
     }, [
