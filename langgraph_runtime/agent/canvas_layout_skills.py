@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from langgraph_runtime.prompts.loaders import load_runtime_prompt
 
@@ -26,3 +26,23 @@ def canvas_layout_skills_section(allowed_tool_ids: Iterable[Any] | None) -> str:
     if not canvas_emit_enabled(allowed_tool_ids):
         return ""
     return load_runtime_prompt("canvas_layout_skills.md").strip()
+
+
+def canvas_publish_synthesis_enabled(state: Mapping[str, Any]) -> bool:
+    """Bind publish_canvas at synthesis only when the objective asks for a canvas artifact."""
+
+    if not canvas_emit_enabled(state.get("allowed_tool_ids")):
+        return False
+    orchestration = state.get("task_orchestration") if isinstance(state.get("task_orchestration"), Mapping) else {}
+    if orchestration.get("publish_canvas") is True:
+        return True
+    text = str(state.get("question") or state.get("objective") or "").lower()
+    markers = (
+        "canvas",
+        "comparison",
+        "compare papers",
+        "timeline",
+        "evidence map",
+        "evidence matrix",
+    )
+    return any(marker in text for marker in markers)

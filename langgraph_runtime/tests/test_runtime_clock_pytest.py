@@ -52,6 +52,16 @@ async def test_sequential_spans_and_checkpoint_continuation_accumulate_once(monk
 
 
 @pytest.mark.asyncio
+async def test_tranche_counters_accumulate_past_one_per_increment():
+    meter = RuntimeBudgetMeter(_budget(), {})
+    for _ in range(5):
+        await meter.consume(model_calls=1)
+    snapshot = await meter.snapshot()
+    assert snapshot["tranche_usage"]["model_calls"] == 5
+    assert snapshot["lifetime_usage"]["model_calls"] == 5
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("dimension", ["elapsed_active_ms", "model_tokens", "model_calls", "tool_calls"])
 async def test_all_dimensions_use_the_same_repeatable_boundary(dimension):
     budget = _budget()

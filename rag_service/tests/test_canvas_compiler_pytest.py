@@ -100,6 +100,30 @@ async def test_compile_resolves_chunk_locator_to_sentence_quote():
     assert quote_blocks[0].sentence_id == 2
 
 
+@pytest.mark.asyncio
+async def test_compile_accepts_src_prefixed_source_id():
+    file_hash = "b" * 32
+    source_id = "src_chunk_alpha"
+    draft = CanvasPublishDraft.model_validate({
+        "layout": "matrix",
+        "title": "Src id",
+        "claims": [{"text": "Claim", "source_ids": [source_id]}],
+    })
+    chunk = type("Chunk", (), {"file_hash": file_hash, "source_id": source_id})()
+    with (
+        patch(
+            "app.services.canvas_compiler._canonicalize_draft_source_id",
+            new=AsyncMock(return_value=f"doc:{file_hash}:{source_id}"),
+        ),
+        patch(
+            "app.services.canvas_compiler._first_sentence_for_chunk",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})
+    assert spec.title == "Src id"
+
+
 def test_publish_idempotency_key_differs_for_revision():
     from app.tools.publish_canvas import _publish_idempotency_key
     from app.models.canvas import CanvasSpec

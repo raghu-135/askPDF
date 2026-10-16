@@ -457,16 +457,45 @@ class LocalEmbeddingWrapper:
         return await asyncio.to_thread(_encode)
 
 
+_LOCAL_RERANK_BATCH_SIZE = 32
+
+
 class LocalRerankerWrapper:
     def __init__(self, model: "CrossEncoder"):
         self.model = model
 
-    async def ascore(self, query: str, passages: List[str]) -> List[float]:
-        def _score():
-            pairs = [(query, p) for p in passages]
-            scores = self.model.predict(pairs)
-            return scores.tolist() if hasattr(scores, "tolist") else list(scores)
-        return await asyncio.to_thread(_score)
+    @staticmethod
+    async def _cancellation_requested(checker: Any) -> bool:
+        if checker is None:
+            return False
+        value = checker()
+        if hasattr(value, "__await__"):
+            value = await value
+        return bool(value)
+
+    async def ascore(
+        self,
+        query: str,
+        passages: List[str],
+        *,
+        cancellation_checker: Any = None,
+    ) -> List[float]:
+        if not passages:
+            return []
+        scores: List[float] = []
+        for start in range(0, len(passages), _LOCAL_RERANK_BATCH_SIZE):
+            if await self._cancellation_requested(cancellation_checker):
+                scores.extend([0.0] * (len(passages) - len(scores)))
+                return scores
+            batch = passages[start : start + _LOCAL_RERANK_BATCH_SIZE]
+
+            def _score(batch_pairs=batch):
+                pairs = [(query, p) for p in batch_pairs]
+                batch_scores = self.model.predict(pairs)
+                return batch_scores.tolist() if hasattr(batch_scores, "tolist") else list(batch_scores)
+
+            scores.extend(await asyncio.to_thread(_score))
+        return scores
 
 
 _local_embedder_cache: Dict[str, LocalEmbeddingWrapper] = {}

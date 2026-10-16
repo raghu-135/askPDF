@@ -115,6 +115,7 @@ def test_parallel_lifecycle_events_remain_canonical(kind):
         ("subagent.start", "subagent.started"),
         ("subagent.complete", "subagent.completed"),
         ("artifact.invalidated", "artifact.updated"),
+        ("task.cancel_rolled_back", "runtime.event"),
     ],
 )
 def test_product_event_sources_normalize_to_neutral_kinds(source: str, expected: str):

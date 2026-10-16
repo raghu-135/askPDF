@@ -281,8 +281,7 @@ class RuntimeBudgetMeter:
             for key, amount in usage.items():
                 increment = max(0, int(amount or 0))
                 if key in limit_names:
-                    limit_name = limit_names[key]
-                    cap = max(1, int(self._limits.get(limit_name) or 1))
+                    cap = max(1, int(self._limits.get(key) or 1))
                     current = int(tranche_usage.get(key) or 0)
                     if current >= cap:
                         increment = 0

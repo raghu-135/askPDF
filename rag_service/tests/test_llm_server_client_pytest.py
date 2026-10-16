@@ -8,6 +8,7 @@ import pytest
 
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODELS,
+    LocalRerankerWrapper,
     ReasoningChatOpenAI,
     _chat_probe_accepted,
     _congested_provider_status,

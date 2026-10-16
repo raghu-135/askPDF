@@ -12,6 +12,7 @@ from app.tools.retrieval_conversation import search_thread_conversation_history 
 from app.tools.retrieval_knowledge import (
     _context_cursor,
     _context_cursor_payload,
+    _scoped_files,
     _source_from_chunk,
     inspect_document,
     read_context,
@@ -22,6 +23,14 @@ from app.tools.thread_shape import invoke_thread_shape
 from app.tools.thread_shape import ThreadShapeRequest
 from app.services.document_pipeline import TokenCounter
 from app.services.document_projection_service import DocumentConversionPendingError
+
+
+class _StubDocumentLookupServices:
+    def __init__(self, lookup: dict):
+        self._lookup = lookup
+
+    async def document_lookup(self, _thread_id: str):
+        return self._lookup
 
 
 def _config(**overrides):
@@ -872,3 +881,26 @@ async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
         caller_node="web_worker",
         warning=ToolWarningCode.WEB_SEARCH_DISABLED,
     )
+
+
+@pytest.mark.asyncio
+async def test_scoped_files_allows_linked_document_id():
+    context = ToolInvocationContext.from_mapping({"thread_id": "thread-1"})
+    lookup, file_hashes = await _scoped_files(
+        context,
+        requested="doc-hash",
+        services=_StubDocumentLookupServices({"doc-hash": {"file_hash": "abc"}}),
+    )
+    assert file_hashes == ["doc-hash"]
+    assert lookup["doc-hash"]["file_hash"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_scoped_files_rejects_unlinked_document_id():
+    context = ToolInvocationContext.from_mapping({"thread_id": "thread-1"})
+    with pytest.raises(PermissionError, match="not linked"):
+        await _scoped_files(
+            context,
+            requested="missing-doc",
+            services=_StubDocumentLookupServices({"known-doc": {"file_hash": "abc"}}),
+        )

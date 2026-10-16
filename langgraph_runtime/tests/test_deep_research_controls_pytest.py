@@ -21,6 +21,19 @@ def test_inspect_document_cursor_zero_is_coerced():
     assert payload["cursor"]
 
 
+def test_read_context_expansion_synonyms_are_coerced():
+    payload = coerce_tool_arguments(
+        "read_context",
+        {"source_id": "src-1", "expansion": "full"},
+    )
+    assert payload["expansion"] == "section"
+    payload = coerce_tool_arguments(
+        "read_context",
+        {"source_id": "src-1", "expansion": "expand"},
+    )
+    assert payload["expansion"] == "section"
+
+
 def test_usage_summary_unwraps_structured_output_raw():
     class _Usage:
         prompt_tokens = 3

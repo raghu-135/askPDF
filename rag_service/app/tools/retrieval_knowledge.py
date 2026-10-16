@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 from collections import defaultdict
 from typing import Any
@@ -15,6 +16,8 @@ from app.tools.contracts import InspectDocumentRequest, ReadContextRequest, Sear
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
 from app.services.embedding_tokenizer import EmbeddingTokenizerUnavailableError, resolve_embedding_tokenizer
+
+logger = logging.getLogger(__name__)
 
 
 def _cursor_offset(value: str | None) -> int:
@@ -181,6 +184,14 @@ async def _scoped_files(context: ToolInvocationContext, requested: str | None = 
     lookup = await (services or get_tool_services()).document_lookup(context.thread_id or "")
     if requested:
         if requested not in lookup:
+            known = sorted(lookup.keys())
+            logger.warning(
+                "document scope mismatch | thread_id=%s requested_prefix=%s known_count=%s known_prefixes=%s",
+                context.thread_id or "",
+                (requested or "")[:6],
+                len(known),
+                [item[:6] for item in known[:8]],
+            )
             raise PermissionError("The requested document is not linked to this thread")
         return lookup, [requested]
     return lookup, list(lookup.keys())

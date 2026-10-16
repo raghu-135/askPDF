@@ -51,7 +51,11 @@ from langgraph_runtime.runtime_support.task_results import (
 )
 from langgraph_runtime.workflows.state import consume_task_result_packets, task_result_packet_identity
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
-from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled, canvas_layout_skills_section
+from langgraph_runtime.agent.canvas_layout_skills import (
+    canvas_emit_enabled,
+    canvas_layout_skills_section,
+    canvas_publish_synthesis_enabled,
+)
 from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_sections
 from langgraph_runtime.workflows.canvas_publish import synthesize_with_canvas_publish
 from langgraph_runtime.workflows.evidence import format_prefetch_summary
@@ -1748,7 +1752,7 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
         )
     synthesis_error: Dict[str, Any] | None = None
     try:
-        if canvas_emit_enabled(state.get("allowed_tool_ids")) and not provisional:
+        if canvas_publish_synthesis_enabled(state) and not provisional:
             llm = get_llm(str(state.get("llm_model") or ""), http_async_client=execution_model_client(config))
             task_id = str(state.get("agent_task_id") or "")
 
