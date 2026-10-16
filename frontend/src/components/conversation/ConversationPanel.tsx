@@ -55,7 +55,18 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
     >
       {header}
       {status}
-      <Box sx={{ flexShrink: 0, minHeight: 0, ...transcriptSx }}>{transcript}</Box>
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          ...transcriptSx,
+        }}
+      >
+        {transcript}
+      </Box>
       {decision ? <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...decisionSx }}>{decision}</Box> : null}
       {composer}
       {footer}
@@ -330,7 +341,7 @@ export const ConversationTranscriptFrame = React.forwardRef<HTMLDivElement, {
       component="div"
       ref={ref}
       sx={{
-        flexGrow: 1,
+        flex: 1,
         minHeight: 0,
         overflow: 'auto',
         borderRadius: 1,
