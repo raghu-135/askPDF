@@ -31,6 +31,10 @@ from langgraph_runtime.workflows.runtime_invocation import (
 _PUBLISH_TOOL = ToolName.PUBLISH_CANVAS.value
 _FAKE_FENCE = re.compile(r"```(?:\w+)?\s*publish_canvas[\s\S]*?```", re.IGNORECASE)
 _FAKE_CALL = re.compile(r"publish_canvas\s*\([^)]*\)", re.IGNORECASE)
+_UNPUBLISHED_CANVAS_CLAIM_LINE = re.compile(
+    r"^\s*here(?:'s| is)\s+(?:a\s+)?(?:the\s+)?research canvas\b.*$",
+    re.IGNORECASE,
+)
 _MAX_ROUNDS = 3
 _DRAFT_COACHING = (
     f"publish_canvas failed. {CANVAS_PUBLISH_DRAFT_HINT} "
@@ -101,6 +105,17 @@ def strip_prose_publish_canvas(text: str) -> str:
     cleaned = _FAKE_FENCE.sub("", str(text or ""))
     cleaned = _FAKE_CALL.sub("", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def strip_unpublished_canvas_claims(text: str) -> str:
+    """Remove prose that claims a canvas was published when no publish occurred."""
+
+    kept = [
+        line
+        for line in str(text or "").splitlines()
+        if not _UNPUBLISHED_CANVAS_CLAIM_LINE.match(line)
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
 def canvas_idempotency_key(state: Mapping[str, Any], *, supersedes_id: str | None = None) -> str:
@@ -305,6 +320,8 @@ async def synthesize_with_canvas_publish(
         if last_publish_error:
             notice = f"{notice} {last_publish_error}"
         answer = f"{answer}\n\n{notice}".strip() if answer else notice
+    elif emit_enabled and not published and publish_calls == 0:
+        answer = strip_unpublished_canvas_claims(answer)
     return {
         "answer": answer,
         "response": last_response,

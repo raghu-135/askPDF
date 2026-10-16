@@ -13,6 +13,7 @@ from langgraph_runtime.workflows.canvas_publish import (
     prepare_publish_canvas_tool_input,
     sanitize_supersedes_id_for_publish,
     strip_prose_publish_canvas,
+    strip_unpublished_canvas_claims,
     synthesize_with_canvas_publish,
 )
 
@@ -80,6 +81,13 @@ def test_strip_prose_publish_canvas_removes_fake_calls():
     text = 'Findings.\n\npublish_canvas(title="Research Summary")\n\nDone.'
     assert "publish_canvas" not in strip_prose_publish_canvas(text)
     assert "Findings." in strip_prose_publish_canvas(text)
+
+
+def test_strip_unpublished_canvas_claims_removes_false_publish_narration():
+    text = "Here is a research canvas comparing the two papers.\n\nThe BLEU score is 28.4."
+    cleaned = strip_unpublished_canvas_claims(text)
+    assert "research canvas" not in cleaned.casefold()
+    assert "28.4" in cleaned
 
 
 

@@ -1031,7 +1031,10 @@ class NodeRegistry:
             }
             lifecycle_events.append(payload)
             if execution_sink is not None:
-                await execution_sink.emit(name, payload)
+                if hasattr(execution_sink, "emit_nowait"):
+                    execution_sink.emit_nowait(name, payload)
+                else:
+                    await execution_sink.emit(name, payload)
             elif studio_queue is not None:
                 await studio_queue.put({"event": name, "data": payload})
 
