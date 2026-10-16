@@ -384,6 +384,13 @@ export default function Home() {
     }
   };
 
+  const handleThreadRenamed = useCallback((thread: Thread) => {
+    setActiveThread((current) => (current?.id === thread.id ? { ...current, ...thread } : current));
+    setRightPanelLineageThreads((current) => (
+      current.map((item) => (item.id === thread.id ? { ...item, ...thread } : item))
+    ));
+  }, []);
+
   const handleOpenHome = useCallback(() => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
     workspaceNavRef.current += 1;
@@ -1215,6 +1222,7 @@ export default function Home() {
               onProjectCloned={handleProjectCloned}
               onProjectDeleted={handleProjectDeleted}
               onThreadForked={handleThreadForked}
+              onThreadRenamed={handleThreadRenamed}
               onBackToProject={handleBackToProject}
               onBackToProjects={handleOpenHome}
               onHeaderStateChange={setSidebarHeaderState}

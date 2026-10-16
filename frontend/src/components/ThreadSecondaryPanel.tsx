@@ -39,6 +39,7 @@ export default function ThreadSecondaryPanel({
   onProjectCloned,
   onProjectDeleted,
   onThreadForked,
+  onThreadRenamed,
   onBackToProject,
   onBackToProjects,
   onHeaderStateChange,
@@ -61,6 +62,7 @@ export default function ThreadSecondaryPanel({
   onProjectCloned?: (project: Project) => void;
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
+  onThreadRenamed?: (thread: Thread) => void;
   onBackToProject: () => void;
   onBackToProjects?: () => void;
   onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
@@ -312,6 +314,7 @@ export default function ThreadSecondaryPanel({
               onProjectCloned={onProjectCloned}
               onProjectDeleted={onProjectDeleted}
               onThreadForked={onThreadForked}
+              onThreadRenamed={onThreadRenamed}
               hideHeader
               onHeaderStateChange={handleHeaderStateChange}
               darkMode={darkMode}
