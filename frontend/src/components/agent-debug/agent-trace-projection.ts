@@ -15,9 +15,47 @@ export function getRetainedRunErrorMessage(runDetails: { error_json?: Record<str
 
 export function shouldRefreshRetainedTrace(runDetails: AgentRunDetails): boolean {
   const status = String(runDetails.status);
-  if (status === 'running' || status === 'awaiting_human') return true;
-  return ['completed', 'failed', 'cancelled'].includes(status) && !runDetails.debug;
+  if (status === 'running') return true;
+  return ['completed', 'failed', 'cancelled', 'awaiting_human'].includes(status) && !runDetails.debug;
 }
+
+const diagnosticMessageText = (rawErrorValue: unknown, rawError: Record<string, unknown>, payload: Record<string, unknown>, eventKind: string): string => {
+  if (typeof rawErrorValue === 'boolean') return '';
+  const fromError = rawError.safe_message || rawError.message || rawError.raw_message;
+  if (typeof fromError === 'string' && fromError.trim()) return fromError;
+  if (typeof rawErrorValue === 'string' && rawErrorValue.trim()) return rawErrorValue;
+  if (typeof payload.message === 'string' && payload.message.trim()) return payload.message;
+  if (typeof payload.reason === 'string' && payload.reason.trim()) return payload.reason;
+  return eventKind;
+};
+
+export const adjustDiagnosticsForSuccessfulRun = (
+  diagnostics: AgentTraceDiagnostics,
+  runStatus: string,
+): AgentTraceDiagnostics => {
+  const normalizedStatus = String(runStatus || '').toLowerCase();
+  if (diagnostics.outcome === 'failed' || diagnostics.outcome === 'cancelled') return diagnostics;
+  if (!['completed', 'awaiting_human'].includes(normalizedStatus)) return diagnostics;
+  if (diagnostics.summary.failure_count === 0) return diagnostics;
+  const recoveredMessage = normalizedStatus === 'awaiting_human'
+    ? 'Run is waiting for your decision. Earlier errors during this attempt were recovered.'
+    : 'Run completed. Earlier errors during this attempt were recovered and are listed as historical.';
+  return {
+    ...diagnostics,
+    summary: {
+      ...diagnostics.summary,
+      failure_count: 0,
+      code: 'run_completed_with_recovered_errors',
+      message: recoveredMessage,
+      retryable: false,
+    },
+    failures: diagnostics.failures.map((failure) => (
+      failure.classification === 'primary' || failure.classification === 'terminal_summary'
+        ? { ...failure, classification: 'contributing' as const }
+        : failure
+    )),
+  };
+};
 
 export interface TraceOperationView {
   id: string;
@@ -69,6 +107,7 @@ export interface TraceGraphView {
 }
 
 export interface TraceRunView {
+  runId?: string;
   parseError?: string;
   parseCorrelationId?: string;
   debug?: AgentRunDebug;
@@ -240,7 +279,7 @@ export const buildDiagnosticsFromTimeline = (events: AgentTraceTimelineEvent[]):
       kind: event.kind,
       classification: ['run.failed', 'run.cancelled'].includes(event.kind) ? 'terminal_summary' : cancelled ? 'cancellation' : 'contributing',
       code: String(rawError.code || payload.code || event.kind.replaceAll('.', '_')),
-      message: String(rawError.safe_message || rawError.message || rawError.raw_message || (typeof rawErrorValue === 'string' ? rawErrorValue : '') || payload.message || payload.reason || event.kind),
+      message: diagnosticMessageText(rawErrorValue, rawError, payload, event.kind),
       retryable: Boolean(rawError.retryable || payload.retryable),
       occurred_at: event.occurred_at,
       location: diagnosticLocation(event),
@@ -493,8 +532,12 @@ export const buildRunTraceView = (
     const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
-    const diagnostics = debug.diagnostics as AgentTraceDiagnostics;
+    const diagnostics = adjustDiagnosticsForSuccessfulRun(
+      debug.diagnostics as AgentTraceDiagnostics,
+      String(runDetails.status || ''),
+    );
     return {
+      runId: runDetails.id,
       debug,
       trace: getRunTrace(runDetails),
       graph: getRunGraph(debug, options.nodeCatalog),
@@ -741,6 +784,9 @@ export const mergeLiveAndRetainedTraceViews = (
   retained?: TraceRunView,
 ): TraceRunView => {
   if (!retained) return live;
+  if (live.runId && retained.runId && live.runId !== retained.runId) {
+    return live;
+  }
   const liveVisits = new Set(live.operations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
   const operations = [
     ...retained.operations.filter((operation) => !liveVisits.has(`${operation.id}:${operation.visitIndex || 1}`)),
@@ -771,7 +817,9 @@ export const mergeLiveAndRetainedTraceViews = (
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0)
       + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: live.diagnostics.summary.failure_count || retained.diagnostics.summary.failure_count,
+    errorCount: live.events.length > 0
+      ? live.diagnostics.summary.failure_count
+      : Math.max(live.diagnostics.summary.failure_count, retained.diagnostics.summary.failure_count),
     diagnostics: live.events.length > 0 ? live.diagnostics : retained.diagnostics,
     parallelGroups: live.parallelGroups.length > 0 ? live.parallelGroups : retained.parallelGroups,
     finalOutput: live.finalOutput || retained.finalOutput,
